@@ -1,5 +1,9 @@
 import type { EventLogEntry } from "./app-events.ts";
-import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type {
+  CompactionStatus,
+  FallbackStatus,
+  SubagentBlockingStatus,
+} from "./app-tool-stream.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -84,6 +88,10 @@ export type AppViewState = {
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
+  /** Live-test iteration 1 Bug 3: bottom-toast state for the
+   * "subagents still running" feedback when user clicks Approve while
+   * subagents are in flight. */
+  subagentBlockingStatus: SubagentBlockingStatus | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
@@ -114,6 +122,40 @@ export type AppViewState = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalError: string | null;
+  /**
+   * PR-8 / #67721: pending plan-approval request emitted by the runtime
+   * when the agent calls `exit_plan_mode`. Exactly one approval is
+   * tracked at a time per session — re-emits replace the prior request
+   * (the agent just minted a fresh approvalId so the old card is stale).
+   */
+  planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null;
+  planApprovalBusy: boolean;
+  planApprovalError: string | null;
+  /** Inline-revise textarea state (no popup). */
+  planApprovalReviseOpen: boolean;
+  planApprovalReviseDraft: string;
+  /**
+   * PR-13 Bug 2: question-card "Other" inline-textarea state. Mirrors
+   * the revise pattern; replaces the prior `window.prompt` approach so
+   * Cancel returns to the option list instead of (perceptibly) exiting
+   * the sequence. Caller owns the state so it survives renders.
+   */
+  planApprovalQuestionOtherOpen: boolean;
+  planApprovalQuestionOtherDraft: string;
+  /**
+   * PR-8 follow-up: most recent live-plan markdown rendered into the
+   * sidebar, kept in sync by `refreshLivePlanSidebar()`. Surfaced so the
+   * chat-controls "Plan view" button + `/plan view` slash command can
+   * re-open the sidebar with current content even if the user closed it.
+   * `null` until the agent calls `update_plan` at least once.
+   */
+  latestPlanMarkdown: string | null;
+  /**
+   * Toggle the plan-view sidebar — opens with the current `latestPlanMarkdown`
+   * (or a placeholder when no plan exists yet), closes if it's already showing.
+   * Used by the chat-controls Plan view button and `/plan view` slash command.
+   */
+  togglePlanViewSidebar: () => void;
   pendingGatewayUrl: string | null;
   configLoading: boolean;
   configRaw: string;
@@ -391,6 +433,36 @@ export type AppViewState = {
     handleNostrProfileImport: () => Promise<void>;
     handleNostrProfileToggleAdvanced: () => void;
     handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
+    /** PR-8 / #67721: resolve a pending plan-approval. */
+    handlePlanApprovalDecision: (
+      decision: "approve" | "reject" | "edit",
+      feedback?: string,
+    ) => Promise<void>;
+    /** Inline-revise textarea control (no popup). */
+    handlePlanApprovalReviseOpen: () => void;
+    handlePlanApprovalReviseCancel: () => void;
+    handlePlanApprovalReviseDraftChange: (text: string) => void;
+    /**
+     * PR-13 Bug 2: question-card "Other" inline-textarea handlers.
+     * Mirrors the revise pattern. Cancel does NOT clear the request,
+     * so users can back out of typing a free-text answer and return
+     * to the option list.
+     */
+    handlePlanApprovalQuestionOtherOpen: () => void;
+    handlePlanApprovalQuestionOtherCancel: () => void;
+    handlePlanApprovalQuestionOtherDraftChange: (text: string) => void;
+    handlePlanApprovalQuestionOtherSubmit: () => Promise<void>;
+    /**
+     * PR-10 ask_user_question: route the chosen answer back through
+     * the same approval-card surface. Persists via
+     * sessions.patch { planApproval: { action: "answer", answer }} and
+     * injects `[QUESTION_ANSWER]: <answer text>` as a synthetic user
+     * message (PR-10 hardening canonical format with COLON, mirroring
+     * `[PLAN_DECISION]: ...`) so the agent's next turn can act on it.
+     * Plan-mode state is NOT transitioned — the agent stays in plan
+     * mode while waiting on follow-on planning steps.
+     */
+    handlePlanApprovalAnswer: (answer: string) => Promise<void>;
     handleGatewayUrlConfirm: () => void;
     handleGatewayUrlCancel: () => void;
     handleConfigLoad: () => Promise<void>;

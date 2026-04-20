@@ -197,17 +197,10 @@ export const tr: TranslationMap = {
       wsUrl: "WebSocket URL'si",
       token: "Gateway Token",
       password: "Parola (saklanmaz)",
-      passwordPlaceholder: "sistem veya paylaşılan parola",
       sessionKey: "Varsayılan Oturum Anahtarı",
       language: "Dil",
       connectHint: "Bağlantı değişikliklerini uygulamak için Bağlan'a tıklayın.",
       trustedProxy: "Güvenilir proxy üzerinden kimlik doğrulandı.",
-      showToken: "Token'ı göster",
-      hideToken: "Token'ı gizle",
-      toggleTokenVisibility: "Token görünürlüğünü değiştir",
-      showPassword: "Parolayı göster",
-      hidePassword: "Parolayı gizle",
-      togglePasswordVisibility: "Parola görünürlüğünü değiştir",
     },
     snapshot: {
       title: "Anlık Görüntü",
@@ -246,19 +239,8 @@ export const tr: TranslationMap = {
     },
     pairing: {
       hint: "Bu cihazın Gateway ana bilgisayarından eşleştirme onayı alması gerekiyor.",
-      scopeUpgradeTitle: "Kapsam yükseltmesi onay bekliyor.",
-      scopeUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak istenen daha geniş kapsam onay bekliyor.",
-      roleUpgradeTitle: "Rol yükseltmesi onay bekliyor.",
-      roleUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak istenen rol değişikliği onay bekliyor.",
-      metadataUpgradeTitle: "Cihaz meta veri değişikliği onay bekliyor.",
-      metadataUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak meta veri değişikliği onay bekliyor.",
       mobileHint:
         "Mobilde misiniz? Masaüstünüzde openclaw dashboard --no-open komutundan tam URL'yi (#token=... dahil) kopyalayın.",
-      docsTitle: "Cihaz eşleştirme belgeleri (yeni sekmede açılır)",
-      docsLink: "Belgeler: Cihaz eşleştirme",
     },
     insecure: {
       hint: "Bu sayfa HTTP olduğu için tarayıcı cihaz kimliğini engelliyor. HTTPS (Tailscale Serve) kullanın veya Gateway ana bilgisayarında {url} adresini açın.",
@@ -273,12 +255,6 @@ export const tr: TranslationMap = {
       step4: "Ya da yeniden kullanılabilir bir token oluşturun:",
       docsHint: "Uzaktan erişim için Tailscale Serve önerilir. ",
       docsLink: "Dokümanları oku →",
-      authDocsTitle: "Control UI kimlik doğrulama belgeleri (yeni sekmede açılır)",
-      authDocsLink: "Belgeler: Control UI kimlik doğrulama",
-      tailscaleDocsTitle: "Tailscale Serve belgeleri (yeni sekmede açılır)",
-      tailscaleDocsLink: "Belgeler: Tailscale Serve",
-      insecureHttpDocsTitle: "Güvenli olmayan HTTP belgeleri (yeni sekmede açılır)",
-      insecureHttpDocsLink: "Belgeler: Güvenli olmayan HTTP",
     },
     cards: {
       cost: "Maliyet",
@@ -650,16 +626,11 @@ export const tr: TranslationMap = {
   login: {
     subtitle: "Gateway Kontrol Paneli",
     passwordPlaceholder: "isteğe bağlı",
-    showToken: "Tokenı göster",
-    hideToken: "Tokenı gizle",
-    toggleTokenVisibility: "Token görünürlüğünü değiştir",
-    showPassword: "Parolayı göster",
-    hidePassword: "Parolayı gizle",
-    togglePasswordVisibility: "Parola görünürlüğünü değiştir",
   },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
     refreshTitle: "Sohbet verilerini yenile",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",

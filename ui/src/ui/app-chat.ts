@@ -1,6 +1,7 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
+import { resumePendingPlanInteraction } from "./chat/plan-resume.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -420,6 +421,16 @@ async function dispatchSlashCommand(
 
   if (result.action === "refresh") {
     await refreshChat(host);
+  }
+
+  if (result.action === "toggle-plan-view") {
+    host.onSlashAction?.("toggle-plan-view");
+  }
+
+  if (result.resumePlanInteraction && host.client) {
+    void resumePendingPlanInteraction(host.client, targetSessionKey).catch((err: unknown) => {
+      host.lastError = `Plan command succeeded but failed to resume the agent: ${String(err)}`;
+    });
   }
 
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);

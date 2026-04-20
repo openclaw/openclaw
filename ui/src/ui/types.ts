@@ -431,6 +431,78 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpoint;
+  // PR-8 / #67721: permission-mode + plan-mode fields exposed to the UI
+  // so the chat toolbar's mode chip can render the current session
+  // state. Backend writes these via `sessions.patch`; gateway includes
+  // them in `sessions.list` payloads when present on `SessionEntry`.
+  execSecurity?: "deny" | "allowlist" | "full";
+  execAsk?: "off" | "on-miss" | "always";
+  planMode?: {
+    mode: "plan" | "normal";
+    approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
+    approvalId?: string;
+    cycleId?: string;
+    enteredAt?: number;
+    confirmedAt?: number;
+    updatedAt?: number;
+    feedback?: string;
+    rejectionCount?: number;
+    /**
+     * PR-8 follow-up Round 2: most-recent plan snapshot persisted by the
+     * runtime after each `update_plan` tool call. Lets the Control UI
+     * rebuild the live-plan sidebar after a hard refresh — without this,
+     * `latestPlanMarkdown` lives only in in-memory `@state()` and is
+     * lost on page reload.
+     */
+    lastPlanSteps?: Array<{
+      step: string;
+      status: string;
+      activeForm?: string;
+      // PR-9 Wave B1 — closure-gate fields (optional, backwards-compatible).
+      acceptanceCriteria?: string[];
+      verifiedCriteria?: string[];
+    }>;
+    lastPlanUpdatedAt?: number;
+    blockingSubagentRunIds?: string[];
+    lastSubagentSettledAt?: number;
+    /**
+     * PR-10 auto-mode: when true, future plan submissions auto-resolve
+     * as "approve" without waiting for the user. Toggle via the chip
+     * or `/plan auto` slash command.
+     */
+    autoApprove?: boolean;
+  };
+  pendingInteraction?:
+    | {
+        kind: "plan";
+        approvalId: string;
+        title: string;
+        createdAt: number;
+        status: "pending" | "resolved";
+        cycleId?: string;
+      }
+    | {
+        kind: "question";
+        approvalId: string;
+        questionId?: string;
+        title: string;
+        prompt: string;
+        options: string[];
+        allowFreetext: boolean;
+        createdAt: number;
+        status: "pending" | "resolved";
+        cycleId?: string;
+      };
+  /**
+   * Codex P2 review #68939 (2026-04-19): mirror of the
+   * `pendingQuestionApprovalId` server-side field so the webchat
+   * `/plan answer` path can thread the question approvalId into the
+   * `sessions.patch { planApproval }` payload. The server-side
+   * answer-guard requires it; pre-fix, the webchat path used the
+   * plan-approval id (which is a different namespace) and answers
+   * were rejected.
+   */
+  pendingQuestionApprovalId?: string;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;

@@ -15,18 +15,79 @@ vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
-vi.mock("../views/agents-utils.ts", () => ({
-  agentLogoUrl: () => "/openclaw-logo.svg",
-  isRenderableControlUiAvatarUrl: (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
-}));
+vi.mock("./markdown-sidebar.ts", async () => {
+  const { html } = await import("lit");
+  return {
+    renderMarkdownSidebar: (props: { content?: { content?: string; title?: string } | null }) =>
+      html`<div class="sidebar-panel" data-mocked-sidebar>
+        ${props.content?.title ?? props.content?.content ?? ""}
+      </div>`,
+  };
+});
 
-vi.mock("./speech.ts", () => ({
-  isTtsSpeaking: () => false,
-  isTtsSupported: () => false,
-  speakText: () => false,
-  stopTts: () => undefined,
-}));
+function createSessions(): SessionsListResult {
+  return {
+    ts: 0,
+    path: "",
+    count: 0,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [],
+  };
+}
+
+function flushTasks() {
+  return new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
+async function flushAssistantAttachmentAvailabilityChecks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
+  return {
+    sessionKey: "main",
+    onSessionKeyChange: () => undefined,
+    thinkingLevel: null,
+    showThinking: false,
+    showToolCalls: true,
+    loading: false,
+    sending: false,
+    canAbort: false,
+    compactionStatus: null,
+    fallbackStatus: null,
+    messages: [],
+    sideResult: null,
+    toolMessages: [],
+    streamSegments: [],
+    stream: null,
+    streamStartedAt: null,
+    assistantAvatarUrl: null,
+    draft: "",
+    queue: [],
+    connected: true,
+    canSend: true,
+    disabledReason: null,
+    error: null,
+    sessions: createSessions(),
+    focusMode: false,
+    assistantName: "OpenClaw",
+    assistantAvatar: null,
+    localMediaPreviewRoots: [],
+    onRefresh: () => undefined,
+    onToggleFocusMode: () => undefined,
+    onDraftChange: () => undefined,
+    onSend: () => undefined,
+    onQueueRemove: () => undefined,
+    onDismissSideResult: () => undefined,
+    onNewSession: () => undefined,
+    agentsList: null,
+    currentAgentId: "",
+    onAgentChange: () => undefined,
+    ...overrides,
+  };
+}
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
@@ -132,19 +193,36 @@ function clearDeleteConfirmSkip() {
   }
 }
 
-async function flushAssistantAttachmentAvailabilityChecks() {
-  for (let i = 0; i < 6; i++) {
-    await Promise.resolve();
-  }
-}
+describe("chat view", () => {
+  it("renders the inline approval card only for the active session", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ...createSessions(),
+            sessions: [
+              { key: "main", kind: "direct", sessionId: "s1", updatedAt: 0, systemSent: false },
+            ],
+          },
+          planApprovalRequest: {
+            approvalId: "approval-1",
+            sessionKey: "other-session",
+            title: "Plan title",
+            plan: [{ step: "Check routes", status: "pending" }],
+            receivedAt: 0,
+          },
+          onPlanApprovalDecision: () => undefined,
+        }),
+      ),
+      container,
+    );
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+    expect(container.querySelector(".plan-inline-card")).toBeNull();
+    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
+  });
 
-describe("grouped chat rendering", () => {
-  it("falls back to the logo while authenticated avatar routes are loading", () => {
+  it("uses the assistant avatar URL or bundled logo fallbacks", () => {
     const container = document.createElement("div");
     renderAssistantMessage(
       container,
@@ -208,6 +286,28 @@ describe("grouped chat rendering", () => {
 
   it("falls back to the local logo when the assistant avatar is a remote URL", () => {
     const container = document.createElement("div");
+
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+          basePath: "/openclaw/",
+        }),
+      ),
+      container,
+    );
+    const logoImage = container.querySelector<HTMLImageElement>(
+      ".agent-chat__welcome .agent-chat__avatar--logo img",
+    );
+    expect(container.querySelector<HTMLImageElement>(".agent-chat__welcome > img")).toBeNull();
+    expect(logoImage).not.toBeNull();
+    expect(
+      container
+        .querySelector<HTMLImageElement>(".agent-chat__welcome .agent-chat__avatar--logo img")
+        ?.getAttribute("src"),
+    ).toBe("/openclaw/favicon.svg");
 
     renderAssistantMessage(
       container,
@@ -426,81 +526,140 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("MEDIA:https://example.com/photo.png");
   });
 
-  it("renders allowed transcript images and skips blocked/non-image media", () => {
-    const renderUserMedia = (message: unknown) => {
-      const container = document.createElement("div");
-      renderGroupedMessage(container, message, "user", {
+  it("keeps user transcript images visible after history reload", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-image",
+        role: "user",
+        content: "",
+        MediaPath: "/tmp/openclaw/user-upload.png",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
         showToolCalls: false,
         basePath: "/openclaw",
         assistantAttachmentAuthToken: "session-token",
         localMediaPreviewRoots: ["/tmp/openclaw"],
-      });
-      return container;
-    };
-
-    let container = renderUserMedia({
-      id: "user-history-image",
-      role: "user",
-      content: "",
-      MediaPath: "/tmp/openclaw/user-upload.png",
-      timestamp: Date.now(),
-    });
-    expect(
-      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&token=session-token",
+      },
     );
 
-    container = renderUserMedia({
-      id: "user-history-image-octet-stream",
-      role: "user",
-      content: "",
-      MediaPath: "/tmp/openclaw/user-upload.png",
-      MediaType: "application/octet-stream",
-      timestamp: Date.now(),
-    });
-    expect(
-      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image?.getAttribute("src")).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&token=session-token",
     );
+  });
 
-    container = renderUserMedia({
-      id: "user-history-images",
-      role: "user",
-      content: "",
-      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
-      MediaTypes: ["image/png", "application/octet-stream"],
-      timestamp: Date.now(),
-    });
-    expect(
-      [...container.querySelectorAll<HTMLImageElement>(".chat-message-image")].map((image) =>
-        image.getAttribute("src"),
-      ),
-    ).toEqual([
+  it("keeps transcript images visible when MIME falls back to application/octet-stream", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-image-octet-stream",
+        role: "user",
+        content: "",
+        MediaPath: "/tmp/openclaw/user-upload.png",
+        MediaType: "application/octet-stream",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image?.getAttribute("src")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&token=session-token",
+    );
+  });
+
+  it("keeps plural user transcript images visible after history reload", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-images",
+        role: "user",
+        content: "",
+        MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+        MediaTypes: ["image/png", "application/octet-stream"],
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
+    const imageSources = [
+      ...container.querySelectorAll<HTMLImageElement>(".chat-message-image"),
+    ].map((image) => image.getAttribute("src"));
+    expect(imageSources).toEqual([
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ffirst.png&token=session-token",
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fsecond.jpg&token=session-token",
     ]);
+  });
 
-    container = renderUserMedia({
-      id: "user-history-image-blocked",
-      role: "user",
-      content: "",
-      MediaPath: "/Users/test/Documents/private.png",
-      MediaType: "image/png",
-      timestamp: Date.now(),
-    });
+  it("does not render blocked local transcript image paths", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-image-blocked",
+        role: "user",
+        content: "",
+        MediaPath: "/Users/test/Documents/private.png",
+        MediaType: "image/png",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
     expect(container.querySelector(".chat-message-image")).toBeNull();
     expect(container.querySelector(".chat-bubble")).toBeNull();
+  });
 
-    container = renderUserMedia({
-      id: "user-history-document",
-      role: "user",
-      content: "",
-      MediaPath: "/tmp/openclaw/user-upload.pdf",
-      MediaType: "application/pdf",
-      timestamp: Date.now(),
-    });
+  it("skips non-image transcript media paths after history reload", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-document",
+        role: "user",
+        content: "",
+        MediaPath: "/tmp/openclaw/user-upload.pdf",
+        MediaType: "application/pdf",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
     expect(container.querySelector(".chat-message-image")).toBeNull();
   });
 
@@ -1132,5 +1291,76 @@ describe("grouped chat rendering", () => {
         kind: "markdown",
       }),
     );
+  });
+
+  it("lets a tool call collapse while keeping matching tool output visible", async () => {
+    const container = document.createElement("div");
+
+    const renderCase = (params: { outputInToolMessages: boolean; id: string }) => {
+      const props = createProps({
+        autoExpandToolCalls: true,
+        messages: [
+          {
+            id: `assistant-${params.id}`,
+            role: "assistant",
+            toolCallId: `call-${params.id}`,
+            content: [
+              {
+                type: "toolcall",
+                id: `call-${params.id}`,
+                name: "sessions_spawn",
+                arguments: { mode: "session", thread: true },
+              },
+            ],
+            timestamp: Date.now(),
+          },
+          ...(params.outputInToolMessages
+            ? []
+            : [
+                {
+                  id: `tool-${params.id}`,
+                  role: "tool" as const,
+                  toolCallId: `call-${params.id}`,
+                  toolName: "sessions_spawn",
+                  content: JSON.stringify({ status: "error" }, null, 2),
+                  timestamp: Date.now() + 1,
+                },
+              ]),
+        ],
+        toolMessages: params.outputInToolMessages
+          ? [
+              {
+                id: `tool-${params.id}`,
+                role: "tool",
+                toolCallId: `call-${params.id}`,
+                toolName: "sessions_spawn",
+                content: JSON.stringify({ status: "error" }, null, 2),
+                timestamp: Date.now() + 1,
+              },
+            ]
+          : [],
+      });
+      const rerender = () => {
+        render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+      };
+      rerender();
+    };
+
+    for (const outputInToolMessages of [false, true]) {
+      renderCase({ id: outputInToolMessages ? "tool-messages" : "split", outputInToolMessages });
+      expect(container.textContent).toContain("Tool input");
+      expect(container.textContent).toContain('"thread": true');
+      expect(container.textContent).toContain('"status": "error"');
+
+      const summaries = container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary");
+      if (outputInToolMessages) {
+        expect(summaries.length).toBeGreaterThan(1);
+      }
+      summaries[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await flushTasks();
+
+      expect(container.textContent).not.toContain("Tool input");
+      expect(container.textContent).toContain('"status": "error"');
+    }
   });
 });

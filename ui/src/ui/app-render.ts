@@ -2211,6 +2211,7 @@ export function renderApp(state: AppViewState) {
               sending: state.chatSending,
               compactionStatus: state.compactionStatus,
               fallbackStatus: state.fallbackStatus,
+              subagentBlockingStatus: state.subagentBlockingStatus,
               assistantAvatarUrl: chatAvatarUrl,
               messages: state.chatMessages,
               sideResult: state.chatSideResult,
@@ -2300,6 +2301,173 @@ export function renderApp(state: AppViewState) {
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,
               assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
               basePath: state.basePath ?? "",
+              onSetMode: (mode) => {
+                // PR-8 / #67721: translate the chip selection into the
+                // appropriate sessions.patch call. Plan mode is its own
+                // dimension and does NOT touch execSecurity/execAsk; the
+                // permission modes (Ask/Accept/Bypass) toggle execSecurity
+                // + execAsk while leaving plan-mode state untouched. If
+                // the user picks anything-but-plan while a plan-mode
+                // session is active, also clear plan mode so the chip
+                // labels match the actual runtime state.
+                //
+                // PR-10 auto-mode: when the user picks "Plan ⚡" we
+                // also fire a planApproval { action: "auto",
+                // autoEnabled: true } patch. Picking plain "Plan"
+                // clears the flag (autoEnabled: false). The two
+                // patches are independent so the auto toggle survives
+                // approval/cancel cycles cleanly.
+                if (!state.client || !state.connected) {
+                  return;
+                }
+                // PR-10 review M2: skip the patch entirely when the
+                // selection matches the currently-resolved chip state.
+                // Without this, clicking the active mode in the dropdown
+                // bumps `planMode.updatedAt` and re-fires both patches —
+                // visible to crons that watch `updatedAt` as activity
+                // and adds noise to the gateway log.
+                const activeSession = state.sessionsResult?.sessions?.find(
+                  (s: { key?: string }) => s.key === state.sessionKey,
+                );
+                const currentChipMode: string | null = (() => {
+                  // Inline minimal copy of resolveCurrentMode's plan-aware
+                  // logic; the imported helper isn't accessible from this
+                  // bundling layer without a cycle. Cheap structural check:
+                  if (activeSession?.planMode?.mode === "plan") {
+                    if (activeSession.planMode.autoApprove === true) {
+                      return "plan-auto";
+                    }
+                    return "plan";
+                  }
+                  return null; // permission-mode comparison handled by patch idempotency
+                })();
+                if (
+                  currentChipMode &&
+                  mode.id === currentChipMode &&
+                  // Plan ⚡ → Plan ⚡ and Plan → Plan are the only redundant
+                  // selections worth short-circuiting; permission-mode
+                  // chips are already idempotent server-side (same
+                  // execSecurity/execAsk = no state delta).
+                  (mode.id === "plan" || mode.id === "plan-auto")
+                ) {
+                  return;
+                }
+                const sessionKey = state.sessionKey;
+                const planAction: "plan" | "normal" | null =
+                  mode.planMode === "plan" ? "plan" : "normal";
+                const patch: Record<string, unknown> = { key: sessionKey };
+                if (mode.planMode === "plan") {
+                  patch.planMode = "plan";
+                } else {
+                  // Clear any active plan mode so the chip + backend agree.
+                  patch.planMode = "normal";
+                  // For the "Default" mode entry (execSecurity +
+                  // execAsk both undefined) send `null` to DELETE the
+                  // session override so the runtime falls back to
+                  // config defaults. Explicit null is the patch
+                  // contract's "clear" signal. Without this, Default
+                  // would no-op (the patch handler skips undefined
+                  // keys) and the chip would immediately flip back to
+                  // whatever the prior override was.
+                  patch.execSecurity = mode.execSecurity ?? null;
+                  patch.execAsk = mode.execAsk ?? null;
+                }
+                void state.client.request("sessions.patch", patch).then(
+                  () => {
+                    state.lastError = null;
+                  },
+                  (err: unknown) => {
+                    state.lastError =
+                      planAction === "plan"
+                        ? `Failed to enter plan mode: ${String(err)}`
+                        : `Failed to set mode: ${String(err)}`;
+                  },
+                );
+                // PR-10 auto-toggle: fire a follow-up patch only when
+                // we're switching INTO or OUT OF plan mode AND the
+                // selected mode disagrees with the current autoApprove
+                // state. We always send for plan-* selections so the
+                // backend is the source of truth (and so toggling
+                // between Plan and Plan ⚡ flips the flag without
+                // re-entering plan mode).
+                if (mode.planMode === "plan") {
+                  const autoEnabled = mode.planAutoApprove === true;
+                  const autoPatch: Record<string, unknown> = {
+                    key: sessionKey,
+                    planApproval: { action: "auto", autoEnabled },
+                  };
+                  void state.client.request("sessions.patch", autoPatch).then(
+                    () => {
+                      // No-op; lastError already cleared by the
+                      // primary patch above.
+                    },
+                    (err: unknown) => {
+                      state.lastError = `Failed to ${autoEnabled ? "enable" : "disable"} auto-approve: ${String(err)}`;
+                    },
+                  );
+                }
+              },
+              // PR-8 follow-up: inline plan approval card lives above
+              // the chat input. Replaces the modal overlay so the rest
+              // of the UI stays interactive while a plan is pending.
+              planApprovalRequest: state.planApprovalRequest,
+              planApprovalBusy: state.planApprovalBusy,
+              planApprovalError: state.planApprovalError,
+              planApprovalReviseOpen: state.planApprovalReviseOpen,
+              planApprovalReviseDraft: state.planApprovalReviseDraft,
+              // PR-13 Bug 2: question-card "Other" inline-textarea
+              // state, mirroring the revise pattern. Cancel returns to
+              // the option list instead of (perceptibly) exiting the
+              // sequence (was: window.prompt that lost the card on
+              // cancel/blur).
+              planApprovalQuestionOtherOpen: state.planApprovalQuestionOtherOpen,
+              planApprovalQuestionOtherDraft: state.planApprovalQuestionOtherDraft,
+              onPlanApprovalDecision: (decision, feedback) =>
+                state.handlePlanApprovalDecision(decision, feedback),
+              // PR-10 AskUserQuestion: route the chosen answer back
+              // through the same approval-card surface.
+              onPlanApprovalAnswer: (answer) => state.handlePlanApprovalAnswer(answer),
+              onPlanApprovalReviseOpen: () => state.handlePlanApprovalReviseOpen(),
+              onPlanApprovalReviseCancel: () => state.handlePlanApprovalReviseCancel(),
+              onPlanApprovalReviseDraftChange: (text) =>
+                state.handlePlanApprovalReviseDraftChange(text),
+              onPlanApprovalQuestionOtherOpen: () => state.handlePlanApprovalQuestionOtherOpen(),
+              onPlanApprovalQuestionOtherCancel: () =>
+                state.handlePlanApprovalQuestionOtherCancel(),
+              onPlanApprovalQuestionOtherDraftChange: (text) =>
+                state.handlePlanApprovalQuestionOtherDraftChange(text),
+              onPlanApprovalQuestionOtherSubmit: () =>
+                state.handlePlanApprovalQuestionOtherSubmit(),
+              onOpenPlanInSidebar: (request) => {
+                // Render the proposed plan as a markdown document and
+                // hand it to the existing markdown-sidebar viewer (same
+                // surface tool-output details use).
+                //
+                // PR-10 review fix (Copilot #3104741606): build the
+                // strikethrough as `~~${label}~~` (no space between
+                // `~~` and the label) so the rendered output is clean
+                // markdown. Pre-fix the marker `"[ ] ~~"` left a
+                // leading space inside the strikethrough that
+                // produced inconsistent rendering vs other markdown
+                // surfaces.
+                const stepLines = request.plan
+                  .map((step, i) => {
+                    const label =
+                      step.status === "in_progress" && step.activeForm
+                        ? step.activeForm
+                        : step.step;
+                    if (step.status === "completed") {
+                      return `${i + 1}. [x] ${label}`;
+                    }
+                    if (step.status === "cancelled") {
+                      return `${i + 1}. [ ] ~~${label}~~ (cancelled)`;
+                    }
+                    return `${i + 1}. [ ] ${label}`;
+                  })
+                  .join("\n");
+                const md = `# ${request.summary || "Proposed plan"}\n\n${stepLines}\n`;
+                state.handleOpenSidebar({ kind: "markdown", content: md });
+              },
             })
           : nothing}
         ${renderConfigTabForActiveTab()}

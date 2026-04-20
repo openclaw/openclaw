@@ -1122,3 +1122,231 @@
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
+/* ── Mode switcher ── */
+
+.agent-chat__mode-switcher {
+  position: relative;
+}
+
+.agent-chat__mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
+}
+
+.agent-chat__mode-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.agent-chat__mode-chip-label {
+  white-space: nowrap;
+}
+
+.agent-chat__mode-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  background: var(--card, #1a1a2e);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  z-index: 100;
+}
+
+.agent-chat__mode-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.agent-chat__mode-menu__item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.agent-chat__mode-menu__item--active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.agent-chat__mode-menu__label {
+  flex: 1;
+}
+
+.agent-chat__mode-menu__shortcut {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-tertiary);
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-hover);
+}
+
+/* PR-8 / #67721 inline plan approval card — sits ABOVE the chat input
+ * bar, mirrors Claude Code's "proposed a plan" affordance. Compact by
+ * default; the "Open plan" button pushes the full checklist into the
+ * right sidebar via the same path tool-output details use. */
+.plan-inline-card {
+  margin: 0 16px 8px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-inline-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.plan-inline-card__title strong {
+  color: var(--text);
+}
+
+.plan-inline-card__summary {
+  color: var(--text-secondary);
+  margin-left: 6px;
+}
+
+.plan-inline-card__open {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.plan-inline-card__open:hover {
+  text-decoration: none;
+}
+
+.plan-inline-card__meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.plan-inline-card__error {
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.plan-inline-card__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/*
+ * PR-13 Bug 1: question-variant approval cards stack option buttons
+ * VERTICALLY instead of the standard plan-approval Approve/Edit/Revise
+ * triad. Long answer strings clip + overlap when laid out horizontally
+ * on narrow viewports — vertical alignment lets each option breathe
+ * and matches Codex's question pattern (numbered vertical list).
+ */
+.plan-inline-card__actions--question {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.plan-inline-card__actions--question .plan-inline-card__btn {
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  white-space: normal; /* allow long option text to wrap instead of clipping */
+  line-height: 1.4;
+}
+
+.plan-inline-card__btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 100ms ease;
+}
+
+.plan-inline-card__btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.plan-inline-card__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plan-inline-card__btn--primary {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  border-color: var(--accent);
+}
+
+.plan-inline-card__btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 90%, #000);
+}
+
+.plan-inline-card__btn--danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+
+.plan-inline-card__btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.plan-inline-card__revise-input {
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.plan-inline-card__revise-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}

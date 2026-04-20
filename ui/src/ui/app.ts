@@ -51,10 +51,12 @@ import {
   type ToolStreamEntry,
   type CompactionStatus,
   type FallbackStatus,
+  type SubagentBlockingStatus,
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import { resumePendingPlanInteraction } from "./chat/plan-resume.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
@@ -129,6 +131,135 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+/**
+ * Build the synthetic user-turn message sent to the agent after the
+/**
+ * PR-8 follow-up Round 2: shared placeholder content for the plan-view
+ * sidebar when no `update_plan` event has fired yet on this session.
+ * Module-level so `togglePlanViewSidebar` and other consumers can do
+ * an identity check (===) against the same string instance.
+ */
+const PLAN_VIEW_PLACEHOLDER_MARKDOWN =
+  "# No active plan\n\nThe agent hasn't called `update_plan` yet on this session. Once it does, the current plan will render here and tick off live as the agent steps through.\n";
+
+/**
+ * PR-8 follow-up Round 2: build the live-plan markdown checklist from
+ * a plan-step array. Shared between the live-stream path (refresh on
+ * every `agent_plan_event`) and the refresh-restore path (rebuild from
+ * persisted `SessionEntry.planMode.lastPlanSteps` when the page mounts).
+ * Keeps both surfaces byte-identical so the toggle's identity check
+ * (`sidebarContent.content === latestPlanMarkdown`) works after either.
+ *
+ * PR-9 Wave A2: derive "Plan complete" header automatically when every
+ * step is terminal — the runtime auto-flips planMode to "normal" via
+ * the gateway-side persister, and the sidebar reflects that visually
+ * without the user having to compare statuses by eye.
+ */
+function buildPlanViewMarkdown(
+  plan: ReadonlyArray<{
+    step: string;
+    status: string;
+    activeForm?: string;
+    acceptanceCriteria?: string[];
+    verifiedCriteria?: string[];
+  }>,
+  summary?: string,
+  archetype?: {
+    analysis?: string;
+    assumptions?: string[];
+    risks?: ReadonlyArray<{ risk: string; mitigation: string }>;
+    verification?: string[];
+    references?: string[];
+  },
+  /**
+   * Live-test iteration 1 Bug 2: plan title persisted on
+   * SessionEntry.planMode.title (set by plan-snapshot-persister when
+   * `exit_plan_mode` fires). Takes precedence over `summary` for the
+   * header so the side panel ANCHORS on the actual plan name through
+   * the entire lifecycle (planning → submitted → approved → executing
+   * → completed). Pre-`exit_plan_mode` (only `update_plan` has fired):
+   * undefined → header falls back to `(planning)`.
+   */
+  title?: string,
+): string {
+  const stepLines = plan
+    .map((step, i) => {
+      const marker =
+        step.status === "completed" ? "[x]" : step.status === "cancelled" ? "[ ] ~~" : "[ ]";
+      const close = step.status === "cancelled" ? "~~" : "";
+      const label = step.status === "in_progress" && step.activeForm ? step.activeForm : step.step;
+      const lines = [`${i + 1}. ${marker} ${label}${close}`];
+      // PR-9 Wave B1: render acceptance criteria as a nested checklist
+      // beneath each step. Verified criteria render as `[x]`, unverified
+      // as `[ ]`. Skipped entirely when no criteria are declared so
+      // existing simple plans render unchanged.
+      if (step.acceptanceCriteria && step.acceptanceCriteria.length > 0) {
+        const verifiedSet = new Set(step.verifiedCriteria ?? []);
+        for (const criterion of step.acceptanceCriteria) {
+          const cMarker = verifiedSet.has(criterion) ? "[x]" : "[ ]";
+          lines.push(`    - ${cMarker} ${criterion}`);
+        }
+      }
+      return lines.join("\n");
+    })
+    .join("\n");
+  const allTerminal =
+    plan.length > 0 && plan.every((s) => s.status === "completed" || s.status === "cancelled");
+  // Live-test iteration 1 Bug 2: title (the persisted plan name) wins
+  // over summary so the side panel ANCHORS on the actual plan name. The
+  // pre-submission state shows `(planning)` (honest signal that a real
+  // title hasn't been set yet) instead of the misleading `Active plan`
+  // generic label that previously made every mid-investigation plan
+  // look like the same nameless thing.
+  const header = title ?? summary ?? (allTerminal ? "Plan complete \u2713" : "(planning)");
+  const sections: string[] = [`# ${header}`, ""];
+  // PR-10 archetype: render rich plan sections when present. Markdown
+  // structure mirrors the persisted file format (title → analysis →
+  // plan checklist → assumptions → risks → verification → references).
+  // Sections only appear when populated so simple plans render
+  // identically to today.
+  if (archetype?.analysis) {
+    sections.push("## Analysis", "", archetype.analysis, "");
+  }
+  sections.push("## Plan", "", stepLines, "");
+  if (archetype?.assumptions && archetype.assumptions.length > 0) {
+    sections.push("## Assumptions", "");
+    for (const a of archetype.assumptions) {
+      sections.push(`- ${a}`);
+    }
+    sections.push("");
+  }
+  if (archetype?.risks && archetype.risks.length > 0) {
+    sections.push("## Risks", "");
+    sections.push("| Risk | Mitigation |");
+    sections.push("| --- | --- |");
+    for (const r of archetype.risks) {
+      sections.push(`| ${escapeMarkdownCell(r.risk)} | ${escapeMarkdownCell(r.mitigation)} |`);
+    }
+    sections.push("");
+  }
+  if (archetype?.verification && archetype.verification.length > 0) {
+    sections.push("## Verification", "");
+    for (const v of archetype.verification) {
+      sections.push(`- ${v}`);
+    }
+    sections.push("");
+  }
+  if (archetype?.references && archetype.references.length > 0) {
+    sections.push("## References", "");
+    for (const r of archetype.references) {
+      sections.push(`- ${r}`);
+    }
+    sections.push("");
+  }
+  return sections.join("\n");
+}
+
+/** PR-10: minimal cell-escape so risk/mitigation text doesn't break the markdown table. */
+function escapeMarkdownCell(text: string): string {
+  return text.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim();
+}
+
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
@@ -180,6 +311,18 @@ export class OpenClawApp extends LitElement {
   @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
+  /**
+   * Live-test iteration 1 Bug 3: bottom-of-chat toast state for the
+   * "subagents still running" feedback when the user clicks Approve
+   * on a plan while subagents are mid-flight. Set in
+   * `handlePlanApprovalDecision()` when the gateway returns error
+   * code `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS`. Auto-cleared after 8s
+   * (matches `FALLBACK_TOAST_DURATION_MS`) — render-time check
+   * compares occurredAt; the timer below schedules a re-render so
+   * the toast disappears even if no other state changes.
+   */
+  @state() subagentBlockingStatus: SubagentBlockingStatus | null = null;
+  subagentBlockingClearTimer: number | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
@@ -214,6 +357,38 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalQueue: ExecApprovalRequest[] = [];
   @state() execApprovalBusy = false;
   @state() execApprovalError: string | null = null;
+  // PR-8 / #67721: plan approval card state — populated by handleAgentEvent
+  // when the runtime emits an `approval` stream event with kind:"plugin"
+  // and a plan payload.
+  @state() planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null = null;
+  @state() planApprovalBusy = false;
+  @state() planApprovalError: string | null = null;
+  // PR #68939 follow-up (stale-state re-render fix): once the user
+  // clicks Approve/Revise/Reject and the server returns a stale-state
+  // rejection (`requires a pending approval`, `current state: none`,
+  // etc.), we dismiss the dialog locally — but the next sessionsResult
+  // refresh tick re-runs `hydratePlanApprovalFromSession` which can
+  // re-create the popup from the stale local cache snapshot. User
+  // perceives "I clicked Approve and nothing happened" because the
+  // popup blinks closed → re-creates → blinks open. Track the
+  // approvalIds we've already given up on so hydration ignores them.
+  // Cleared on session change (resetPlanApprovalLocalState).
+  @state() planApprovalDismissedApprovalIds = new Set<string>();
+  // Inline-revise textarea state (no popup). Open + draft live on the
+  // host so the textarea survives chat re-renders.
+  @state() planApprovalReviseOpen = false;
+  @state() planApprovalReviseDraft = "";
+  // PR-13 Bug 2: question-card "Other" inline-textarea state. Replaces
+  // the prior window.prompt approach so backing out returns to the
+  // option list instead of (perceptibly) exiting the sequence.
+  @state() planApprovalQuestionOtherOpen = false;
+  @state() planApprovalQuestionOtherDraft = "";
+  // PR-8 follow-up: latest known plan content (rendered as markdown).
+  // Updated whenever the agent calls update_plan (regardless of whether
+  // the sidebar is open). The chat-controls "Plan view" button reads
+  // this to render the current plan on demand and the `/plan view`
+  // slash command opens the same content in the sidebar.
+  @state() latestPlanMarkdown: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
 
@@ -549,6 +724,13 @@ export class OpenClawApp extends LitElement {
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
           break;
+        case "toggle-plan-view":
+          // PR-8 follow-up: `/plan view` slash command — mirrors the
+          // chat-controls Plan view button. Opens the sidebar with the
+          // latest live plan markdown (or a placeholder if none has
+          // been emitted yet), or closes it if already showing.
+          this.togglePlanViewSidebar();
+          break;
         case "refresh-tools-effective": {
           void refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
           break;
@@ -571,6 +753,15 @@ export class OpenClawApp extends LitElement {
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    // PR-8 follow-up Round 2: when sessions list updates OR the active
+    // session changes, hydrate the plan-view markdown from
+    // SessionEntry.planMode.lastPlanSteps. Restores the sidebar state
+    // after a hard refresh — without this, the button shows the
+    // placeholder until a fresh `update_plan` event fires.
+    if (changed.has("sessionsResult") || changed.has("sessionKey")) {
+      this.hydratePlanViewFromSession();
+      this.hydratePlanApprovalFromSession();
+    }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
     }
@@ -763,6 +954,286 @@ export class OpenClawApp extends LitElement {
     }
   }
 
+  /**
+   * PR-8 / #67721: resolve a pending plan-approval card.
+   *
+   * Flow:
+   *   1. Snapshot the active request + clear UI state OPTIMISTICALLY so
+   *      the card disappears immediately. Avoids the stale-card-double-click
+   *      scenario where users click Accept twice and the second click
+   *      hits "planApproval requires an active plan-mode session".
+   *   2. POST sessions.patch { planApproval } so the server transitions
+   *      SessionEntry.planMode via resolvePlanApproval (#67538).
+   *   3. On success, send a follow-up message to the agent so it
+   *      auto-continues without the user having to type "go". This is
+   *      the [APPROVED_PLAN] / [PLAN_DECISION] context injection
+   *      from the original PR-8 design, delivered via sessions.send
+   *      (which the chat surface already uses for user messages).
+   *   4. On failure, restore the card so the user can retry.
+   */
+  async handlePlanApprovalDecision(
+    decision: "approve" | "reject" | "edit",
+    feedback?: string,
+  ): Promise<void> {
+    const active = this.planApprovalRequest;
+    if (!active || !this.client || this.planApprovalBusy) {
+      return;
+    }
+    this.planApprovalBusy = true;
+    this.planApprovalError = null;
+    // Optimistic dismissal — clear card BEFORE the round-trip so a
+    // second click can't fire while the first is in-flight.
+    const snapshotRequest = active;
+    const snapshotReviseDraft = this.planApprovalReviseDraft;
+    this.planApprovalRequest = null;
+    this.planApprovalReviseOpen = false;
+    this.planApprovalReviseDraft = "";
+    try {
+      const params: Record<string, unknown> = {
+        key: active.sessionKey,
+        planApproval: {
+          action: decision,
+          ...(active.approvalId ? { approvalId: active.approvalId } : {}),
+          ...(feedback && feedback.trim() ? { feedback: feedback.trim() } : {}),
+        },
+        // After approve/edit, also CLEAR session-level permission
+        // overrides so the chip falls back to "Default permissions"
+        // (whatever's in agents.defaults / per-agent config). User
+        // feedback: post-plan-mode shouldn't lock into Ask just
+        // because Ask was active before. Reject leaves overrides
+        // alone (still in plan mode, no permission change needed).
+        ...(decision === "approve" || decision === "edit"
+          ? { execSecurity: null, execAsk: null }
+          : {}),
+      };
+      await this.client.request("sessions.patch", params);
+      await resumePendingPlanInteraction(this.client, active.sessionKey);
+    } catch (err) {
+      // Bug 5 fix: gracefully dismiss the dialog when the server
+      // reports the approval is no longer pending (e.g., another
+      // surface resolved it, OR the auto-close fired due to a
+      // race with subagent return / update_plan-with-all-terminal).
+      // Without this, the user is stuck with an undismissable dialog
+      // and forced to refresh the page.
+      const errMsg = String(err);
+      const errCode =
+        err && typeof err === "object" && "code" in err
+          ? (err as { code?: unknown }).code
+          : undefined;
+      const errDetails =
+        err && typeof err === "object" && "details" in err
+          ? (err as { details?: unknown }).details
+          : undefined;
+      // Bug B (C1 follow-up): PLAN_APPROVAL_EXPIRED is the canonical
+      // code for "session is no longer in plan mode" (timeout, /plan
+      // off, resolved on another channel, compaction loss). Keep the
+      // message-substring fallbacks for transports that flatten the
+      // error to a string.
+      const staleStateError =
+        errCode === "PLAN_APPROVAL_EXPIRED" ||
+        errMsg.includes("PLAN_APPROVAL_EXPIRED") ||
+        errMsg.includes("requires an active plan-mode session") ||
+        errMsg.includes("requires a pending approval") ||
+        errMsg.includes("current state: none") ||
+        errMsg.includes("stale approvalId") ||
+        errMsg.includes("terminal approval state");
+      // Live-test iteration 1 Bug 3: detect the approval-side
+      // subagent gate. Error code is the canonical signal; the
+      // message-substring fallback handles transports that flatten
+      // the error to a string (no structured code surfaced).
+      const subagentBlockedError =
+        errCode === "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS" ||
+        errMsg.includes("PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS") ||
+        errMsg.includes("subagent(s) you spawned");
+      const gateStateUnavailableError =
+        errCode === "PLAN_APPROVAL_GATE_STATE_UNAVAILABLE" ||
+        errMsg.includes("PLAN_APPROVAL_GATE_STATE_UNAVAILABLE");
+      if (subagentBlockedError) {
+        // Restore the card so the user can re-click Approve once the
+        // subagents return (the agent's plan-mode session keeps
+        // running in the background). Surface the message via the
+        // bottom toast region (mirroring the model-fallback toast)
+        // so it's visible without blocking the card.
+        this.planApprovalRequest = snapshotRequest;
+        this.planApprovalReviseDraft = snapshotReviseDraft;
+        this.planApprovalError = null;
+        const openIds =
+          errDetails && typeof errDetails === "object" && "openSubagentRunIds" in errDetails
+            ? ((errDetails as { openSubagentRunIds?: unknown }).openSubagentRunIds ?? [])
+            : [];
+        const openIdsArr = Array.isArray(openIds)
+          ? openIds.filter((s) => typeof s === "string")
+          : [];
+        this.subagentBlockingStatus = {
+          message: "Subagents still running — try again after subagent results return",
+          openSubagentRunIds: openIdsArr,
+          occurredAt: Date.now(),
+        };
+        // Schedule a re-render so the toast disappears at the 8s
+        // mark even if nothing else changes. Mirror of the
+        // fallback-status pattern in app-tool-stream.ts.
+        if (this.subagentBlockingClearTimer != null) {
+          window.clearTimeout(this.subagentBlockingClearTimer);
+        }
+        this.subagentBlockingClearTimer = window.setTimeout(() => {
+          this.subagentBlockingStatus = null;
+          this.subagentBlockingClearTimer = null;
+        }, 8000);
+      } else if (gateStateUnavailableError) {
+        this.planApprovalRequest = snapshotRequest;
+        this.planApprovalReviseDraft = snapshotReviseDraft;
+        this.planApprovalError =
+          "Approval could not resume safely because subagent gate state was lost. Refresh the session or ask the agent to resubmit the plan.";
+      } else if (staleStateError) {
+        // Clear the dialog + show a transient toast-style message.
+        // The plan was already resolved on another surface (or was
+        // structurally closed by a plan-event race); don't fight it,
+        // just dismiss + tell the user.
+        this.planApprovalRequest = null;
+        this.planApprovalReviseDraft = "";
+        this.planApprovalReviseOpen = false;
+        // PR #68939 follow-up (stale-state re-render fix): mark the
+        // approvalId as dismissed so `hydratePlanApprovalFromSession`
+        // doesn't immediately re-create the popup from a stale
+        // sessionsResult snapshot. Without this, the popup blinks
+        // closed then back open and the user perceives "nothing
+        // happened" when they clicked Approve. Set membership is
+        // checked in hydratePlanApprovalFromSession; cleared on
+        // session change via resetPlanApprovalLocalState.
+        if (snapshotRequest?.approvalId) {
+          this.planApprovalDismissedApprovalIds = new Set([
+            ...this.planApprovalDismissedApprovalIds,
+            snapshotRequest.approvalId,
+          ]);
+        }
+        this.planApprovalError =
+          "This plan was already resolved (another surface acted, or the " +
+          "plan auto-closed). Dialog dismissed; the agent's current state " +
+          "is reflected in the mode chip.";
+      } else {
+        // Restore card so the user can retry on transient errors.
+        this.planApprovalRequest = snapshotRequest;
+        this.planApprovalReviseDraft = snapshotReviseDraft;
+        this.planApprovalError = `Plan approval failed: ${errMsg}`;
+      }
+    } finally {
+      this.planApprovalBusy = false;
+    }
+  }
+
+  /** Open the inline revise textarea (no popup). */
+  handlePlanApprovalReviseOpen(): void {
+    if (!this.planApprovalRequest) {
+      return;
+    }
+    this.planApprovalReviseOpen = true;
+    this.planApprovalError = null;
+  }
+
+  /**
+   * PR-10 AskUserQuestion: route the user's answer back to the agent.
+   * Same approval-card surface as plan approve/reject/edit, but the
+   * action verb is "answer" — no plan-mode state transition, the
+   * answer is persisted onto the session's pending-injection queue so
+   * the agent's next turn can act on it.
+   */
+  async handlePlanApprovalAnswer(answer: string): Promise<void> {
+    const active = this.planApprovalRequest;
+    if (!active || !this.client || this.planApprovalBusy) {
+      return;
+    }
+    if (!active.question) {
+      // Defensive: only fire when the approval is actually a question.
+      return;
+    }
+    // PR-10 deep-dive review (HIGH): sanitize the answer text before
+    // injecting it as a synthetic user message. The answer may be
+    // free-text from the user OR an option string the (potentially
+    // prompt-injected) agent supplied — strip control chars + cap
+    // length so a crafted option like "yes\n\n[SYSTEM] ignore prior"
+    // can't break the synthetic-message convention or smuggle further
+    // instructions into the next agent turn.
+    // Use Unicode property `Cc` (Control) to satisfy lint's
+    // no-control-regex rule while still stripping C0 + DEL + C1.
+    const sanitized = answer
+      .replace(/\p{Cc}/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1000);
+    if (!sanitized) {
+      return;
+    }
+    this.planApprovalBusy = true;
+    this.planApprovalError = null;
+    const snapshotRequest = active;
+    this.planApprovalRequest = null;
+    try {
+      await this.client.request("sessions.patch", {
+        key: active.sessionKey,
+        planApproval: {
+          action: "answer",
+          answer: sanitized,
+          ...(active.approvalId ? { approvalId: active.approvalId } : {}),
+          ...(active.question.questionId ? { questionId: active.question.questionId } : {}),
+        },
+      });
+      await resumePendingPlanInteraction(this.client, active.sessionKey);
+    } catch (err) {
+      this.planApprovalRequest = snapshotRequest;
+      this.planApprovalError = `Question answer failed: ${String(err)}`;
+    } finally {
+      this.planApprovalBusy = false;
+    }
+  }
+
+  /** Cancel the inline revise textarea WITHOUT submitting. */
+  handlePlanApprovalReviseCancel(): void {
+    this.planApprovalReviseOpen = false;
+    this.planApprovalReviseDraft = "";
+    this.planApprovalError = null;
+  }
+
+  handlePlanApprovalReviseDraftChange(text: string): void {
+    this.planApprovalReviseDraft = text;
+  }
+
+  /**
+   * PR-13 Bug 2: question-card "Other" inline-textarea handlers.
+   * Mirror the revise pattern. Open shows the textarea; Cancel returns
+   * to the option list (does NOT clear planApprovalRequest); Submit
+   * routes through the existing handlePlanApprovalAnswer with the
+   * typed text.
+   */
+  handlePlanApprovalQuestionOtherOpen(): void {
+    if (!this.planApprovalRequest?.question) {
+      return;
+    }
+    this.planApprovalQuestionOtherOpen = true;
+    this.planApprovalError = null;
+  }
+
+  handlePlanApprovalQuestionOtherCancel(): void {
+    this.planApprovalQuestionOtherOpen = false;
+    this.planApprovalQuestionOtherDraft = "";
+    this.planApprovalError = null;
+  }
+
+  handlePlanApprovalQuestionOtherDraftChange(text: string): void {
+    this.planApprovalQuestionOtherDraft = text;
+  }
+
+  async handlePlanApprovalQuestionOtherSubmit(): Promise<void> {
+    const draft = this.planApprovalQuestionOtherDraft.trim();
+    if (!draft) {
+      return;
+    }
+    // Clear the local textarea state before routing — handlePlanApprovalAnswer
+    // owns clearing the request itself.
+    this.planApprovalQuestionOtherOpen = false;
+    this.planApprovalQuestionOtherDraft = "";
+    await this.handlePlanApprovalAnswer(draft);
+  }
+
   handleGatewayUrlConfirm() {
     const nextGatewayUrl = this.pendingGatewayUrl;
     if (!nextGatewayUrl) {
@@ -790,9 +1261,292 @@ export class OpenClawApp extends LitElement {
       window.clearTimeout(this.sidebarCloseTimer);
       this.sidebarCloseTimer = null;
     }
+    // Capture the chat thread's scroll position before opening the
+    // sidebar — the layout reflow on .chat-main flex change otherwise
+    // resets the chat container scroll to top, yanking the user away
+    // from where they were reading. Restore on the next animation
+    // frame after Lit re-renders.
+    const threadEl = this.renderRoot?.querySelector?.(".chat-thread");
+    const savedScrollTop = threadEl instanceof HTMLElement ? threadEl.scrollTop : null;
+    const wasNearBottom =
+      threadEl instanceof HTMLElement
+        ? threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 60
+        : false;
     this.sidebarContent = content;
     this.sidebarError = null;
     this.sidebarOpen = true;
+    if (savedScrollTop !== null) {
+      // Defer to after the layout reflow completes.
+      requestAnimationFrame(() => {
+        const after = this.renderRoot?.querySelector?.(".chat-thread");
+        if (!(after instanceof HTMLElement)) {
+          return;
+        }
+        if (wasNearBottom) {
+          // Sticky bottom — pin to the new bottom after reflow.
+          after.scrollTop = after.scrollHeight;
+        } else {
+          after.scrollTop = savedScrollTop;
+        }
+      });
+    }
+  }
+
+  /**
+   * PR-8 follow-up: live update_plan refresh — every time the agent
+   * calls update_plan during execution, re-render the sidebar
+   * markdown so the user sees the latest checklist (boxes ticking off
+   * as the agent steps through). No-op if the sidebar isn't currently
+   * open with markdown content (don't yank focus from a different
+   * view the user is on).
+   */
+  refreshLivePlanSidebar(
+    plan: import("./app-tool-stream.ts").PlanApprovalRequest["plan"],
+    summary?: string,
+  ): void {
+    // Live-test iteration 1 Bug 2: read the persisted plan title for
+    // the active session so the live-update render keeps the title
+    // sticky. Without this, every `update_plan` tick would re-render
+    // the sidebar with header `(planning)` instead of the actual
+    // submitted plan name.
+    const activeSessionKey = this.sessionKey;
+    const row = activeSessionKey
+      ? this.sessionsResult?.sessions.find((s) => s.key === activeSessionKey)
+      : undefined;
+    const persistedTitle = (row?.planMode as { title?: unknown } | undefined)?.title;
+    const titleForView = typeof persistedTitle === "string" ? persistedTitle : undefined;
+    const md = buildPlanViewMarkdown(plan, summary, undefined, titleForView);
+    // ALWAYS track latest plan so the chat-controls "Plan view" button
+    // and `/plan view` slash command can re-open the sidebar with current
+    // content. Sidebar content is only updated if it's already showing
+    // a markdown plan (don't yank focus from a different open view).
+    this.latestPlanMarkdown = md;
+    if (this.sidebarOpen && this.sidebarContent?.kind === "markdown") {
+      this.sidebarContent = { kind: "markdown", content: md };
+    }
+  }
+
+  /**
+   * PR-8 follow-up Round 2: rebuild `latestPlanMarkdown` from the
+   * persisted `SessionEntry.planMode.lastPlanSteps` snapshot for the
+   * current session. Called when the sessions list updates so the
+   * Plan view button shows the latest plan after a hard refresh —
+   * before this hydrates, only stream events would update the markdown
+   * and a fresh subscription doesn't replay prior `update_plan` events.
+   *
+   * No-op when no snapshot exists for the active session (button still
+   * shows the placeholder) or when a snapshot is already loaded with
+   * the same content (avoids stomping fresher live-stream state).
+   */
+  hydratePlanViewFromSession(): void {
+    const activeSessionKey = this.sessionKey;
+    if (!activeSessionKey || !this.sessionsResult) {
+      return;
+    }
+    const row = this.sessionsResult.sessions.find((s) => s.key === activeSessionKey);
+    const snapshot = row?.planMode?.lastPlanSteps;
+    if (!snapshot || snapshot.length === 0) {
+      return;
+    }
+    // Live-test iteration 1 Bug 2: pass the persisted plan title so
+    // the sidebar header anchors on the actual plan name (not "Active
+    // plan"). Title is undefined pre-`exit_plan_mode` — the markdown
+    // builder falls back to "(planning)".
+    const persistedTitle = (row?.planMode as { title?: unknown } | undefined)?.title;
+    const titleForView = typeof persistedTitle === "string" ? persistedTitle : undefined;
+    const md = buildPlanViewMarkdown(snapshot, undefined, undefined, titleForView);
+    if (md === this.latestPlanMarkdown) {
+      return;
+    }
+    this.latestPlanMarkdown = md;
+    // If the sidebar is currently showing the placeholder for THIS
+    // session, swap it for the real plan. Don't yank focus from a
+    // different view the user is on.
+    if (
+      this.sidebarOpen &&
+      this.sidebarContent?.kind === "markdown" &&
+      this.sidebarContent.content === PLAN_VIEW_PLACEHOLDER_MARKDOWN
+    ) {
+      this.sidebarContent = { kind: "markdown", content: md };
+    }
+  }
+
+  private resetPlanApprovalLocalState(): void {
+    this.planApprovalReviseOpen = false;
+    this.planApprovalReviseDraft = "";
+    this.planApprovalQuestionOtherOpen = false;
+    this.planApprovalQuestionOtherDraft = "";
+    this.planApprovalError = null;
+    // PR #68939 follow-up (stale-state re-render fix): clear the
+    // dismissed-set when the interaction changes (new approvalId,
+    // different session, etc.) so a genuinely-new approval card on the
+    // same session can still appear. Without this clear, dismissing
+    // approval A would also block the eventual approval B in the same
+    // session.
+    if (this.planApprovalDismissedApprovalIds.size > 0) {
+      this.planApprovalDismissedApprovalIds = new Set<string>();
+    }
+  }
+
+  private buildHydratedPlanApprovalRequest(
+    row: NonNullable<NonNullable<typeof this.sessionsResult>["sessions"][number]>,
+  ): import("./app-tool-stream.ts").PlanApprovalRequest | null {
+    const pending = row.pendingInteraction;
+    if (!pending || pending.status !== "pending") {
+      return null;
+    }
+    const plan = (row.planMode?.lastPlanSteps ?? []).map((step) =>
+      Object.assign(
+        { step: step.step, status: step.status },
+        step.activeForm ? { activeForm: step.activeForm } : {},
+      ),
+    );
+    if (pending.kind === "plan") {
+      if (row.planMode?.approval !== "pending") {
+        return null;
+      }
+      return {
+        approvalId: pending.approvalId,
+        sessionKey: row.key,
+        title: pending.title,
+        plan,
+        receivedAt: pending.createdAt,
+      };
+    }
+    return {
+      approvalId: pending.approvalId,
+      sessionKey: row.key,
+      title: pending.title,
+      plan,
+      receivedAt: pending.createdAt,
+      question: {
+        prompt: pending.prompt,
+        options: pending.options,
+        allowFreetext: pending.allowFreetext,
+        ...(pending.questionId ? { questionId: pending.questionId } : {}),
+      },
+    };
+  }
+
+  hydratePlanApprovalFromSession(): void {
+    if (this.planApprovalBusy) {
+      return;
+    }
+    const activeSessionKey = this.sessionKey;
+    const row = this.sessionsResult?.sessions.find((session) => session.key === activeSessionKey);
+    const nextRequest = row ? this.buildHydratedPlanApprovalRequest(row) : null;
+    const previous = this.planApprovalRequest;
+    const previousQuestionId = previous?.question?.questionId;
+    const nextQuestionId = nextRequest?.question?.questionId;
+    const changedInteraction =
+      previous?.sessionKey !== nextRequest?.sessionKey ||
+      previous?.approvalId !== nextRequest?.approvalId ||
+      previousQuestionId !== nextQuestionId ||
+      Boolean(previous?.question) !== Boolean(nextRequest?.question);
+    if (!nextRequest) {
+      if (previous) {
+        this.planApprovalRequest = null;
+        this.resetPlanApprovalLocalState();
+      }
+      return;
+    }
+    // PR #68939 follow-up (stale-state re-render fix): if the user
+    // already got a stale-state rejection on this approvalId, do NOT
+    // re-create the popup. The local sessionsResult cache may still
+    // show approval=pending for an approvalId the server has since
+    // cleared; without this guard, the popup re-creates on every
+    // hydrate tick and the user sees their click do nothing visible.
+    // The dismissed set is cleared when the session changes (via
+    // resetPlanApprovalLocalState below + the !nextRequest branch
+    // above), so a genuinely-new approvalId on the same session still
+    // creates a fresh popup.
+    if (
+      nextRequest.approvalId &&
+      this.planApprovalDismissedApprovalIds.has(nextRequest.approvalId)
+    ) {
+      if (previous) {
+        this.planApprovalRequest = null;
+      }
+      return;
+    }
+    this.planApprovalRequest = nextRequest;
+    if (changedInteraction) {
+      this.resetPlanApprovalLocalState();
+    }
+  }
+
+  /**
+   * PR-8 follow-up: open the most-recent active plan in the right
+   * sidebar. Used by both the chat-controls "Plan view" button and
+   * the `/plan view` slash command. If the sidebar is already showing
+   * the plan (or the placeholder), toggle it closed. If no plan has
+   * been tracked yet, render the placeholder so the user knows the
+   * affordance exists.
+   *
+   * Round 2 fix: previously the close-check required
+   * `latestPlanMarkdown !== null`, but opening with the placeholder
+   * doesn't populate that field, so the second click never matched
+   * the close branch. Now the close branch fires when the sidebar
+   * shows EITHER the live plan markdown OR the shared placeholder
+   * constant, so the toggle is symmetric for both states.
+   */
+  togglePlanViewSidebar(): void {
+    const sidebarMd =
+      this.sidebarOpen && this.sidebarContent?.kind === "markdown"
+        ? this.sidebarContent.content
+        : null;
+    const isShowingPlanContent =
+      sidebarMd !== null &&
+      (sidebarMd === this.latestPlanMarkdown || sidebarMd === PLAN_VIEW_PLACEHOLDER_MARKDOWN);
+    if (isShowingPlanContent) {
+      this.handleCloseSidebar();
+      return;
+    }
+    this.handleOpenSidebar({
+      kind: "markdown",
+      content: this.latestPlanMarkdown ?? PLAN_VIEW_PLACEHOLDER_MARKDOWN,
+    });
+  }
+
+  /**
+   * PR-8 follow-up: render the proposed plan as markdown and open it
+   * in the right sidebar (read-only viewer, same path tool-output
+   * details use). Called both from the inline card's "Open plan"
+   * button AND auto-fired by handlePlanApprovalEvent when a fresh
+   * approval arrives so the user sees the full plan immediately.
+   */
+  openPlanInSidebar(request: import("./app-tool-stream.ts").PlanApprovalRequest): void {
+    // PR-9 Tier 1: prefer the agent-supplied title (filtered the same
+    // way as the inline-card headline) over summary, then fall back to
+    // "Proposed plan" so pre-Tier-1 agents render unchanged.
+    const rawTitle = request.title?.trim();
+    const isGenericTitle =
+      !rawTitle || rawTitle === "Plan approval requested" || rawTitle.startsWith("Plan approval —");
+    const headerCandidate = !isGenericTitle ? rawTitle : request.summary || "Proposed plan";
+    // PR-10: pass archetype fields so the sidebar markdown shows the
+    // full plan structure (analysis / assumptions / risks / verification
+    // / references) instead of just the step checklist.
+    // Live-test iteration 1 Bug 2: pass the trimmed agent-supplied
+    // title as the title param too (and keep the existing `summary`
+    // fallback path). The new param takes precedence in the markdown
+    // builder so the side panel header anchors on the actual plan
+    // name as soon as the approval card opens. `headerCandidate` is
+    // kept as the `summary` arg for backward-compat with pre-Tier-1
+    // agents whose request.title is generic.
+    const titleForView = !isGenericTitle && rawTitle ? rawTitle : undefined;
+    const md = buildPlanViewMarkdown(
+      request.plan,
+      headerCandidate,
+      {
+        ...(request.analysis ? { analysis: request.analysis } : {}),
+        ...(request.assumptions ? { assumptions: request.assumptions } : {}),
+        ...(request.risks ? { risks: request.risks } : {}),
+        ...(request.verification ? { verification: request.verification } : {}),
+        ...(request.references ? { references: request.references } : {}),
+      },
+      titleForView,
+    );
+    this.handleOpenSidebar({ kind: "markdown", content: md });
   }
 
   handleCloseSidebar() {

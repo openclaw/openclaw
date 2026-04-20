@@ -46,6 +46,7 @@ export type SlashCommandResult = {
     | "stop"
     | "clear"
     | "toggle-focus"
+    | "toggle-plan-view"
     | "navigate-usage";
   /** Optional session-level directive changes that the caller should mirror locally. */
   sessionPatch?: {
@@ -55,6 +56,14 @@ export type SlashCommandResult = {
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
   pendingCurrentRun?: boolean;
+  /**
+   * When true, the caller should trigger the hidden plan-resume path
+   * after the patch lands. The authoritative decision/answer context
+   * already lives in the gateway-owned pending injection queue; the
+   * resume call only wakes the next turn without echoing synthetic
+   * control text into visible chat history.
+   */
+  resumePlanInteraction?: boolean;
 };
 
 export type SlashCommandContext = {
@@ -122,8 +131,325 @@ export async function executeSlashCommand(
       return await executeSteer(client, sessionKey, args, context);
     case "redirect":
       return await executeRedirect(client, sessionKey, args, context);
+    case "plan":
+      return await executePlan(client, sessionKey, args, context);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
+  }
+}
+
+/**
+ * `/plan on|off|status|view|auto [on|off]` — manage plan-mode session state.
+ *
+ * - `on` / `off`: toggle planMode via `setSessionPlanMode`
+ * - `view`: UI-only sidebar toggle (no gateway round-trip)
+ * - `status`: print usage / discoverability helper
+ * - `auto on|off`: PR-10 — toggle the session's autoApprove flag via
+ *   `sessions.patch { planApproval: { action: "auto", autoEnabled }}`.
+ *   When ON, future `exit_plan_mode` submissions auto-resolve as
+ *   "approve" without user confirmation (Cloud Code parity for
+ *   long-running unattended sessions).
+ *
+ * All paths are validated against the gateway's
+ * `agents.defaults.planMode.enabled` opt-in gate.
+ */
+/**
+ * PR-11 review: shared error mapper for the universal /plan
+ * subcommands. Maps gateway errors to friendly chat messages.
+ */
+function mapPlanCommandError(err: unknown, verb: string): SlashCommandResult {
+  const msg = String(err);
+  if (msg.includes("plan mode is disabled")) {
+    return {
+      content:
+        "Plan mode is disabled at the config level. Set `agents.defaults.planMode.enabled: true` and restart the gateway.",
+    };
+  }
+  if (msg.includes("stale approvalId") || msg.includes("terminal approval state")) {
+    return {
+      content:
+        "Plan was already resolved (likely a duplicate command). Use `/plan status` to see the current state.",
+    };
+  }
+  if (msg.includes("requires an active plan-mode session")) {
+    return {
+      content: `No pending plan to ${verb} — the agent hasn't submitted a plan via exit_plan_mode yet, or the previous one was already resolved.`,
+    };
+  }
+  if (msg.includes("PLAN_APPROVAL_GATE_STATE_UNAVAILABLE")) {
+    return {
+      content:
+        "Plan approval could not be resumed safely because the subagent gate state was lost. Refresh the session or ask the agent to resubmit the plan.",
+    };
+  }
+  return { content: `Failed to ${verb}: ${msg}` };
+}
+
+/**
+ * Codex P1 review #68939 (2026-04-19): look up the live `approvalId`
+ * for a session from the cached `sessionsResult` snapshot so the
+ * webchat /plan accept|revise|answer paths can include it in the
+ * `sessions.patch` call. Pre-fix, the webchat patches omitted
+ * `approvalId` entirely — letting a stale `/plan accept` typed AFTER
+ * the previous plan was resolved silently approve a freshly-submitted
+ * one (race window between approval landing and the next plan
+ * submission). Mirrors the backend `commands-plan.ts` handler which
+ * always threads `planMode.approvalId` (see line 431/447 in that file).
+ *
+ * Returns `undefined` when no live planMode is cached or when no
+ * pending approval exists. The gateway-side handler still validates
+ * `approvalId` server-side; passing `undefined` preserves the prior
+ * looser behavior so this fix is non-breaking when the snapshot is
+ * stale or absent.
+ */
+function resolvePendingApprovalIdFromContext(
+  sessionKey: string,
+  context: SlashCommandContext,
+): string | undefined {
+  const rows = context.sessionsResult?.sessions;
+  if (!Array.isArray(rows)) {
+    return undefined;
+  }
+  for (const row of rows) {
+    if (row?.key === sessionKey) {
+      const pm = row.planMode;
+      if (pm && pm.approval === "pending" && typeof pm.approvalId === "string" && pm.approvalId) {
+        return pm.approvalId;
+      }
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Codex P2 review #68939 (2026-04-19): the question approval is a
+ * separate id namespace from the plan approval. Pre-fix, the webchat
+ * `/plan answer` path called `resolvePendingApprovalIdFromContext`
+ * which only returns `planMode.approvalId` (the PLAN id) — the
+ * gateway-side answer-guard validates against
+ * `pendingQuestionApprovalId` (the QUESTION id) and would reject
+ * the patch as a stale token. New helper reads the question-specific
+ * id from the cached session row (now exposed via
+ * `GatewaySessionRow.pendingQuestionApprovalId` per the third-wave
+ * companion change in `session-utils.ts`).
+ *
+ * Returns `undefined` when no question is pending; caller surfaces
+ * a friendly "no pending question" message in that case.
+ */
+function resolvePendingQuestionFromContext(
+  sessionKey: string,
+  context: SlashCommandContext,
+): { approvalId?: string; questionId?: string } {
+  const rows = context.sessionsResult?.sessions;
+  if (!Array.isArray(rows)) {
+    return {};
+  }
+  for (const row of rows) {
+    if (row?.key === sessionKey) {
+      if (row.pendingInteraction?.kind === "question") {
+        return {
+          approvalId: row.pendingInteraction.approvalId,
+          questionId: row.pendingInteraction.questionId,
+        };
+      }
+      const id = row.pendingQuestionApprovalId;
+      if (typeof id === "string" && id) {
+        return { approvalId: id };
+      }
+      return {};
+    }
+  }
+  return {};
+}
+
+async function executePlan(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const raw = normalizeLowercaseStringOrEmpty(args);
+  // PR-8 follow-up: `/plan view` is a UI-only toggle that opens the
+  // plan-view sidebar with the most recent live plan (or a placeholder
+  // when none has been emitted yet). Mirrors the chat-controls Plan
+  // view button — handled by the host via the `toggle-plan-view`
+  // action; no gateway round-trip.
+  if (raw === "view") {
+    return {
+      content: "Toggling plan view sidebar.",
+      action: "toggle-plan-view",
+    };
+  }
+  // PR-10: `/plan auto on|off` toggles autoApprove. Without an
+  // explicit on/off arg, defaults to on (matches the chip's "switch
+  // INTO Plan ⚡" intent).
+  if (raw === "auto" || raw.startsWith("auto ")) {
+    const tail = raw.slice(4).trim();
+    let autoEnabled: boolean;
+    if (!tail || tail === "on") {
+      autoEnabled = true;
+    } else if (tail === "off") {
+      autoEnabled = false;
+    } else {
+      return {
+        content: `Unrecognized auto value "${tail}". Valid: on, off.`,
+      };
+    }
+    try {
+      await setSessionPlanAutoApprove(client, sessionKey, autoEnabled);
+      return {
+        content: autoEnabled
+          ? "Plan auto-approve **enabled** — future plan submissions resolve as approved without confirmation."
+          : "Plan auto-approve **disabled** — plan submissions require manual confirmation.",
+        action: "refresh",
+      };
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("plan mode is disabled")) {
+        return {
+          content:
+            "Plan mode is disabled at the config level. Set `agents.defaults.planMode.enabled: true` and restart the gateway.",
+        };
+      }
+      return { content: `Failed to set plan auto-approve: ${msg}` };
+    }
+  }
+  // PR-11 review fix (Copilot #3105169610): the universal /plan
+  // subcommands (accept | accept edits | revise <feedback> | restate |
+  // answer <text>) were intercepted by the local executor's old
+  // "on/off/status/view/auto only" gate and rejected before reaching
+  // the backend handler. Route them to the same sessions.patch shapes
+  // that backend `commands-plan.ts` uses so webchat has parity with
+  // every other channel (Telegram/Discord/Slack/etc).
+  if (raw === "accept" || raw.startsWith("accept ")) {
+    const allowEdits = raw === "accept edits" || raw === "accept edit";
+    const approvalId = resolvePendingApprovalIdFromContext(sessionKey, context);
+    try {
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        planApproval: {
+          action: allowEdits ? "edit" : "approve",
+          ...(approvalId ? { approvalId } : {}),
+        },
+      });
+      return {
+        content: allowEdits
+          ? "Plan **accepted with edits** — agent may adjust steps as it executes."
+          : "Plan **accepted** — agent will execute as proposed.",
+        action: "refresh",
+        resumePlanInteraction: true,
+      };
+    } catch (err) {
+      return mapPlanCommandError(err, "accept");
+    }
+  }
+  if (raw === "revise" || raw.startsWith("revise ")) {
+    const feedback = args.trim().slice(6).trim();
+    if (!feedback) {
+      return {
+        content:
+          "Usage: `/plan revise <feedback>` — give the agent something to revise toward, e.g. `/plan revise add error handling for the websocket reconnect`.",
+      };
+    }
+    const approvalId = resolvePendingApprovalIdFromContext(sessionKey, context);
+    try {
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        planApproval: { action: "reject", feedback, ...(approvalId ? { approvalId } : {}) },
+      });
+      return {
+        content: `Plan returned for revision with feedback: "${feedback}"`,
+        action: "refresh",
+        resumePlanInteraction: true,
+      };
+    } catch (err) {
+      return mapPlanCommandError(err, "revise");
+    }
+  }
+  if (raw === "answer" || raw.startsWith("answer ")) {
+    const answer = args.trim().slice(6).trim();
+    if (!answer) {
+      return {
+        content: "Usage: `/plan answer <text>` — answer the agent's `ask_user_question` prompt.",
+      };
+    }
+    // Codex P2 review #68939 (2026-04-19): use the
+    // QUESTION-specific approvalId, not the plan approvalId. The
+    // gateway-side answer-guard validates against
+    // `pendingQuestionApprovalId` (a separate token namespace from
+    // `planMode.approvalId`); pre-fix, the webchat `/plan answer`
+    // path threaded the plan id and the patch was rejected as a
+    // stale token.
+    const pendingQuestion = resolvePendingQuestionFromContext(sessionKey, context);
+    const questionApprovalId = pendingQuestion.approvalId;
+    if (!questionApprovalId) {
+      return {
+        content:
+          "No pending `ask_user_question` for this session — `/plan answer` requires an active question.",
+      };
+    }
+    try {
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        planApproval: {
+          action: "answer",
+          answer,
+          approvalId: questionApprovalId,
+          ...(pendingQuestion.questionId ? { questionId: pendingQuestion.questionId } : {}),
+        },
+      });
+      return {
+        content: `Question answered: "${answer}"`,
+        action: "refresh",
+        resumePlanInteraction: true,
+      };
+    } catch (err) {
+      return mapPlanCommandError(err, "answer");
+    }
+  }
+  if (raw === "restate") {
+    // Webchat already shows the live plan in the sidebar; redirect to
+    // /plan view rather than duplicating the rendered plan in chat.
+    return {
+      content:
+        "On webchat, use `/plan view` (or click the Plan view button in the chat controls) to see the active plan in the sidebar.",
+      action: "toggle-plan-view",
+    };
+  }
+
+  if (!raw || raw === "status") {
+    return {
+      content: formatDirectiveOptions(
+        "Usage: `/plan on` to enter plan mode, `/plan off` to exit, `/plan view` to toggle the sidebar, `/plan auto on|off` to toggle auto-approve, `/plan accept`/`/plan accept edits`/`/plan revise <feedback>`/`/plan answer <text>` to resolve.",
+        "on, off, status, view, auto, accept, revise, answer",
+      ),
+    };
+  }
+  if (raw !== "on" && raw !== "off") {
+    return {
+      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status, view, auto, accept, revise, answer.`,
+    };
+  }
+  const mode: "plan" | "normal" = raw === "on" ? "plan" : "normal";
+  try {
+    await setSessionPlanMode(client, sessionKey, mode);
+    return {
+      content:
+        mode === "plan"
+          ? "Plan mode **enabled** — write/edit/exec tools blocked until plan approved."
+          : "Plan mode **disabled** — mutations unblocked.",
+      action: "refresh",
+    };
+  } catch (err) {
+    const msg = String(err);
+    if (msg.includes("plan mode is disabled")) {
+      return {
+        content:
+          "Plan mode is disabled at the config level. Set `agents.defaults.planMode.enabled: true` and restart the gateway.",
+      };
+    }
+    return { content: `Failed to set plan mode: ${msg}` };
   }
 }
 
@@ -370,6 +696,54 @@ async function executeFast(
   } catch (err) {
     return { content: `Failed to set fast mode: ${String(err)}` };
   }
+}
+
+/**
+ * Set the session's plan-mode flag on the backend (PR-8).
+ *
+ * - `"plan"`: arms the runtime mutation gate — write/edit/exec/etc. are
+ *   blocked until the user approves a plan via the approval flow OR the
+ *   user toggles back to `"normal"`.
+ * - `"normal"`: clears any pending plan-mode state and unblocks mutations.
+ *
+ * Mirrors the `thinkingLevel` / `fastMode` patch pattern above so
+ * consumers (the mode switcher chip, `/plan` slash command if we add
+ * one later) get a single helper they can call without knowing the
+ * wire shape. Throws on patch failure so callers can surface an error
+ * rather than silently failing state updates.
+ */
+export async function setSessionPlanMode(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  mode: "plan" | "normal",
+): Promise<void> {
+  await client.request("sessions.patch", { key: sessionKey, planMode: mode });
+}
+
+/**
+ * PR-10: toggle the session's plan-mode autoApprove flag.
+ *
+ * - `true`: future `exit_plan_mode` submissions auto-resolve as
+ *   "approve" without user confirmation. The plan-snapshot persister's
+ *   auto-approve branch (`autoApproveIfEnabled`) reads this flag and
+ *   fires the approve action immediately on emission.
+ * - `false`: clears the flag. Pending plans surfaced after this point
+ *   wait for manual confirmation through the inline approval card or
+ *   channel-native buttons (PR-11).
+ *
+ * The patch handler accepts the toggle even when no plan-mode session
+ * is currently active — this lets users pre-arm auto-approve before
+ * entering plan mode, matching the chip's "Plan ⚡" intent.
+ */
+export async function setSessionPlanAutoApprove(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  autoEnabled: boolean,
+): Promise<void> {
+  await client.request("sessions.patch", {
+    key: sessionKey,
+    planApproval: { action: "auto", autoEnabled },
+  });
 }
 
 async function executeUsage(
