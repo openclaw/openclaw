@@ -25,6 +25,10 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+const CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS = 10_000;
+
+type TelegramBot = ReturnType<typeof createTelegramBot>;
+type TelegramApiAbortSignal = Parameters<TelegramBot["api"]["getUpdates"]>[1];
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -43,7 +47,8 @@ const waitForGracefulStop = async (stop: () => Promise<void>) => {
   }
 };
 
-type TelegramBot = ReturnType<typeof createTelegramBot>;
+const telegramApiTimeoutSignal = (timeoutMs: number): TelegramApiAbortSignal =>
+  AbortSignal.timeout(timeoutMs) as unknown as TelegramApiAbortSignal;
 
 type TelegramPollingSessionOpts = {
   token: string;
@@ -212,7 +217,7 @@ export class TelegramPollingSession {
     try {
       await bot.api.getUpdates(
         { offset: lastUpdateId + 1, limit: 1, timeout: 0 },
-        { signal: AbortSignal.timeout(10000) },
+        telegramApiTimeoutSignal(CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS),
       );
     } catch {
       // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
