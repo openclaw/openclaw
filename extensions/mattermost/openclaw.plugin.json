@@ -1,6 +1,9 @@
 {
   "id": "mattermost",
   "channels": ["mattermost"],
+  "activation": {
+    "onRoutes": ["gateway-plugin-http"]
+  },
   "channelEnvVars": {
     "mattermost": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
   },

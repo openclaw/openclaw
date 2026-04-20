@@ -13,6 +13,7 @@ import {
 } from "./manifest-command-aliases.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import { normalizeActivationRouteId } from "./route-id-normalize.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
@@ -487,7 +488,13 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   const onAgentHarnesses = normalizeTrimmedStringList(value.onAgentHarnesses);
   const onCommands = normalizeTrimmedStringList(value.onCommands);
   const onChannels = normalizeTrimmedStringList(value.onChannels);
-  const onRoutes = normalizeTrimmedStringList(value.onRoutes);
+  const onRoutes = Array.from(
+    new Set(
+      normalizeTrimmedStringList(value.onRoutes).map((routeId) =>
+        normalizeActivationRouteId(routeId),
+      ),
+    ),
+  );
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -507,7 +514,6 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
 
   return Object.keys(activation).length > 0 ? activation : undefined;
 }
-
 function normalizeManifestSetupProviders(
   value: unknown,
 ): PluginManifestSetupProvider[] | undefined {

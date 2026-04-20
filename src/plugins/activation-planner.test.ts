@@ -65,7 +65,7 @@ describe("resolveManifestActivationPluginIds", () => {
             tools: ["web-search"],
           },
           activation: {
-            onRoutes: ["webhook"],
+            onRoutes: ["gateway-webhook"],
             onCommands: ["demo-tools"],
           },
           origin: "workspace",
@@ -146,6 +146,15 @@ describe("resolveManifestActivationPluginIds", () => {
         trigger: {
           kind: "route",
           route: "webhook",
+        },
+      }),
+    ).toEqual(["demo-channel"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "route",
+          route: "gateway-plugin-http",
         },
       }),
     ).toEqual(["demo-channel"]);

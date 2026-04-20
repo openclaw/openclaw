@@ -2,6 +2,9 @@
   "id": "webhooks",
   "name": "Webhooks",
   "description": "Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.",
+  "activation": {
+    "onRoutes": ["gateway-plugin-http"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

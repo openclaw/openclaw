@@ -1,6 +1,9 @@
 {
   "id": "nostr",
   "channels": ["nostr"],
+  "activation": {
+    "onRoutes": ["gateway-plugin-http"]
+  },
   "channelEnvVars": {
     "nostr": ["NOSTR_PRIVATE_KEY"]
   },

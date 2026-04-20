@@ -1,6 +1,9 @@
 {
   "id": "synology-chat",
   "channels": ["synology-chat"],
+  "activation": {
+    "onRoutes": ["gateway-plugin-http"]
+  },
   "channelEnvVars": {
     "synology-chat": [
       "SYNOLOGY_CHAT_TOKEN",

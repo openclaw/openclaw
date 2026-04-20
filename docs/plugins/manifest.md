@@ -267,7 +267,7 @@ change correctness while legacy manifest ownership fallbacks still exist.
     "onProviders": ["openai"],
     "onCommands": ["models"],
     "onChannels": ["web"],
-    "onRoutes": ["gateway-webhook"],
+    "onRoutes": ["gateway-plugin-http"],
     "onCapabilities": ["provider", "tool"]
   }
 }
@@ -290,6 +290,8 @@ Current live consumers:
 - provider-triggered setup/runtime planning falls back to legacy
   `providers[]` and top-level `cliBackends[]` ownership when explicit provider
   activation metadata is missing
+- route-triggered gateway plugin HTTP planning currently uses `onRoutes` as a
+  narrowing hint before it falls back to the pinned startup route registry
 
 ## setup reference
 

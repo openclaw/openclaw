@@ -1119,6 +1119,9 @@ Route fields:
 Notes:
 
 - `api.registerHttpHandler(...)` was removed and will cause a plugin-load error. Use `api.registerHttpRoute(...)` instead.
+- `activation.onRoutes` can declare cheap route-owner hints such as
+  `"gateway-plugin-http"` so the gateway can narrow plugin HTTP route loads
+  before falling back to the pinned startup registry.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.

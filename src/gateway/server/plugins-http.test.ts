@@ -297,6 +297,38 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(explicitRouteHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("tries a scoped route registry when the active startup registry misses", async () => {
+    const scopedRouteHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 206;
+      return true;
+    });
+    const scopedRegistry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/demo",
+          auth: "plugin",
+          handler: scopedRouteHandler,
+        }),
+      ],
+    });
+    const resolveScopedRegistry = vi.fn(() => scopedRegistry);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry(),
+      log: createPluginLog(),
+      resolveScopedRegistry,
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/demo" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(resolveScopedRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routeIds: ["gateway-plugin-http"],
+      }),
+    );
+    expect(scopedRouteHandler).toHaveBeenCalledTimes(1);
+  });
+
   it("handles routes registered into the pinned startup registry after the active registry changes", async () => {
     const startupRegistry = createTestRegistry();
     const laterActiveRegistry = createTestRegistry();

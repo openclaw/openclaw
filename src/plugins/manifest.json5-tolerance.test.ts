@@ -132,7 +132,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         onProviders: ["openai", "openai-codex"],
         onCommands: ["models"],
         onChannels: ["web"],
-        onRoutes: ["gateway-webhook"],
+        onRoutes: ["gateway-plugin-http"],
         onCapabilities: ["provider", "tool"],
       });
       expect(result.manifest.setup).toEqual({

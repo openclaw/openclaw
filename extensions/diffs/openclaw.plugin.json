@@ -2,6 +2,9 @@
   "id": "diffs",
   "name": "Diffs",
   "description": "Read-only diff viewer and file renderer for agents.",
+  "activation": {
+    "onRoutes": ["gateway-plugin-http"]
+  },
   "skills": ["./skills"],
   "uiHints": {
     "viewerBaseUrl": {

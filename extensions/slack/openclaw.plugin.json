@@ -1,6 +1,9 @@
 {
   "id": "slack",
   "channels": ["slack"],
+  "activation": {
+    "onRoutes": ["gateway-plugin-http"]
+  },
   "channelEnvVars": {
     "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"]
   },

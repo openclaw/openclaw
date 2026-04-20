@@ -3,6 +3,7 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { GATEWAY_PLUGIN_HTTP_ROUTE_ID } from "../../plugins/runtime/http-route-registry-loader.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
@@ -60,25 +61,35 @@ export type PluginHttpRequestHandler = (
   dispatchContext?: PluginRouteDispatchContext,
 ) => Promise<boolean>;
 
+export type ScopedPluginRouteRegistryResolver = (params: {
+  pathContext: PluginRoutePathContext;
+  routeIds: readonly string[];
+}) => PluginRegistry | undefined;
+
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
+  resolveScopedRegistry?: ScopedPluginRouteRegistryResolver;
 }): PluginHttpRequestHandler {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    const registry = resolveActivePluginHttpRouteRegistry(params.registry);
-    const routes = registry.httpRoutes ?? [];
-    if (routes.length === 0) {
-      return false;
-    }
-
+    const activeRegistry = resolveActivePluginHttpRouteRegistry(params.registry);
     const pathContext =
       providedPathContext ??
       (() => {
         const url = new URL(req.url ?? "/", "http://localhost");
         return resolvePluginRoutePathContext(url.pathname);
       })();
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    let matchedRoutes = findMatchingPluginHttpRoutes(activeRegistry, pathContext);
+    if (matchedRoutes.length === 0) {
+      const scopedRegistry = params.resolveScopedRegistry?.({
+        pathContext,
+        routeIds: [GATEWAY_PLUGIN_HTTP_ROUTE_ID],
+      });
+      if (scopedRegistry) {
+        matchedRoutes = findMatchingPluginHttpRoutes(scopedRegistry, pathContext);
+      }
+    }
     if (matchedRoutes.length === 0) {
       return false;
     }

@@ -1,6 +1,9 @@
 {
   "id": "line",
   "channels": ["line"],
+  "activation": {
+    "onRoutes": ["gateway-plugin-http"]
+  },
   "channelEnvVars": {
     "line": ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"]
   },

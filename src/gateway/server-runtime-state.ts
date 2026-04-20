@@ -12,6 +12,7 @@ import {
   releasePinnedPluginHttpRouteRegistry,
   resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
+import { loadScopedGatewayPluginHttpRouteRegistry } from "../plugins/runtime/http-route-registry-loader.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -32,6 +33,7 @@ import {
   createGatewayHttpServer,
   type HookClientIpConfig,
 } from "./server-http.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -50,6 +52,7 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
+  workspaceDir?: string;
   bindHost: string;
   port: number;
   controlUiEnabled: boolean;
@@ -68,6 +71,7 @@ export async function createGatewayRuntimeState(params: {
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
+  coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   pinChannelRegistry?: boolean;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
@@ -147,6 +151,15 @@ export async function createGatewayRuntimeState(params: {
     const handlePluginRequest = createGatewayPluginRequestHandler({
       registry: params.pluginRegistry,
       log: params.logPlugins,
+      resolveScopedRegistry: ({ routeIds }) =>
+        loadScopedGatewayPluginHttpRouteRegistry({
+          config: params.cfg,
+          activationSourceConfig: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+          coreGatewayHandlers: params.coreGatewayHandlers,
+          routeIds,
+        }),
     });
     const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
       return shouldEnforceGatewayAuthForPluginPath(
