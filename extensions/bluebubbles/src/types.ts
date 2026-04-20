@@ -1,3 +1,4 @@
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -209,7 +210,10 @@ export async function blueBubblesFetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...safeInit, signal: controller.signal });
+    return await fetchWithRuntimeDispatcherOrMockedGlobal(url, {
+      ...safeInit,
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timer);
   }
