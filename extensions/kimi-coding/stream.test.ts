@@ -197,7 +197,8 @@ describe("kimi tool-call markup wrapper", () => {
 
   it("supports async stream functions", async () => {
     const finalMessage = createAssistantTextMessage(KIMI_TOOL_TEXT);
-    const baseStreamFn: StreamFn = async () => createResultStreamFn(finalMessage)();
+    const baseStreamFn: StreamFn = async (model, context, options) =>
+      createResultStreamFn(finalMessage)(model, context, options);
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
     const stream = await callKimiStream(wrapped);
