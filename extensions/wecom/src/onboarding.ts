@@ -111,8 +111,8 @@ export const wecomSetupWizard: ChannelSetupWizard = {
     unconfiguredLabel: "Bot ID and Secret required",
     configuredHint: "Configured",
     unconfiguredHint: "Setup required",
-    resolveConfigured: ({ cfg }) => {
-      const account = resolveWeComAccountMulti({ cfg });
+    resolveConfigured: ({ cfg, accountId }) => {
+      const account = resolveWeComAccountMulti({ cfg, accountId });
       return Boolean(account.botId?.trim() && account.secret?.trim());
     },
     resolveStatusLines: ({ configured }) => {
@@ -133,8 +133,8 @@ export const wecomSetupWizard: ChannelSetupWizard = {
       "",
       "Setup guide: https://docs.openclaw.ai/channels/wecom",
     ],
-    shouldShow: ({ cfg }) => {
-      const account = resolveWeComAccountMulti({ cfg });
+    shouldShow: ({ cfg, accountId }) => {
+      const account = resolveWeComAccountMulti({ cfg, accountId });
       return !account.botId?.trim() || !account.secret?.trim();
     },
   },
@@ -184,11 +184,11 @@ export const wecomSetupWizard: ChannelSetupWizard = {
   ],
 
   // ── Post-completion finalization ──────────────────────────────────────
-  finalize: async ({ cfg }) => {
+  finalize: async ({ cfg, accountId }) => {
     // Ensure the channel is enabled after configuration is complete
-    const account = resolveWeComAccountMulti({ cfg });
+    const account = resolveWeComAccountMulti({ cfg, accountId });
     if (account.botId?.trim() && account.secret?.trim() && !account.enabled) {
-      return { cfg: setWeComAccountMulti(cfg, { enabled: true }) };
+      return { cfg: setWeComAccountMulti(cfg, { enabled: true }, accountId) };
     }
     return undefined;
   },
@@ -197,8 +197,8 @@ export const wecomSetupWizard: ChannelSetupWizard = {
   completionNote: {
     title: "WeCom Configuration Complete",
     lines: ["WeCom bot has been configured.", "Run `openclaw start` to start the service."],
-    shouldShow: ({ cfg }) => {
-      const account = resolveWeComAccountMulti({ cfg });
+    shouldShow: ({ cfg, accountId }) => {
+      const account = resolveWeComAccountMulti({ cfg, accountId });
       return Boolean(account.botId?.trim() && account.secret?.trim());
     },
   },

@@ -27,16 +27,23 @@ export default defineBundledChannelEntry({
     });
   },
   registerFull(api: OpenClawPluginApi) {
-    // Register wecom_mcp tool: invoke WeCom MCP Server via HTTP
+    // Register wecom_mcp tool: invoke WeCom MCP Server via HTTP.
+    // Use factory form so the tool receives the trusted per-session context
+    // (e.g. ctx.agentAccountId) and routes MCP calls to the active account in
+    // multi-account setups, avoiding cross-account data leakage.
     const createWeComMcpTool = loadBundledEntryExportSync<
       typeof import("./mcp-api.js").createWeComMcpTool
     >(import.meta.url, {
       specifier: "./mcp-api.js",
       exportName: "createWeComMcpTool",
     });
-    api.registerTool(createWeComMcpTool() as unknown as Parameters<typeof api.registerTool>[0], {
-      name: "wecom_mcp",
-    });
+    api.registerTool(
+      ((ctx: { agentAccountId?: string }) =>
+        createWeComMcpTool(ctx.agentAccountId ?? "default")) as Parameters<
+        typeof api.registerTool
+      >[0],
+      { name: "wecom_mcp" },
+    );
 
     // Inject media-send instructions (WeCom channel only)
     api.on("before_prompt_build", (_event, ctx) => {
