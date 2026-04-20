@@ -167,8 +167,8 @@ enum ModelCatalogLoader {
 
     private static func extractModelsObjectLiteral(
         from source: String,
-        exportRange: Range<String.Index>,
-    ) -> String? {
+        exportRange: Range<String.Index>) -> String?
+    {
         guard let firstBrace = source[exportRange.upperBound...].firstIndex(of: "{"),
               let lastBrace = self.findMatchingClosingBrace(in: source, openingBrace: firstBrace)
         else {
@@ -331,8 +331,8 @@ enum ModelCatalogLoader {
     private static func readBareObjectKey(
         in source: String,
         at index: String.Index,
-        containers: [ContainerState],
-    ) -> (identifier: String, endIndex: String.Index)? {
+        containers: [ContainerState]) -> (identifier: String, endIndex: String.Index)?
+    {
         guard let top = containers.last,
               top.kind == .object,
               top.expectsObjectKey,
@@ -357,8 +357,8 @@ enum ModelCatalogLoader {
     private static func typeAssertionEnd(
         in source: String,
         at index: String.Index,
-        containers: [ContainerState],
-    ) -> String.Index? {
+        containers: [ContainerState]) -> String.Index?
+    {
         if let top = containers.last, top.kind == .object, top.expectsObjectKey {
             return nil
         }
