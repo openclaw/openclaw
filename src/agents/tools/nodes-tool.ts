@@ -323,6 +323,15 @@ export function createNodesTool(options?: {
                 `file.read: file size ${payload.size} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
               );
             }
+            const decodedBuf =
+              payload.encoding === "base64"
+                ? Buffer.from(payload.data, "base64")
+                : Buffer.from(payload.data, "utf8");
+            if (decodedBuf.length > FILE_TRANSFER_MAX_BYTES) {
+              throw new Error(
+                `file.read: actual data size ${decodedBuf.length} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
+              );
+            }
             const localPath = outPath ?? fileTempPath({ remotePath });
             await writeFilePayloadToFile(localPath, payload);
             return {
@@ -368,6 +377,11 @@ export function createNodesTool(options?: {
               pushData = inlineData!;
               pushEncoding = "utf8";
               size = Buffer.byteLength(pushData, "utf8");
+              if (size > FILE_TRANSFER_MAX_BYTES) {
+                throw new Error(
+                  `file_push: inline data size ${size} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
+                );
+              }
             }
 
             await callGatewayTool("node.invoke", gatewayOpts, {

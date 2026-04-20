@@ -27,7 +27,7 @@ export function parseFileReadPayload(value: unknown): FileReadPayload {
   if (!filePath) {
     throw new Error("invalid file.read payload: missing path");
   }
-  if (!data) {
+  if (data === undefined) {
     throw new Error(`invalid file.read payload: missing data for ${filePath}`);
   }
   if (encoding !== "base64" && encoding !== "utf8") {
