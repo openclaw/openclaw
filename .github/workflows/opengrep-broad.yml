@@ -1,0 +1,89 @@
+name: OpenGrep — Broad
+
+# Runs the broad/review-aid OpenGrep rule super-config that was compiled from
+# the detector-review pipeline. These rules each correspond to a specific GHSA
+# advisory and ship with `metadata.detector-bucket: broad`. Broad rules are
+# intentionally noisier than the precise set — their job is to surface
+# review-worthy code paths, not to deliver high-precision findings.
+#
+# This workflow is manual-dispatch only. It uploads SARIF to GitHub Code
+# Scanning under category `opengrep-broad` so findings show up in the Security
+# tab without colliding with CodeQL or the precise ruleset.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: opengrep-broad-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan (broad)
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install opengrep
+        env:
+          # Pin both the install script (by commit SHA) and the binary version.
+          # The script SHA must match the v1.19.0 release tag in opengrep/opengrep
+          # so a compromised or force-pushed `main` cannot RCE in our CI runner.
+          # Bump both together when upgrading.
+          OPENGREP_VERSION: v1.19.0
+          OPENGREP_INSTALL_SHA: 9a4c0a68220618441608cd2bad4ff2eddccf8113
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
+            | bash -s -- -v "$OPENGREP_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify opengrep
+        run: opengrep --version
+
+      - name: Run opengrep
+        # `continue-on-error` so findings never block the workflow. Broad rules
+        # are designed to be noisy; the intent is to surface signal in the
+        # Security tab, not gate merges.
+        # Scan first-party source dirs only — node_modules/, vendor/, assets/,
+        # test-fixtures/ etc. are deliberately excluded. Per-rule `paths.include`
+        # filters in the compiled rulepack scope each rule further.
+        continue-on-error: true
+        run: |
+          mkdir -p .opengrep-out
+          # Test/fixture/QA path exclusions live in `.semgrepignore` at the
+          # repo root and are picked up automatically. Keep this command in
+          # lockstep with `scripts/run-opengrep.sh` so local and CI scans
+          # produce identical findings.
+          opengrep scan \
+            --no-strict \
+            --config security/opengrep/broad.yml \
+            --sarif-output=.opengrep-out/broad.sarif \
+            --no-git-ignore \
+            src/ extensions/ apps/ packages/ scripts/
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        # Only upload if the scan actually produced a SARIF file. Without this
+        # guard, an opengrep crash before output write would hard-fail the job
+        # despite `continue-on-error: true` on the scan step.
+        if: always() && hashFiles('.opengrep-out/broad.sarif') != ''
+        with:
+          sarif_file: .opengrep-out/broad.sarif
+          category: opengrep-broad
+
+      - name: Upload SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opengrep-broad-sarif
+          path: .opengrep-out/broad.sarif
+          if-no-files-found: warn
+          retention-days: 30
