@@ -184,4 +184,24 @@ describe("copilot-sdk shim server", () => {
     expect(status).toBe(500);
     expect((body as { error: { message: string } }).error.message).toBe("sdk boom");
   });
+
+  it("falls back to ephemeral port on EADDRINUSE", async () => {
+    const client = buildFakeClient();
+    // Occupy a fixed port
+    const blocker = await startShimServer({ client, port: 19876 });
+    handles.push(blocker);
+    expect(blocker.port).toBe(19876);
+
+    // Second server on the same fixed port should fall back to ephemeral
+    const fallback = await startShimServer({ client, port: 19876 });
+    handles.push(fallback);
+    expect(fallback.port).not.toBe(19876);
+    expect(fallback.port).toBeGreaterThan(0);
+
+    // Both servers should respond
+    const { status: s1 } = await fetchJson(`${blocker.url}/models`);
+    const { status: s2 } = await fetchJson(`${fallback.url}/models`);
+    expect(s1).toBe(200);
+    expect(s2).toBe(200);
+  });
 });

@@ -21,10 +21,10 @@
     "properties": {
       "port": {
         "type": "integer",
-        "minimum": 1,
+        "minimum": 0,
         "maximum": 65535,
-        "default": 9527,
-        "description": "Local loopback port for the OpenAI-compatible shim server."
+        "default": 0,
+        "description": "Local loopback port for the OpenAI-compatible shim server (0 = ephemeral)."
       },
       "rejectToolRequests": {
         "type": "boolean",

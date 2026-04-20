@@ -48,13 +48,17 @@ export async function startShimServer(options: ShimServerOptions): Promise<ShimS
     }
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.port ?? 0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const requestedPort = options.port ?? 0;
+  try {
+    await listenOn(server, requestedPort);
+  } catch (err) {
+    if (isAddrInUse(err) && requestedPort !== 0) {
+      // Stale shim from a previous process — fall back to an ephemeral port.
+      await listenOn(server, 0);
+    } else {
+      throw err;
+    }
+  }
 
   const address = server.address() as AddressInfo | null;
   if (!address || typeof address === "string") {
@@ -189,4 +193,18 @@ function toMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function listenOn(server: http.Server, port: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+function isAddrInUse(err: unknown): boolean {
+  return err instanceof Error && "code" in err && (err as { code: string }).code === "EADDRINUSE";
 }

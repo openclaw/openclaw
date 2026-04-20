@@ -13,7 +13,7 @@ import { startShimServer, type ShimServerHandle } from "./shim-server.js";
 const PROVIDER_ID = "copilot-sdk";
 const CHOICE_ID = "copilot-sdk";
 const METHOD_ID = "sdk";
-const DEFAULT_PORT = 9527;
+const DEFAULT_PORT = 0; // ephemeral — avoids EADDRINUSE from stale processes
 const PROFILE_ID = "copilot-sdk:logged-in";
 const PLACEHOLDER_API_KEY = "copilot-sdk";
 
