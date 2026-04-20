@@ -36,6 +36,7 @@ export function normalizeReplyPayload(
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
   const applyChannelTransforms = opts.applyChannelTransforms ?? true;
+  const hasDroppedMedia = Boolean(payload.droppedMedia?.length);
   const hasContent = (text: string | undefined) =>
     hasReplyPayloadContent(
       {
@@ -47,7 +48,7 @@ export function normalizeReplyPayload(
       },
     );
   const trimmed = normalizeOptionalString(payload.text) ?? "";
-  if (!hasContent(trimmed)) {
+  if (!hasContent(trimmed) && !hasDroppedMedia) {
     opts.onSkip?.("empty");
     return null;
   }
@@ -55,7 +56,7 @@ export function normalizeReplyPayload(
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyPayloadText(text, silentToken)) {
-    if (!hasContent("")) {
+    if (!hasContent("") && !hasDroppedMedia) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -71,7 +72,7 @@ export function normalizeReplyPayload(
     }
     if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
       text = stripSilentToken(text, silentToken);
-      if (!hasContent(text)) {
+      if (!hasContent(text) && !hasDroppedMedia) {
         opts.onSkip?.("silent");
         return null;
       }
@@ -88,7 +89,7 @@ export function normalizeReplyPayload(
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
     }
-    if (stripped.shouldSkip && !hasContent(stripped.text)) {
+    if (stripped.shouldSkip && !hasContent(stripped.text) && !hasDroppedMedia) {
       opts.onSkip?.("heartbeat");
       return null;
     }
@@ -98,7 +99,7 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (!hasContent(text)) {
+  if (!hasContent(text) && !hasDroppedMedia) {
     opts.onSkip?.("empty");
     return null;
   }
