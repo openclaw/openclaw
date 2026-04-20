@@ -331,6 +331,105 @@ describe("gateway session utils", () => {
     }
   });
 
+  test("loadSessionEntry preserves a listed deleted main session over the live default main", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
+        const storeTemplate = path.join(
+          stateDir,
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        );
+        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(liveSessionsDir, { recursive: true });
+        fs.mkdirSync(deletedSessionsDir, { recursive: true });
+        const liveStorePath = path.join(liveSessionsDir, "sessions.json");
+        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          liveStorePath,
+          JSON.stringify({
+            "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
+          }),
+          "utf8",
+        );
+        fs.writeFileSync(
+          deletedStorePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: { mainKey: "main", store: storeTemplate },
+          agents: { list: [{ id: "ops", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main" });
+        const loaded = loadSessionEntry("agent:main:main");
+
+        expect(target.canonicalKey).toBe("agent:main:main");
+        expect(target.agentId).toBe("main");
+        expect(target.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.canonicalKey).toBe("agent:main:main");
+        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntry resolves deleted main aliases when mainKey is customized", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
+        const storeTemplate = path.join(
+          stateDir,
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        );
+        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(liveSessionsDir, { recursive: true });
+        fs.mkdirSync(deletedSessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(liveSessionsDir, "sessions.json"),
+          JSON.stringify({
+            "agent:ops:work": { sessionId: "sess-live-default", updatedAt: 10 },
+          }),
+          "utf8",
+        );
+        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          deletedStorePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: { mainKey: "work", store: storeTemplate },
+          agents: { list: [{ id: "ops", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntry("agent:main:work");
+
+        expect(loaded.canonicalKey).toBe("agent:main:work");
+        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
   test("loadSessionEntry prefers the freshest duplicate row for a logical key", async () => {
     resetConfigRuntimeState();
     try {

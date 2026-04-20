@@ -42,6 +42,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
+  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -414,22 +415,23 @@ export function resolveDeletedAgentIdFromSessionKey(
 
 export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
-  const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const { storePath, store } = resolveGatewaySessionStoreLookup({
-    cfg,
-    key: normalizeOptionalString(sessionKey) ?? "",
-    canonicalKey,
-    agentId,
-  });
+  const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
-    key: normalizeOptionalString(sessionKey) ?? "",
-    store,
+    key,
   });
+  const storePath = target.storePath;
+  const store = loadSessionStore(storePath);
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
-  const legacyKey = freshestMatch?.key !== canonicalKey ? freshestMatch?.key : undefined;
-  return { cfg, storePath, store, entry: freshestMatch?.entry, canonicalKey, legacyKey };
+  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  return {
+    cfg,
+    storePath,
+    store,
+    entry: freshestMatch?.entry,
+    canonicalKey: target.canonicalKey,
+    legacyKey,
+  };
 }
 
 export function resolveFreshestSessionStoreMatchFromStoreKeys(
@@ -828,6 +830,83 @@ function resolveGatewaySessionStoreLookup(params: {
   };
 }
 
+function resolveExplicitDeletedLegacyMainStoreTarget(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  scanLegacyKeys?: boolean;
+}): {
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  storeKeys: string[];
+} | null {
+  const parsed = parseAgentSessionKey(params.key);
+  const legacyAgentId = normalizeAgentId(parsed?.agentId);
+  if (
+    !parsed ||
+    legacyAgentId !== DEFAULT_AGENT_ID ||
+    listAgentIds(params.cfg).includes(legacyAgentId)
+  ) {
+    return null;
+  }
+
+  // Only preserve agent:main:* when it is backed by a discovered deleted-main store.
+  // Shared-store legacy aliases should continue remapping to the configured default agent.
+  const canonicalKey = resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId: legacyAgentId,
+    sessionKey: params.key,
+  });
+  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: legacyAgentId });
+  const legacyAgentMainKey = `agent:${legacyAgentId}:main`;
+  const lookupSeeds = Array.from(
+    new Set([params.key, canonicalKey, agentMainKey, legacyAgentMainKey]),
+  );
+  let best:
+    | {
+        storePath: string;
+        store: Record<string, SessionEntry>;
+        match: { entry: SessionEntry; key: string };
+      }
+    | undefined;
+  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
+    if (target.agentId !== legacyAgentId) {
+      continue;
+    }
+    const store = loadSessionStore(target.storePath);
+    const match = findFreshestStoreMatch(store, ...lookupSeeds);
+    if (!match) {
+      continue;
+    }
+    if (!best || (match.entry.updatedAt ?? 0) >= (best.match.entry.updatedAt ?? 0)) {
+      best = { storePath: target.storePath, store, match };
+    }
+  }
+  if (!best) {
+    return null;
+  }
+
+  const storeKeys = new Set<string>([canonicalKey]);
+  if (params.key !== canonicalKey) {
+    storeKeys.add(params.key);
+  }
+  storeKeys.add(best.match.key);
+  if (params.scanLegacyKeys !== false) {
+    for (const seed of lookupSeeds) {
+      storeKeys.add(seed);
+      for (const legacyKey of findStoreKeysIgnoreCase(best.store, seed)) {
+        storeKeys.add(legacyKey);
+      }
+    }
+  }
+  return {
+    agentId: legacyAgentId,
+    storePath: best.storePath,
+    canonicalKey,
+    storeKeys: Array.from(storeKeys),
+  };
+}
+
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -840,6 +919,15 @@ export function resolveGatewaySessionStoreTarget(params: {
   storeKeys: string[];
 } {
   const key = normalizeOptionalString(params.key) ?? "";
+  const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
+    cfg: params.cfg,
+    key,
+    scanLegacyKeys: params.scanLegacyKeys,
+  });
+  if (explicitDeletedMainTarget) {
+    return explicitDeletedMainTarget;
+  }
+
   const canonicalKey = resolveSessionStoreKey({
     cfg: params.cfg,
     sessionKey: key,

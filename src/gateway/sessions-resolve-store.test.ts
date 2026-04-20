@@ -109,4 +109,39 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       });
     });
   });
+
+  it("rejects an explicit listed deleted main key instead of remapping to the live default main", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-key-deleted-main-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "ops", default: true }] },
+      };
+      const liveDefaultStorePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+      await saveSessionStore(liveDefaultStorePath, {
+        "agent:ops:main": {
+          sessionId: "sess-live-default",
+          updatedAt: 10,
+        },
+      });
+      const staleMainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+      await saveSessionStore(staleMainStorePath, {
+        "agent:main:main": {
+          sessionId: "sess-deleted-main",
+          updatedAt: 20,
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: "agent:main:main" },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: 'Agent "main" no longer exists in configuration',
+        },
+      });
+    });
+  });
 });

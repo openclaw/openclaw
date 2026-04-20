@@ -3,9 +3,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
+  const registerSubagentRunMock = vi.fn();
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
+    registerSubagentRunMock,
   };
 });
 
@@ -19,6 +21,10 @@ vi.mock("../acp-spawn.js", () => ({
   ACP_SPAWN_STREAM_TARGETS: ["parent"],
   isSpawnAcpAcceptedResult: (result: { status?: string }) => result?.status === "accepted",
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
+}));
+
+vi.mock("../subagent-registry.js", () => ({
+  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
 }));
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
@@ -39,6 +45,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
+    hoisted.registerSubagentRunMock.mockReset();
   });
 
   it("uses subagent runtime by default", async () => {
@@ -237,6 +244,7 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it("adds requested role to forwarded ACP failures", async () => {
@@ -284,6 +292,16 @@ describe("sessions_spawn tool", () => {
       expect.objectContaining({
         agentSessionKey: "agent:main:subagent:parent",
         sandboxed: true,
+      }),
+    );
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requesterSessionKey: "agent:main:subagent:parent",
+        task: "investigate",
+        cleanup: "keep",
+        spawnMode: "run",
       }),
     );
   });
