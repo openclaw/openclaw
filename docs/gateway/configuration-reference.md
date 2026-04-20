@@ -1660,7 +1660,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
 - `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex", fallback: "none" }` to make one agent Codex-only while other agents keep the default PI fallback.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
-- `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
+- `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI. **Local images must be under 2MB**; larger images will fail silently with a 404 error.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.

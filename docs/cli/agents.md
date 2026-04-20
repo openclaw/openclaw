@@ -167,7 +167,7 @@ Avatar paths resolve relative to the workspace root.
 - `name`
 - `theme`
 - `emoji`
-- `avatar` (workspace-relative path, http(s) URL, or data URI)
+- `avatar` (workspace-relative path, http(s) URL, or data URI; **max 2MB for local images**)
 
 Options:
 
@@ -186,6 +186,7 @@ Notes:
 - `--agent` or `--workspace` can be used to select the target agent.
 - If you rely on `--workspace` and multiple agents share that workspace, the command fails and asks you to pass `--agent`.
 - When no explicit identity fields are provided, the command reads identity data from `IDENTITY.md`.
+- **Avatar images must be under 2MB**. Larger images will fail silently with a 404 error.
 
 Load from `IDENTITY.md`:
 
