@@ -471,7 +471,7 @@ function expectRegistryErrorDiagnostic(params: {
 
 function createWarningLogger(warnings: string[]) {
   return {
-    info: () => {},
+    info: (msg: string) => warnings.push(msg),
     warn: (msg: string) => warnings.push(msg),
     error: () => {},
   };
@@ -479,7 +479,7 @@ function createWarningLogger(warnings: string[]) {
 
 function createErrorLogger(errors: string[]) {
   return {
-    info: () => {},
+    info: (msg: string) => warnings.push(msg),
     warn: () => {},
     error: (msg: string) => errors.push(msg),
     debug: () => {},
