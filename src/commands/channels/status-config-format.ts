@@ -82,7 +82,7 @@ export async function formatConfigChannelsStatusLines(
 
   lines.push("");
   lines.push(
-    `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
+    `Tip: ${formatDocsLink("/cli#status", "openclaw status --deep")} adds gateway health probes to status output (requires a reachable gateway). The nested \`channels status\` command does not accept \`--deep\` — use the top-level \`openclaw status --deep\` instead.`,
   );
   return lines;
 }

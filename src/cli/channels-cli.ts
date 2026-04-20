@@ -105,7 +105,7 @@ export function registerChannelsCli(program: Command) {
 
   channels
     .command("status")
-    .description("Show gateway channel status (use status --deep for local)")
+    .description("Show gateway channel status (use `openclaw status --deep` for local health probes)")
     .option("--probe", "Probe channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
