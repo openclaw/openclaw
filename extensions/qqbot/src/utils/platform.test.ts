@@ -129,4 +129,24 @@ describe("qqbot local media path remapping", () => {
 
     expect(resolveQQBotPayloadLocalFilePath(missingWorkspacePath)).toBe(fs.realpathSync(mediaFile));
   });
+
+  it("allows structured payload files inside the outbound media directory", () => {
+    const actualHome = getHomeDir();
+    const outboundFile = path.join(actualHome, ".openclaw", "media", "outbound", "screenshot.png");
+    fs.mkdirSync(path.dirname(outboundFile), { recursive: true });
+    fs.writeFileSync(outboundFile, "screenshot", "utf8");
+    createdPaths.push(path.dirname(outboundFile));
+
+    expect(resolveQQBotPayloadLocalFilePath(outboundFile)).toBe(fs.realpathSync(outboundFile));
+  });
+
+  it("allows structured payload files inside the inbound media directory", () => {
+    const actualHome = getHomeDir();
+    const inboundFile = path.join(actualHome, ".openclaw", "media", "inbound", "attachment.pdf");
+    fs.mkdirSync(path.dirname(inboundFile), { recursive: true });
+    fs.writeFileSync(inboundFile, "attachment", "utf8");
+    createdPaths.push(path.dirname(inboundFile));
+
+    expect(resolveQQBotPayloadLocalFilePath(inboundFile)).toBe(fs.realpathSync(inboundFile));
+  });
 });

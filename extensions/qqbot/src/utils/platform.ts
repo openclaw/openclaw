@@ -167,6 +167,32 @@ export function resolveQQBotLocalMediaPath(p: string): string {
 }
 
 /**
+ * Return a path under `~/.openclaw/media/outbound`, creating it on demand.
+ *
+ * This is where locally-generated images (screenshots, AI-generated images) are saved.
+ */
+export function getOutboundMediaDir(...subPaths: string[]): string {
+  const dir = path.join(getHomeDir(), ".openclaw", "media", "outbound", ...subPaths);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+/**
+ * Return a path under `~/.openclaw/media/inbound`, creating it on demand.
+ *
+ * This is where inbound attachments from channels are staged.
+ */
+export function getInboundMediaDir(...subPaths: string[]): string {
+  const dir = path.join(getHomeDir(), ".openclaw", "media", "inbound", ...subPaths);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+/**
  * Resolve a structured-payload local file path and enforce that it stays within
  * QQ Bot-owned storage roots.
  */
@@ -182,7 +208,7 @@ export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
   }
 
   const canonicalCandidate = fs.realpathSync(resolvedCandidate);
-  const allowedRoots = [getQQBotMediaDir()];
+  const allowedRoots = [getQQBotMediaDir(), getOutboundMediaDir(), getInboundMediaDir()];
 
   for (const root of allowedRoots) {
     const resolvedRoot = path.resolve(root);
