@@ -602,6 +602,18 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("abc-123abc-123");
   });
 
+  it("preserves a repeated structured suffix when the preamble names the full repeated output in quotes", () => {
+    const input = [
+      'The user is instructing me to reply with a very specific string: "abc-123abc-123" and nothing else.',
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|>abc-123abc-123",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("abc-123abc-123");
+  });
+
   it("extracts the explicitly named final string when no delimiter was emitted and runaway junk followed", () => {
     const input = [
       "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
@@ -723,6 +735,18 @@ describe("sanitizeAssistantVisibleText", () => {
   it("preserves an explicitly requested literal channel delimiter target", () => {
     const input = [
       "The user is instructing me to reply with a very specific string: `<channel|>` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|><channel|>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("<channel|>");
+  });
+
+  it("preserves an explicitly requested literal channel delimiter target when it is named in quotes", () => {
+    const input = [
+      'The user is instructing me to reply with a very specific string: "<channel|>" and nothing else.',
       "This is a direct instruction for the output content.",
       "I must adhere to the instruction precisely.",
       "I will output the text directly as the final response.",

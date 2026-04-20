@@ -13,6 +13,8 @@ const INTENTIONAL_REPEAT_INTENT_RE =
 const EXACT_TARGET_HINT_RE =
   /\b(?:specific string|reply with|output the text directly|output content)\b/i;
 const INLINE_CODE_LITERAL_RE = /`([^`\r\n]{1,400})`/g;
+const DOUBLE_QUOTED_LITERAL_RE = /"([^"\r\n]{1,400})"/g;
+const SINGLE_QUOTED_LITERAL_RE = /'([^'\r\n]{1,400})'/g;
 const EXCLUDED_TARGET_HINT_SEGMENT_RE = /\b(?:incorrect|wrong|duplicate|previous|attempt)\b/i;
 const EXCLUDED_TRAILING_COLLAPSE_CONTEXT_RE =
   /\b(?:mistaken|example|examples|incorrect|wrong|previous attempt|doubled output|duplicate(?:d)? output)\b/i;
@@ -200,8 +202,12 @@ function splitPreambleHintSegments(text: string): string[] {
     .filter((segment) => segment.length > 0);
 }
 
-function extractInlineCodeLiterals(text: string): string[] {
-  return [...text.matchAll(INLINE_CODE_LITERAL_RE)]
+function extractTargetLiterals(text: string): string[] {
+  return [
+    ...text.matchAll(INLINE_CODE_LITERAL_RE),
+    ...text.matchAll(DOUBLE_QUOTED_LITERAL_RE),
+    ...text.matchAll(SINGLE_QUOTED_LITERAL_RE),
+  ]
     .map((match) => match[1]?.trim() ?? "")
     .filter((literal) => literal.length > 0);
 }
@@ -221,13 +227,13 @@ export function findExplicitSingleTargetLiteralInPreamble(text: string): string 
       (SINGLE_ANSWER_INTENT_RE.test(segment) || EXACT_TARGET_HINT_RE.test(segment)) &&
       !EXCLUDED_TARGET_HINT_SEGMENT_RE.test(segment),
   );
-  const hintedLiterals = hintedSegments.flatMap(extractInlineCodeLiterals);
+  const hintedLiterals = hintedSegments.flatMap(extractTargetLiterals);
   const uniqueHintedLiterals = [...new Set(hintedLiterals)];
   if (uniqueHintedLiterals.length === 1) {
     return uniqueHintedLiterals[0] ?? null;
   }
 
-  const uniqueLiterals = [...new Set(extractInlineCodeLiterals(text))];
+  const uniqueLiterals = [...new Set(extractTargetLiterals(text))];
   if (uniqueLiterals.length !== 1) {
     return null;
   }
