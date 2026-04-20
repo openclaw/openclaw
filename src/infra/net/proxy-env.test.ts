@@ -168,6 +168,24 @@ describe("matchesNoProxy", () => {
       expected: true,
     },
     {
+      name: "matches apex hostnames for leading-dot entries",
+      url: "https://example.com/v1",
+      env: { NO_PROXY: ".example.com" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches apex hostnames for wildcard-dot entries",
+      url: "https://example.com/v1",
+      env: { NO_PROXY: "*.example.com" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "does not treat wildcard entries inside a list as global bypass",
+      url: "https://api.example.com/v1/chat",
+      env: { NO_PROXY: "localhost,*" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
       name: "matches exact hostname",
       url: "https://api.openai.com/v1/chat",
       env: { NO_PROXY: "api.openai.com" } as NodeJS.ProcessEnv,

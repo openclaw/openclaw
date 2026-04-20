@@ -119,7 +119,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
  * - Empty or missing → no bypass
- * - `*` → bypass everything
+ * - Bare `*` value → bypass everything
  * - Exact hostname match
  * - Leading-dot match (`.example.com` matches `foo.example.com`)
  * - Leading `*.` wildcard match (`*.example.com` matches `foo.example.com`);
@@ -148,6 +148,10 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     return false;
   }
 
+  if (raw === "*") {
+    return true;
+  }
+
   const targetHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (!targetHost) {
     return false;
@@ -169,9 +173,6 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     const entry = rawEntry.trim().toLowerCase();
     if (!entry) {
       continue;
-    }
-    if (entry === "*") {
-      return true;
     }
 
     let entryHost: string;
@@ -198,9 +199,10 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     }
 
     // Mirror undici: strip optional leading `*` followed by `.` so both
-    // `.example.com` and `*.example.com` normalize to `example.com`.
-    const normalizedEntry = entryHost.replace(/^\*?\./, "");
-    if (!normalizedEntry) {
+    // `.example.com` and `*.example.com` normalize to `example.com`. That also
+    // means apex hosts still match those entries after normalization.
+    const normalizedEntry = entryHost.replace(/^\*\./, "").replace(/^\./, "");
+    if (!normalizedEntry || normalizedEntry === "*") {
       continue;
     }
 
@@ -211,6 +213,5 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
       return true;
     }
   }
-
   return false;
 }

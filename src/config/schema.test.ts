@@ -345,6 +345,18 @@ describe("config schema", () => {
     ).toThrow();
   });
 
+  it("accepts web fetch trusted env proxy opt-in in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          useTrustedEnvProxy: true,
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.useTrustedEnvProxy).toBe(true);
+  });
+
   it("rejects unknown keys inside web fetch firecrawl config", () => {
     expect(() =>
       ToolsSchema.parse({
