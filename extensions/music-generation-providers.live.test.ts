@@ -19,9 +19,9 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../test/helpers/plugins/provider-registration.js";
-import { maybeLoadShellEnvForGenerationProviders } from "./generation-live-test-helpers.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
