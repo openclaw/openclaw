@@ -1,13 +1,14 @@
 import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provider-web-search-contract";
 
 const EXA_CREDENTIAL_PATH = "plugins.entries.exa.config.webSearch.apiKey";
+const EXA_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
 
 export function createExaWebSearchProviderBase() {
   return {
     id: "exa",
     label: "Exa Search",
     hint: "Neural + keyword search with date filters and content extraction",
-    onboardingScopes: ["text-inference"],
+    onboardingScopes: [...EXA_ONBOARDING_SCOPES],
     credentialLabel: "Exa API key",
     envVars: ["EXA_API_KEY"],
     placeholder: "exa-...",
