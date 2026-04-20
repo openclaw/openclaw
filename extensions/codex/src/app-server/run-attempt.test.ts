@@ -74,7 +74,9 @@ function createAppServerHarness(
     request,
     requests,
     async waitForMethod(method: string) {
-      await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true));
+      await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true), {
+        interval: 1,
+      });
     },
     async completeTurn(params: { threadId: string; turnId: string }) {
       await notify({
@@ -143,12 +145,14 @@ describe("runCodexAppServerAttempt", () => {
     await waitForMethod("turn/start");
 
     expect(queueAgentHarnessMessage("session-1", "more context")).toBe(true);
-    await vi.waitFor(() =>
-      expect(requests.some((entry) => entry.method === "turn/steer")).toBe(true),
+    await vi.waitFor(
+      () => expect(requests.some((entry) => entry.method === "turn/steer")).toBe(true),
+      { interval: 1 },
     );
     expect(abortAgentHarnessRun("session-1")).toBe(true);
-    await vi.waitFor(() =>
-      expect(requests.some((entry) => entry.method === "turn/interrupt")).toBe(true),
+    await vi.waitFor(
+      () => expect(requests.some((entry) => entry.method === "turn/interrupt")).toBe(true),
+      { interval: 1 },
     );
 
     const result = await run;
@@ -311,7 +315,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.timeoutMs = 1;
 
-    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+    await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
       "codex app-server startup timed out",
     );
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
@@ -319,11 +323,13 @@ describe("runCodexAppServerAttempt", () => {
 
   it("passes the selected auth profile into app-server startup", async () => {
     const seenAuthProfileIds: Array<string | undefined> = [];
+    const requests: string[] = [];
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     __testing.setCodexAppServerClientFactoryForTests(async (_startOptions, authProfileId) => {
       seenAuthProfileIds.push(authProfileId);
       return {
         request: async (method: string) => {
+          requests.push(method);
           if (method === "thread/start") {
             return {
               thread: { id: "thread-1" },
@@ -350,7 +356,11 @@ describe("runCodexAppServerAttempt", () => {
     params.authProfileId = "openai-codex:work";
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:work"]));
+    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:work"]), {
+      interval: 1,
+    });
+    await vi.waitFor(() => expect(requests).toContain("turn/start"), { interval: 1 });
+    await new Promise<void>((resolve) => setImmediate(resolve));
     await notify({
       method: "turn/completed",
       params: {
@@ -372,10 +382,7 @@ describe("runCodexAppServerAttempt", () => {
         }
         if (method === "turn/start") {
           return await new Promise<never>((_, reject) => {
-            setTimeout(
-              () => reject(new Error("turn/start timed out")),
-              Math.max(100, options?.timeoutMs ?? 0),
-            );
+            setTimeout(() => reject(new Error("turn/start timed out")), options?.timeoutMs ?? 0);
           });
         }
         return {};
@@ -571,11 +578,13 @@ describe("runCodexAppServerAttempt", () => {
       dynamicToolsFingerprint: "[]",
     });
     const seenAuthProfileIds: Array<string | undefined> = [];
+    const requests: string[] = [];
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     __testing.setCodexAppServerClientFactoryForTests(async (_startOptions, authProfileId) => {
       seenAuthProfileIds.push(authProfileId);
       return {
         request: async (method: string) => {
+          requests.push(method);
           if (method === "thread/resume") {
             return { thread: { id: "thread-existing" }, modelProvider: "openai" };
           }
@@ -595,7 +604,11 @@ describe("runCodexAppServerAttempt", () => {
     delete params.authProfileId;
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]));
+    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]), {
+      interval: 1,
+    });
+    await vi.waitFor(() => expect(requests).toContain("turn/start"), { interval: 1 });
+    await new Promise<void>((resolve) => setImmediate(resolve));
     await notify({
       method: "turn/completed",
       params: {

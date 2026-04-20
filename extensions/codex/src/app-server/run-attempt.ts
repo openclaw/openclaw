@@ -45,7 +45,7 @@ let clientFactory: CodexAppServerClientFactory = (startOptions, authProfileId) =
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
-  options: { pluginConfig?: unknown } = {},
+  options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -102,6 +102,7 @@ export async function runCodexAppServerAttempt(
   try {
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
+      timeoutFloorMs: options.startupTimeoutFloorMs,
       signal: runAbortController.signal,
       operation: async () => {
         const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
@@ -374,6 +375,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
 
 async function withCodexStartupTimeout<T>(params: {
   timeoutMs: number;
+  timeoutFloorMs?: number;
   signal: AbortSignal;
   operation: () => Promise<T>;
 }): Promise<T> {
@@ -393,7 +395,7 @@ async function withCodexStartupTimeout<T>(params: {
           }
           reject(error);
         };
-        const timeoutMs = Math.max(100, params.timeoutMs);
+        const timeoutMs = Math.max(params.timeoutFloorMs ?? 100, params.timeoutMs);
         timeout = setTimeout(() => {
           rejectOnce(new Error("codex app-server startup timed out"));
         }, timeoutMs);
