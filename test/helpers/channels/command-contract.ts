@@ -2,6 +2,7 @@ import {
   loadBundledPluginApiSync,
   loadBundledPluginContractApiSync,
 } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { createLazyObjectSurface } from "./lazy-object-surface.js";
 
 type TelegramContractSurface = {
   buildTelegramModelsProviderChannelData: (...args: unknown[]) => unknown;
@@ -14,25 +15,6 @@ type WhatsAppApiSurface = {
 
 let telegramContractSurface: TelegramContractSurface | undefined;
 let whatsappApiSurface: WhatsAppApiSurface | undefined;
-
-function createLazyObjectSurface<T extends object>(loadSurface: () => T): T {
-  return new Proxy({} as T, {
-    get(_target, property) {
-      const surface = loadSurface();
-      const value = Reflect.get(surface, property, surface);
-      return typeof value === "function" ? value.bind(surface) : value;
-    },
-    has(_target, property) {
-      return property in loadSurface();
-    },
-    ownKeys() {
-      return Reflect.ownKeys(loadSurface());
-    },
-    getOwnPropertyDescriptor(_target, property) {
-      return Reflect.getOwnPropertyDescriptor(loadSurface(), property);
-    },
-  });
-}
 
 function getTelegramContractSurface(): TelegramContractSurface {
   telegramContractSurface ??= loadBundledPluginContractApiSync<TelegramContractSurface>("telegram");
