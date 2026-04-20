@@ -78,6 +78,46 @@ export function readTelegramButtons(
   return filtered.length > 0 ? filtered : undefined;
 }
 
+/**
+ * Atomic side effect: pin a just-sent telegram message in the same tool turn.
+ * Collapses what would be a 2-step agent chain (send → pin) into one call,
+ * avoiding the ~5-15% LLM skip rate on trailing tool calls. Always returns —
+ * pin failures are warned and swallowed because the message is already
+ * delivered and the broadcast must not look like a false negative.
+ */
+async function tryPinAfterSend(args: {
+  isPinEnabled: boolean;
+  chatId: string;
+  messageId: string;
+  token: string;
+  accountId?: string;
+  disableNotification: boolean;
+}): Promise<boolean> {
+  const warn = (reason: string) => console.warn(`telegram sendMessage: pinAfterSend ${reason}.`);
+  if (!args.isPinEnabled) {
+    warn("requested but channels.telegram.actions.pin is disabled; skipping pin");
+    return false;
+  }
+  const numericMessageId = Number(args.messageId);
+  if (!Number.isFinite(numericMessageId)) {
+    warn(`skipped (non-numeric messageId: ${args.messageId})`);
+    return false;
+  }
+  try {
+    await pinOrUnpinMessageTelegram(args.chatId, numericMessageId, true, {
+      token: args.token,
+      accountId: args.accountId,
+      disableNotification: args.disableNotification,
+    });
+    return true;
+  } catch (err) {
+    warn(
+      `failed for chat=${args.chatId} message=${args.messageId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return false;
+  }
+}
+
 export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -237,10 +277,25 @@ export async function handleTelegramAction(
       asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
       silent: typeof params.silent === "boolean" ? params.silent : undefined,
     });
+    const pinAfterSend = params.pinAfterSend === true;
+    const pinned = pinAfterSend
+      ? await tryPinAfterSend({
+          isPinEnabled: isActionEnabled("pin", false),
+          chatId: result.chatId,
+          messageId: result.messageId,
+          token,
+          accountId: accountId ?? undefined,
+          disableNotification:
+            typeof params.pinDisableNotification === "boolean"
+              ? params.pinDisableNotification
+              : true,
+        })
+      : false;
     return jsonResult({
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+      ...(pinAfterSend ? { pinned } : {}),
     });
   }
 

@@ -30,6 +30,9 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
   const silent = typeof params.silent === "boolean" ? params.silent : undefined;
   const quoteText = readStringParam(params, "quoteText");
+  const pinAfterSend = typeof params.pinAfterSend === "boolean" ? params.pinAfterSend : undefined;
+  const pinDisableNotification =
+    typeof params.pinDisableNotification === "boolean" ? params.pinDisableNotification : undefined;
   return {
     to,
     content,
@@ -40,6 +43,8 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     asVoice,
     silent,
     quoteText: quoteText ?? undefined,
+    pinAfterSend,
+    pinDisableNotification,
   };
 }
 

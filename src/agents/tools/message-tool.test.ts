@@ -139,7 +139,7 @@ describe("message tool schema scoping", () => {
     label: "Telegram",
     docsPath: "/channels/telegram",
     blurb: "Telegram test plugin.",
-    actions: ["send", "react"],
+    actions: ["send", "react", "pin"],
     supportsButtons: true,
   });
 
@@ -161,18 +161,27 @@ describe("message tool schema scoping", () => {
       expectComponents: false,
       expectButtons: true,
       expectButtonStyle: true,
-      expectedActions: ["send", "react", "poll"],
+      expectPinAfterSend: true,
+      expectedActions: ["send", "react", "pin", "poll"],
     },
     {
       provider: "discord",
       expectComponents: true,
       expectButtons: false,
       expectButtonStyle: false,
-      expectedActions: ["send", "poll", "react"],
+      expectPinAfterSend: false,
+      expectedActions: ["send", "poll", "react", "pin"],
     },
   ])(
     "scopes schema fields for $provider",
-    ({ provider, expectComponents, expectButtons, expectButtonStyle, expectedActions }) => {
+    ({
+      provider,
+      expectComponents,
+      expectButtons,
+      expectButtonStyle,
+      expectPinAfterSend,
+      expectedActions,
+    }) => {
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "telegram", source: "test", plugin: telegramPlugin },
@@ -206,11 +215,39 @@ describe("message tool schema scoping", () => {
           )?.items?.items?.properties ?? {};
         expect(buttonItemProps.style).toBeDefined();
       }
+      if (expectPinAfterSend) {
+        expect(properties.pinAfterSend).toBeDefined();
+        expect(properties.pinDisableNotification).toBeDefined();
+      } else {
+        expect(properties.pinAfterSend).toBeUndefined();
+        expect(properties.pinDisableNotification).toBeUndefined();
+      }
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
       }
     },
   );
+
+  it("excludes pinAfterSend from the telegram schema when pin action is disabled", () => {
+    const telegramNoPinPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin (pin gate off).",
+      actions: ["send", "react"],
+      supportsButtons: true,
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramNoPinPlugin }]),
+    );
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+    expect(properties.pinAfterSend).toBeUndefined();
+    expect(properties.pinDisableNotification).toBeUndefined();
+  });
 });
 
 describe("message tool description", () => {

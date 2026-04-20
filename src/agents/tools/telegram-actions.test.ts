@@ -16,6 +16,17 @@ const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const pinOrUnpinMessageTelegram = vi.fn(async () => ({ ok: true }));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
+async function withCapturedWarn<T>(
+  fn: (warnSpy: ReturnType<typeof vi.spyOn>) => Promise<T>,
+): Promise<T> {
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    return await fn(warnSpy);
+  } finally {
+    warnSpy.mockRestore();
+  }
+}
+
 vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
     reactMessageTelegram(...args),
@@ -617,6 +628,119 @@ describe("handleTelegramAction", () => {
       ),
     ).rejects.toThrow(/pin\/unpin is disabled/);
     expect(pinOrUnpinMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("pinAfterSend atomically pins after send when pin action is enabled", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "broadcast",
+        pinAfterSend: true,
+      },
+      telegramConfig({ actions: { pin: true } }),
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(pinOrUnpinMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      789,
+      true,
+      expect.objectContaining({ token: "tok", disableNotification: true }),
+    );
+    const payload = result.details;
+    expect(payload).toMatchObject({ ok: true, messageId: "789", chatId: "123", pinned: true });
+  });
+
+  it("pinAfterSend honours explicit pinDisableNotification:false", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "broadcast",
+        pinAfterSend: true,
+        pinDisableNotification: false,
+      },
+      telegramConfig({ actions: { pin: true } }),
+    );
+    expect(pinOrUnpinMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      789,
+      true,
+      expect.objectContaining({ token: "tok", disableNotification: false }),
+    );
+  });
+
+  it("pinAfterSend soft-skips when pin action is disabled (send still succeeds)", async () => {
+    await withCapturedWarn(async (warnSpy) => {
+      const result = await handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "@testchannel",
+          content: "broadcast",
+          pinAfterSend: true,
+        },
+        telegramConfig(),
+      );
+      expect(sendMessageTelegram).toHaveBeenCalledTimes(1);
+      expect(pinOrUnpinMessageTelegram).not.toHaveBeenCalled();
+      const payload = result.details;
+      expect(payload).toMatchObject({ ok: true, messageId: "789", pinned: false });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("channels.telegram.actions.pin is disabled"),
+      );
+    });
+  });
+
+  it("pinAfterSend swallows pin errors so the send result remains ok", async () => {
+    pinOrUnpinMessageTelegram.mockRejectedValueOnce(new Error("pin boom"));
+    await withCapturedWarn(async (warnSpy) => {
+      const result = await handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "@testchannel",
+          content: "broadcast",
+          pinAfterSend: true,
+        },
+        telegramConfig({ actions: { pin: true } }),
+      );
+      const payload = result.details;
+      expect(payload).toMatchObject({ ok: true, messageId: "789", pinned: false });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("pin boom"));
+    });
+  });
+
+  it("pinAfterSend is a no-op when flag is false or omitted", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "broadcast",
+      },
+      telegramConfig({ actions: { pin: true } }),
+    );
+    expect(pinOrUnpinMessageTelegram).not.toHaveBeenCalled();
+    const payload = result.details;
+    expect(payload).toMatchObject({ ok: true, messageId: "789" });
+    expect(payload).not.toHaveProperty("pinned");
+  });
+
+  it("pinAfterSend soft-skips when sendMessage returns a non-numeric messageId", async () => {
+    sendMessageTelegram.mockResolvedValueOnce({ messageId: "N/A", chatId: "123" });
+    await withCapturedWarn(async (warnSpy) => {
+      const result = await handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "@testchannel",
+          content: "broadcast",
+          pinAfterSend: true,
+        },
+        telegramConfig({ actions: { pin: true } }),
+      );
+      expect(pinOrUnpinMessageTelegram).not.toHaveBeenCalled();
+      const payload = result.details;
+      expect(payload).toMatchObject({ ok: true, messageId: "N/A", pinned: false });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("non-numeric messageId"));
+    });
   });
 });
 

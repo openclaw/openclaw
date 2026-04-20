@@ -164,6 +164,7 @@ function buildSendSchema(options: {
   includeButtons: boolean;
   includeCards: boolean;
   includeComponents: boolean;
+  includePinAfterSend: boolean;
 }) {
   const props: Record<string, unknown> = {
     message: Type.Optional(Type.String()),
@@ -214,6 +215,18 @@ function buildSendSchema(options: {
         },
       ),
     ),
+    pinAfterSend: Type.Optional(
+      Type.Boolean({
+        description:
+          "Telegram only: atomically pin the message after a successful send. Prefer this over a separate pin tool call — it is delivered in one step and cannot be dropped by the model. Requires channels.telegram.actions.pin=true; otherwise the pin is skipped with a warning. Pin is silent by default.",
+      }),
+    ),
+    pinDisableNotification: Type.Optional(
+      Type.Boolean({
+        description:
+          "Telegram only, paired with pinAfterSend. Set false to send a pin notification; default true (silent pin).",
+      }),
+    ),
     card: Type.Optional(
       Type.Object(
         {},
@@ -233,6 +246,10 @@ function buildSendSchema(options: {
   }
   if (!options.includeComponents) {
     delete props.components;
+  }
+  if (!options.includePinAfterSend) {
+    delete props.pinAfterSend;
+    delete props.pinDisableNotification;
   }
   return props;
 }
@@ -397,6 +414,7 @@ function buildMessageToolSchemaProps(options: {
   includeButtons: boolean;
   includeCards: boolean;
   includeComponents: boolean;
+  includePinAfterSend: boolean;
 }) {
   return {
     ...buildRoutingSchema(),
@@ -417,7 +435,12 @@ function buildMessageToolSchemaProps(options: {
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
-  options: { includeButtons: boolean; includeCards: boolean; includeComponents: boolean },
+  options: {
+    includeButtons: boolean;
+    includeCards: boolean;
+    includeComponents: boolean;
+    includePinAfterSend: boolean;
+  },
 ) {
   const props = buildMessageToolSchemaProps(options);
   return Type.Object({
@@ -430,6 +453,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeButtons: true,
   includeCards: true,
   includeComponents: true,
+  includePinAfterSend: true,
 });
 
 type MessageToolOptions = {
@@ -491,6 +515,21 @@ function resolveIncludeComponents(params: {
   return listChannelSupportedActions({ cfg: params.cfg, channel: "discord" }).length > 0;
 }
 
+function resolveIncludePinAfterSend(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+}): boolean {
+  // pinAfterSend is a Telegram-only atomic side effect on sendMessage.
+  // Scope the schema to telegram-bound sessions (or unscoped sessions where
+  // telegram has pin enabled) so non-Telegram adapters never see a field
+  // they'd silently drop.
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel && currentChannel !== "telegram") {
+    return false;
+  }
+  return listChannelSupportedActions({ cfg: params.cfg, channel: "telegram" }).includes("pin");
+}
+
 function buildMessageToolSchema(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
@@ -505,10 +544,12 @@ function buildMessageToolSchema(params: {
     ? supportsChannelMessageCardsForChannel({ cfg: params.cfg, channel: currentChannel })
     : supportsChannelMessageCards(params.cfg);
   const includeComponents = resolveIncludeComponents(params);
+  const includePinAfterSend = resolveIncludePinAfterSend(params);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeButtons,
     includeCards,
     includeComponents,
+    includePinAfterSend,
   });
 }
 
