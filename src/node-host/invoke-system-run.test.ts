@@ -500,23 +500,21 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     };
   }
 
-  it("uses local execution by default when mac app exec host preference is disabled", async () => {
-    const { runCommand, runViaMacAppExecHost, sendInvokeResult } = await runSystemInvoke({
+  it("routes local, mac host, and canonical shell-wrapper requests", async () => {
+    const localInvoke = await runSystemInvoke({
       preferMacAppExecHost: false,
     });
 
-    expect(runViaMacAppExecHost).not.toHaveBeenCalled();
-    expect(runCommand).toHaveBeenCalledTimes(1);
-    expectInvokeOk(sendInvokeResult, { payloadContains: "local-ok" });
-  });
+    expect(localInvoke.runViaMacAppExecHost).not.toHaveBeenCalled();
+    expect(localInvoke.runCommand).toHaveBeenCalledTimes(1);
+    expectInvokeOk(localInvoke.sendInvokeResult, { payloadContains: "local-ok" });
 
-  it("uses mac app exec host when explicitly preferred", async () => {
-    const { runCommand, runViaMacAppExecHost, sendInvokeResult } = await runSystemInvoke({
+    const macHostInvoke = await runSystemInvoke({
       preferMacAppExecHost: true,
       runViaResponse: createMacExecHostSuccess(),
     });
 
-    expect(runViaMacAppExecHost).toHaveBeenCalledWith({
+    expect(macHostInvoke.runViaMacAppExecHost).toHaveBeenCalledWith({
       approvals: expect.objectContaining({
         agent: expect.objectContaining({
           security: "full",
@@ -527,18 +525,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         command: ["echo", "ok"],
       }),
     });
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeOk(sendInvokeResult, { payloadContains: "app-ok" });
-  });
+    expect(macHostInvoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeOk(macHostInvoke.sendInvokeResult, { payloadContains: "app-ok" });
 
-  it("forwards canonical command text to mac app exec host for positional-argv shell wrappers", async () => {
-    const { runViaMacAppExecHost } = await runSystemInvoke({
+    const shellWrapperInvoke = await runSystemInvoke({
       preferMacAppExecHost: true,
       command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
       runViaResponse: createMacExecHostSuccess(),
     });
 
-    expect(runViaMacAppExecHost).toHaveBeenCalledWith({
+    expect(shellWrapperInvoke.runViaMacAppExecHost).toHaveBeenCalledWith({
       approvals: expect.anything(),
       request: expect.objectContaining({
         command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
@@ -558,69 +554,72 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   ] as const;
 
-  for (const testCase of approvedEnvShellWrapperCases) {
-    it.runIf(process.platform !== "win32")(testCase.name, async () => {
-      const tmp = createFixtureDir("openclaw-approved-wrapper-");
-      const marker = path.join(tmp, "marker");
-      const attackerScript = path.join(tmp, "sh");
-      fs.writeFileSync(attackerScript, "#!/bin/sh\necho exploited > marker\n");
-      fs.chmodSync(attackerScript, 0o755);
-      const runCommand = vi.fn(async (argv: string[]) => {
-        if (argv[0] === "/bin/sh" && argv[1] === "sh" && argv[2] === "-c") {
-          fs.writeFileSync(marker, "rewritten");
-        }
-        return createLocalRunResult();
-      });
-      const sendInvokeResult = vi.fn(async () => {});
-      try {
-        const invoke = await runSystemInvoke({
-          preferMacAppExecHost: testCase.preferMacAppExecHost,
-          command: ["env", "sh", "-c", "echo SAFE"],
-          cwd: tmp,
-          approved: true,
-          security: "allowlist",
-          ask: "on-miss",
-          runCommand,
-          sendInvokeResult,
-          runViaResponse: testCase.preferMacAppExecHost
-            ? {
-                ok: true,
-                payload: {
-                  success: true,
-                  stdout: "app-ok",
-                  stderr: "",
-                  timedOut: false,
-                  exitCode: 0,
-                  error: null,
-                },
-              }
-            : undefined,
+  it.runIf(process.platform !== "win32")(
+    "preserves wrapper argv for approved env shell commands",
+    async () => {
+      for (const testCase of approvedEnvShellWrapperCases) {
+        const tmp = createFixtureDir("openclaw-approved-wrapper-");
+        const marker = path.join(tmp, "marker");
+        const attackerScript = path.join(tmp, "sh");
+        fs.writeFileSync(attackerScript, "#!/bin/sh\necho exploited > marker\n");
+        fs.chmodSync(attackerScript, 0o755);
+        const runCommand = vi.fn(async (argv: string[]) => {
+          if (argv[0] === "/bin/sh" && argv[1] === "sh" && argv[2] === "-c") {
+            fs.writeFileSync(marker, "rewritten");
+          }
+          return createLocalRunResult();
         });
-
-        if (testCase.preferMacAppExecHost) {
-          const canonicalCwd = fs.realpathSync(tmp);
-          expect(invoke.runCommand).not.toHaveBeenCalled();
-          expect(invoke.runViaMacAppExecHost).toHaveBeenCalledWith({
-            approvals: expect.anything(),
-            request: expect.objectContaining({
-              command: ["env", "sh", "-c", "echo SAFE"],
-              rawCommand: 'env sh -c "echo SAFE"',
-              cwd: canonicalCwd,
-            }),
+        const sendInvokeResult = vi.fn(async () => {});
+        try {
+          const invoke = await runSystemInvoke({
+            preferMacAppExecHost: testCase.preferMacAppExecHost,
+            command: ["env", "sh", "-c", "echo SAFE"],
+            cwd: tmp,
+            approved: true,
+            security: "allowlist",
+            ask: "on-miss",
+            runCommand,
+            sendInvokeResult,
+            runViaResponse: testCase.preferMacAppExecHost
+              ? {
+                  ok: true,
+                  payload: {
+                    success: true,
+                    stdout: "app-ok",
+                    stderr: "",
+                    timedOut: false,
+                    exitCode: 0,
+                    error: null,
+                  },
+                }
+              : undefined,
           });
-          expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
-          return;
-        }
 
-        const runArgs = vi.mocked(invoke.runCommand).mock.calls[0]?.[0] as string[] | undefined;
-        expect(runArgs).toEqual(["env", "sh", "-c", "echo SAFE"]);
-        expect(fs.existsSync(marker)).toBe(false);
-        expectInvokeOk(invoke.sendInvokeResult);
-      } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
+          if (testCase.preferMacAppExecHost) {
+            const canonicalCwd = fs.realpathSync(tmp);
+            expect(invoke.runCommand).not.toHaveBeenCalled();
+            expect(invoke.runViaMacAppExecHost).toHaveBeenCalledWith({
+              approvals: expect.anything(),
+              request: expect.objectContaining({
+                command: ["env", "sh", "-c", "echo SAFE"],
+                rawCommand: 'env sh -c "echo SAFE"',
+                cwd: canonicalCwd,
+              }),
+            });
+            expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
+            continue;
+          }
+
+          const runArgs = vi.mocked(invoke.runCommand).mock.calls[0]?.[0] as string[] | undefined;
+          expect(runArgs).toEqual(["env", "sh", "-c", "echo SAFE"]);
+          expect(fs.existsSync(marker)).toBe(false);
+          expectInvokeOk(invoke.sendInvokeResult);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
       }
-    });
-  }
+    },
+  );
 
   it("handles transparent env wrappers in allowlist mode", async () => {
     const { runCommand, sendInvokeResult } = await runSystemInvoke({
@@ -652,59 +651,68 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "pins PATH-token executable to canonical path for approval-based runs",
+    "pins PATH-token executable to canonical path",
     async () => {
-      await withPathTokenCommand({
-        tmpPrefix: "openclaw-approval-path-pin-",
-        run: async ({ expected }) => {
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: ["poccmd", "-n", "SAFE"],
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
-          expectCommandPinnedToCanonicalPath({
-            runCommand,
-            expected,
-            commandTail: ["-n", "SAFE"],
-          });
-          expectInvokeOk(sendInvokeResult);
+      for (const testCase of [
+        {
+          name: "approval-based run",
+          tmpPrefix: "openclaw-approval-path-pin-",
+          run: async (ctx: { expected: string }) => {
+            const { runCommand, sendInvokeResult } = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: ["poccmd", "-n", "SAFE"],
+              approved: true,
+              security: "full",
+              ask: "off",
+            });
+            expectCommandPinnedToCanonicalPath({
+              runCommand,
+              expected: ctx.expected,
+              commandTail: ["-n", "SAFE"],
+            });
+            expectInvokeOk(sendInvokeResult);
+          },
         },
-      });
-    },
-  );
+        {
+          name: "prepared plan",
+          tmpPrefix: "openclaw-prepare-run-path-pin-",
+          run: async (ctx: { expected: string }) => {
+            const prepared = buildSystemRunApprovalPlan({
+              command: ["poccmd", "hello"],
+            });
+            expect(prepared.ok).toBe(true);
+            if (!prepared.ok) {
+              throw new Error("unreachable");
+            }
 
-  it.runIf(process.platform !== "win32")(
-    "accepts prepared plans after PATH-token hardening rewrites argv",
-    async () => {
-      await withPathTokenCommand({
-        tmpPrefix: "openclaw-prepare-run-path-pin-",
-        run: async ({ expected }) => {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["poccmd", "hello"],
-          });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: prepared.plan.argv,
-            rawCommand: prepared.plan.commandText,
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
-          expectCommandPinnedToCanonicalPath({
-            runCommand,
-            expected,
-            commandTail: ["hello"],
-          });
-          expectInvokeOk(sendInvokeResult);
+            const { runCommand, sendInvokeResult } = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.commandText,
+              approved: true,
+              security: "full",
+              ask: "off",
+            });
+            expectCommandPinnedToCanonicalPath({
+              runCommand,
+              expected: ctx.expected,
+              commandTail: ["hello"],
+            });
+            expectInvokeOk(sendInvokeResult);
+          },
         },
-      });
+      ] as const) {
+        await withPathTokenCommand({
+          tmpPrefix: testCase.tmpPrefix,
+          run: async ({ expected }) => {
+            try {
+              await testCase.run({ expected });
+            } catch (error) {
+              throw new Error(`case failed: ${testCase.name}`, { cause: error });
+            }
+          },
+        });
+      }
     },
   );
 
