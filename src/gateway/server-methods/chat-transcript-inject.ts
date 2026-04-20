@@ -20,12 +20,12 @@ export type GatewayInjectedTranscriptAppendResult = {
 function resolveInjectedAssistantContent(params: {
   message: string;
   label?: string;
-  content?: ReadonlyArray<Record<string, unknown>>;
+  content?: Array<Record<string, unknown>>;
 }): Array<Record<string, unknown>> {
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
   if (params.content && params.content.length > 0) {
     if (!labelPrefix) {
-      return [...params.content];
+      return params.content;
     }
     const first = params.content[0];
     if (
@@ -65,7 +65,7 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
   message?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
-  content?: ReadonlyArray<Record<string, unknown>>;
+  content?: Array<Record<string, unknown>>;
   label?: string;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;

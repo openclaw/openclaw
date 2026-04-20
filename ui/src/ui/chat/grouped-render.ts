@@ -1,10 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
-import {
-  DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_HEIGHT,
-  DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_WIDTH,
-} from "../../../../src/shared/managed-image-thumbnail-limits.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -60,61 +56,8 @@ type ImageBlock = {
   height?: number;
 };
 
-type ImageRenderOptions = {
-  localMediaPreviewRoots?: readonly string[];
-  basePath?: string;
-  authToken?: string | null;
-};
-
-type RenderableImageBlock = ImageBlock & {
-  displayUrl: string;
-};
-
-function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
-  if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
-    images.push(block);
-  }
-}
-
-function buildBase64ImageUrl(params: { data: string; mediaType?: string }): string {
-  return params.data.startsWith("data:")
-    ? params.data
-    : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
-}
-
-function getFileExtension(url: string): string | undefined {
-  const source = (() => {
-    try {
-      const trimmed = url.trim();
-      if (/^https?:\/\//i.test(trimmed)) {
-        return new URL(trimmed).pathname;
-      }
-    } catch {
-      // Fall back to the raw path when URL parsing fails.
-    }
-    return url;
-  })();
-  const fileName = source.split(/[\\/]/).pop() ?? source;
-  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
-  return match?.[1]?.toLowerCase();
-}
-
-function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
-      return true;
-    }
-    if (normalized !== "application/octet-stream") {
-      return false;
-    }
-  }
-  const ext = getFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
-  );
-}
+const DEFAULT_INLINE_IMAGE_PREVIEW_MAX_WIDTH = 480;
+const DEFAULT_INLINE_IMAGE_PREVIEW_MAX_HEIGHT = 480;
 
 function normalizeMarkdownLinkTarget(target: string): string {
   const trimmed = target.trim();
@@ -196,8 +139,8 @@ function imageDisplayStyle(img: ImageBlock): string {
   const width = normalizePositiveDimension(img.width);
   const height = normalizePositiveDimension(img.height);
   const styles = [
-    `--chat-message-image-default-width: ${DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_WIDTH}`,
-    `--chat-message-image-default-height: ${DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_HEIGHT}`,
+    `--chat-message-image-default-width: ${DEFAULT_INLINE_IMAGE_PREVIEW_MAX_WIDTH}`,
+    `--chat-message-image-default-height: ${DEFAULT_INLINE_IMAGE_PREVIEW_MAX_HEIGHT}`,
   ];
   if (width && height) {
     styles.push(`--chat-message-image-width: ${width}`);
@@ -219,16 +162,16 @@ function extractImages(message: unknown): ImageBlock[] {
       const b = block as Record<string, unknown>;
 
       if (b.type === "image") {
+        // Handle source object format (from sendChatMessage)
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
+          const data = source.data;
+          const mediaType = (source.media_type as string) || "image/png";
+          // If data is already a data URL, use it directly
+          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+          images.push({ url });
         } else if (typeof b.url === "string") {
-          appendImageBlock(images, {
+          images.push({
             url: b.url,
             openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
             alt: typeof b.alt === "string" ? b.alt : undefined,
@@ -237,50 +180,13 @@ function extractImages(message: unknown): ImageBlock[] {
           });
         }
       } else if (b.type === "image_url") {
+        // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          appendImageBlock(images, { url: imageUrl.url });
-        }
-      } else if (b.type === "input_image") {
-        const imageUrl = b.image_url;
-        if (typeof imageUrl === "string") {
-          appendImageBlock(images, { url: imageUrl });
-        } else if (imageUrl && typeof imageUrl === "object") {
-          const url = (imageUrl as Record<string, unknown>).url;
-          if (typeof url === "string") {
-            appendImageBlock(images, { url });
-          }
-        }
-        const source = b.source as Record<string, unknown> | undefined;
-        if (typeof source?.url === "string") {
-          appendImageBlock(images, { url: source.url });
-        } else if (typeof source?.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
+          images.push({ url: imageUrl.url });
         }
       }
     }
-  }
-
-  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
-    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
-    : typeof m.MediaPath === "string"
-      ? [m.MediaPath]
-      : [];
-  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
-    ? m.MediaTypes
-    : typeof m.MediaType === "string"
-      ? [m.MediaType]
-      : [];
-  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
-    if (!isImageTranscriptMediaPath(mediaPath, transcriptMediaTypes[index])) {
-      continue;
-    }
-    appendImageBlock(images, { url: mediaPath });
   }
 
   return images;
@@ -314,9 +220,7 @@ function preferTextBeforeImages(message: unknown): boolean {
     }
     if (
       firstImageIndex === Number.POSITIVE_INFINITY &&
-      (candidate.type === "image" ||
-        candidate.type === "image_url" ||
-        candidate.type === "input_image")
+      (candidate.type === "image" || candidate.type === "image_url")
     ) {
       firstImageIndex = index;
     }
@@ -822,6 +726,8 @@ const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
 const MANAGED_IMAGE_FETCH_RETRY_DELAYS_MS = [0, 75, 200, 500] as const;
 const MANAGED_IMAGE_FETCH_MISS_TTL_MS = 10_000;
+const IMAGE_ACTION_COPIED_FEEDBACK_MS = 1_500;
+const imageActionFeedbackTimers = new WeakMap<HTMLButtonElement, number>();
 const MANAGED_IMAGE_PREVIEW_SELECTOR = ".chat-message-image";
 
 function buildManagedImageFetchCacheKey(
@@ -954,6 +860,136 @@ async function fetchManagedImageBlobUrl(
   return pending;
 }
 
+async function fetchImageBlob(
+  rawUrl: string,
+  opts: { basePath?: string; authHeader?: string; requesterSessionKey?: string },
+): Promise<Blob | null> {
+  const managedUrl = resolveManagedImageUrl(rawUrl, {
+    basePath: opts.basePath,
+    authHeader: opts.authHeader,
+    allowDataImage: true,
+  });
+  if (managedUrl) {
+    return fetchManagedImageBlob(managedUrl, opts.authHeader, {
+      bypassMissCache: true,
+      requesterSessionKey: opts.requesterSessionKey,
+    });
+  }
+
+  const safeUrl = resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
+    allowDataImage: true,
+  });
+  if (!safeUrl) {
+    return null;
+  }
+  try {
+    const response = await fetch(safeUrl);
+    if (!response.ok) {
+      return null;
+    }
+    return await response.blob();
+  } catch {
+    return null;
+  }
+}
+
+function showCopiedImageActionFeedback(button: HTMLButtonElement): void {
+  button.dataset.state = "copied";
+  const priorTimer = imageActionFeedbackTimers.get(button);
+  if (typeof priorTimer === "number") {
+    window.clearTimeout(priorTimer);
+  }
+  const timer = window.setTimeout(() => {
+    delete button.dataset.state;
+    imageActionFeedbackTimers.delete(button);
+  }, IMAGE_ACTION_COPIED_FEEDBACK_MS);
+  imageActionFeedbackTimers.set(button, timer);
+}
+
+async function cloneBlobForClipboard(blob: Blob, mimeType: string): Promise<Blob> {
+  try {
+    const bytes = await blob.arrayBuffer();
+    return new Blob([bytes], { type: mimeType });
+  } catch {
+    return blob;
+  }
+}
+
+async function rasterizeBlobToPng(blob: Blob): Promise<Blob | null> {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.addEventListener("load", () => resolve(img), { once: true });
+      img.addEventListener("error", () => reject(new Error("image load failed")), { once: true });
+      img.src = objectUrl;
+    });
+    const canvas = document.createElement("canvas");
+    const width = Math.max(1, image.naturalWidth || image.width || 1);
+    const height = Math.max(1, image.naturalHeight || image.height || 1);
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+    context.drawImage(image, 0, 0, width, height);
+    return await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((pngBlob) => resolve(pngBlob), "image/png");
+    });
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function prepareClipboardImageBlob(blob: Blob): Promise<Blob> {
+  if (blob.type === "image/png") {
+    return cloneBlobForClipboard(blob, "image/png");
+  }
+  if (blob.type?.startsWith("image/")) {
+    const pngBlob = await rasterizeBlobToPng(blob);
+    if (pngBlob) {
+      return cloneBlobForClipboard(pngBlob, "image/png");
+    }
+  }
+  throw new Error("unsupported clipboard image type");
+}
+
+async function copyImageUrl(
+  rawUrl: string,
+  opts: { basePath?: string; authHeader?: string; requesterSessionKey?: string },
+): Promise<boolean> {
+  if (typeof navigator === "undefined" || !navigator.clipboard) {
+    return false;
+  }
+
+  const ClipboardItemCtor = globalThis.ClipboardItem as
+    | (new (items: Record<string, Blob | Promise<Blob>>) => ClipboardItem)
+    | undefined;
+  if (typeof navigator.clipboard.write !== "function" || !ClipboardItemCtor) {
+    return false;
+  }
+
+  const clipboardBlobPromise = (async () => {
+    const blob = await fetchImageBlob(rawUrl, opts);
+    if (!blob) {
+      throw new Error("image fetch failed");
+    }
+    return prepareClipboardImageBlob(blob);
+  })();
+  try {
+    await navigator.clipboard.write([new ClipboardItemCtor({ "image/png": clipboardBlobPromise })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function cleanupUnusedManagedImagePreviewBlobUrls(
   root: ParentNode,
   options?: { revokeActive?: boolean },
@@ -1017,18 +1053,6 @@ async function fetchManagedPreviewBlobUrl(
   });
 }
 
-function isAssistantAttachmentProxyUrl(rawUrl: string | null | undefined): boolean {
-  if (!rawUrl) {
-    return false;
-  }
-  try {
-    const parsed = new URL(rawUrl, window.location.href);
-    return parsed.pathname.endsWith("/__openclaw__/assistant-media");
-  } catch {
-    return false;
-  }
-}
-
 function resolveManagedPreviewSource(
   rawUrl: string | null | undefined,
   opts: {
@@ -1040,9 +1064,6 @@ function resolveManagedPreviewSource(
 ): string | Promise<string | null> | null {
   if (!rawUrl) {
     return null;
-  }
-  if (isAssistantAttachmentProxyUrl(rawUrl)) {
-    return rawUrl;
   }
   const managedUrl = resolveManagedImageUrl(rawUrl, {
     basePath: opts.basePath,
@@ -1100,7 +1121,15 @@ async function openImageUrl(
       requesterSessionKey: opts.requesterSessionKey,
     });
     if (blobUrl) {
-      openExternalUrlSafe(blobUrl);
+      try {
+        window.open(blobUrl, "_blank", "noopener,noreferrer");
+      } catch {
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.click();
+      }
       return;
     }
   }
@@ -1110,26 +1139,8 @@ async function openImageUrl(
   });
 }
 
-function resolveRenderableMessageImages(
-  images: ImageBlock[],
-  opts?: ImageRenderOptions,
-): RenderableImageBlock[] {
-  return images.flatMap((img) => {
-    const isLocalImage = isLocalAssistantAttachmentSource(img.url);
-    const canProxyLocalImage =
-      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
-    if (isLocalImage && !canProxyLocalImage) {
-      return [];
-    }
-    const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
-      : img.url;
-    return [{ ...img, displayUrl, openUrl: img.openUrl ?? displayUrl }];
-  });
-}
-
 function renderMessageImages(
-  images: RenderableImageBlock[],
+  images: ImageBlock[],
   opts: {
     basePath?: string;
     authHeader?: string;
@@ -1148,6 +1159,24 @@ function renderMessageImages(
       requesterSessionKey: opts.requesterSessionKey,
     });
   };
+  const copyImage = (img: ImageBlock, button: HTMLButtonElement | null) => {
+    if (!button) {
+      return;
+    }
+    const copySource = img.openUrl ?? img.url;
+    void copyImageUrl(copySource, {
+      basePath: opts.basePath,
+      authHeader: opts.authHeader,
+      requesterSessionKey: opts.requesterSessionKey,
+    })
+      .then((copied) => {
+        if (copied) {
+          showCopiedImageActionFeedback(button);
+        }
+      })
+      .catch(() => {});
+  };
+
   const renderImageFrameContent = (img: ImageBlock, resolvedPreviewSrc: string | null) => {
     if (!resolvedPreviewSrc) {
       return html`<div class="chat-message-image-unavailable" role="status">
@@ -1164,13 +1193,39 @@ function renderMessageImages(
         @load=${() => opts.onMediaLoad?.()}
         @click=${() => openImage(img)}
       />
+      <div class="chat-message-image-overlay">
+        <button
+          type="button"
+          class="chat-message-image-action chat-message-image-copy"
+          title="copy image"
+          aria-label="copy image"
+          @click=${(event: Event) =>
+            copyImage(img, event.currentTarget as HTMLButtonElement | null)}
+        >
+          <span class="chat-message-image-action__icon chat-message-image-action__icon--copy"
+            >${icons.copy}</span
+          >
+          <span class="chat-message-image-action__icon chat-message-image-action__icon--check"
+            >${icons.check}</span
+          >
+        </button>
+        <button
+          type="button"
+          class="chat-message-image-action chat-message-image-open"
+          title="open"
+          aria-label="open"
+          @click=${() => openImage(img)}
+        >
+          ${icons.externalLink}
+        </button>
+      </div>
     `;
   };
 
   return html`
     <div class="chat-message-images">
       ${images.map((img) => {
-        const previewSrc = resolveManagedPreviewSource(img.displayUrl, {
+        const previewSrc = resolveManagedPreviewSource(img.url, {
           basePath: opts.basePath,
           authHeader: opts.authHeader,
           requesterSessionKey: opts.requesterSessionKey,
@@ -1669,12 +1724,7 @@ function renderGroupedMessage(
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
-  const imageRenderOptions = {
-    localMediaPreviewRoots: opts.localMediaPreviewRoots,
-    basePath: opts.basePath,
-    authToken: opts.assistantAttachmentAuthToken,
-  };
-  const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
+  const images = extractImages(message);
   const hasImages = images.length > 0;
 
   const normalizedMessage = normalizeMessage(message);

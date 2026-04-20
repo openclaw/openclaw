@@ -132,6 +132,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       thinkLevel: undefined,
       timeoutMs: 60_000,
       messageChannel: "telegram",
+      resolvedDelivery: {},
       toolPolicy: {
         requireExplicitMessageTarget: false,
         disableMessageTool: false,

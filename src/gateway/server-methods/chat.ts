@@ -14,7 +14,7 @@ import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -79,8 +79,8 @@ import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
-  resolveGatewayModelSupportsImages,
   resolveDeletedAgentIdFromSessionKey,
+  resolveGatewayModelSupportsImages,
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -153,7 +153,7 @@ async function buildWebchatAudioOnlyAssistantMessage(
 
 type AssistantDisplayContentBlock = Record<string, unknown>;
 
-export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -255,15 +255,6 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
     })
     .filter(Boolean);
   return chunks.join("\n\n").trim();
-}
-
-function buildVisibleAssistantReplyText(payloads: ReplyPayload[]): string | undefined {
-  const text = payloads
-    .map((payload) => sanitizeAssistantDisplayText(payload.text))
-    .filter((value): value is string => Boolean(value))
-    .join("\n\n")
-    .trim();
-  return text || undefined;
 }
 
 function resolveChatSendOriginatingRoute(params: {
@@ -1324,7 +1315,7 @@ function appendAssistantTranscriptMessage(params: {
   return appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     message: params.message,
-    content: params.content,
+    content: params.content ? [...params.content] : undefined,
     label: params.label,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
@@ -1435,16 +1426,6 @@ function extractAssistantDisplayTextFromContent(
     return undefined;
   }
   return parts.join("\n\n");
-}
-
-function stripTextBlocksFromAssistantDisplayContent(
-  content?: readonly AssistantDisplayContentBlock[] | null,
-): AssistantDisplayContentBlock[] | undefined {
-  if (!Array.isArray(content) || content.length === 0) {
-    return undefined;
-  }
-  const stripped = content.filter((block) => block?.type !== "text");
-  return stripped.length > 0 ? [...stripped] : undefined;
 }
 
 async function buildAssistantDisplayContentFromReplyPayloads(params: {
@@ -2201,11 +2182,50 @@ export const chatHandlers: GatewayRequestHandlers = {
           savedImages: await persistedImagesPromise,
         });
       };
-      let dispatchError: unknown;
+      const appendWebchatAgentAudioTranscriptIfNeeded = async (payload: ReplyPayload) => {
+        if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
+          return;
+        }
+        const mediaSources = [
+          ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+          ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+        ];
+        const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
+          localRoots: getAgentScopedMediaLocalRootsForSources({
+            cfg,
+            agentId,
+            mediaSources,
+          }),
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+          },
+        });
+        if (!audioMessage) {
+          return;
+        }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+        const appended = appendAssistantTranscriptMessage({
+          message: audioMessage.transcriptText,
+          content: audioMessage.content,
+          sessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile,
+          agentId,
+          createIfMissing: true,
+          idempotencyKey: `${clientRunId}:assistant-media`,
+        });
+        if (appended.ok) {
+          appendedWebchatAgentAudio = true;
+          return;
+        }
+        context.logGateway.warn(
+          `webchat transcript append failed for audio reply: ${appended.error ?? "unknown error"}`,
+        );
+      };
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
         onError: (err) => {
-          dispatchError ??= err;
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
@@ -2213,6 +2233,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
+              await appendWebchatAgentAudioTranscriptIfNeeded(payload);
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted
@@ -2272,10 +2293,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       })
         .then(async () => {
-          await dispatcher.waitForIdle();
-          if (dispatchError) {
-            throw dispatchError;
-          }
           await rewriteUserTranscriptMedia();
           if (!agentRunStarted) {
             await emitUserTranscriptUpdate();
@@ -2374,81 +2391,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               });
             }
           } else {
-            const mediaReplies = deliveredReplies
-              .map((reply) => reply.payload)
-              .filter((payload) => !isBtwReplyPayload(payload))
-              .filter(isMediaBearingPayload);
-            if (mediaReplies.length > 0) {
-              const { storePath: latestStorePath, entry: latestEntry } =
-                loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const transcriptPath = resolveTranscriptPath({
-                sessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile,
-                agentId,
-              });
-              const localRoots = [
-                ...getAgentScopedMediaLocalRoots(cfg, agentId),
-                ...(transcriptPath ? [path.dirname(transcriptPath)] : []),
-              ];
-              const payloadVisibleText = buildVisibleAssistantReplyText(mediaReplies);
-              const payloadHasVisibleText = Boolean(payloadVisibleText);
-              const audioOnlyMessage = await buildWebchatAudioOnlyAssistantMessage(mediaReplies, {
-                localRoots,
-                onLocalAudioAccessDenied: (message) => {
-                  context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-                },
-              });
-              let combinedReply =
-                !payloadHasVisibleText && audioOnlyMessage
-                  ? audioOnlyMessage.transcriptText
-                  : undefined;
-              let assistantContent =
-                !payloadHasVisibleText && audioOnlyMessage
-                  ? (audioOnlyMessage.content as AssistantDisplayContentBlock[])
-                  : await buildAssistantDisplayContentFromReplyPayloads({
-                      sessionKey,
-                      payloads: mediaReplies,
-                      managedImageAttachmentsLimits: undefined,
-                    });
-              if (payloadHasVisibleText) {
-                assistantContent = stripTextBlocksFromAssistantDisplayContent(assistantContent);
-              } else {
-                combinedReply ??=
-                  extractAssistantDisplayTextFromContent(assistantContent) ?? payloadVisibleText;
-                if (combinedReply && isSuppressedControlReplyText(combinedReply)) {
-                  combinedReply = undefined;
-                }
-              }
-              if (combinedReply || assistantContent?.length) {
-                const appended = appendAssistantTranscriptMessage({
-                  ...(combinedReply ? { message: combinedReply } : {}),
-                  ...(assistantContent?.length ? { content: assistantContent } : {}),
-                  sessionId,
-                  storePath: latestStorePath,
-                  sessionFile: latestEntry?.sessionFile,
-                  agentId,
-                  createIfMissing: true,
-                  idempotencyKey: `${clientRunId}:assistant-media`,
-                });
-                if (appended.ok) {
-                  if (appended.messageId && assistantContent?.length) {
-                    await attachManagedOutgoingImagesToMessage({
-                      messageId: appended.messageId,
-                      blocks: assistantContent,
-                    });
-                  }
-                  appendedWebchatAgentAudio ||= Boolean(
-                    assistantContent?.some((block) => block.type === "audio"),
-                  );
-                } else {
-                  context.logGateway.warn(
-                    `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
-                  );
-                }
-              }
-            }
             void emitUserTranscriptUpdate();
           }
           setGatewayDedupeEntry({

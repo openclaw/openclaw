@@ -11,11 +11,6 @@ import {
   resizeToPng,
 } from "../media/image-ops.js";
 import { saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import {
-  DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_DIMENSION,
-  DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_HEIGHT,
-  DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_WIDTH,
-} from "../shared/managed-image-thumbnail-limits.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
@@ -34,9 +29,6 @@ export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
   maxWidth: 4096,
   maxHeight: 4096,
   maxPixels: 20_000_000,
-  thumbnailMaxDimension: DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_DIMENSION,
-  thumbnailMaxWidth: DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_WIDTH,
-  thumbnailMaxHeight: DEFAULT_INLINE_IMAGE_THUMBNAIL_MAX_HEIGHT,
 } as const;
 
 export type ManagedImageAttachmentLimits = {
@@ -44,22 +36,10 @@ export type ManagedImageAttachmentLimits = {
   maxWidth: number;
   maxHeight: number;
   maxPixels: number;
-  thumbnailMaxDimension: number;
-  thumbnailMaxWidth: number;
-  thumbnailMaxHeight: number;
 };
 
 type ManagedImageAttachmentLimitsConfig = Partial<
-  Pick<
-    ManagedImageAttachmentLimits,
-    | "maxBytes"
-    | "maxWidth"
-    | "maxHeight"
-    | "maxPixels"
-    | "thumbnailMaxDimension"
-    | "thumbnailMaxWidth"
-    | "thumbnailMaxHeight"
-  >
+  Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
 
 type ManagedImageRecordVariant = {
@@ -82,7 +62,6 @@ type ManagedImageRecord = {
   retentionClass?: ManagedImageRetentionClass;
   alt: string;
   original: ManagedImageRecordVariant;
-  thumbnail?: ManagedImageRecordVariant;
 };
 
 type ParsedImageDataUrl =
@@ -101,22 +80,11 @@ type CleanupManagedOutgoingImageRecordsResult = {
 export function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
-  const thumbnailMaxDimension =
-    config?.thumbnailMaxDimension ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.thumbnailMaxDimension;
   return {
     maxBytes: config?.maxBytes ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxBytes,
     maxWidth: config?.maxWidth ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxWidth,
     maxHeight: config?.maxHeight ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxHeight,
     maxPixels: config?.maxPixels ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxPixels,
-    thumbnailMaxDimension,
-    thumbnailMaxWidth:
-      config?.thumbnailMaxWidth ??
-      config?.thumbnailMaxDimension ??
-      DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.thumbnailMaxWidth,
-    thumbnailMaxHeight:
-      config?.thumbnailMaxHeight ??
-      config?.thumbnailMaxDimension ??
-      DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.thumbnailMaxHeight,
   };
 }
 
@@ -270,19 +238,11 @@ function resolveOutgoingOriginalsDir(stateDir = resolveStateDir()) {
   return path.join(stateDir, "media", "outgoing", "originals");
 }
 
-function resolveOutgoingThumbnailsDir(stateDir = resolveStateDir()) {
-  return path.join(stateDir, "media", "outgoing", "thumbs");
-}
-
 function resolveOutgoingRecordPath(attachmentId: string, stateDir = resolveStateDir()) {
   return path.join(resolveOutgoingRecordsDir(stateDir), `${attachmentId}.json`);
 }
 
-function buildOutgoingVariantUrl(
-  sessionKey: string,
-  attachmentId: string,
-  variant: "thumb" | "full" | "download",
-) {
+function buildOutgoingVariantUrl(sessionKey: string, attachmentId: string, variant: "full") {
   return `${OUTGOING_IMAGE_ROUTE_PREFIX}/${encodeURIComponent(sessionKey)}/${attachmentId}/${variant}`;
 }
 
@@ -348,10 +308,13 @@ function parseImageDataUrl(source: string): ParsedImageDataUrl {
 
 async function getVariantStats(filePath: string) {
   const [stats, metadataBuffer] = await Promise.all([fs.stat(filePath), fs.readFile(filePath)]);
-  const metadata = await getImageMetadata(metadataBuffer).catch(() => null);
+  const metadata = (await getImageMetadata(metadataBuffer).catch(() => null)) ?? {
+    width: null,
+    height: null,
+  };
   return {
-    width: metadata?.width ?? null,
-    height: metadata?.height ?? null,
+    width: metadata.width ?? null,
+    height: metadata.height ?? null,
     sizeBytes: Number.isFinite(stats.size) ? stats.size : null,
   };
 }
@@ -369,9 +332,6 @@ async function deleteManagedImageRecordArtifacts(
   const files = new Set<string>();
   if (record.original?.path) {
     files.add(record.original.path);
-  }
-  if (record.thumbnail?.path) {
-    files.add(record.thumbnail.path);
   }
   let deletedFileCount = 0;
   for (const filePath of files) {
@@ -395,10 +355,7 @@ async function deleteOrphanManagedImageFiles(params: {
   referencedPaths: ReadonlySet<string>;
 }) {
   let deletedFileCount = 0;
-  for (const dir of [
-    resolveOutgoingOriginalsDir(params.stateDir),
-    resolveOutgoingThumbnailsDir(params.stateDir),
-  ]) {
+  for (const dir of [resolveOutgoingOriginalsDir(params.stateDir)]) {
     let names: string[] = [];
     try {
       names = await fs.readdir(dir);
@@ -494,9 +451,6 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
     } else {
       if (record.original?.path) {
         referencedPaths.add(record.original.path);
-      }
-      if (record.thumbnail?.path) {
-        referencedPaths.add(record.thumbnail.path);
       }
       retainedCount += 1;
     }
