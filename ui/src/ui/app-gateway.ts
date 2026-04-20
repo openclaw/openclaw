@@ -273,6 +273,13 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      // Sync auth token to state so resolveAssistantAttachmentAuthToken can access it
+      // for media preview URLs (requires Bearer token on the media endpoint).
+      if (host.settings.token) {
+        applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+          {...host.settings}
+        });
+      }
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
