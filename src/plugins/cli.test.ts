@@ -369,6 +369,120 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 
+  it("includes the configured memory slot in scoped CLI loading", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki"]);
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: " memory-core ",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+        primary: "wiki",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-wiki", "memory-core"],
+      }),
+    );
+  });
+
+  it("leaves scoped CLI loading unchanged when no memory slot is configured", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki"]);
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: "   ",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+        primary: "wiki",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-wiki"],
+      }),
+    );
+  });
+
+  it("deduplicates the configured memory slot when it is already in scoped CLI loading", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki", "memory-core"]);
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+        primary: "wiki",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-wiki", "memory-core"],
+      }),
+    );
+  });
+
+  it("does not force scoped CLI loading when no primary command is provided", async () => {
+    const program = createProgram();
+    program.exitOverride();
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: expect.anything(),
+      }),
+    );
+  });
+
   it("keeps full CLI loading when primary command planning finds no plugin match", async () => {
     const program = createProgram();
     program.exitOverride();
