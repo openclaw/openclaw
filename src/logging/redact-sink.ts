@@ -150,7 +150,7 @@ function sanitizeValueForSink(
   depth: number,
 ): unknown {
   if (typeof value === "string") {
-    return sanitizeStringForSink(value, resolved, { allowDirectMask: true });
+    return sanitizeStringForSink(value, resolved);
   }
   if (
     value === null ||

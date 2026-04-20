@@ -14,6 +14,7 @@ const disabled = resolveRedactOptions({
 
 const SECRET = "abcdef1234567890ghij";
 const MASKED = "abcdef…ghij";
+const ULID = "01HWKJFQ7N3Y8B3GMJKK0HXMZ8";
 
 describe("redact-sink", () => {
   it("sanitizes sink strings with shared redaction rules", () => {
@@ -28,7 +29,7 @@ describe("redact-sink", () => {
       nested: {
         apiKey: SECRET,
       },
-      items: [SECRET, { token: SECRET }],
+      items: [`Authorization: Bearer ${SECRET}`, { token: SECRET }],
     };
 
     const sanitized = sanitizeLogRecordForSink(record, resolved);
@@ -37,14 +38,15 @@ describe("redact-sink", () => {
     expect(serialized).toContain(MASKED);
     expect(serialized).not.toContain(SECRET);
     expect(record.nested.apiKey).toBe(SECRET);
-    expect(record.items[0]).toBe(SECRET);
+    expect(record.items[0]).toBe(`Authorization: Bearer ${SECRET}`);
   });
 
-  it("preserves non-credential fields while still masking top-level message args", () => {
+  it("preserves non-credential values while still masking message args and credential fields", () => {
     const record = {
       0: SECRET,
       time: "2026-02-27T15:04:00.000+08:00",
       host: "api.production.openclaw.ai:443",
+      requestIds: [ULID],
       token: SECRET,
     };
 
@@ -53,6 +55,7 @@ describe("redact-sink", () => {
     expect(sanitized[0]).toBe(MASKED);
     expect(sanitized.time).toBe(record.time);
     expect(sanitized.host).toBe(record.host);
+    expect(sanitized.requestIds).toEqual(record.requestIds);
     expect(sanitized.token).toBe(MASKED);
   });
 
