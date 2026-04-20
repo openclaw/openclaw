@@ -796,6 +796,17 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
+  it("does not collapse explanatory prose that ends with a repeated sample output", () => {
+    const input = [
+      'The user asked me to reply with exactly "Hello." and nothing else.',
+      "This is only an explanation of the failure and not hidden planning.",
+      "The sample duplicated output was:",
+      "Hello.Hello.Hello.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("preserves intentional repeated structured output after a leaked delimiter when the prompt did not ask for a single answer", () => {
     const input = "internal planning<channel|>abc-123abc-123abc-123";
 
@@ -806,6 +817,12 @@ describe("sanitizeAssistantVisibleText", () => {
     const input = "Internal planning<channel|>";
 
     expect(sanitizeAssistantVisibleText(input)).toBe("");
+  });
+
+  it("preserves earlier visible text when a leaked delimiter trails it", () => {
+    const input = "Visible answer\nplan: <channel|>";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
   it("preserves an explicitly requested literal channel delimiter target", () => {

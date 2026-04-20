@@ -146,4 +146,8 @@ describe("stripModelSpecialTokens", () => {
       "Here is the explanation.\nMy plan: <channel|> is the separator token, not hidden scaffolding.",
     );
   });
+
+  it("preserves earlier visible text when a leaked delimiter trails it", () => {
+    expect(stripModelSpecialTokens("Visible answer\nplan: <channel|>")).toBe("Visible answer");
+  });
 });

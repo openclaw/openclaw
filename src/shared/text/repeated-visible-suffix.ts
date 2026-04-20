@@ -170,6 +170,9 @@ function selectVisibleSuffixReplacement(params: {
 
   const explicitTarget = findExplicitVisibleSuffixTarget(prefix, match);
   if (explicitTarget) {
+    if (context === "no-delimiter" && hasExcludedTrailingCollapseContext(prefix)) {
+      return null;
+    }
     return explicitTarget;
   }
   if (context === "delimiter" && findExplicitSingleTargetLiteralInPreamble(prefix)) {

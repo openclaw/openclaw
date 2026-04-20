@@ -21,7 +21,7 @@ import {
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
-const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
+const CHANNEL_DELIMITER_RE = /<channel\|>/i;
 const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\binternal planning\b|(?:^|[\r\n])\s*plan:\s*$/i;
 const CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE =
   /\b(?:reply with|reply to|nothing else|output content|output the text directly|direct instruction|current session|i will output|i will reply|i must output|i must reply|i must adhere)\b/i;
@@ -126,21 +126,61 @@ function stripTrailingChannelDelimiters(text: string): string {
   return next;
 }
 
+function looksLikeLiteralTrailingChannelDelimiter(prefix: string): boolean {
+  return CHANNEL_DELIMITER_TRAILING_LITERAL_HINT_RE.test(prefix.trimEnd().slice(-80));
+}
+
+function stripTrailingLeakedChannelPrefix(text: string): string | null {
+  const trimmedEnd = text.trimEnd();
+  if (!trimmedEnd) {
+    return null;
+  }
+
+  const lastLineBreak = Math.max(trimmedEnd.lastIndexOf("\n"), trimmedEnd.lastIndexOf("\r"));
+  const lastLineStart = lastLineBreak < 0 ? 0 : lastLineBreak + 1;
+  const trailingLine = trimmedEnd.slice(lastLineStart);
+  if (!/^\s*(?:plan:\s*|internal planning\b.*)$/i.test(trailingLine)) {
+    return null;
+  }
+
+  return lastLineBreak < 0 ? "" : trimmedEnd.slice(0, lastLineBreak).trimEnd();
+}
+
 function stripModelSpecialTokensImpl(text: string): string {
   if (!text) {
     return text;
   }
   MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
-  CHANNEL_DELIMITER_RE.lastIndex = 0;
   if (!MODEL_SPECIAL_TOKEN_RE.test(text) && !CHANNEL_DELIMITER_RE.test(text)) {
     return text;
   }
   MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
-  CHANNEL_DELIMITER_RE.lastIndex = 0;
 
   const codeRegions = findCodeRegions(text);
+  const trailingDelimiterMatch = text.match(/^(.*?)(<channel\|>)\s*$/i);
+  const prefixBeforeTrailingDelimiter = trailingDelimiterMatch?.[1] ?? "";
+  if (trailingDelimiterMatch && /<channel\|>/i.test(prefixBeforeTrailingDelimiter)) {
+    const explicitLiteral = findExplicitSingleTargetLiteralInPreamble(text);
+    if (explicitLiteral && /<channel\|>\s*$/i.test(explicitLiteral)) {
+      const explicitPrefix = explicitLiteral.replace(/\s*<channel\|>\s*$/i, "").trimEnd();
+      if (explicitPrefix && prefixBeforeTrailingDelimiter.trimEnd().endsWith(explicitPrefix)) {
+        return explicitLiteral;
+      }
+    }
+    if (!looksLikeLiteralTrailingChannelDelimiter(prefixBeforeTrailingDelimiter)) {
+      const sanitizedTrailingPrefix = stripModelSpecialTokensImpl(
+        prefixBeforeTrailingDelimiter,
+      ).trimEnd();
+      if (
+        sanitizedTrailingPrefix &&
+        sanitizedTrailingPrefix !== prefixBeforeTrailingDelimiter.trimEnd()
+      ) {
+        return sanitizedTrailingPrefix;
+      }
+    }
+  }
   const channelDelimiterMatches: { start: number; end: number }[] = [];
-  for (const match of text.matchAll(CHANNEL_DELIMITER_RE)) {
+  for (const match of text.matchAll(/<channel\|>/gi)) {
     const matched = match[0];
     const start = match.index ?? 0;
     const end = start + matched.length;
@@ -167,8 +207,38 @@ function stripModelSpecialTokensImpl(text: string): string {
     }
     const visibleSuffix = stripTrailingChannelDelimiters(rawVisibleSuffix);
     if (!visibleSuffix.trim()) {
+      const prefixBeforeDelimiter = text.slice(0, channelDelimiterMatch.start);
       if (explicitLiteral?.toLowerCase() === "<channel|>") {
         return explicitLiteral;
+      }
+      if (explicitLiteral && /<channel\|>\s*$/i.test(explicitLiteral)) {
+        const trimmedPrefixBeforeDelimiter = prefixBeforeDelimiter.trimEnd();
+        const explicitPrefix = explicitLiteral.replace(/\s*<channel\|>\s*$/i, "").trimEnd();
+        if (explicitPrefix && trimmedPrefixBeforeDelimiter.endsWith(explicitPrefix)) {
+          return explicitLiteral;
+        }
+      }
+      const preservedPrefix = stripTrailingLeakedChannelPrefix(prefixBeforeDelimiter);
+      if (preservedPrefix !== null) {
+        return stripModelSpecialTokensImpl(preservedPrefix);
+      }
+      if (/<channel\|>/i.test(prefixBeforeDelimiter)) {
+        const sanitizedPrefix = stripModelSpecialTokensImpl(prefixBeforeDelimiter).trimEnd();
+        if (sanitizedPrefix) {
+          return sanitizedPrefix;
+        }
+      }
+      if (
+        !looksLikeLeakedChannelDelimiterPrefix(
+          prefixBeforeDelimiter,
+          { attachedBefore: false, attachedAfter: false },
+          "",
+        )
+      ) {
+        const sanitizedPrefix = stripModelSpecialTokensImpl(prefixBeforeDelimiter).trimEnd();
+        if (sanitizedPrefix) {
+          return sanitizedPrefix;
+        }
       }
       continue;
     }
@@ -176,6 +246,14 @@ function stripModelSpecialTokensImpl(text: string): string {
     return collapseRepeatedVisibleSuffixAfterDelimiter(prefix, visibleSuffix);
   }
   if (channelDelimiterMatches.length > 0) {
+    const lastMatch = channelDelimiterMatches.at(-1);
+    if (lastMatch) {
+      const prefixBeforeLastDelimiter = text.slice(0, lastMatch.start);
+      const sanitizedPrefix = stripModelSpecialTokensImpl(prefixBeforeLastDelimiter).trimEnd();
+      if (sanitizedPrefix && sanitizedPrefix !== prefixBeforeLastDelimiter.trimEnd()) {
+        return sanitizedPrefix;
+      }
+    }
     return "";
   }
 
