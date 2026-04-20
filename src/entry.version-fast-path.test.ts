@@ -21,7 +21,12 @@ describe("entry root version fast path", () => {
   it("prints version output and skips host handling when container-targeted", async () => {
     const output = vi.fn();
     const exit = vi.fn();
-    const resolveVersion = vi.fn(async () => ({
+    const resolveVersion = vi.fn<
+      () => Promise<{
+        VERSION: string;
+        resolveCommitHash: (params: { moduleUrl: string }) => string | null;
+      }>
+    >(async () => ({
       VERSION: "9.9.9-test",
       resolveCommitHash: vi.fn(() => "abc1234"),
     }));
