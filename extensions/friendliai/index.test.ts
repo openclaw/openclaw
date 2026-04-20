@@ -76,7 +76,7 @@ describe("friendliai provider plugin", () => {
     // Default model is first in catalog
     expect(catalog.provider.models?.[0]?.id).toBe(FRIENDLIAI_DEFAULT_MODEL_ID);
     expect(catalog.provider.models?.[0]).toMatchObject({
-      reasoning: false,
+      reasoning: true,
       input: ["text"],
       contextWindow: FRIENDLIAI_DEFAULT_CONTEXT_WINDOW,
       maxTokens: FRIENDLIAI_DEFAULT_MAX_TOKENS,
