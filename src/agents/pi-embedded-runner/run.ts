@@ -743,6 +743,24 @@ export async function runEmbeddedPiAgent(
             // the field added to attempt's params + the threading through
             // pi-tools is dead code (Codex P1 #67840 r3096735975).
             ...(params.planMode ? { planMode: params.planMode } : {}),
+            // PR #68939 follow-up (auto-mode gate fix): ALSO thread the
+            // live-read accessors. Without these, the mutation gate falls
+            // back to the cached `planMode` snapshot captured at
+            // run-start — which stays "plan" across the full turn even
+            // after auto-approve flips disk → "normal" and the resume
+            // chat.send starts a fresh run. Confirmed via the
+            // `[plan-mode-gate]` diagnostic: `hasGetLatestCallback=no`
+            // on every tool call despite agent-runner-execution.ts
+            // wiring the callback — the drop happened here in the
+            // attempt hand-off. Three parallel optional spreads keep
+            // the shape consistent with the `planMode` line above and
+            // with `attempt.ts:614` on the receiving end.
+            ...(params.getLatestPlanMode
+              ? { getLatestPlanMode: params.getLatestPlanMode }
+              : {}),
+            ...(params.getLatestAcceptEdits
+              ? { getLatestAcceptEdits: params.getLatestAcceptEdits }
+              : {}),
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
