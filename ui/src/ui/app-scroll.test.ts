@@ -61,9 +61,15 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
   } as unknown as Event;
 }
 
-function createWheelEvent(deltaY: number, scrollHeight: number, clientHeight: number) {
+function createWheelEvent(
+  deltaY: number,
+  scrollHeight: number,
+  clientHeight: number,
+  target: EventTarget | null = null,
+) {
   return {
     deltaY,
+    target,
     currentTarget: { scrollHeight, clientHeight },
   } as unknown as WheelEvent;
 }
@@ -198,6 +204,25 @@ describe("handleChatScroll", () => {
     host.chatLastScrollTop = 1600;
 
     handleChatWheelIntent(host, createWheelEvent(-120, 2000, 400));
+    handleChatScroll(host, createScrollEvent(2000, 1592, 400));
+
+    expect(host.chatSmoothInterrupted).toBe(true);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
+
+  it("keeps the interrupt active when a wheel-down arrives before the user is truly back at bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatWheelIntent(host, createWheelEvent(-120, 2000, 400));
+    handleChatWheelIntent(host, createWheelEvent(120, 2000, 400));
     handleChatScroll(host, createScrollEvent(2000, 1592, 400));
 
     expect(host.chatSmoothInterrupted).toBe(true);

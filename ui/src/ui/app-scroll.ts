@@ -219,7 +219,6 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
 
 export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
   if (event.deltaY >= 0) {
-    host.chatSmoothInterrupted = false;
     return;
   }
   const container = event.currentTarget as HTMLElement | null;
