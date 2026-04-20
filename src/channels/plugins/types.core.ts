@@ -652,6 +652,13 @@ export type ChannelMessageActionAdapter = {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
+  /**
+   * Set this only for `send` handlers that consume the shared hydrated
+   * attachment fields (`buffer`, `contentType`, `filename`) directly.
+   * Most handlers should leave media as URL/path hints and load it inside
+   * the channel runtime so core/gateway sends do not prefetch media bytes.
+   */
+  preloadSendMedia?: boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   /**
    * Prefer this for channel-specific poll semantics or extra poll parameters.

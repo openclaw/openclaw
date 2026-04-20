@@ -789,6 +789,7 @@ export async function runMessageAction(
     action,
     dryRun,
     mediaPolicy,
+    hydrateSendMedia: shouldPreloadSendMedia({ channel, action }),
   });
 
   const resolvedTarget = await resolveActionTarget({
@@ -855,4 +856,18 @@ export async function runMessageAction(
     agentId: resolvedAgentId,
     abortSignal: input.abortSignal,
   });
+}
+
+function shouldPreloadSendMedia(params: {
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+}): boolean {
+  if (params.action !== "send") {
+    return false;
+  }
+  const actions = getChannelPlugin(params.channel)?.actions;
+  if (!actions?.handleAction || actions.preloadSendMedia !== true) {
+    return false;
+  }
+  return actions.supportsAction ? actions.supportsAction({ action: params.action }) : true;
 }

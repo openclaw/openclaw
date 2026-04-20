@@ -159,7 +159,7 @@ describe("message action media helpers", () => {
     expect(args.filename).toBe("attachment");
   });
 
-  it("hydrates send actions when media is provided via the media field", async () => {
+  it("does not hydrate send actions unless the caller opts in", async () => {
     const loadSpy = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       buffer: Buffer.from("remote-image"),
       contentType: "image/png",
@@ -177,6 +177,34 @@ describe("message action media helpers", () => {
       args,
       action: "send",
       mediaPolicy: { mode: "host" },
+    });
+
+    expect(loadSpy).not.toHaveBeenCalled();
+    expect(args).toEqual({
+      media: "https://example.com/photo.png",
+      message: "hello",
+    });
+  });
+
+  it("hydrates send actions when media is provided and hydration is requested", async () => {
+    const loadSpy = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      buffer: Buffer.from("remote-image"),
+      contentType: "image/png",
+      kind: "image",
+      fileName: "photo.png",
+    });
+    const args: Record<string, unknown> = {
+      media: "https://example.com/photo.png",
+      message: "hello",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "discord",
+      args,
+      action: "send",
+      mediaPolicy: { mode: "host" },
+      hydrateSendMedia: true,
     });
 
     expect(loadSpy).toHaveBeenCalledWith(

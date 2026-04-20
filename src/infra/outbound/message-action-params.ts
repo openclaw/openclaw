@@ -310,9 +310,11 @@ export async function hydrateAttachmentParamsForAction(params: {
   action: ChannelMessageActionName;
   dryRun?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
+  hydrateSendMedia?: boolean;
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
   const shouldHydrateSend =
+    params.hydrateSendMedia === true &&
     params.action === "send" &&
     Boolean(readAttachmentMediaHint(params.args) ?? readAttachmentFileHint(params.args));
   if (
