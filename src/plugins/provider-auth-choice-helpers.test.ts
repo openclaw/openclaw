@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 describe("applyProviderAuthConfigPatch", () => {
-  it("replaces patched default model maps instead of recursively merging them", () => {
+  it("merges patched default model maps instead of replacing them", () => {
     const base = {
       agents: {
         defaults: {
@@ -33,7 +33,14 @@ describe("applyProviderAuthConfigPatch", () => {
 
     const next = applyProviderAuthConfigPatch(base, patch);
 
-    expect(next.agents?.defaults?.models).toEqual(patch.agents.defaults.models);
+    // Should merge, not replace - both providers' models should be present
+    expect(next.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
+      "openai/gpt-5.2": {},
+      "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+      "claude-cli/claude-opus-4-6": { alias: "Opus" },
+    });
     expect(next.agents?.defaults?.model).toEqual(base.agents?.defaults?.model);
   });
 

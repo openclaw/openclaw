@@ -81,10 +81,12 @@ export function applyProviderAuthConfigPatch(cfg: OpenClawConfig, patch: unknown
       ...merged.agents,
       defaults: {
         ...merged.agents?.defaults,
-        // Provider auth migrations can intentionally replace the exact allowlist.
-        models: patchModels as NonNullable<
-          NonNullable<OpenClawConfig["agents"]>["defaults"]
-        >["models"],
+        // Merge models instead of replacing to preserve multi-provider setups.
+        // Provider auth migrations can still override specific model entries.
+        models: {
+          ...merged.agents?.defaults?.models,
+          ...patchModels,
+        } as NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"],
       },
     },
   };
