@@ -15,7 +15,7 @@ import {
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { Agent, EnvHttpProxyAgent, ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch } from "undici";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
@@ -32,7 +32,7 @@ type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: unknown;
 };
 
-type TelegramDispatcher = Agent | EnvHttpProxyAgent | ProxyAgent;
+type TelegramDispatcher = Agent | EnvHttpProxyAgent | ProxyAgent | Socks5ProxyAgent;
 
 type TelegramDispatcherMode = "direct" | "env-proxy" | "explicit-proxy";
 
@@ -266,13 +266,35 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   effectivePolicy: PinnedDispatcherPolicy;
 } {
   if (policy.mode === "explicit-proxy") {
+    const proxyUrl = policy.proxyUrl;
+    // SOCKS5/SOCKS4 proxies require Socks5ProxyAgent; HTTP/HTTPS proxies use ProxyAgent.
+    // Use URL.protocol for reliable scheme detection rather than regex.
+    let isSocks = false;
+    try {
+      const scheme = new URL(proxyUrl).protocol;
+      isSocks = scheme === "socks5:" || scheme === "socks5h:" || scheme === "socks4:" || scheme === "socks4a:" || scheme === "socks:";
+    } catch {
+      // malformed URL — fall through to ProxyAgent which will also fail gracefully
+    }
+    if (isSocks) {
+      try {
+        return {
+          dispatcher: new Socks5ProxyAgent(proxyUrl),
+          mode: "explicit-proxy",
+          effectivePolicy: policy,
+        };
+      } catch (err) {
+        const reason = formatErrorMessage(err);
+        throw new Error(`explicit socks proxy dispatcher init failed: ${reason}`, { cause: err });
+      }
+    }
     const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
     const proxyOptions = requestTlsOptions
       ? ({
-          uri: policy.proxyUrl,
+          uri: proxyUrl,
           requestTls: requestTlsOptions,
         } satisfies ConstructorParameters<typeof ProxyAgent>[0])
-      : policy.proxyUrl;
+      : proxyUrl;
     try {
       return {
         dispatcher: new ProxyAgent(proxyOptions),
