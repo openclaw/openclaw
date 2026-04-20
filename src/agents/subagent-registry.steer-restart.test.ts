@@ -564,6 +564,10 @@ describe("subagent registry steer restarts", () => {
 
     const run = listMainRuns()[0];
     expect(run?.outcome).toMatchObject({ status: "error", error: "manual kill" });
+    expect(run?.outcome?.startedAt).toEqual(expect.any(Number));
+    expect(run?.outcome?.endedAt).toEqual(expect.any(Number));
+    expect(run?.outcome?.elapsedMs).toEqual(expect.any(Number));
+    expect(run?.outcome?.endedAt).toBeGreaterThanOrEqual(run?.outcome?.startedAt ?? 0);
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
     await flushAnnounce();

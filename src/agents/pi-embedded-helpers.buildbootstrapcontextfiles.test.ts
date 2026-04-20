@@ -117,6 +117,21 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain("truncated");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
   });
+  it("keeps at least one bootstrap byte when only the compact marker fits", () => {
+    const maxChars = 22;
+    const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content,
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content).toContain("truncated");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+    expect(result?.content).toContain("H");
+  });
   it("keeps content under the default limit", () => {
     const long = "a".repeat(DEFAULT_BOOTSTRAP_MAX_CHARS - 10);
     const files = [makeFile({ content: long })];
