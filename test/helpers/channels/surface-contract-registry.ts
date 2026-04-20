@@ -1,17 +1,11 @@
-import {
-  getBundledChannelPlugin,
-  listBundledChannelPluginIds,
-  listBundledChannelPlugins,
-  setBundledChannelRuntime,
-} from "../../../src/channels/plugins/bundled.js";
 import type { ChannelId } from "../../../src/channels/plugins/channel-id.types.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
-  listLineAccountIds,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../../src/plugin-sdk/line.js";
+  getBundledChannelPlugin,
+  listBundledChannelPluginIds,
+  listBundledChannelPlugins,
+} from "./bundled-channel-plugin-loader.js";
 import { channelPluginSurfaceKeys, type ChannelPluginSurface } from "./manifest.js";
 
 type SurfaceContractEntry = {
@@ -43,17 +37,6 @@ type DirectoryContractEntry = {
   cfg?: OpenClawConfig;
   accountId?: string;
 };
-
-setBundledChannelRuntime("line", {
-  channel: {
-    line: {
-      listLineAccountIds,
-      resolveDefaultLineAccountId,
-      resolveLineAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
-        resolveLineAccount({ cfg, accountId }),
-    },
-  },
-} as never);
 
 let surfaceContractRegistryCache: SurfaceContractEntry[] | undefined;
 const surfaceContractEntryCache = new Map<ChannelId, SurfaceContractEntry | null>();

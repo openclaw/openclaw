@@ -1,11 +1,12 @@
-import {
-  getBundledChannelPlugin,
-  listBundledChannelPluginIds,
-  listBundledChannelPlugins,
-} from "../../../src/channels/plugins/bundled.js";
 import type { ChannelId } from "../../../src/channels/plugins/channel-id.types.js";
 import { normalizeChannelMeta } from "../../../src/channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
+import {
+  getBundledChannelCatalogEntry,
+  getBundledChannelPlugin,
+  listBundledChannelPluginIds,
+  listBundledChannelPlugins,
+} from "./bundled-channel-plugin-loader.js";
 
 type PluginContractEntry = {
   id: string;
@@ -13,11 +14,12 @@ type PluginContractEntry = {
 };
 
 function toPluginContractEntry(plugin: ChannelPlugin): PluginContractEntry {
+  const existingMeta = getBundledChannelCatalogEntry(plugin.id)?.channel;
   return {
     id: plugin.id,
     plugin: {
       ...plugin,
-      meta: normalizeChannelMeta({ id: plugin.id, meta: plugin.meta }),
+      meta: normalizeChannelMeta({ id: plugin.id, meta: plugin.meta, existing: existingMeta }),
     },
   };
 }
