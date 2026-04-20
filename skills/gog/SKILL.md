@@ -1,6 +1,6 @@
 ---
 name: gog
-description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs. Use when (1) searching/sending Gmail, (2) reading/creating Google Calendar events, (3) listing/uploading Drive files, (4) reading/editing Sheets or Docs. Triggers on phrases like "check my email", "what's on my calendar", "send an email to", "summarize today's inbox", "add a calendar event".
 homepage: https://gogcli.sh
 metadata:
   {

@@ -1,6 +1,6 @@
 ---
 name: obsidian-vault-maintainer
-description: Maintain an Obsidian-friendly memory wiki vault with wikilinks, frontmatter, and official Obsidian CLI awareness.
+description: Maintain an Obsidian-friendly memory wiki vault with wikilinks, frontmatter, and official Obsidian CLI awareness. Use when the memory-wiki vault render mode is `obsidian` or the user asks to create/edit/link notes in an Obsidian-compatible vault. Triggers on phrases like "update the wiki", "add a wikilink", "create a daily note", "link these vault pages", "open this note in Obsidian".
 ---
 
 Use this skill when the memory-wiki vault render mode is `obsidian` or the user wants the wiki to play nicely with Obsidian.
