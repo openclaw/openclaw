@@ -121,9 +121,8 @@ https://github.com/user-attachments/assets/a11f41b2-0262-48c7-8ba2-7c5462840d6f
   
 ## Examples
   
-See TOOLS-EXAMPLE.md
-See openclaw-EXAMPLE.json
-
+See TOOLS-EXAMPLE.md  
+See openclaw-EXAMPLE.json  
 <br><br><br><br>
 
 # 🦞 OpenClaw — Personal AI Assistant
