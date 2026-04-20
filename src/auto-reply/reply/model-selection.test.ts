@@ -569,13 +569,46 @@ describe("createModelSelectionState auto-failover override self-healing", () => 
     });
 
     // Provider/model should revert to the configured primary, not the fallback.
+    // Provider/model should revert to the configured primary, not the fallback.
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe(defaultModel);
     // The auto override should be cleared from session state.
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
-    expect(state.resetModelOverride).toBe(true);
+    // resetModelOverride must NOT be set — it triggers a "Model override not allowed"
+    // system event which is incorrect for auto-heal (the override was valid).
+    expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("resets in-memory provider/model even when caller pre-loaded the fallback", async () => {
+    // Simulates get-reply-directives.ts preloading provider/model from stored override
+    // before calling createModelSelectionState. Our fix must update those in-memory
+    // values so the current turn retries the primary, not the fallback.
+    const cfg = {} as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      // Caller already preloaded fallback values from stored override
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(false);
   });
 
   it("preserves a user-selected override across turns", async () => {
