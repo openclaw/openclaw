@@ -19,8 +19,12 @@ describe("sense worker plugin registration", () => {
       }),
     );
 
-    expect(registerCommand).toHaveBeenCalledTimes(2);
-    expect(registerCommand.mock.calls.map(([entry]) => entry?.name)).toEqual(["nemoclaw", "run"]);
+    expect(registerCommand).toHaveBeenCalledTimes(3);
+    expect(registerCommand.mock.calls.map(([entry]) => entry?.name)).toEqual([
+      "nemoclaw",
+      "run",
+      "runs",
+    ]);
     expect(registerTool).toHaveBeenCalledTimes(2);
     const [factory, options] = registerTool.mock.calls[0] ?? [];
     expect(options).toMatchObject({ optional: true });

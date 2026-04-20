@@ -9,9 +9,13 @@ const RUN_HELP_TEXT = [
   "OpenClaw run commands",
   "Current MVP stores queued runs only.",
   "- /openclaw run help",
+  "- /openclaw runs help",
   "- /openclaw run health",
+  "- /openclaw runs health",
   "- /openclaw run digest",
+  "- /openclaw runs digest",
   "- /openclaw run <free-text>",
+  "- /openclaw runs <free-text>",
 ].join("\n");
 
 type RunCommandParseResult =

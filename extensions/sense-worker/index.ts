@@ -25,6 +25,12 @@ export default definePluginEntry({
       acceptsArgs: true,
       handler: async (ctx) => await handleRunCommand(ctx),
     });
+    api.registerCommand({
+      name: "runs",
+      description: "Alias for /run to queue an OpenClaw run record.",
+      acceptsArgs: true,
+      handler: async (ctx) => await handleRunCommand(ctx),
+    });
     api.registerTool(
       (ctx) => {
         if (ctx.sandboxed) {
