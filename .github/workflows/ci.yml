@@ -138,6 +138,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
           OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+          OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
@@ -169,12 +170,16 @@ jobs:
           const outputPath = process.env.GITHUB_OUTPUT;
           const eventName = process.env.GITHUB_EVENT_NAME ?? "pull_request";
           const isPush = eventName === "push";
+          const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
-          const runMacos = parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly;
-          const runAndroid = parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly;
-          const runWindows = parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly;
+          const runMacos =
+            parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
+          const runAndroid =
+            parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly && isCanonicalRepository;
+          const runWindows =
+            parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly && isCanonicalRepository;
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
