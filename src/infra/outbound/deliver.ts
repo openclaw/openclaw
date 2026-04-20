@@ -1452,6 +1452,10 @@ async function deliverOutboundPayloadsCore(
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
 
       // Append dropped-media user notice to text before sending.
+      // Note: this runs after normalizePayloadsForChannelDelivery, so the notice
+      // bypasses channel-specific text normalization. This is acceptable because
+      // the notice is a short generated string with displayNames already sanitized
+      // by sanitizeMediaDisplayName (no raw user paths or data: payloads).
       if (payloadSummary.droppedMedia?.length) {
         const notice = formatDroppedMediaNotice(payloadSummary.droppedMedia);
         if (notice) {

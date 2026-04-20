@@ -66,7 +66,12 @@ export type DroppedMediaItem = {
 /** Strip directory components from a media source so user-facing notices
  *  never expose full filesystem paths. */
 export function sanitizeMediaDisplayName(mediaSource: string): string {
-  return path.basename(mediaSource) || mediaSource;
+  if (/^data:/i.test(mediaSource)) {
+    return "(inline data)";
+  }
+  // Normalize Windows backslash paths for cross-platform safety
+  const normalized = mediaSource.replace(/\\/g, "/");
+  return path.basename(normalized) || mediaSource;
 }
 
 /** Derive a reason code from the error thrown during media normalization. */
@@ -78,7 +83,7 @@ export function resolveDroppedMediaCode(err: unknown): DroppedMediaReasonCode {
   if (msg.includes("blocked")) {
     return "blocked-path";
   }
-  if (msg.includes("data url") || msg.includes("data:")) {
+  if (msg.includes("data url") || /\bdata:\s*[a-z]/i.test(err.message)) {
     return "data-url-rejected";
   }
   if (

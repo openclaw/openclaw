@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { formatDroppedMediaNotice } from "../../infra/outbound/deliver.js";
 import {
   normalizeOutboundPayloads,
@@ -23,9 +23,21 @@ describe("DroppedMedia types and helpers", () => {
       expect(sanitizeMediaDisplayName("file.txt")).toBe("file.txt");
     });
 
+    it("returns (inline data) for data: URLs", () => {
+      expect(sanitizeMediaDisplayName("data:image/png;base64,iVBORw0KGgo...")).toBe(
+        "(inline data)",
+      );
+      expect(sanitizeMediaDisplayName("DATA:text/plain;base64,abc")).toBe("(inline data)");
+    });
+
     it("handles paths with forward slashes in Windows-style input", () => {
       // On unix, path.basename only splits on '/' so we test with forward slashes.
       expect(sanitizeMediaDisplayName("C:/Users/docs/report.pdf")).toBe("report.pdf");
+    });
+
+    it("handles Windows backslash paths", () => {
+      expect(sanitizeMediaDisplayName("C:\\Users\\docs\\report.pdf")).toBe("report.pdf");
+      expect(sanitizeMediaDisplayName("\\\\server\\share\\file.txt")).toBe("file.txt");
     });
 
     it("never exposes full path in displayName", () => {
@@ -55,6 +67,16 @@ describe("DroppedMedia types and helpers", () => {
 
     it("returns unknown for unrecognized Error", () => {
       expect(resolveDroppedMediaCode(new Error("something unexpected"))).toBe("unknown");
+    });
+
+    it("returns data-url-rejected for data: prefix via regex", () => {
+      expect(resolveDroppedMediaCode(new Error("Rejected data:image/png;base64,abc"))).toBe(
+        "data-url-rejected",
+      );
+    });
+
+    it("does not false-positive on metadata: strings", () => {
+      expect(resolveDroppedMediaCode(new Error("invalid metadata: field missing"))).toBe("unknown");
     });
 
     it("returns unknown for non-Error values", () => {
@@ -201,9 +223,8 @@ describe("reply-media-paths normalizer droppedMedia collection", () => {
     const result = await normalizer(payload);
     expect(result.droppedMedia).toHaveLength(1);
     expect(result.droppedMedia![0].code).toBe("data-url-rejected");
-    // sanitizeMediaDisplayName strips directory components; the data URL basename
-    // should not expose a full path.
-    expect(result.droppedMedia![0].displayName).toBeDefined();
+    // sanitizeMediaDisplayName returns "(inline data)" for data: URLs.
+    expect(result.droppedMedia![0].displayName).toBe("(inline data)");
     // The valid remote URL should still be kept.
     expect(result.mediaUrls).toEqual(["https://example.com/ok.png"]);
   });
