@@ -110,6 +110,7 @@ export type ChatState = {
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatAttachmentReadPending: number;
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;

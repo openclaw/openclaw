@@ -234,6 +234,24 @@ describe("handleSendChat", () => {
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
   });
 
+  it("does not send while attachment reads are still pending", async () => {
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "look at this",
+      chatAttachments: [
+        { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
+      ],
+      chatAttachmentReadPending: 1,
+    });
+
+    await handleSendChat(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("look at this");
+    expect(host.chatAttachments).toHaveLength(1);
+  });
+
   it("sends /btw immediately while a main run is active without queueing it", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
