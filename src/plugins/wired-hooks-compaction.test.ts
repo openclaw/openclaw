@@ -65,6 +65,7 @@ describe("compaction hook wiring", () => {
             resetForCompactionRetry: vi.fn(),
           }
         : {}),
+      resetUsageTotals: vi.fn(),
     };
   }
 
@@ -251,6 +252,7 @@ describe("compaction hook wiring", () => {
       maybeResolveCompactionWait: vi.fn(),
       getCompactionCount: () => 1,
       incrementCompactionCount: vi.fn(),
+      resetUsageTotals: vi.fn(),
     };
 
     runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
@@ -276,6 +278,7 @@ describe("compaction hook wiring", () => {
       log: { debug: vi.fn(), warn: vi.fn() },
       noteCompactionRetry: vi.fn(),
       resetForCompactionRetry: vi.fn(),
+      resetUsageTotals: vi.fn(),
       getCompactionCount: () => 0,
     };
 
@@ -283,5 +286,17 @@ describe("compaction hook wiring", () => {
 
     const assistant = messages[0] as { usage?: unknown };
     expect(assistant.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
+  });
+
+  it("resets usageTotals after final compaction", () => {
+    const ctx = createCompactionEndCtx({ runId: "r6", compactionCount: 1 });
+    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    expect(ctx.resetUsageTotals).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets usageTotals when compaction is retrying", () => {
+    const ctx = createCompactionEndCtx({ runId: "r7", withRetryHooks: true });
+    runCompactionEnd(ctx, { willRetry: true });
+    expect(ctx.resetUsageTotals).toHaveBeenCalledTimes(1);
   });
 });

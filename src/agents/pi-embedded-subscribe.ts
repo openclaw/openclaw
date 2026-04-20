@@ -379,6 +379,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
+  const resetUsageTotals = () => {
+    usageTotals.input = 0;
+    usageTotals.output = 0;
+    usageTotals.cacheRead = 0;
+    usageTotals.cacheWrite = 0;
+    usageTotals.total = 0;
+  };
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -745,6 +752,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,
+    resetUsageTotals,
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,

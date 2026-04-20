@@ -66,6 +66,7 @@ export function handleAutoCompactionEnd(
   if (willRetry) {
     ctx.noteCompactionRetry();
     ctx.resetForCompactionRetry();
+    ctx.resetUsageTotals();
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
     if (!wasAborted) {
@@ -73,6 +74,7 @@ export function handleAutoCompactionEnd(
     }
     ctx.maybeResolveCompactionWait();
     clearStaleAssistantUsageOnSessionMessages(ctx);
+    ctx.resetUsageTotals();
   }
   emitAgentEvent({
     runId: ctx.params.runId,

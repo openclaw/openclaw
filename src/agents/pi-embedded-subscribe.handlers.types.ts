@@ -127,6 +127,7 @@ export type EmbeddedPiSubscribeContext = {
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
+  resetUsageTotals: () => void;
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
