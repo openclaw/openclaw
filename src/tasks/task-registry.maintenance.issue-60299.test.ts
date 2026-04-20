@@ -132,7 +132,7 @@ function createTaskRegistryMaintenanceHarness(params: {
 
 describe("task-registry maintenance issue #60299", () => {
   it("marks stale cron tasks lost once the runtime no longer tracks the job as active", async () => {
-    const childSessionKey = "agent:main:slack:channel:test-channel";
+    const childSessionKey = "agent:main:workspace:channel:test-channel";
     const task = makeStaleTask({
       runtime: "cron",
       sourceId: "cron-job-1",
@@ -165,7 +165,7 @@ describe("task-registry maintenance issue #60299", () => {
   });
 
   it("marks chat-backed cli tasks lost after the owning run context disappears", async () => {
-    const channelKey = "agent:main:slack:channel:C1234567890";
+    const channelKey = "agent:main:workspace:channel:C1234567890";
     const task = makeStaleTask({
       runtime: "cli",
       sourceId: "run-chat-cli-stale",
@@ -185,7 +185,7 @@ describe("task-registry maintenance issue #60299", () => {
   });
 
   it("keeps chat-backed cli tasks live while the owning run context is still active", async () => {
-    const channelKey = "agent:main:slack:channel:C1234567890";
+    const channelKey = "agent:main:workspace:channel:C1234567890";
     const task = makeStaleTask({
       runtime: "cli",
       sourceId: "run-chat-cli-live",
