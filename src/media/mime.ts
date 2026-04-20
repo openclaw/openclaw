@@ -10,6 +10,9 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
+  "image/tiff": ".tiff",
+  "image/svg+xml": ".svg",
+  "image/bmp": ".bmp",
   "audio/ogg": ".ogg",
   "audio/mpeg": ".mp3",
   "audio/wav": ".wav",
@@ -18,8 +21,12 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/opus": ".opus",
   "audio/x-m4a": ".m4a",
   "audio/mp4": ".m4a",
+  "audio/webm": ".webm",
   "video/mp4": ".mp4",
   "video/quicktime": ".mov",
+  "video/webm": ".webm",
+  "video/avi": ".avi",
+  "video/x-matroska": ".mkv",
   "application/pdf": ".pdf",
   "application/json": ".json",
   "application/zip": ".zip",
@@ -39,7 +46,13 @@ const EXT_BY_MIME: Record<string, string> = {
   "text/html": ".html",
   "text/xml": ".xml",
   "text/css": ".css",
+  "text/javascript": ".js",
+  "text/typescript": ".ts",
   "application/xml": ".xml",
+  "application/javascript": ".js",
+  "application/typescript": ".ts",
+  "application/yaml": ".yaml",
+  "application/x-yaml": ".yml",
 };
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -49,6 +62,17 @@ const MIME_BY_EXT: Record<string, string> = {
   ".js": "text/javascript",
   ".htm": "text/html",
   ".xml": "text/xml",
+  ".tiff": "image/tiff",
+  ".tif": "image/tiff",
+  ".yaml": "application/yaml",
+  ".yml": "application/x-yaml",
+  ".svg": "image/svg+xml",
+  ".webm": "video/webm",
+  ".avi": "video/avi",
+  ".mkv": "video/x-matroska",
+  ".ts": "text/typescript",
+  ".mjs": "text/javascript",
+  ".cjs": "text/javascript",
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([
@@ -61,6 +85,48 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".ogg",
   ".opus",
   ".wav",
+  ".webm",
+]);
+
+const IMAGE_FILE_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".heic",
+  ".heif",
+  ".tiff",
+  ".tif",
+  ".svg",
+  ".bmp",
+]);
+
+const VIDEO_FILE_EXTENSIONS = new Set([
+  ".mp4",
+  ".mov",
+  ".webm",
+  ".avi",
+  ".mkv",
+]);
+
+const DOCUMENT_FILE_EXTENSIONS = new Set([
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".txt",
+  ".md",
+  ".csv",
+  ".html",
+  ".htm",
+  ".xml",
+  ".json",
+  ".yaml",
+  ".yml",
 ]);
 
 export function normalizeMimeType(mime?: string | null): string | undefined {
@@ -207,4 +273,51 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
 
 export function kindFromMime(mime?: string | null): MediaKind | undefined {
   return mediaKindFromMime(normalizeMimeType(mime));
+}
+
+export function isImageFileName(fileName?: string | null): boolean {
+  const ext = getFileExtension(fileName);
+  if (!ext) {
+    return false;
+  }
+  return IMAGE_FILE_EXTENSIONS.has(ext);
+}
+
+export function isVideoFileName(fileName?: string | null): boolean {
+  const ext = getFileExtension(fileName);
+  if (!ext) {
+    return false;
+  }
+  return VIDEO_FILE_EXTENSIONS.has(ext);
+}
+
+export function isDocumentFileName(fileName?: string | null): boolean {
+  const ext = getFileExtension(fileName);
+  if (!ext) {
+    return false;
+  }
+  return DOCUMENT_FILE_EXTENSIONS.has(ext);
+}
+
+export function isImageMime(mime?: string | null): boolean {
+  const normalized = normalizeMimeType(mime);
+  return normalized !== undefined && normalized.startsWith("image/");
+}
+
+export function isVideoMime(mime?: string | null): boolean {
+  const normalized = normalizeMimeType(mime);
+  return normalized !== undefined && normalized.startsWith("video/");
+}
+
+export function isAudioMime(mime?: string | null): boolean {
+  const normalized = normalizeMimeType(mime);
+  return normalized !== undefined && normalized.startsWith("audio/");
+}
+
+export function isDocumentMime(mime?: string | null): boolean {
+  const normalized = normalizeMimeType(mime);
+  if (!normalized) return false;
+  return normalized === "application/pdf" || 
+         normalized.startsWith("text/") || 
+         (normalized.startsWith("application/") && !normalized.startsWith("application/octet-stream"));
 }

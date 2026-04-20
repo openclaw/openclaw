@@ -210,5 +210,117 @@ export function displayString(input: string): string {
   return shortenHomeInString(input);
 }
 
+export function uniqueBy<T, K>(arr: T[], keyFn: (item: T) => K): T[] {
+  const seen = new Set<K>();
+  const result: T[] = [];
+  for (const item of arr) {
+    const key = keyFn(item);
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(item);
+    }
+  }
+  return result;
+}
+
+export function groupBy<T, K>(arr: T[], keyFn: (item: T) => K): Map<K, T[]> {
+  const result = new Map<K, T[]>();
+  for (const item of arr) {
+    const key = keyFn(item);
+    const group = result.get(key);
+    if (group) {
+      group.push(item);
+    } else {
+      result.set(key, [item]);
+    }
+  }
+  return result;
+}
+
+export function chunkArray<T>(arr: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    result.push(arr.slice(i, i + size));
+  }
+  return result;
+}
+
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function formatNumber(num: number, options?: { thousandsSeparator?: string; decimalSeparator?: string }): string {
+  const { thousandsSeparator = ",", decimalSeparator = "." } = options ?? {};
+  const [integerPart, fractionalPart] = num.toFixed(2).split(".");
+  const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, thousandsSeparator);
+  return fractionalPart && fractionalPart !== "00"
+    ? `${formattedInteger}${decimalSeparator}${fractionalPart}`
+    : formattedInteger;
+}
+
+export function capitalize(str: string): string {
+  if (!str) return str;
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+export function titleCase(str: string): string {
+  return str.split(" ").map(capitalize).join(" ");
+}
+
+export function isTruthy<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined && value !== false && value !== 0 && value !== "";
+}
+
+export function isFalsy(value: unknown): value is null | undefined | false | 0 | "" {
+  return value === null || value === undefined || value === false || value === 0 || value === "";
+}
+
+export function waitFor(
+  condition: () => boolean | Promise<boolean>,
+  options?: { timeoutMs?: number; intervalMs?: number },
+): Promise<void> {
+  const { timeoutMs = 10000, intervalMs = 100 } = options ?? {};
+  const startTime = Date.now();
+  
+  return new Promise((resolve, reject) => {
+    const check = async () => {
+      const result = await condition();
+      if (result) {
+        resolve();
+      } else if (Date.now() - startTime > timeoutMs) {
+        reject(new Error("Timeout waiting for condition"));
+      } else {
+        setTimeout(check, intervalMs);
+      }
+    };
+    check();
+  });
+}
+
+export function memoize<T, R>(fn: (arg: T) => R): (arg: T) => R {
+  const cache = new Map<T, R>();
+  return (arg: T) => {
+    if (cache.has(arg)) {
+      return cache.get(arg)!;
+    }
+    const result = fn(arg);
+    cache.set(arg, result);
+    return result;
+  };
+}
+
+export function debounce<T extends (...args: unknown[]) => unknown>(
+  fn: T,
+  waitMs: number,
+): ((...args: Parameters<T>) => void) {
+  let timeoutId: NodeJS.Timeout | null = null;
+  return (...args: Parameters<T>) => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(() => fn(...args), waitMs);
+  };
+}
+
 // Configuration root; can be overridden via OPENCLAW_STATE_DIR.
 export const CONFIG_DIR = resolveConfigDir();
