@@ -102,44 +102,50 @@ function resolveWorkspacePackageDir(packageName: string): string {
   throw new Error(`Unknown workspace package: ${packageName}`);
 }
 
-export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
+type BundledPluginPublicSurfaceLoader = <T extends object>(params: {
   pluginId: string;
   artifactBasename: string;
-}): T {
+}) => T;
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
+type BundledPluginPublicArtifactLoader = <T extends object>(pluginId: string) => T;
+
+export const loadBundledPluginPublicSurfaceSync: BundledPluginPublicSurfaceLoader = (params) => {
   const metadata = findBundledPluginMetadata(params.pluginId);
-  return loadBundledPluginPublicSurfaceModuleSync<T>({
+  return loadBundledPluginPublicSurfaceModuleSync({
     dirName: metadata.dirName,
     artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
   });
-}
+};
 
-export function loadBundledPluginApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "api.js",
   });
-}
+};
 
-export function loadBundledPluginContractApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginContractApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "contract-api.js",
   });
-}
+};
 
-export function loadBundledPluginRuntimeApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginRuntimeApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "runtime-api.js",
   });
-}
+};
 
-export function loadBundledPluginTestApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginTestApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "test-api.js",
   });
-}
+};
 
 export function resolveBundledPluginPublicModulePath(params: {
   pluginId: string;
