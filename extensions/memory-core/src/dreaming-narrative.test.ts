@@ -641,6 +641,13 @@ describe("generateAndAppendDreamNarrative", () => {
     "model unavailable",
     "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
     "models/openai/gpt-6 is not found",
+    "provider/model override is not authorized for this plugin subagent run.",
+    "provider/model overrides are not authorized for this caller.",
+    "provider/model override requires plugin identity in fallback subagent runs.",
+    'plugin "memory-core" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/tools/plugin#runtime-helpers and search for: plugins.entries.<id>.subagent.allowModelOverride',
+    'plugin "memory-core" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.',
+    "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
+    'model override "anthropic/claude-haiku-4-5" is not allowlisted for plugin "memory-core".',
   ])(
     "falls back to the session default model when the configured model cannot start (%s)",
     async (startupError) => {

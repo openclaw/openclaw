@@ -221,6 +221,27 @@ function isModelUnavailableNarrativeErrorMessage(raw: string): boolean {
   return false;
 }
 
+function isConfiguredModelRetryableNarrativeErrorMessage(raw: string): boolean {
+  const message = raw.trim();
+  if (!message) {
+    return false;
+  }
+  return (
+    isModelUnavailableNarrativeErrorMessage(message) ||
+    /provider\/model override is not authorized for this plugin subagent run/i.test(message) ||
+    /provider\/model overrides are not authorized for this caller/i.test(message) ||
+    /provider\/model override requires plugin identity in fallback subagent runs/i.test(message) ||
+    /is not trusted for fallback provider\/model override requests/i.test(message) ||
+    /configured subagent\.allowedModels, but none of the entries normalized to a valid provider\/model target/i.test(
+      message,
+    ) ||
+    /fallback provider\/model overrides that use an allowlist must resolve to a canonical provider\/model target/i.test(
+      message,
+    ) ||
+    /model override ".*" is not allowlisted for plugin /i.test(message)
+  );
+}
+
 function formatNarrativeTerminalStatus(params: { status: string; error?: string }): string {
   const detail = params.error?.trim();
   return detail ? `status=${params.status} (${detail})` : `status=${params.status}`;
@@ -984,7 +1005,7 @@ export async function generateAndAppendDreamNarrative(params: {
         if (
           attemptModel &&
           result.status === "error" &&
-          isModelUnavailableNarrativeErrorMessage(result.error ?? "")
+          isConfiguredModelRetryableNarrativeErrorMessage(result.error ?? "")
         ) {
           params.logger.warn(
             `memory-core: narrative generation ended with ${formatNarrativeTerminalStatus({
@@ -1003,7 +1024,10 @@ export async function generateAndAppendDreamNarrative(params: {
         );
         return;
       } catch (err) {
-        if (attemptModel && isModelUnavailableNarrativeErrorMessage(formatErrorMessage(err))) {
+        if (
+          attemptModel &&
+          isConfiguredModelRetryableNarrativeErrorMessage(formatErrorMessage(err))
+        ) {
           params.logger.warn(
             `memory-core: narrative generation could not start with configured model "${attemptModel}" for ${params.data.phase} phase; retrying with the session default (${formatErrorMessage(err)}).`,
           );
