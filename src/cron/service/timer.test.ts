@@ -65,6 +65,7 @@ describe("cron service timer seam coverage", () => {
       reason: "cron:main-heartbeat-job",
       agentId: undefined,
       sessionKey: "agent:main:main",
+      heartbeat: { target: "last" },
     });
 
     const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
