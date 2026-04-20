@@ -95,6 +95,43 @@ describe("telegram custom commands schema", () => {
 });
 
 describe("telegram topic agentId schema", () => {
+  it("accepts topic ingest boolean", () => {
+    expectTelegramConfigValid({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "42": {
+              ingest: true,
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("accepts group ingest boolean", () => {
+    expectTelegramConfigValid({
+      groups: {
+        "-1001234567890": {
+          ingest: true,
+        },
+      },
+    });
+  });
+
+  it("rejects non-boolean ingest", () => {
+    expectTelegramConfigIssue(
+      {
+        groups: {
+          "-1001234567890": {
+            ingest: { enabled: true },
+          },
+        },
+      },
+      "groups.-1001234567890.ingest",
+    );
+  });
+
   it("accepts nested groupPolicy overrides", () => {
     expectTelegramConfigValid({
       groups: {
