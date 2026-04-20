@@ -79,7 +79,7 @@ function isCopySensitiveToken(token: string): boolean {
   if (token.includes("/") || token.includes("\\")) {
     return true;
   }
-  if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+  if ((token.includes("_") || token.includes("-")) && FILE_LIKE_RE.test(token)) {
     return true;
   }
 
