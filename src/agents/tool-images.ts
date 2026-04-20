@@ -85,22 +85,43 @@ function readIsoBmffBrand(buffer: Buffer, offset: number): string | undefined {
   return buffer.toString("ascii", offset, offset + 4);
 }
 
+function clampIsoBmffBoxEnd(buffer: Buffer, boxSize: bigint): number {
+  if (boxSize > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return buffer.length;
+  }
+  return Math.min(Number(boxSize), buffer.length);
+}
+
 function isHeifFamilyImageBuffer(buffer: Buffer): boolean {
   if (buffer.length < 16 || buffer.toString("ascii", 4, 8) !== "ftyp") {
     return false;
   }
   const boxSize = buffer.readUInt32BE(0);
-  if (boxSize < 16) {
+  let majorBrandOffset = 8;
+  let compatibleBrandOffset = 16;
+  let brandRegionEnd = buffer.length;
+
+  if (boxSize === 0) {
+    brandRegionEnd = buffer.length;
+  } else if (boxSize === 1) {
+    if (buffer.length < 20) {
+      return false;
+    }
+    majorBrandOffset = 16;
+    compatibleBrandOffset = 20;
+    brandRegionEnd = clampIsoBmffBoxEnd(buffer, buffer.readBigUInt64BE(8));
+  } else if (boxSize >= 16) {
+    brandRegionEnd = Math.min(boxSize, buffer.length);
+  } else {
     return false;
   }
-  const brandRegionEnd = Math.min(boxSize, buffer.length);
 
-  const majorBrand = readIsoBmffBrand(buffer, 8);
+  const majorBrand = readIsoBmffBrand(buffer, majorBrandOffset);
   if (majorBrand && HEIF_FAMILY_BRANDS.has(majorBrand)) {
     return true;
   }
 
-  for (let offset = 16; offset + 4 <= brandRegionEnd; offset += 4) {
+  for (let offset = compatibleBrandOffset; offset + 4 <= brandRegionEnd; offset += 4) {
     const brand = readIsoBmffBrand(buffer, offset);
     if (brand && HEIF_FAMILY_BRANDS.has(brand)) {
       return true;
