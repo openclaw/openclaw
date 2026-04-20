@@ -412,6 +412,27 @@ describe("gateway hooks helpers", () => {
       "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
     );
   });
+
+  test("resolveHooksConfig allows a static explicit mapping to shadow the templated gmail preset", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowRequestSessionKey: false,
+          presets: ["gmail"],
+          mappings: [
+            {
+              match: { path: "gmail" },
+              action: "agent",
+              messageTemplate: "Subject: {{messages[0].subject}}",
+              sessionKey: "hook:gmail:static",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

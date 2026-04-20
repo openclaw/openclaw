@@ -88,10 +88,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
     );
   }
-  if (
-    mappings.some((mapping) => hasTemplatedHookSessionKey(mapping.sessionKey)) &&
-    !allowedSessionKeyPrefixes
-  ) {
+  if (hasEffectiveTemplatedHookSessionKeyMapping(mappings) && !allowedSessionKeyPrefixes) {
     throw new Error(
       "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
     );
@@ -355,6 +352,32 @@ export function resolveHookSessionKey(params: {
 
 function hasTemplatedHookSessionKey(sessionKey: string | undefined): boolean {
   return typeof sessionKey === "string" && hasHookTemplateExpressions(sessionKey);
+}
+
+function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolved[]): boolean {
+  const effectiveMappings: HookMappingResolved[] = [];
+  for (const mapping of mappings) {
+    if (isHookMappingShadowed(mapping, effectiveMappings)) {
+      continue;
+    }
+    effectiveMappings.push(mapping);
+    if (hasTemplatedHookSessionKey(mapping.sessionKey)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isHookMappingShadowed(
+  mapping: HookMappingResolved,
+  earlierMappings: HookMappingResolved[],
+): boolean {
+  return earlierMappings.some((earlier) => {
+    if (earlier.matchPath !== mapping.matchPath) {
+      return false;
+    }
+    return earlier.matchSource === undefined || earlier.matchSource === mapping.matchSource;
+  });
 }
 
 export function normalizeHookDispatchSessionKey(params: {
