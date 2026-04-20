@@ -721,6 +721,19 @@ jobs:
           }
           writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(includePatterns), "utf8");
           EOF
+          channel_contract_heartbeat() {
+            while true; do
+              sleep 30
+              printf '[ci] channel contract shard still running at %s\n' "$(date -u +%H:%M:%S)"
+            done
+          }
+          channel_contract_heartbeat &
+          heartbeat_pid="$!"
+          cleanup_channel_contract_heartbeat() {
+            kill "$heartbeat_pid" >/dev/null 2>&1 || true
+            wait "$heartbeat_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup_channel_contract_heartbeat EXIT
           OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:channels
 
   checks-fast-channel-contracts:
