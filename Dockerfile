@@ -263,6 +263,41 @@ RUN npm install -g @openai/codex@0.117.0
 
 ENV NODE_ENV=production
 
+# ── Local pipeline extensions ─────────────────────────────────────────────
+# Retained from pre-2026.4.20: Rust toolchain + opendataloader-pdf pipeline.
+# Not in upstream; kept as a local fork patch for pdf-pipeline/pdf-hybrid services.
+ARG OPENCLAW_INSTALL_RUST=""
+ARG OPENCLAW_INSTALL_PIPELINE=""
+ARG OPENCLAW_PIPELINE_PY_PKG="opendataloader-pdf[hybrid]==2.2.1"
+ARG OPENCLAW_PIPELINE_TORCH_INDEX="https://download.pytorch.org/whl/cpu"
+
+RUN if [ -n "$OPENCLAW_INSTALL_RUST" ]; then \
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+        RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
+        sh -s -- -y --no-modify-path --default-toolchain stable && \
+      RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
+        /usr/local/cargo/bin/rustup component add clippy rustfmt rust-analyzer && \
+      for b in rustc cargo rustup rustfmt cargo-fmt rust-analyzer rustdoc rust-gdb rust-lldb; do \
+        ln -sf /usr/local/cargo/bin/$b /usr/local/bin/$b 2>/dev/null || true; \
+      done; \
+    fi
+
+RUN if [ -n "$OPENCLAW_INSTALL_PIPELINE" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless python3-pip python3-venv ripgrep git curl libgl1 && \
+      python3 -m venv /opt/ocpipeline && \
+      /opt/ocpipeline/bin/pip install --no-cache-dir \
+        --extra-index-url "$OPENCLAW_PIPELINE_TORCH_INDEX" \
+        torch torchvision && \
+      /opt/ocpipeline/bin/pip install --no-cache-dir "$OPENCLAW_PIPELINE_PY_PKG"; \
+    fi
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    OCPIPELINE_VENV=/opt/ocpipeline \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
