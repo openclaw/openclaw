@@ -846,6 +846,266 @@ describe("loadOpenClawPlugins", () => {
     expect(bundled?.status).toBe("disabled");
   });
 
+  it("repairs enabled bundled plugin runtime deps before importing the plugin", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "discord",
+      dir: path.join(bundledDir, "discord"),
+      filename: "index.cjs",
+      body: `const dep = require("discord-runtime/package.json");
+module.exports = {
+  id: "discord",
+  register() {
+    if (dep.name !== "discord-runtime") {
+      throw new Error("missing runtime dep");
+    }
+  },
+};`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          dependencies: {
+            "discord-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discord",
+          channels: ["discord"],
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const installedSpecs: string[] = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
+        installedSpecs.push(...missingSpecs);
+        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(bundledDir));
+        fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(installRoot, "node_modules", "discord-runtime", "package.json"),
+          JSON.stringify({ name: "discord-runtime", version: "1.0.0" }),
+          "utf-8",
+        );
+      },
+    });
+
+    expect(installedSpecs).toEqual(["discord-runtime@1.0.0"]);
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+  });
+
+  it("does not repair disabled bundled plugin runtime deps", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "discord",
+      dir: path.join(bundledDir, "discord"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "discord", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          dependencies: {
+            "discord-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: () => {
+        throw new Error("disabled plugin deps should not install");
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("disabled");
+  });
+
+  it("repairs default-enabled bundled plugin runtime deps", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "openai",
+      dir: path.join(bundledDir, "openai"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "openai", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/openai",
+          version: "1.0.0",
+          dependencies: {
+            "openai-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "openai",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const installedSpecs: string[] = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ missingSpecs }) => {
+        installedSpecs.push(...missingSpecs);
+      },
+    });
+
+    expect(installedSpecs).toEqual(["openai-runtime@1.0.0"]);
+    expect(registry.plugins.find((entry) => entry.id === "openai")?.status).toBe("loaded");
+  });
+
+  it("retains earlier bundled runtime deps across sequential repairs", () => {
+    const bundledDir = makeTempDir();
+    const alpha = writePlugin({
+      id: "alpha",
+      dir: path.join(bundledDir, "alpha"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "alpha", register() {} };`,
+    });
+    const beta = writePlugin({
+      id: "beta",
+      dir: path.join(bundledDir, "beta"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "beta", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    for (const [plugin, depName] of [
+      [alpha, "alpha-runtime"],
+      [beta, "beta-runtime"],
+    ] as const) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "package.json"),
+        JSON.stringify(
+          {
+            name: `@openclaw/${plugin.id}`,
+            version: "1.0.0",
+            dependencies: {
+              [depName]: "1.0.0",
+            },
+            openclaw: { extensions: ["./index.cjs"] },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: plugin.id,
+            enabledByDefault: true,
+            configSchema: EMPTY_PLUGIN_SCHEMA,
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    }
+    const calls: Array<{ missingSpecs: string[]; installSpecs: string[] | undefined }> = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs, installSpecs }) => {
+        calls.push({ missingSpecs, installSpecs });
+        for (const spec of installSpecs ?? missingSpecs) {
+          const name = spec.split("@")[0] || spec;
+          fs.mkdirSync(path.join(installRoot, "node_modules", name), { recursive: true });
+          fs.writeFileSync(
+            path.join(installRoot, "node_modules", name, "package.json"),
+            JSON.stringify({ name, version: "1.0.0" }),
+            "utf-8",
+          );
+        }
+      },
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["alpha", "beta"]);
+    expect(calls).toEqual([
+      {
+        missingSpecs: ["alpha-runtime@1.0.0"],
+        installSpecs: ["alpha-runtime@1.0.0"],
+      },
+      {
+        missingSpecs: ["beta-runtime@1.0.0"],
+        installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"],
+      },
+    ]);
+  });
+
   it("registers standalone text transforms", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

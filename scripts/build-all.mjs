@@ -51,14 +51,6 @@ export const BUILD_ALL_STEPS = [
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
     args: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
-    cache: {
-      inputs: [
-        "scripts/write-plugin-sdk-entry-dts.ts",
-        "scripts/lib/plugin-sdk-entrypoints.json",
-        "dist/plugin-sdk/src/plugin-sdk",
-      ],
-      outputs: ["dist/plugin-sdk", "packages/plugin-sdk/dist/src/plugin-sdk"],
-    },
   },
   {
     label: "check-plugin-sdk-exports",

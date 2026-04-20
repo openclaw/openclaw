@@ -143,6 +143,12 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("does not cache plugin-sdk entry shims over compiled JS", () => {
+    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "write-plugin-sdk-entry-dts");
+    expect(step).toBeTruthy();
+    expect(step?.cache).toBeUndefined();
+  });
+
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
   });

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { scanBundledPluginRuntimeDeps } from "./doctor-bundled-plugin-runtime-deps.js";
+import { scanBundledPluginRuntimeDeps } from "../plugins/bundled-runtime-deps.js";
 
 function writeJson(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -63,5 +63,98 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(result.conflicts).toHaveLength(1);
     expect(result.conflicts[0]?.name).toBe("dep-conflict");
     expect(result.conflicts[0]?.versions).toEqual(["1.0.0", "2.0.0"]);
+  });
+
+  it("limits configured scans to enabled bundled channel plugins", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+
+    writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
+      dependencies: {
+        "discord-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "discord", "openclaw.plugin.json"), {
+      id: "discord",
+      channels: ["discord"],
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(root, "dist", "extensions", "whatsapp", "package.json"), {
+      dependencies: {
+        "whatsapp-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "whatsapp", "openclaw.plugin.json"), {
+      id: "whatsapp",
+      channels: ["whatsapp"],
+      configSchema: { type: "object" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "discord-only@1.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("does not report bundled channel deps when the channel is not enabled", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
+      dependencies: {
+        "discord-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "discord", "openclaw.plugin.json"), {
+      id: "discord",
+      channels: ["discord"],
+      configSchema: { type: "object" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+      },
+    });
+
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("reports default-enabled bundled plugin deps", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "openai", "package.json"), {
+      dependencies: {
+        "openai-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "openai", "openclaw.plugin.json"), {
+      id: "openai",
+      enabledByDefault: true,
+      configSchema: { type: "object" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+      },
+    });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "openai-only@1.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
   });
 });
