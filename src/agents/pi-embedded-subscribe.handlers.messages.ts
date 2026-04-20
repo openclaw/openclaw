@@ -118,6 +118,10 @@ function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
+function trimStreamVisibleTextPreservingIndentation(text: string): string {
+  return text.trimEnd().replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
 function appendBlockReplyChunk(ctx: EmbeddedPiSubscribeContext, chunk: string) {
   if (ctx.blockChunker) {
     ctx.blockChunker.append(chunk);
@@ -384,9 +388,9 @@ export function handleMessageUpdate(
   if (deliveryPhase === "commentary") {
     return;
   }
-  const phaseAwareVisibleText = coerceChatContentText(
-    extractAssistantVisibleText(partialAssistant),
-  ).trim();
+  const phaseAwareVisibleText = trimStreamVisibleTextPreservingIndentation(
+    coerceChatContentText(extractAssistantVisibleText(partialAssistant)),
+  );
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
@@ -404,13 +408,13 @@ export function handleMessageUpdate(
     phaseAwareVisibleText ||
     (deliveryPhase === "final_answer"
       ? ""
-      : ctx
-          .stripBlockTags(ctx.state.deltaBuffer, {
+      : trimStreamVisibleTextPreservingIndentation(
+          ctx.stripBlockTags(ctx.state.deltaBuffer, {
             thinking: false,
             final: false,
             inlineCode: createInlineCodeState(),
-          })
-          .trim());
+          }),
+        ));
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";

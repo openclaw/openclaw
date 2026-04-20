@@ -44,14 +44,22 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
   const split = splitMediaFromOutput(raw);
   let text = split.text ?? "";
 
-  const replyParsed = parseInlineDirectives(text, {
-    stripAudioTag: false,
-    stripReplyTags: true,
-  });
+  const replyParsed = text.includes("[[")
+    ? parseInlineDirectives(text, {
+        stripAudioTag: false,
+        stripReplyTags: true,
+      })
+    : {
+        text,
+        audioAsVoice: false,
+        replyToId: undefined,
+        replyToExplicitId: undefined,
+        replyToCurrent: false,
+        hasAudioTag: false,
+        hasReplyTag: false,
+      };
 
-  if (replyParsed.hasReplyTag) {
-    text = replyParsed.text;
-  }
+  text = replyParsed.text;
 
   const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent =

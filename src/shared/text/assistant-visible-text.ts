@@ -574,10 +574,10 @@ function applyAssistantVisibleTextStagePipeline(
       mode: options.reasoningMode,
       trim: options.reasoningTrim,
     });
-  const trimDeliveryTextPreservingIndentedFences = (value: string) => {
+  const trimDeliveryTextPreservingMeaningfulIndentation = (value: string) => {
     const trimmedEnd = value.trimEnd();
     const withoutLeadingBlankLines = trimmedEnd.replace(/^(?:[ \t]*\r?\n)+/, "");
-    if (/^[ \t]+(?:`{3,}|~{3,})/.test(withoutLeadingBlankLines)) {
+    if (/^(?: {2,}|\t+)/.test(withoutLeadingBlankLines)) {
       return withoutLeadingBlankLines;
     }
     return trimmedEnd.trimStart();
@@ -589,7 +589,7 @@ function applyAssistantVisibleTextStagePipeline(
     if (options.finalTrim === "start") {
       return value.trimStart();
     }
-    return trimDeliveryTextPreservingIndentedFences(value);
+    return trimDeliveryTextPreservingMeaningfulIndentation(value);
   };
   const stripNonReasoningStages = (value: string) => {
     let cleaned = value;

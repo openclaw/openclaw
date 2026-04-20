@@ -1010,6 +1010,14 @@ describe("createStreamingDirectiveAccumulator", () => {
 
     expect(result?.text).toBe("NO_REPLY: explanation");
   });
+
+  it("preserves leading indentation for plain streamed chunks without directives", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("  nested bullet");
+
+    expect(result?.text).toBe("  nested bullet");
+  });
 });
 
 describe("extractShortModelName", () => {

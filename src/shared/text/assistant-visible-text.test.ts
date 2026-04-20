@@ -827,6 +827,20 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("Hi there");
   });
 
+  it("preserves meaningful leading indentation in delivery mode", () => {
+    const input = "\n\n  nested bullet\n  continued detail";
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "delivery")).toBe(
+      "  nested bullet\n  continued detail",
+    );
+  });
+
+  it("still trims incidental single-space padding in delivery mode", () => {
+    expect(sanitizeAssistantVisibleTextWithProfile(" single leading space", "delivery")).toBe(
+      "single leading space",
+    );
+  });
+
   it("uses the internal-scaffolding profile to preserve downgraded tool text behavior", () => {
     const input = [
       "[Tool Call: read (ID: toolu_1)]",
