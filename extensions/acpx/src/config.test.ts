@@ -62,6 +62,28 @@ describe("embedded acpx plugin config", () => {
     expect(server.args?.length).toBeGreaterThan(0);
   });
 
+  it("accepts nonInteractivePermissions=allow", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        nonInteractivePermissions: "allow",
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.nonInteractivePermissions).toBe("allow");
+  });
+
+  it("rejects unknown nonInteractivePermissions values", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          nonInteractivePermissions: "ignore",
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("nonInteractivePermissions must be one of: deny, fail, allow");
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const pluginRoot = resolveAcpxPluginRoot();
     const manifest = JSON.parse(
