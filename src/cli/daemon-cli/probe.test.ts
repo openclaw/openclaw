@@ -209,6 +209,26 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("keeps actionable probe errors when the close reason stays generic", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "scope upgrade pending approval (requestId: req-123)",
+      close: { code: 1008, reason: "pairing required" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "scope upgrade pending approval (requestId: req-123)",
+    });
+  });
+
   it("surfaces status RPC errors when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();

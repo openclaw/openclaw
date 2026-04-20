@@ -5,9 +5,13 @@ import {
   buildPairingConnectErrorMessage,
   ConnectPairingRequiredReasons,
   describePairingConnectRequirement,
+  formatConnectErrorMessage,
+  formatConnectPairingRequiredMessage,
   normalizePairingConnectRequestId,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
+  readConnectPairingRequiredDetails,
+  readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
 } from "./connect-error-details.js";
 
@@ -112,5 +116,58 @@ describe("pairing connect details", () => {
       reason: "scope-upgrade",
       remediationHint: "Review the requested scopes, then approve the pending upgrade.",
     });
+  });
+
+  it("reads pairing details as compact connect details", () => {
+    expect(
+      readConnectPairingRequiredDetails({
+        code: "PAIRING_REQUIRED",
+        requestId: "req-123",
+        reason: "scope-upgrade",
+        remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+      }),
+    ).toEqual({
+      requestId: "req-123",
+      reason: "scope-upgrade",
+    });
+  });
+
+  it("formats upgrade rejections with the request id", () => {
+    expect(
+      formatConnectPairingRequiredMessage({
+        code: "PAIRING_REQUIRED",
+        requestId: "req-123",
+        reason: "scope-upgrade",
+      }),
+    ).toBe("scope upgrade pending approval (requestId: req-123)");
+  });
+
+  it("parses surfaced pairing-required messages", () => {
+    expect(
+      readConnectPairingRequiredMessage("scope upgrade pending approval (requestId: req-123)"),
+    ).toEqual({
+      requestId: "req-123",
+      reason: "scope-upgrade",
+    });
+    expect(
+      readConnectPairingRequiredMessage(
+        "scope upgrade pending approval (requestId: req-123;rm -rf /)",
+      ),
+    ).toEqual({
+      reason: "scope-upgrade",
+    });
+  });
+
+  it("prefers pairing detail formatting over the generic message", () => {
+    expect(
+      formatConnectErrorMessage({
+        message: "pairing required",
+        details: {
+          code: "PAIRING_REQUIRED",
+          requestId: "req-123",
+          reason: "scope-upgrade",
+        },
+      }),
+    ).toBe("scope upgrade pending approval (requestId: req-123)");
   });
 });

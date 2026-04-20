@@ -66,6 +66,11 @@ export type PairingConnectErrorDetails = {
   approvedScopes?: string[];
 };
 
+export type ConnectPairingRequiredDetails = Pick<
+  PairingConnectErrorDetails,
+  "reason" | "requestId"
+>;
+
 const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = new Set([
   "retry_with_device_token",
   "update_auth_configuration",
@@ -112,6 +117,15 @@ const PAIRING_CONNECT_REASON_METADATA: Readonly<
     remediationHint: "Review the refreshed device details, then approve the pending request.",
     recoveryTitle: "Gateway device refresh approval required.",
   },
+};
+
+const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
+  Record<ConnectPairingRequiredReason, string>
+> = {
+  "not-paired": "device pairing required",
+  "role-upgrade": "role upgrade pending approval",
+  "scope-upgrade": "scope upgrade pending approval",
+  "metadata-upgrade": "device metadata change pending approval",
 };
 
 export function resolveAuthConnectErrorDetailCode(
@@ -336,4 +350,65 @@ export function readPairingConnectErrorDetails(
     ...(approvedRoles ? { approvedRoles } : {}),
     ...(approvedScopes ? { approvedScopes } : {}),
   };
+}
+
+export function readConnectPairingRequiredDetails(
+  details: unknown,
+): ConnectPairingRequiredDetails | null {
+  const pairing = readPairingConnectErrorDetails(details);
+  if (!pairing) {
+    return null;
+  }
+  return {
+    ...(pairing.requestId ? { requestId: pairing.requestId } : {}),
+    ...(pairing.reason ? { reason: pairing.reason } : {}),
+  };
+}
+
+export function readConnectPairingRequiredMessage(
+  message: string | null | undefined,
+): ConnectPairingRequiredDetails | null {
+  const normalizedMessage = normalizeOptionalString(message);
+  if (!normalizedMessage) {
+    return null;
+  }
+  const normalized = normalizedMessage.trim().toLowerCase();
+  let reason: ConnectPairingRequiredReason | undefined;
+  for (const [candidate, prefix] of Object.entries(
+    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON,
+  ) as Array<[ConnectPairingRequiredReason, string]>) {
+    if (normalized.includes(prefix)) {
+      reason = candidate;
+      break;
+    }
+  }
+  if (!reason && normalized.includes("pairing required")) {
+    reason = ConnectPairingRequiredReasons.NOT_PAIRED;
+  }
+  if (!reason) {
+    return null;
+  }
+  const requestId = normalizePairingConnectRequestId(
+    normalizedMessage.match(/\(requestId:\s*([^\s)]+)\)/i)?.[1],
+  );
+  return {
+    ...(requestId ? { requestId } : {}),
+    reason,
+  };
+}
+
+export function formatConnectPairingRequiredMessage(details: unknown): string {
+  const pairing = readPairingConnectErrorDetails(details);
+  const base =
+    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON[
+      pairing?.reason ?? ConnectPairingRequiredReasons.NOT_PAIRED
+    ];
+  return pairing?.requestId ? `${base} (requestId: ${pairing.requestId})` : base;
+}
+
+export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {
+  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+    return formatConnectPairingRequiredMessage(params.details);
+  }
+  return normalizeOptionalString(params.message) ?? "gateway request failed";
 }

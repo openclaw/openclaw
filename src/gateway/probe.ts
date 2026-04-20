@@ -251,7 +251,7 @@ export async function probeGateway(opts: {
         if (connectLatencyMs == null) {
           settleProbe({
             ok: false,
-            error: formatProbeCloseError(close),
+            error: connectError || formatProbeCloseError(close),
             health: null,
             status: null,
             presence: null,
