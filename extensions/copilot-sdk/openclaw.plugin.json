@@ -1,6 +1,6 @@
 {
   "id": "copilot-sdk",
-  "enabledByDefault": false,
+  "enabledByDefault": true,
   "providers": ["copilot-sdk"],
   "autoEnableWhenConfiguredProviders": ["copilot-sdk"],
   "providerAuthChoices": [

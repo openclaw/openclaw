@@ -109,13 +109,13 @@ async function buildCatalog(
         ? sdkModels.map((m) => buildModelDefinitionFromSdk(m.id, m.name))
         : buildFallbackModelCatalog();
     } catch (innerErr) {
-      console.error("[copilot-sdk] listModels failed, using fallback:", innerErr instanceof Error ? innerErr.message : innerErr);
+      console.error(
+        "[copilot-sdk] listModels failed, using fallback:",
+        innerErr instanceof Error ? innerErr.message : innerErr,
+      );
       models = buildFallbackModelCatalog();
     }
   } catch (err) {
-    // Shim failed to start (e.g., port in use, SDK missing). Surface as
-    // "no provider" rather than crashing the whole catalog pass; onboarding
-    // will report the issue to the user when they pick the provider.
     console.error("[copilot-sdk] catalog failed:", err instanceof Error ? err.message : err);
     return null;
   }
