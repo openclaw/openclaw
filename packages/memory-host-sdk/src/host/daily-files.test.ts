@@ -3,12 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  filterSessionSummaryDailyMemoryFiles,
-  isDailyMemoryFileName,
-  isSessionSummaryDailyMemory,
   listDailyMemoryFiles,
   listRecentDailyMemoryFiles,
-  parseDailyMemoryFileName,
   rememberRecentDailyMemoryFile,
 } from "./daily-files.js";
 
@@ -24,27 +20,6 @@ async function makeMemoryDir(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
-describe("parseDailyMemoryFileName", () => {
-  it("accepts canonical and dated-slug memory files", () => {
-    expect(parseDailyMemoryFileName("2026-04-19.md")).toMatchObject({
-      day: "2026-04-19",
-      canonical: true,
-    });
-    expect(parseDailyMemoryFileName("2026-04-19-session-reset.md")).toMatchObject({
-      day: "2026-04-19",
-      slug: "session-reset",
-      canonical: false,
-    });
-  });
-
-  it("rejects non-daily markdown names", () => {
-    expect(parseDailyMemoryFileName("memory.md")).toBeNull();
-    expect(parseDailyMemoryFileName("2026-04-19 notes.md")).toBeNull();
-    expect(isDailyMemoryFileName("2026-04-19-topic.md")).toBe(true);
-    expect(isDailyMemoryFileName("notes.md")).toBe(false);
-  });
 });
 
 describe("listDailyMemoryFiles", () => {
@@ -73,47 +48,6 @@ describe("listDailyMemoryFiles", () => {
     await fs.writeFile(memoryPath, "not a directory", "utf-8");
 
     await expect(listDailyMemoryFiles(memoryPath)).resolves.toEqual([]);
-  });
-});
-
-describe("session summary helpers", () => {
-  it("detects session-summary bookkeeping content", () => {
-    expect(
-      isSessionSummaryDailyMemory(
-        [
-          "# Session: 2026-04-19 10:00:00 America/New_York",
-          "",
-          "- **Session Key**: agent:main:main",
-          "- **Session ID**: abc123",
-          "- **Source**: cli",
-        ].join("\n"),
-      ),
-    ).toBe(true);
-    expect(isSessionSummaryDailyMemory("# Notes\n\nRegular daily memory.")).toBe(false);
-  });
-
-  it("filters session-summary bookkeeping files out of grounded-memory inputs", async () => {
-    const memoryDir = await makeMemoryDir();
-    const notePath = path.join(memoryDir, "2026-04-19.md");
-    const sessionSummaryPath = path.join(memoryDir, "2026-04-19-session-reset.md");
-    await fs.writeFile(notePath, "## Durable Notes\n\nKeep this.\n", "utf-8");
-    await fs.writeFile(
-      sessionSummaryPath,
-      [
-        "# Session: 2026-04-19 10:00:00 America/New_York",
-        "",
-        "- **Session Key**: agent:main:main",
-        "- **Session ID**: abc123",
-        "- **Source**: cli",
-        "",
-        "assistant: bookkeeping only",
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-
-    await expect(
-      filterSessionSummaryDailyMemoryFiles([notePath, sessionSummaryPath]),
-    ).resolves.toEqual([notePath]);
   });
 });
 

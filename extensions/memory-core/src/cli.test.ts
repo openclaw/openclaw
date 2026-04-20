@@ -28,8 +28,10 @@ vi.mock("./cli.host.runtime.js", async () => {
     import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
   ]);
   return {
+    collectDreamDiaryBackfillEntries: runtimeFiles.collectDreamDiaryBackfillEntries,
     colorize: runtimeCli.colorize,
     defaultRuntime: runtimeCli.defaultRuntime,
+    extractDailyMemoryDayFromPath: runtimeFiles.extractDailyMemoryDayFromPath,
     filterSessionSummaryDailyMemoryFiles: runtimeFiles.filterSessionSummaryDailyMemoryFiles,
     formatErrorMessage: runtimeCli.formatErrorMessage,
     getMemorySearchManager,

@@ -1,109 +1,12 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createAsyncLock, writeJsonAtomic } from "./json-files.js";
+import { parseDailyMemoryFileName, type ParsedDailyMemoryFileName } from "./daily-paths.js";
 
-export const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-([a-z0-9][a-z0-9._-]*))?\.md$/i;
 const DAILY_MEMORY_RECENT_INDEX_FILE_NAME = ".recent-daily-files.json";
 const DAILY_MEMORY_RECENT_INDEX_VERSION = 1;
 const DAILY_MEMORY_RECENT_INDEX_MAX_ENTRIES = 512;
 const withDailyMemoryRecentIndexLock = createAsyncLock();
-
-function getErrorCode(err: unknown): string | undefined {
-  return err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-}
-
-async function replaceFileWithWindowsFallback(tempPath: string, filePath: string, mode: number) {
-  try {
-    await fs.rename(tempPath, filePath);
-    return;
-  } catch (err) {
-    const code = getErrorCode(err);
-    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EEXIST")) {
-      throw err;
-    }
-  }
-
-  const existing = await fs.lstat(filePath).catch(() => null);
-  if (existing?.isSymbolicLink()) {
-    await fs.rm(filePath, { force: true });
-    await fs.rename(tempPath, filePath);
-    return;
-  }
-
-  await fs.copyFile(tempPath, filePath);
-  try {
-    await fs.chmod(filePath, mode);
-  } catch {}
-  await fs.rm(tempPath, { force: true }).catch(() => undefined);
-}
-
-async function writeJsonAtomic(
-  filePath: string,
-  value: unknown,
-  options?: { mode?: number; trailingNewline?: boolean; ensureDirMode?: number },
-) {
-  const text = JSON.stringify(value, null, 2);
-  const mode = options?.mode ?? 0o600;
-  const payload = options?.trailingNewline && !text.endsWith("\n") ? `${text}\n` : text;
-  const mkdirOptions: { recursive: true; mode?: number } = { recursive: true };
-  if (typeof options?.ensureDirMode === "number") {
-    mkdirOptions.mode = options.ensureDirMode;
-  }
-
-  await fs.mkdir(path.dirname(filePath), mkdirOptions);
-  const parentDir = path.dirname(filePath);
-  const tmp = `${filePath}.${randomUUID()}.tmp`;
-  try {
-    const tmpHandle = await fs.open(tmp, "w", mode);
-    try {
-      await tmpHandle.writeFile(payload, { encoding: "utf8" });
-      await tmpHandle.sync();
-    } finally {
-      await tmpHandle.close().catch(() => undefined);
-    }
-    try {
-      await fs.chmod(tmp, mode);
-    } catch {}
-    await replaceFileWithWindowsFallback(tmp, filePath, mode);
-    try {
-      const dirHandle = await fs.open(parentDir, "r");
-      try {
-        await dirHandle.sync();
-      } finally {
-        await dirHandle.close().catch(() => undefined);
-      }
-    } catch {}
-    try {
-      await fs.chmod(filePath, mode);
-    } catch {}
-  } finally {
-    await fs.rm(tmp, { force: true }).catch(() => undefined);
-  }
-}
-
-function createAsyncLock() {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await prev;
-    try {
-      return await fn();
-    } finally {
-      release?.();
-    }
-  };
-}
-
-export type ParsedDailyMemoryFileName = {
-  day: string;
-  slug?: string;
-  fileName: string;
-  canonical: boolean;
-};
 
 export type DailyMemoryFileEntry = ParsedDailyMemoryFileName & {
   absolutePath: string;
@@ -118,34 +21,6 @@ type DailyMemoryRecentIndexPayload = {
     mtimeMs: number;
   }>;
 };
-
-export function parseDailyMemoryFileName(fileName: string): ParsedDailyMemoryFileName | null {
-  const normalized = path.posix.basename(fileName.replace(/\\/g, "/").trim());
-  const match = normalized.match(DAILY_MEMORY_FILE_NAME_RE);
-  if (!match || !match[1]) {
-    return null;
-  }
-  const slug = match[2]?.trim() || undefined;
-  return {
-    day: match[1],
-    slug,
-    fileName: normalized,
-    canonical: slug == null,
-  };
-}
-
-export function isDailyMemoryFileName(fileName: string): boolean {
-  return parseDailyMemoryFileName(fileName) !== null;
-}
-
-export function isSessionSummaryDailyMemory(raw: string): boolean {
-  return (
-    /^# Session:\s+/m.test(raw) &&
-    /^-\s+\*\*Session Key\*\*:/m.test(raw) &&
-    /^-\s+\*\*Session ID\*\*:/m.test(raw) &&
-    /^-\s+\*\*Source\*\*:/m.test(raw)
-  );
-}
 
 function isBenignDailyMemoryDirError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -334,23 +209,6 @@ async function persistDailyMemoryRecentIndex(
     trailingNewline: true,
     ensureDirMode: 0o700,
   });
-}
-
-export async function filterSessionSummaryDailyMemoryFiles(filePaths: string[]): Promise<string[]> {
-  const keptPaths: string[] = [];
-  for (const filePath of filePaths) {
-    const raw = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-        return null;
-      }
-      throw error;
-    });
-    if (raw === null || isSessionSummaryDailyMemory(raw)) {
-      continue;
-    }
-    keptPaths.push(filePath);
-  }
-  return keptPaths;
 }
 
 export async function listDailyMemoryFiles(

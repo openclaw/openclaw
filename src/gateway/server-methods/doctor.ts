@@ -12,6 +12,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
 import {
+  collectDreamDiaryBackfillEntries,
   filterSessionSummaryDailyMemoryFiles,
   listDailyMemoryFiles,
   parseDailyMemoryFileName,
@@ -238,79 +239,6 @@ export type DoctorMemoryRemHarnessPayload =
 
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_MEMORY_DIR_RE = /(?:^|\/)memory\/(?:[^/]+\/)*[^/]+$/;
-
-function extractIsoDayFromPath(filePath: string): string | null {
-  return parseDailyMemoryFileName(path.basename(filePath))?.day ?? null;
-}
-
-function groundedMarkdownToDiaryLines(markdown: string): string[] {
-  return markdown
-    .split("\n")
-    .map((line) => line.replace(/^##\s+/, "").trimEnd())
-    .filter((line, index, lines) => line.length > 0 || (index > 0 && lines[index - 1]?.length > 0));
-}
-
-const MERGED_DIARY_LIST_LINE_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
-
-function shouldDedupeMergedDiaryLine(line: string): boolean {
-  return MERGED_DIARY_LIST_LINE_RE.test(line.trim());
-}
-
-function collectBackfillDiaryEntries(
-  files: Array<{ path: string; renderedMarkdown: string }>,
-): Array<{ isoDay: string; sourcePath?: string; bodyLines: string[] }> {
-  const entries = new Map<
-    string,
-    { isoDay: string; sourcePath?: string; bodyLines: string[]; seenLines: Set<string> }
-  >();
-  for (const file of files) {
-    const isoDay = extractIsoDayFromPath(file.path);
-    if (!isoDay) {
-      continue;
-    }
-    const bodyLines = groundedMarkdownToDiaryLines(file.renderedMarkdown);
-    if (bodyLines.length === 0) {
-      continue;
-    }
-    const sourcePath = file.path;
-    const existing = entries.get(isoDay);
-    if (!existing) {
-      entries.set(isoDay, {
-        isoDay,
-        sourcePath,
-        bodyLines: [...bodyLines],
-        seenLines: new Set(bodyLines.filter((line) => shouldDedupeMergedDiaryLine(line))),
-      });
-      continue;
-    }
-    if (existing.sourcePath && existing.sourcePath !== sourcePath) {
-      existing.sourcePath = undefined;
-    }
-    if (
-      existing.bodyLines.length > 0 &&
-      existing.bodyLines[existing.bodyLines.length - 1] !== "" &&
-      bodyLines[0] !== ""
-    ) {
-      existing.bodyLines.push("");
-    }
-    for (const line of bodyLines) {
-      if (line === "") {
-        if (existing.bodyLines[existing.bodyLines.length - 1] !== "") {
-          existing.bodyLines.push(line);
-        }
-        continue;
-      }
-      if (shouldDedupeMergedDiaryLine(line) && existing.seenLines.has(line)) {
-        continue;
-      }
-      if (shouldDedupeMergedDiaryLine(line)) {
-        existing.seenLines.add(line);
-      }
-      existing.bodyLines.push(line);
-    }
-  }
-  return [...entries.values()].map(({ seenLines: _seenLines, ...entry }) => entry);
-}
 
 async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
   try {
@@ -1087,7 +1015,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
       cfg,
     });
-    const entries = collectBackfillDiaryEntries(grounded.files);
+    const entries = collectDreamDiaryBackfillEntries({ files: grounded.files });
     const written = await writeBackfillDiaryEntries({
       workspaceDir,
       entries,

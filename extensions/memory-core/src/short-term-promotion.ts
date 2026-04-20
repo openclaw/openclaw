@@ -2,6 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  compareDailyVariantPathPreference,
+  extractDailyMemoryDayFromPath,
+  parseDailyMemoryPathInfo,
   parseDailyMemoryFileName,
   type MemorySearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -367,43 +370,6 @@ function normalizeIsoDay(isoLike: string): string | null {
   }
   const match = isoLike.trim().match(/^(\d{4}-\d{2}-\d{2})/);
   return match?.[1] ?? null;
-}
-
-function extractDailyMemoryDayFromPath(filePath: string): string | null {
-  return parseDailyMemoryFileName(path.posix.basename(normalizeMemoryPath(filePath)))?.day ?? null;
-}
-
-type DailyMemoryPathInfo = {
-  normalizedPath: string;
-  day: string;
-  dir: string;
-  canonical: boolean;
-};
-
-function parseDailyMemoryPathInfo(filePath: string): DailyMemoryPathInfo | null {
-  const normalizedPath = normalizeMemoryPath(filePath);
-  const parsed = parseDailyMemoryFileName(path.posix.basename(normalizedPath));
-  if (!parsed) {
-    return null;
-  }
-  return {
-    normalizedPath,
-    day: parsed.day,
-    dir: path.posix.dirname(normalizedPath),
-    canonical: parsed.canonical,
-  };
-}
-
-function compareDailyVariantPathPreference(leftPath: string, rightPath: string): number {
-  const left = parseDailyMemoryPathInfo(leftPath);
-  const right = parseDailyMemoryPathInfo(rightPath);
-  if (!left || !right || left.day !== right.day || left.dir !== right.dir) {
-    return 0;
-  }
-  if (left.canonical !== right.canonical) {
-    return left.canonical ? -1 : 1;
-  }
-  return left.normalizedPath.localeCompare(right.normalizedPath);
 }
 
 function findExistingDailyVariantEntryKey(params: {

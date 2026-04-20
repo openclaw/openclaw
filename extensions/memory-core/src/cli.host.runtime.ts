@@ -20,6 +20,8 @@ export {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 export {
+  collectDreamDiaryBackfillEntries,
+  extractDailyMemoryDayFromPath,
   filterSessionSummaryDailyMemoryFiles,
   isSessionSummaryDailyMemory,
   listDailyMemoryFiles,
