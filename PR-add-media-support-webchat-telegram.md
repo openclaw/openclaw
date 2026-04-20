@@ -106,12 +106,14 @@ None - all features are additive.
 .openclaw\workspace\openclaw\src\agents\tools\image-tool.ts
 
 ## Some Screenshots
+
+<img width="1446" height="953" alt="Rocky-Mountaineer-screenshot-small" src="https://github.com/user-attachments/assets/7f49f842-af5b-45fd-8fd3-30e6c79c2bb4" /><br>
+  
+<img width="1449" height="956" alt="Rocky-Mountaineer-screenshot" src="https://github.com/user-attachments/assets/f6ab3c5b-5d13-4ac8-81c5-a160cf589c2a" /><br>
   
 <img width="1250" height="894" alt="embeded-video" src="https://github.com/user-attachments/assets/f0eba12d-4406-41a4-b374-6868e681a898" /><br>  
-  
-<img width="1250" height="894" alt="Screenshot 2026-04-07 013354" src="https://github.com/user-attachments/assets/63de7368-2b85-4f58-9033-717de68af0bf" /><br>  
-  
-<img width="1408" height="950" alt="Screenshot 2026-04-07 094253" src="https://github.com/user-attachments/assets/84af6222-9d08-44fb-8d60-3dfd8ef8a528" /><br>  
+    
+<img width="1627" height="1078" alt="media-server" src="https://github.com/user-attachments/assets/42f464e9-2b48-4e89-a3fd-e743b01124fa" /><br>  
   
 https://github.com/user-attachments/assets/a11f41b2-0262-48c7-8ba2-7c5462840d6f  
   
@@ -220,3 +222,4 @@ OLLAMA_CONTEXT_LENGTH=2048 ollama run qwen3-vl:2b "Describe this image" -- /path
 
 ---
 Use this file to resolve ambiguous requests regarding network setup, media playback, or preferred output styles. When a user asks to "watch" something, default to video embedding using the read command.
+
