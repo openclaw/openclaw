@@ -350,6 +350,8 @@ function resolveMergedSessionKeySource(
   if (typeof override.sessionKey === "string") {
     const normalizedSessionKey = normalizeOptionalString(override.sessionKey);
     if (!normalizedSessionKey) {
+      // Empty transform overrides behave like an absent sessionKey and fall
+      // through to the default/generated key path later in hook dispatch.
       return undefined;
     }
     return override.sessionKeySource === "static" ? "static" : "templated";
