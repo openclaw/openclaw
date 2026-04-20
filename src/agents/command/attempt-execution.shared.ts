@@ -12,9 +12,29 @@ export type PersistSessionEntryParams = {
   clearedFields?: string[];
 };
 
+function preserveLatestLastInteractionAt(
+  existing: SessionEntry | undefined,
+  next: SessionEntry,
+): SessionEntry {
+  const existingLastInteractionAt = existing?.lastInteractionAt;
+  if (existingLastInteractionAt == null) {
+    return next;
+  }
+  if (next.lastInteractionAt == null || existingLastInteractionAt > next.lastInteractionAt) {
+    return {
+      ...next,
+      lastInteractionAt: existingLastInteractionAt,
+    };
+  }
+  return next;
+}
+
 export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
+    const merged = preserveLatestLastInteractionAt(
+      store[params.sessionKey],
+      mergeSessionEntry(store[params.sessionKey], params.entry),
+    );
     for (const field of params.clearedFields ?? []) {
       if (!Object.hasOwn(params.entry, field)) {
         Reflect.deleteProperty(merged, field);

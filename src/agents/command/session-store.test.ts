@@ -685,7 +685,9 @@ describe("clearCliSessionInStore", () => {
       expect(
         loadSessionStore(storePath, { skipCache: true })[existingKey]?.claudeCliSessionId,
       ).toBe("claude-session-1");
-=======
+    });
+  });
+
   it("keeps lastInteractionAt monotonic across overlapping CLI runs", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
