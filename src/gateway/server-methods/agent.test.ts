@@ -835,6 +835,35 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("accepts Paperclip adapter's root-level paperclip metadata", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "Paperclip wake event",
+        sessionKey: "paperclip",
+        idempotencyKey: "paperclip-test",
+        paperclip: {
+          runId: "paperclip-run-123",
+          agentId: "test-agent",
+          companyId: "test-company",
+        },
+      },
+      { reqId: "paperclip-test-1", respond },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
   it("does not create task rows for inter-session completion wakes", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
@@ -1052,9 +1081,7 @@ describe("gateway agent handler", () => {
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
-    expect(call?.message).toContain(
-      "If runtime-provided startup context is included for this first turn",
-    );
+    expect(call?.message).toContain("Execute your Session Startup sequence now");
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");
