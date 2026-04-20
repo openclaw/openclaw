@@ -14,6 +14,57 @@ function expectTelegramConfigIssue(config: unknown, path: string) {
 }
 
 describe("telegram custom commands schema", () => {
+  it('rejects dmPolicy="open" without allowFrom "*"', () => {
+    expectTelegramConfigIssue(
+      { dmPolicy: "open", allowFrom: ["123456789"], botToken: "fake" },
+      "allowFrom",
+    );
+  });
+
+  it('accepts dmPolicy="open" with allowFrom "*"', () => {
+    const res = TelegramConfigSchema.safeParse({ dmPolicy: "open", allowFrom: ["*"] });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults dm/group policy", () => {
+    const res = TelegramConfigSchema.safeParse({});
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("pairing");
+      expect(res.data.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it("accepts historyLimit overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      historyLimit: 8,
+      accounts: { ops: { historyLimit: 3 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.historyLimit).toBe(8);
+      expect(res.data.accounts?.ops?.historyLimit).toBe(3);
+    }
+  });
+
+  it("accepts textChunkLimit", () => {
+    const res = TelegramConfigSchema.safeParse({
+      enabled: true,
+      textChunkLimit: 3333,
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.textChunkLimit).toBe(3333);
+    }
+  });
+
   it("normalizes custom commands", () => {
     const res = TelegramConfigSchema.safeParse({
       customCommands: [{ command: "/Backup", description: "  Git backup  " }],
@@ -44,6 +95,43 @@ describe("telegram custom commands schema", () => {
 });
 
 describe("telegram topic agentId schema", () => {
+  it("accepts topic ingest boolean", () => {
+    expectTelegramConfigValid({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "42": {
+              ingest: true,
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("accepts group ingest boolean", () => {
+    expectTelegramConfigValid({
+      groups: {
+        "-1001234567890": {
+          ingest: true,
+        },
+      },
+    });
+  });
+
+  it("rejects non-boolean ingest", () => {
+    expectTelegramConfigIssue(
+      {
+        groups: {
+          "-1001234567890": {
+            ingest: { enabled: true },
+          },
+        },
+      },
+      "groups.-1001234567890.ingest",
+    );
+  });
+
   it("accepts nested groupPolicy overrides", () => {
     expectTelegramConfigValid({
       groups: {
