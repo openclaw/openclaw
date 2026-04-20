@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { MSTeamsConfigSchema } from "./zod-schema.providers-core.js";
+import { MSTeamsConfigSchema } from "../config-api.js";
 
-describe("config msteams", () => {
+describe("msteams config schema", () => {
   it("accepts replyStyle at global/team/channel levels", () => {
     const res = MSTeamsConfigSchema.safeParse({
       replyStyle: "top-level",
@@ -14,6 +14,7 @@ describe("config msteams", () => {
         },
       },
     });
+
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.replyStyle).toBe("top-level");
@@ -26,6 +27,7 @@ describe("config msteams", () => {
     const res = MSTeamsConfigSchema.safeParse({
       replyStyle: "nope",
     });
+
     expect(res.success).toBe(false);
   });
 });

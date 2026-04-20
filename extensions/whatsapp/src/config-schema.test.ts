@@ -8,6 +8,17 @@ function expectWhatsAppConfigValid(config: unknown) {
 }
 
 describe("whatsapp config schema", () => {
+  it("accepts textChunkLimit", () => {
+    const res = expectWhatsAppConfigValid({
+      allowFrom: ["+15555550123"],
+      textChunkLimit: 4444,
+    });
+
+    if (res.success) {
+      expect(res.data.textChunkLimit).toBe(4444);
+    }
+  });
+
   it("accepts enabled", () => {
     expectWhatsAppConfigValid({
       enabled: true,

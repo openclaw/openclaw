@@ -16,6 +16,18 @@ function expectInvalidSignalConfig(config: unknown) {
 }
 
 describe("signal groups schema", () => {
+  it("accepts textChunkLimit", () => {
+    const res = SignalConfigSchema.safeParse({
+      enabled: true,
+      textChunkLimit: 2222,
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.textChunkLimit).toBe(2222);
+    }
+  });
+
   it("accepts accountUuid for loop protection", () => {
     expectValidSignalConfig({
       accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",

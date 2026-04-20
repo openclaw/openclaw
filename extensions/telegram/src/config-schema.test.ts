@@ -14,6 +14,18 @@ function expectTelegramConfigIssue(config: unknown, path: string) {
 }
 
 describe("telegram custom commands schema", () => {
+  it("accepts textChunkLimit", () => {
+    const res = TelegramConfigSchema.safeParse({
+      enabled: true,
+      textChunkLimit: 3333,
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.textChunkLimit).toBe(3333);
+    }
+  });
+
   it("normalizes custom commands", () => {
     const res = TelegramConfigSchema.safeParse({
       customCommands: [{ command: "/Backup", description: "  Git backup  " }],

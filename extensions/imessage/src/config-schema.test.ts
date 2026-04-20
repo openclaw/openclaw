@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { IMessageConfigSchema } from "../config-api.js";
 
 describe("imessage config schema", () => {
+  it("accepts textChunkLimit", () => {
+    const res = IMessageConfigSchema.safeParse({
+      enabled: true,
+      textChunkLimit: 1111,
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.textChunkLimit).toBe(1111);
+    }
+  });
+
   it("accepts safe remoteHost", () => {
     const res = IMessageConfigSchema.safeParse({
       remoteHost: "bot@gateway-host",
