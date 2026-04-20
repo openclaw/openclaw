@@ -85,4 +85,50 @@ describe("redact-sink", () => {
     );
     expect(sanitizeLogRecordForSink(record, disabled)).toBe(record);
   });
+
+  it("preserves toJSON semantics for URL, Buffer, and custom classes", () => {
+    class Tagged {
+      constructor(private readonly id: string) {}
+      toJSON() {
+        return { kind: "tagged", id: this.id };
+      }
+    }
+
+    const record = {
+      endpoint: new URL("https://api.openclaw.ai/v1/resource?k=v"),
+      payload: Buffer.from([1, 2, 3, 4]),
+      tagged: new Tagged("abc"),
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as unknown as {
+      endpoint: unknown;
+      payload: { type: string; data: number[] };
+      tagged: { kind: string; id: string };
+    };
+
+    // URL.toJSON() returns the href string; must not become {}.
+    expect(sanitized.endpoint).toBe("https://api.openclaw.ai/v1/resource?k=v");
+    // Buffer.toJSON() returns { type: "Buffer", data: [...] }; must be preserved.
+    expect(sanitized.payload).toEqual({ type: "Buffer", data: [1, 2, 3, 4] });
+    // Custom toJSON must be honored rather than bypassed by Object.entries.
+    expect(sanitized.tagged).toEqual({ kind: "tagged", id: "abc" });
+  });
+
+  it("falls back to record sanitization when toJSON throws", () => {
+    const record = {
+      broken: {
+        toJSON() {
+          throw new Error("bad");
+        },
+        safe: "value",
+      },
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      broken: { safe: string };
+    };
+
+    // Must not throw; fall through to plain sanitization which keeps enumerable keys.
+    expect(sanitized.broken.safe).toBe("value");
+  });
 });

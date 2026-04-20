@@ -174,6 +174,22 @@ function sanitizeValueForSink(
     return value.map((entry) => sanitizeValueForSink(entry, resolved, seen, depth + 1));
   }
   if (typeof value === "object") {
+    // Preserve toJSON semantics for objects like URL, Buffer, or custom classes
+    // that define a custom serializer. Without this, sanitizeRecordForSink
+    // rebuilds the object via Object.entries and silently drops the toJSON view
+    // (e.g. URL becomes {}, Buffer loses its { type, data } shape).
+    const maybeToJson = (value as { toJSON?: () => unknown }).toJSON;
+    if (typeof maybeToJson === "function" && !seen.has(value)) {
+      seen.add(value);
+      try {
+        const serialized = maybeToJson.call(value);
+        return sanitizeValueForSink(serialized, resolved, seen, depth + 1);
+      } catch {
+        // fall through to record sanitization if toJSON throws
+      } finally {
+        seen.delete(value);
+      }
+    }
     return sanitizeRecordForSink(value as JsonLikeRecord, resolved, seen, depth);
   }
   return value;
