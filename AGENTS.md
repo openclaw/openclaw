@@ -127,16 +127,13 @@
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
 - Type-check/build: `pnpm build`
-- TypeScript checks are split by architecture boundary, with four normal lanes:
-  - `pnpm tsgo` / `pnpm tsgo:core`: core production roots (`src/`, `ui/`, `packages/`; no `extensions/` include roots).
-  - `pnpm tsgo:core:test`: core colocated tests.
-  - `pnpm tsgo:extensions`: bundled extension production graph.
-  - `pnpm tsgo:extensions:test`: bundled extension colocated tests.
-  - `pnpm tsgo:core:all`: core production + core test project references (`tsconfig.core.projects.json`).
-  - `pnpm tsgo:extensions:all`: extension production + extension test project references (`tsconfig.extensions.projects.json`).
-  - `pnpm tsgo:all`: every TypeScript graph above through the project-reference root (`tsconfig.projects.json`); this is what `pnpm check` runs.
+- TypeScript checks are split by architecture boundary. Normal entrypoints:
+  - `pnpm tsgo`: fastest core production check (`src/`, `ui/`, `packages/`; no `extensions/` include roots).
+  - `pnpm tsgo:prod`: core + bundled extension production graphs; this is what `pnpm check` runs.
+  - `pnpm check:test-types` / `pnpm tsgo:test`: core + bundled extension test graphs.
+  - `pnpm tsgo:all`: every production + test graph through project references; use for full typecheck sweeps.
+  - Boundary/debug slices exist (`tsgo:core:test`, `tsgo:extensions:test`, `tsgo:core:all`, `tsgo:extensions:all`, `tsgo:test:src`, `tsgo:test:ui`, `tsgo:test:packages`), but do not present them as the normal flow.
   - `pnpm tsgo:profile [core-test|extensions-test|--all]`: profile fresh graph cost into `.artifacts/tsgo-profile/`. Diagnostic-only profile slices (`core-test-agents`, `core-test-non-agents`) exist for investigating agent graph cost; do not treat them as normal user-facing checks.
-  - Narrow aliases remain for local loops: `pnpm tsgo:test:src`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
 - Do not add `tsc --noEmit`, `typecheck`, or `check:types` lanes for repo type checking. Use `tsgo` graphs. `tsc` is allowed only when emitting declaration/package-boundary compatibility artifacts that `tsgo` does not replace.
 - Boundary rule: core must not know extension implementation details. Extensions hook into core through manifests, registries, capabilities, and public `openclaw/plugin-sdk/*` contracts. If you find core production code naming a specific extension, or a core test that is really testing extension-owned behavior, call it out and prefer moving coverage/logic to the owning extension or a generic contract test.
 - Lint/format: `pnpm check`
@@ -152,8 +149,8 @@
   - A local dev gate is the fast default loop, usually `pnpm check` plus any scoped test you actually need.
   - A landing gate is the broader bar before pushing `main`, usually `pnpm check`, `pnpm test`, and `pnpm build` when the touched surface can affect build output, packaging, lazy-loading/module boundaries, or published surfaces.
   - A CI gate is whatever the relevant workflow enforces for that lane (for example `check`, `check-additional`, `build-smoke`, or release validation).
-- Local dev gate: prefer `pnpm check` for the normal edit loop. It runs typecheck and lint first, then parallelizes independent policy guards. It keeps the repo-architecture policy guards out of the default local loop.
-- Timed local gate: use `pnpm check:timed` to see per-stage cost. Add `:architecture` only when investigating the CI architecture gate locally.
+- Local dev gate: prefer `pnpm check` for the normal edit loop. It runs production typecheck, lint, and independent policy guards. It keeps test typecheck and repo-architecture policy guards out of the default local loop.
+- Timed local gate: use `pnpm check:timed` to see per-stage cost. Use `pnpm check:timed:all-types` when investigating test typecheck cost. Add `:architecture` only when investigating the CI architecture gate locally.
 - CI architecture gate: `check-additional` enforces architecture and boundary policy guards that are intentionally kept out of the default local loop.
 - Formatting gate: the pre-commit hook runs targeted formatting on staged source files before `pnpm check`. If you want a repo-wide formatting-only preflight locally, run `pnpm format:check` explicitly.
 - If you need a fast commit loop, `FAST_COMMIT=1 git commit ...` skips the hook’s repo-wide `pnpm check`; targeted formatting/linting still runs, so use that only when you are deliberately covering the touched surface some other way.
