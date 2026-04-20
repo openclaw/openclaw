@@ -18,7 +18,7 @@ env:
 
 jobs:
   no-tabs:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.repository == 'openclaw/openclaw' && github.event_name != 'workflow_dispatch'
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
@@ -50,7 +50,7 @@ jobs:
           PY
 
   actionlint:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.repository == 'openclaw/openclaw' && github.event_name != 'workflow_dispatch'
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
@@ -82,7 +82,7 @@ jobs:
         run: node scripts/check-no-conflict-markers.mjs
 
   generated-doc-baselines:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch'
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
