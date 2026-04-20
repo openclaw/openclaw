@@ -1231,6 +1231,7 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnWithSessionTracing({
         streamFn: activeSession.agent.streamFn,
         sessionKey: params.sessionKey,
+        runId: params.runId,
         diagnostics: params.config?.diagnostics,
       });
       const providerTextTransforms = resolveProviderTextTransforms({

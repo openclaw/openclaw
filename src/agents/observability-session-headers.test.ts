@@ -49,32 +49,35 @@ describe("resolveSessionTracingHeaders", () => {
   it("uses default header names x-session-id and x-session-name", () => {
     const result = resolveSessionTracingHeaders({
       sessionKey: "agent:main:telegram:direct:12345",
+      runId: "run-abc-123",
       diagnostics: {
         sessionTracing: { enabled: true },
       },
     });
     expect(result).toEqual({
-      "x-session-id": "agent:main:telegram:direct:12345",
-      "x-session-name": "main",
+      "x-session-id": "run-abc-123",
+      "x-session-name": "agent:main:telegram:direct:12345",
     });
   });
 
-  it("derives session name from agent ID when not configured", () => {
+  it("uses sessionKey as session name when not configured", () => {
     const result = resolveSessionTracingHeaders({
       sessionKey: "agent:my-agent:subagent:abc123",
+      runId: "run-def-456",
       diagnostics: {
         sessionTracing: { enabled: true },
       },
     });
     expect(result).toEqual({
-      "x-session-id": "agent:my-agent:subagent:abc123",
-      "x-session-name": "my-agent",
+      "x-session-id": "run-def-456",
+      "x-session-name": "agent:my-agent:subagent:abc123",
     });
   });
 
   it("uses configured session name when provided", () => {
     const result = resolveSessionTracingHeaders({
       sessionKey: "agent:main:main",
+      runId: "run-ghi-789",
       diagnostics: {
         sessionTracing: {
           enabled: true,
@@ -83,7 +86,7 @@ describe("resolveSessionTracingHeaders", () => {
       },
     });
     expect(result).toEqual({
-      "x-session-id": "agent:main:main",
+      "x-session-id": "run-ghi-789",
       "x-session-name": "Custom Agent Name",
     });
   });
@@ -91,6 +94,7 @@ describe("resolveSessionTracingHeaders", () => {
   it("uses custom header names when configured", () => {
     const result = resolveSessionTracingHeaders({
       sessionKey: "agent:main:main",
+      runId: "run-jkl-012",
       diagnostics: {
         sessionTracing: {
           enabled: true,
@@ -103,8 +107,21 @@ describe("resolveSessionTracingHeaders", () => {
       },
     });
     expect(result).toEqual({
-      "Helicone-Session-Id": "agent:main:main",
+      "Helicone-Session-Id": "run-jkl-012",
       "Helicone-Session-Name": "OpenClaw",
+    });
+  });
+
+  it("falls back to sessionKey when runId is not provided", () => {
+    const result = resolveSessionTracingHeaders({
+      sessionKey: "agent:main:main",
+      diagnostics: {
+        sessionTracing: { enabled: true },
+      },
+    });
+    expect(result).toEqual({
+      "x-session-id": "agent:main:main",
+      "x-session-name": "agent:main:main",
     });
   });
 });
@@ -125,6 +142,7 @@ describe("wrapStreamFnWithSessionTracing", () => {
     const wrapped = wrapStreamFnWithSessionTracing({
       streamFn: inner,
       sessionKey: "agent:test-agent:subagent:abc",
+      runId: "run-xyz-789",
       diagnostics: {
         sessionTracing: { enabled: true },
       },
@@ -136,8 +154,8 @@ describe("wrapStreamFnWithSessionTracing", () => {
     expect(inner).toHaveBeenCalledTimes(1);
     const callOptions = inner.mock.calls[0][2];
     expect(callOptions.headers).toEqual({
-      "x-session-id": "agent:test-agent:subagent:abc",
-      "x-session-name": "test-agent",
+      "x-session-id": "run-xyz-789",
+      "x-session-name": "agent:test-agent:subagent:abc",
       existing: "header",
     });
   });
@@ -147,6 +165,7 @@ describe("wrapStreamFnWithSessionTracing", () => {
     const wrapped = wrapStreamFnWithSessionTracing({
       streamFn: inner,
       sessionKey: "agent:main:main",
+      runId: "run-collision-001",
       diagnostics: {
         sessionTracing: { enabled: true },
       },
@@ -164,6 +183,7 @@ describe("wrapStreamFnWithSessionTracing", () => {
     const wrapped = wrapStreamFnWithSessionTracing({
       streamFn: inner,
       sessionKey: "agent:main:main",
+      runId: "run-none-002",
       diagnostics: {
         sessionTracing: { enabled: true },
       },
@@ -172,8 +192,8 @@ describe("wrapStreamFnWithSessionTracing", () => {
     await wrapped({} as never, {} as never, {});
 
     expect(inner.mock.calls[0][2].headers).toEqual({
-      "x-session-id": "agent:main:main",
-      "x-session-name": "main",
+      "x-session-id": "run-none-002",
+      "x-session-name": "agent:main:main",
     });
   });
 });

@@ -7,6 +7,7 @@ const DEFAULT_SESSION_NAME_HEADER = "x-session-name";
 
 export function resolveSessionTracingHeaders(params: {
   sessionKey?: string;
+  runId?: string;
   diagnostics?: DiagnosticsConfig;
 }): Record<string, string> | undefined {
   const tracing = params.diagnostics?.sessionTracing;
@@ -24,11 +25,11 @@ export function resolveSessionTracingHeaders(params: {
   const sessionIdHeader = tracing.headers?.sessionId ?? DEFAULT_SESSION_ID_HEADER;
   const sessionNameHeader = tracing.headers?.sessionName ?? DEFAULT_SESSION_NAME_HEADER;
 
-  // x-session-id: the full session key
-  headers[sessionIdHeader] = sessionKey;
+  // x-session-id: unique per top-level request (runId)
+  headers[sessionIdHeader] = params.runId ?? sessionKey;
 
-  // x-session-name: configured value, or derive from agent ID
-  const sessionName = tracing.sessionName ?? parsed.agentId;
+  // x-session-name: the session key for grouping related requests/subagents
+  const sessionName = tracing.sessionName ?? sessionKey;
   headers[sessionNameHeader] = sessionName;
 
   return headers;
@@ -37,10 +38,12 @@ export function resolveSessionTracingHeaders(params: {
 export function wrapStreamFnWithSessionTracing(params: {
   streamFn: StreamFn;
   sessionKey?: string;
+  runId?: string;
   diagnostics?: DiagnosticsConfig;
 }): StreamFn {
   const tracingHeaders = resolveSessionTracingHeaders({
     sessionKey: params.sessionKey,
+    runId: params.runId,
     diagnostics: params.diagnostics,
   });
   if (!tracingHeaders) return params.streamFn;
