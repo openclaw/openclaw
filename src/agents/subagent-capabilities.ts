@@ -261,9 +261,10 @@ export function resolveStoredSubagentCapabilities(
         store,
       })
     : undefined;
+  const depthStore = opts?.cfg && isAcpSessionKey(normalizedSessionKey) ? undefined : store;
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
-    store,
+    store: depthStore,
   });
   if (!isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry })) {
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
