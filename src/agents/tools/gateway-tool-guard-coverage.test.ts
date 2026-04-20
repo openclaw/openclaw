@@ -27,6 +27,32 @@ function expectAllowed(
   ).not.toThrow();
 }
 
+function expectBlockedApply(
+  currentConfig: Record<string, unknown>,
+  nextConfig: Record<string, unknown>,
+): void {
+  expect(() =>
+    assertGatewayConfigMutationAllowedForTest({
+      action: "config.apply",
+      currentConfig,
+      raw: JSON.stringify(nextConfig),
+    }),
+  ).toThrow(/cannot (?:change protected|enable dangerous)/);
+}
+
+function expectAllowedApply(
+  currentConfig: Record<string, unknown>,
+  nextConfig: Record<string, unknown>,
+): void {
+  expect(() =>
+    assertGatewayConfigMutationAllowedForTest({
+      action: "config.apply",
+      currentConfig,
+      raw: JSON.stringify(nextConfig),
+    }),
+  ).not.toThrow();
+}
+
 describe("gateway config mutation guard coverage", () => {
   it("blocks disabling sandbox mode via config.patch", () => {
     expectBlocked(
@@ -109,6 +135,17 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
+  it("blocks id-less per-agent sandbox injection under agents.list[]", () => {
+    expectBlocked(
+      { agents: { list: [] as Array<Record<string, unknown>> } },
+      {
+        agents: {
+          list: [{ sandbox: { mode: "off" } }],
+        },
+      },
+    );
+  });
+
   it("blocks per-agent tools.allow override under agents.list[]", () => {
     expectBlocked(
       {
@@ -161,6 +198,38 @@ describe("gateway config mutation guard coverage", () => {
 
   it("still allows benign agent-driven tweaks", () => {
     expectAllowed(
+      {
+        agents: {
+          defaults: { prompt: "You are a helpful assistant." },
+          list: [{ id: "worker", model: "sonnet-4" }],
+        },
+      },
+      {
+        agents: {
+          defaults: { prompt: "You are a terse assistant." },
+          list: [{ id: "worker", model: "opus-4.6" }],
+        },
+      },
+    );
+  });
+
+  it("blocks config.apply replacing the config with protected changes", () => {
+    expectBlockedApply(
+      {
+        agents: {
+          defaults: { sandbox: { mode: "all" }, prompt: "You are a helpful assistant." },
+        },
+      },
+      {
+        agents: {
+          defaults: { sandbox: { mode: "off" }, prompt: "You are a terse assistant." },
+        },
+      },
+    );
+  });
+
+  it("still allows benign config.apply replacements", () => {
+    expectAllowedApply(
       {
         agents: {
           defaults: { prompt: "You are a helpful assistant." },

@@ -167,23 +167,40 @@ function isProtectedPathEqual(
     return true;
   }
 
+  const isIdKeyedEntry = (entry: unknown): entry is Record<string, unknown> & { id: string } =>
+    Boolean(
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      typeof (entry as { id?: unknown }).id === "string" &&
+      (entry as { id: string }).id.length > 0,
+    );
+
   const indexById = (list: unknown): Map<string, Record<string, unknown>> => {
     const out = new Map<string, Record<string, unknown>>();
     if (!Array.isArray(list)) {
       return out;
     }
     for (const entry of list) {
-      if (
-        entry &&
-        typeof entry === "object" &&
-        !Array.isArray(entry) &&
-        typeof (entry as { id?: unknown }).id === "string" &&
-        (entry as { id: string }).id.length > 0
-      ) {
-        out.set((entry as { id: string }).id, entry as Record<string, unknown>);
+      if (isIdKeyedEntry(entry)) {
+        out.set(entry.id, entry);
       }
     }
     return out;
+  };
+
+  const readUnkeyedValues = (list: unknown): unknown[] => {
+    if (!Array.isArray(list)) {
+      return [];
+    }
+    return list
+      .filter((entry) => !isIdKeyedEntry(entry))
+      .map((entry) => {
+        if (!subPath || !entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return entry;
+        }
+        return getValueAtCanonicalPath(entry as Record<string, unknown>, subPath);
+      });
   };
 
   const currentEntries = indexById(currentList);
@@ -206,7 +223,8 @@ function isProtectedPathEqual(
       return false;
     }
   }
-  return true;
+
+  return isDeepStrictEqual(readUnkeyedValues(currentList), readUnkeyedValues(nextList));
 }
 
 function assertGatewayConfigMutationAllowed(params: {
