@@ -496,7 +496,11 @@
         },
         {
           "group": "发布策略",
-          "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+          "pages": [
+            "zh-CN/reference/RELEASING",
+            "zh-CN/reference/testing-ci-policy",
+            "zh-CN/reference/test"
+          ]
         }
       ]
     },

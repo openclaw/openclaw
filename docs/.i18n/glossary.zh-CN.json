@@ -216,6 +216,10 @@
     "target": "发布策略"
   },
   {
+    "source": "Testing CI Policy",
+    "target": "测试 CI 策略"
+  },
+  {
     "source": "Release policy",
     "target": "发布策略"
   },

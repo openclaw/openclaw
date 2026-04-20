@@ -55,6 +55,15 @@ OpenClaw has three public release lanes:
 - This split is intentional: keep the real npm release path short,
   deterministic, and artifact-focused, while slower live checks stay in their
   own lane so they do not stall or block publish
+- Use [Testing CI Policy](/reference/testing-ci-policy) as the source of truth
+  for which end-to-end and live suites belong in `PR CI`, `release CI`,
+  `scheduled CI`, or `manual only`.
+- Read that split literally:
+  - the publish workflow is the short path that prepares and promotes artifacts
+  - other important end-to-end checks can still be required CI in release or
+    scheduled workflows
+- In other words, "not in the publish workflow" does not mean "manual only."
+  It often means "run it in a different CI lane."
 - Release checks must be dispatched from the `main` workflow ref so the
   workflow logic and secrets stay canonical
 - That workflow accepts either an existing release tag or the current full

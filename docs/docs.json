@@ -1582,7 +1582,7 @@
               },
               {
                 "group": "Release policy",
-                "pages": ["reference/RELEASING", "reference/test"]
+                "pages": ["reference/RELEASING", "reference/testing-ci-policy", "reference/test"]
               }
             ]
           },
