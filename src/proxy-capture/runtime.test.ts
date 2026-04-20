@@ -77,7 +77,9 @@ describe("debug proxy runtime", () => {
       headers: { "content-type": "application/json" },
       body: '{"input":"hello"}',
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let index = 0; index < 4; index += 1) {
+      await Promise.resolve();
+    }
     runtime.finalizeDebugProxyCapture();
 
     const events = storeState.events.filter((event) => event.sessionId === "runtime-test-session");

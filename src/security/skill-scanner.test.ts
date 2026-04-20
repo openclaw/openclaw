@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   clearSkillScanCacheForTest,
   isScannable,
@@ -16,11 +16,22 @@ import type { SkillScanOptions } from "./skill-scanner.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const tmpDirs: string[] = [];
+let fixtureRoot = "";
+let fixtureId = 0;
+
+beforeAll(() => {
+  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
+});
+
+afterAll(() => {
+  if (fixtureRoot) {
+    fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
 
 function makeTmpDir(): string {
-  const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
-  tmpDirs.push(dir);
+  const dir = path.join(fixtureRoot, `case-${fixtureId++}`);
+  fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -110,11 +121,7 @@ type SummaryCase = {
   };
 };
 
-afterEach(async () => {
-  for (const dir of tmpDirs) {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-  tmpDirs.length = 0;
+afterEach(() => {
   clearSkillScanCacheForTest();
 });
 

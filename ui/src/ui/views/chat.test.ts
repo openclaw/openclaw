@@ -58,9 +58,9 @@ function flushTasks() {
 }
 
 async function flushAssistantAttachmentAvailabilityChecks() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < 6; i++) {
+    await Promise.resolve();
+  }
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {

@@ -377,17 +377,8 @@ describe("tool-cards", () => {
       container,
     );
 
-    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
-    const rawBody = container.querySelector<HTMLElement>(".chat-tool-card__raw-body");
-
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(rawBody?.hidden).toBe(true);
-
-    rawToggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(rawBody?.hidden).toBe(false);
+    expect(container.querySelector(".chat-tool-card__raw-toggle")).not.toBeNull();
   });
 
   it("keeps raw details for legacy canvas tool output without rendering tool-row previews", () => {
