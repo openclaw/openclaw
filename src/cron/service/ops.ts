@@ -29,6 +29,7 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  jobExists,
   normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
@@ -618,7 +619,18 @@ async function finishPreparedManualRun(
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
-    coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    // Pre-execution check: if the job was removed between prepareManualRun
+    // and now (e.g. by a concurrent `remove()` call), skip execution entirely
+    // so no delivery occurs.
+    if (!(await jobExists(state, jobId))) {
+      state.deps.log.info(
+        { jobId, jobName: executionJob.name },
+        "cron: skipping manual run for job removed before execution",
+      );
+      coreResult = { status: "skipped" };
+    } else {
+      coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    }
   } catch (err) {
     coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
   }
