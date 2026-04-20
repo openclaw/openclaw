@@ -3,6 +3,27 @@ import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
+export type StoredUserDeliveryPayloadSource =
+  | "empty"
+  | "child-blocks"
+  | "named-section"
+  | "sanitized-fallback";
+
+export type StoredUserDeliveryPayload = {
+  text: string;
+  source: StoredUserDeliveryPayloadSource;
+  capturedAt: number;
+};
+
+export type SubagentDeliveryClaim = {
+  announceId: string;
+  state: "claimed" | "delivered";
+  token: string;
+  path: "queued" | "steered" | "direct" | "none";
+  claimedAt: number;
+  updatedAt: number;
+};
+
 export type SubagentRunRecord = {
   runId: string;
   childSessionKey: string;
@@ -38,6 +59,9 @@ export type SubagentRunRecord = {
   fallbackFrozenResultCapturedAt?: number;
   endedHookEmittedAt?: number;
   completionAnnouncedAt?: number;
+  deliveryClaim?: SubagentDeliveryClaim;
+  userDeliveryPayload?: StoredUserDeliveryPayload | null;
+  fallbackUserDeliveryPayload?: StoredUserDeliveryPayload | null;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

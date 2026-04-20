@@ -7,8 +7,6 @@ const sendMessageIMessageMock = vi.hoisted(() =>
     sentText: message,
   })),
 );
-const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
-const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
 const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
 
@@ -20,8 +18,6 @@ vi.mock("../send.js", () => ({
 vi.mock("./deliver.runtime.js", () => ({
   loadConfig: vi.fn(() => ({})),
   resolveMarkdownTableMode: vi.fn(() => resolveMarkdownTableModeMock()),
-  chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
-  resolveChunkMode: vi.fn(() => resolveChunkModeMock()),
   convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
 }));
 
@@ -37,20 +33,17 @@ describe("deliverReplies", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    chunkTextWithModeMock.mockImplementation((text: string) => [text]);
   });
 
   it("propagates payload replyToId through all text chunks", async () => {
-    chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
-
     await deliverReplies({
-      replies: [{ text: "first|second", replyToId: "reply-1" }],
+      replies: [{ text: "first second", replyToId: "reply-1" }],
       target: "chat_id:10",
       client,
       accountId: "default",
       runtime,
       maxBytes: 4096,
-      textLimit: 4000,
+      textLimit: 6,
     });
 
     expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
@@ -127,19 +120,18 @@ describe("deliverReplies", () => {
     // never with the full un-chunked text before sending begins.
     // Pre-send population widened the false-positive window in self-chat.
     const remember = vi.fn();
-    chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
     sendMessageIMessageMock
       .mockResolvedValueOnce({ messageId: "imsg-1", sentText: "first" })
       .mockResolvedValueOnce({ messageId: "imsg-2", sentText: "second" });
 
     await deliverReplies({
-      replies: [{ text: "first|second" }],
+      replies: [{ text: "first second" }],
       target: "chat_id:30",
       client,
       accountId: "acct-3",
       runtime,
       maxBytes: 2048,
-      textLimit: 4000,
+      textLimit: 6,
       sentMessageCache: { remember },
     });
 
@@ -177,5 +169,23 @@ describe("deliverReplies", () => {
       text: "<media:image>",
       messageId: "imsg-media-1",
     });
+  });
+
+  it("closes dangling code fences before sending text", async () => {
+    await deliverReplies({
+      replies: [{ text: "```js\nconst x = 1;" }],
+      target: "chat_id:50",
+      client,
+      accountId: "acct-5",
+      runtime,
+      maxBytes: 2048,
+      textLimit: 4000,
+    });
+
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "chat_id:50",
+      "```js\nconst x = 1;\n```",
+      expect.anything(),
+    );
   });
 });
