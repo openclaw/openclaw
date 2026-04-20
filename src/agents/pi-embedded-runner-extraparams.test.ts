@@ -284,6 +284,7 @@ import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
+  resolveModelConfigExtraParams,
   resolvePreparedExtraParams,
 } from "./pi-embedded-runner/extra-params.js";
 import { createGoogleThinkingPayloadWrapper } from "./pi-embedded-runner/google-stream-wrappers.js";
@@ -2099,6 +2100,99 @@ describe("applyExtraParamsToAgent", () => {
     expect(Object.hasOwn(effectiveExtraParams, "__proto__")).toBe(false);
     expect(Object.hasOwn(effectiveExtraParams, "constructor")).toBe(false);
     expect(Object.hasOwn(effectiveExtraParams, "prototype")).toBe(false);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  it("merges model-level extraParams before runtime overrides", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openrouter",
+      modelId: "google/gemma-3-27b-it",
+      modelExtraParams: {
+        reasoning: { max_tokens: 0 },
+        temperature: 0.1,
+      },
+      extraParamsOverride: {
+        temperature: 0.3,
+      },
+    });
+
+    expect(effectiveExtraParams.reasoning).toEqual({ max_tokens: 0 });
+    expect(effectiveExtraParams.temperature).toBe(0.3);
+  });
+
+  it("keeps model-level cached content alias precedence over defaults", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/google/gemma-3-27b-it": {
+                params: {
+                  cachedContent: "from-default",
+                },
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolvePreparedExtraParams>[0]["cfg"],
+      provider: "openrouter",
+      modelId: "google/gemma-3-27b-it",
+      modelExtraParams: {
+        cached_content: "from-model",
+      },
+    });
+
+    expect(effectiveExtraParams.cachedContent).toBe("from-model");
+    expect(effectiveExtraParams.cached_content).toBeUndefined();
+  });
+
+  it("keeps model-level service tier alias precedence over defaults", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      resolvedExtraParams: {
+        serviceTier: "auto",
+      },
+      modelExtraParams: {
+        service_tier: "priority",
+      },
+    });
+
+    expect(effectiveExtraParams.serviceTier).toBe("priority");
+    expect(effectiveExtraParams.service_tier).toBeUndefined();
+  });
+
+  it("keeps model-level fast mode alias precedence over defaults", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      resolvedExtraParams: {
+        fastMode: false,
+      },
+      modelExtraParams: {
+        fast_mode: true,
+      },
+    });
+
+    expect(effectiveExtraParams.fastMode).toBe(true);
+    expect(effectiveExtraParams.fast_mode).toBeUndefined();
+  });
+
+  it("reads sanitized model-level extraParams from runtime model objects", () => {
+    const resolved = resolveModelConfigExtraParams({
+      id: "google/gemma-3-27b-it",
+      extraParams: {
+        __proto__: { polluted: true },
+        reasoning: { max_tokens: 0 },
+      },
+    });
+
+    expect(resolved).toEqual({
+      reasoning: { max_tokens: 0 },
+    });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 

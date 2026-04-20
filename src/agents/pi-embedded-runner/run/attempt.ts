@@ -147,6 +147,7 @@ import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
+  resolveModelConfigExtraParams,
 } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
@@ -1428,6 +1429,7 @@ export async function runEmbeddedAttempt(
         effectiveWorkspace,
         params.model,
         agentDir,
+        resolveModelConfigExtraParams(params.model),
         resolveExplicitSettingsTransport({
           settingsManager,
           sessionTransport: activeSession.agent.transport,

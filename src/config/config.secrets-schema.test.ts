@@ -156,6 +156,31 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts provider model extraParams objects", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [
+              {
+                id: "google/gemma-3-27b-it",
+                name: "Gemma 3 27B IT",
+                extraParams: {
+                  reasoning: {
+                    max_tokens: 0,
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts model provider header SecretRef values", () => {
     const result = validateConfigObjectRaw({
       models: {

@@ -304,6 +304,8 @@ const ConfiguredModelProviderRequestSchema = z
   .strict()
   .optional();
 
+const ModelExtraParamsSchema = z.record(z.string(), z.unknown()).optional();
+
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -338,6 +340,7 @@ export const ModelDefinitionSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
+    extraParams: ModelExtraParamsSchema,
     compat: ModelCompatSchema,
     metadataSource: z.literal("models-add").optional(),
   })

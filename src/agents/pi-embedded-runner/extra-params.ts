@@ -135,6 +135,7 @@ export function resolvePreparedExtraParams(params: {
   modelId: string;
   agentDir?: string;
   workspaceDir?: string;
+  modelExtraParams?: Record<string, unknown>;
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
   agentId?: string;
@@ -158,19 +159,48 @@ export function resolvePreparedExtraParams(params: {
           ),
         )
       : undefined;
+  const modelExtraParams = sanitizeExtraParamsRecord(params.modelExtraParams);
   const merged = {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
+    ...modelExtraParams,
     ...override,
   };
-  const resolvedCachedContent = resolveAliasedParamValue(
-    [resolvedExtraParams, override],
-    "cached_content",
-    "cachedContent",
-  );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
+  const aliasSources = [resolvedExtraParams, modelExtraParams, override];
+  applyAliasedParamCanonicalization({
+    merged,
+    sources: aliasSources,
+    snakeCaseKey: "cached_content",
+    camelCaseKey: "cachedContent",
+    canonicalKey: "cachedContent",
+  });
+  applyAliasedParamCanonicalization({
+    merged,
+    sources: aliasSources,
+    snakeCaseKey: "service_tier",
+    camelCaseKey: "serviceTier",
+    canonicalKey: "serviceTier",
+  });
+  applyAliasedParamCanonicalization({
+    merged,
+    sources: aliasSources,
+    snakeCaseKey: "fast_mode",
+    camelCaseKey: "fastMode",
+    canonicalKey: "fastMode",
+  });
+  applyAliasedParamCanonicalization({
+    merged,
+    sources: aliasSources,
+    snakeCaseKey: "text_verbosity",
+    camelCaseKey: "textVerbosity",
+    canonicalKey: "text_verbosity",
+  });
+  applyAliasedParamCanonicalization({
+    merged,
+    sources: aliasSources,
+    snakeCaseKey: "parallel_tool_calls",
+    camelCaseKey: "parallelToolCalls",
+    canonicalKey: "parallel_tool_calls",
+  });
   const prepared =
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
@@ -216,6 +246,19 @@ function sanitizeExtraParamsRecord(
       ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
     ),
   );
+}
+
+export function resolveModelConfigExtraParams(
+  model: unknown,
+): Record<string, unknown> | undefined {
+  if (!model || typeof model !== "object" || Array.isArray(model)) {
+    return undefined;
+  }
+  const rawExtraParams = (model as { extraParams?: unknown }).extraParams;
+  if (!rawExtraParams || typeof rawExtraParams !== "object" || Array.isArray(rawExtraParams)) {
+    return undefined;
+  }
+  return sanitizeExtraParamsRecord(rawExtraParams as Record<string, unknown>);
 }
 
 function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
@@ -371,6 +414,30 @@ function resolveAliasedParamValue(
   return seen ? resolved : undefined;
 }
 
+function applyAliasedParamCanonicalization(params: {
+  merged: Record<string, unknown>;
+  sources: Array<Record<string, unknown> | undefined>;
+  snakeCaseKey: string;
+  camelCaseKey: string;
+  canonicalKey: string;
+}): void {
+  const resolvedValue = resolveAliasedParamValue(
+    params.sources,
+    params.snakeCaseKey,
+    params.camelCaseKey,
+  );
+  if (resolvedValue === undefined) {
+    return;
+  }
+  params.merged[params.canonicalKey] = resolvedValue;
+  if (params.snakeCaseKey !== params.canonicalKey) {
+    delete params.merged[params.snakeCaseKey];
+  }
+  if (params.camelCaseKey !== params.canonicalKey) {
+    delete params.merged[params.camelCaseKey];
+  }
+}
+
 function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -493,8 +560,20 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   agentDir?: string,
+  modelExtraParamsOrResolvedTransport?: Record<string, unknown> | SupportedTransport,
   resolvedTransport?: SupportedTransport,
 ): { effectiveExtraParams: Record<string, unknown> } {
+  const modelExtraParams =
+    modelExtraParamsOrResolvedTransport &&
+    typeof modelExtraParamsOrResolvedTransport === "object" &&
+    !Array.isArray(modelExtraParamsOrResolvedTransport)
+      ? modelExtraParamsOrResolvedTransport
+      : undefined;
+  const effectiveResolvedTransport =
+    resolvedTransport ??
+    (typeof modelExtraParamsOrResolvedTransport === "string"
+      ? modelExtraParamsOrResolvedTransport
+      : undefined);
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
@@ -511,6 +590,7 @@ export function applyExtraParamsToAgent(
     cfg,
     provider,
     modelId,
+    modelExtraParams,
     extraParamsOverride,
     thinkingLevel,
     agentId,
@@ -518,7 +598,7 @@ export function applyExtraParamsToAgent(
     workspaceDir,
     resolvedExtraParams,
     model,
-    resolvedTransport,
+    resolvedTransport: effectiveResolvedTransport,
   });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,

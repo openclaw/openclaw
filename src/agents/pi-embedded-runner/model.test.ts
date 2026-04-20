@@ -395,6 +395,40 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("propagates extraParams from matching configured fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                extraParams: {
+                  reasoning: { max_tokens: 128 },
+                },
+              },
+              {
+                ...makeModel("model-b"),
+                extraParams: {
+                  reasoning: { max_tokens: 512 },
+                  service_tier: "priority",
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
+
+    expect((result.model as { extraParams?: unknown } | undefined)?.extraParams).toEqual({
+      reasoning: { max_tokens: 512 },
+      service_tier: "priority",
+    });
+  });
+
   it("propagates image input capability from matching configured fallback model", () => {
     const cfg = {
       models: {
@@ -1483,6 +1517,9 @@ describe("resolveModel", () => {
                 input: ["text"],
                 contextWindow: 256000,
                 maxTokens: 32000,
+                extraParams: {
+                  fast_mode: true,
+                },
               },
             ],
           },
@@ -1508,6 +1545,9 @@ describe("resolveModel", () => {
         "X-Proxy-Auth": "token-123",
       },
     );
+    expect((result.model as { extraParams?: unknown } | undefined)?.extraParams).toEqual({
+      fast_mode: true,
+    });
   });
 
   it("resolves github-copilot Claude dynamic models to anthropic-messages by default", () => {

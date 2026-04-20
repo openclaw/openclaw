@@ -107,6 +107,11 @@ export type ModelDefinitionConfig = {
   contextTokens?: number;
   maxTokens: number;
   headers?: Record<string, string>;
+  /**
+   * Provider-specific request body fields merged into model calls.
+   * Use this for per-model vendor options that OpenClaw does not model explicitly.
+   */
+  extraParams?: Record<string, unknown>;
   compat?: ModelCompatConfig;
   metadataSource?: "models-add";
 };

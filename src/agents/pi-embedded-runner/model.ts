@@ -397,6 +397,7 @@ function applyConfiguredProviderOverrides(params: {
       contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
       maxTokens: metadataOverrideModel?.maxTokens ?? discoveredModel.maxTokens,
       headers: requestConfig.headers,
+      extraParams: configuredModel?.extraParams,
       compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
     },
     providerRequest,
@@ -604,6 +605,7 @@ function resolveConfiguredFallbackModel(params: {
           providerConfig?.models?.[0]?.maxTokens ??
           DEFAULT_CONTEXT_TOKENS,
         headers: requestConfig.headers,
+        extraParams: configuredModel?.extraParams,
       } as Model<Api>,
       providerRequest,
     ),
