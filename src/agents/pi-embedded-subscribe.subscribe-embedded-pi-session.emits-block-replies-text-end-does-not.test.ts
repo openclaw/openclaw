@@ -375,28 +375,51 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts.join("")).toBe("gemma-visible-ok");
   });
 
-  it("keeps intermediate chunk drains in history mode before text_end", async () => {
+  it("waits until text_end before draining chunked text_end replies", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({
       onBlockReply,
-      blockReplyChunking: { minChars: 1, maxChars: 200 },
+      blockReplyChunking: { minChars: 1, maxChars: 80 },
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitOpenAiResponsesTextEvent({
       emit,
       type: "text_delta",
-      text: "  nested list item",
-      delta: "  nested list item",
-      id: "item_intermediate_chunk_indent",
+      text: [
+        "The user is instructing me to reply with a very specific string: `abc-123` and nothing else.",
+        "This is a direct instruction for the output content.",
+        "I must output the text directly as the final response.",
+        "<channel|>abc-123abc-123",
+      ].join("\n\n"),
+      delta: [
+        "The user is instructing me to reply with a very specific string: `abc-123` and nothing else.",
+        "This is a direct instruction for the output content.",
+        "I must output the text directly as the final response.",
+        "<channel|>abc-123abc-123",
+      ].join("\n\n"),
+      id: "item_chunked_text_end_exact_string",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: [
+        "The user is instructing me to reply with a very specific string: `abc-123` and nothing else.",
+        "This is a direct instruction for the output content.",
+        "I must output the text directly as the final response.",
+        "<channel|>abc-123abc-123",
+      ].join("\n\n"),
+      id: "item_chunked_text_end_exact_string",
     });
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const delivered = onBlockReply.mock.calls[0]?.[0]?.text ?? "";
-    expect(delivered.startsWith("  ")).toBe(true);
-    expect(delivered).toContain("nested");
-    expect(subscription.assistantTexts).toEqual([delivered]);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("abc-123");
+    expect(subscription.assistantTexts).toEqual(["abc-123"]);
   });
 
   it("preserves a repeated structured suffix when the preamble names the full repeated output literally", async () => {

@@ -500,11 +500,12 @@ export function handleMessageUpdate(
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.blockChunker?.drain({
-      force: false,
-      emit: (text) =>
-        ctx.emitBlockChunk(text, evtType === "text_end" ? { finalDelivery: true } : undefined),
-    });
+    if (evtType === "text_end") {
+      ctx.blockChunker?.drain({
+        force: false,
+        emit: (text) => ctx.emitBlockChunk(text, { finalDelivery: true }),
+      });
+    }
   }
 
   if (
@@ -554,7 +555,9 @@ export function handleMessageEnd(
   });
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
+    text: sanitizeAssistantVisibleText(
+      ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
+    ),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
@@ -694,7 +697,14 @@ export function handleMessageEnd(
       text !== ctx.state.lastBlockReplyText)
   ) {
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
+      ctx.blockChunker.drain({
+        force: true,
+        emit: (chunk) =>
+          ctx.emitBlockChunk(
+            chunk,
+            ctx.state.blockReplyBreak === "text_end" ? { finalDelivery: true } : undefined,
+          ),
+      });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Guard: for text_end channels, if text_end already delivered content

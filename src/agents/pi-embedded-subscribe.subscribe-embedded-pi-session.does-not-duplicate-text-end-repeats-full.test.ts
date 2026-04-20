@@ -36,11 +36,17 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     const callsAfterDelta = onBlockReply.mock.calls.length;
-    expect(callsAfterDelta).toBeGreaterThan(0);
+    expect(callsAfterDelta).toBe(0);
 
     emitAssistantTextEnd({ emit, content: fullText });
     await Promise.resolve();
 
-    expect(onBlockReply).toHaveBeenCalledTimes(callsAfterDelta);
+    const callsAfterEnd = onBlockReply.mock.calls.length;
+    expect(callsAfterEnd).toBeGreaterThan(0);
+
+    emitAssistantTextEnd({ emit, content: fullText });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(callsAfterEnd);
   });
 });
