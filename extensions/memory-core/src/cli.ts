@@ -120,6 +120,7 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--deep", "Probe embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
+    .option("--force", "Force full reindex when used with --index", false)
     .option("--fix", "Repair stale recall locks and normalize promotion metadata")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {

@@ -706,6 +706,26 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("passes force to reindex on status --index --force", async () => {
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+      sync,
+      status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
+      close,
+    });
+
+    spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--index", "--force"]);
+
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cli", force: true, progress: expect.any(Function) }),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("closes manager after index", async () => {
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
