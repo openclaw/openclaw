@@ -37,13 +37,68 @@ async function expectRejectedScopeUpgradeAttempt({
         requestId?: unknown;
         reason?: unknown;
         remediationHint?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
       }
     ).requestId,
   ).toBe(pending.pending[0]?.requestId);
-  expect(((attempt.error?.details ?? {}) as { reason?: unknown }).reason).toBe("scope-upgrade");
-  expect(((attempt.error?.details ?? {}) as { remediationHint?: unknown }).remediationHint).toBe(
-    "Review the requested scopes, then approve the pending upgrade.",
-  );
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).reason,
+  ).toBe("scope-upgrade");
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).requestedRole,
+  ).toBe("operator");
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).requestedScopes,
+  ).toEqual(["operator.admin"]);
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).approvedScopes,
+  ).toEqual(["operator.read"]);
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        remediationHint?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).remediationHint,
+  ).toBe("Review the requested scopes, then approve the pending upgrade.");
 
   const requested = (await requestedEvent) as {
     payload?: { requestId?: string; deviceId?: string; scopes?: string[] };

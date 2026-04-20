@@ -19,6 +19,7 @@ import {
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
+  listApprovedPairedDeviceRoles,
   listDevicePairing,
   listEffectivePairedDeviceRoles,
   requestDevicePairing,
@@ -1006,9 +1007,25 @@ export function attachGatewayWsMessageHandler(params: {
                 (approved?.status === "approved" || resolvedByConcurrentApproval)
               )
             ) {
+              const exposeApprovedAccess = existingPairedDevice?.publicKey === devicePublicKey;
+              const approvedRoles = exposeApprovedAccess
+                ? listApprovedPairedDeviceRoles(existingPairedDevice)
+                : [];
+              const approvedScopes = exposeApprovedAccess
+                ? Array.isArray(existingPairedDevice.approvedScopes)
+                  ? existingPairedDevice.approvedScopes
+                  : Array.isArray(existingPairedDevice.scopes)
+                    ? existingPairedDevice.scopes
+                    : []
+                : [];
               const pairingErrorDetails = buildPairingConnectErrorDetails({
                 reason,
                 requestId: recoveryRequestId,
+                deviceId: device.id,
+                requestedRole: role,
+                requestedScopes: scopes,
+                ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
+                ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
               });
               const pairingErrorMessage = buildPairingConnectErrorMessage(reason);
               setHandshakeState("failed");
