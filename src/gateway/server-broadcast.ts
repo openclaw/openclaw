@@ -71,7 +71,7 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
 }
 
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
-  let seq = 0;
+  const clientSeq = new WeakMap<GatewayWsClient, number>();
 
   const broadcastInternal = (
     event: string,
@@ -83,18 +83,10 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       return;
     }
     const isTargeted = Boolean(targetConnIds);
-    const eventSeq = isTargeted ? undefined : ++seq;
-    const frame = JSON.stringify({
-      type: "event",
-      event,
-      payload,
-      seq: eventSeq,
-      stateVersion: opts?.stateVersion,
-    });
     if (shouldLogWs()) {
       const logMeta: Record<string, unknown> = {
         event,
-        seq: eventSeq ?? "targeted",
+        seq: isTargeted ? "targeted" : "per-client",
         clients: params.clients.size,
         targets: targetConnIds ? targetConnIds.size : undefined,
         dropIfSlow: opts?.dropIfSlow,
@@ -126,6 +118,18 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       try {
+        const nextSeq = (clientSeq.get(c) ?? 0) + 1;
+        const eventSeq = isTargeted ? undefined : nextSeq;
+        if (!isTargeted) {
+          clientSeq.set(c, nextSeq);
+        }
+        const frame = JSON.stringify({
+          type: "event",
+          event,
+          payload,
+          seq: eventSeq,
+          stateVersion: opts?.stateVersion,
+        });
         c.socket.send(frame);
       } catch {
         /* ignore */

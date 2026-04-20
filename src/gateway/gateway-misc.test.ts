@@ -171,6 +171,7 @@ type EventFrame = {
   type: "event";
   event: string;
   payload?: unknown;
+  seq?: number;
 };
 
 type RecordingSocket = TestSocket & {
@@ -411,6 +412,44 @@ describe("gateway broadcaster", () => {
       "tick",
       "shutdown",
       "update.available",
+    ]);
+  });
+
+  it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {
+    const pairingSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: pairingSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
+        connId: "c-pairing",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: readSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-read",
+        usesSharedGatewayAuth: false,
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" });
+    broadcast("heartbeat", { ts: 1 });
+    broadcast("chat.side_result", { sessionKey: "agent:main:main", text: "tool output" });
+    broadcast("tick", { ts: 2 });
+
+    expect(pairingSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["heartbeat", 1],
+      ["tick", 2],
+    ]);
+    expect(readSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["chat", 1],
+      ["heartbeat", 2],
+      ["chat.side_result", 3],
+      ["tick", 4],
     ]);
   });
 });
