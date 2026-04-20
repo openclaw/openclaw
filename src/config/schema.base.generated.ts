@@ -7308,6 +7308,38 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       required: ["type"],
                       additionalProperties: false,
                     },
+                    {
+                      type: "object",
+                      properties: {
+                        type: {
+                          type: "string",
+                          const: "claude-sdk",
+                          title: "Agent Runtime Type",
+                          description:
+                            'Runtime type for this agent: "embedded" (default OpenClaw runtime) or "acp" (ACP harness defaults).',
+                        },
+                        claudeSdk: {
+                          type: "object",
+                          properties: {
+                            model: {
+                              type: "string",
+                            },
+                            maxTurns: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            credential: {
+                              type: "string",
+                              enum: ["subscription", "profile"],
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["type"],
+                      additionalProperties: false,
+                    },
                   ],
                   title: "Agent Runtime",
                   description:
@@ -27472,5 +27504,5 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
   },
   version: "2026.4.19-beta.2",
-  generatedAt: "2026-03-22T21:17:33.302Z",
+  generatedAt: "2026-04-19T13:56:00.649Z",
 };

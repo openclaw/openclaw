@@ -9,7 +9,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { runAgent, type RunAgentResult } from "../../agents/runtime-dispatch.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -170,7 +170,7 @@ export function createFollowupRunner(params: {
         });
       }
       let autoCompactionCount = 0;
-      let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      let runResult: RunAgentResult;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
       let activeSessionEntry =
@@ -208,7 +208,7 @@ export function createFollowupRunner(params: {
             const authProfile = resolveRunAuthProfile(run, provider);
             let attemptCompactionCount = 0;
             try {
-              const result = await runEmbeddedPiAgent({
+              const result = await runAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
                 sessionId: run.sessionId,

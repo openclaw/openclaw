@@ -1,0 +1,702 @@
+// Claude Agent SDK runtime driver for OpenClaw.
+//
+// This replaces `runEmbeddedPiAgent()` when the active agent is
+// configured with `agents.runtime.type === "claude-sdk"` (see the branch
+// in `src/agents/command/attempt-execution.ts` and the unified dispatch
+// in `src/agents/runtime-dispatch.ts`).
+//
+// CREDENTIALS: defaults to the user's Claude.ai Pro/Max subscription via
+// their `claude login` session. To route through OpenClaw's auth-profile
+// store (which may include API-key credentials — metered), set
+// `agents.runtime.claudeSdk.credential: "profile"` in config. See
+// `transport-middleware.ts`.
+//
+// SCOPE: Phase 2-extended. The adapter honors the RunEmbeddedPiAgentParams
+// fields that have a reasonable mapping to SDK options (prompt, cwd,
+// abort/timeout, model, extraSystemPrompt, toolsAllow, disableTools,
+// thinkLevel → thinking tokens, core streaming callbacks). Fields that
+// belong to pi-ai internals or OpenClaw-specific subsystems not yet
+// bridged (streamParams, bootstrapContext variants, skillsSnapshot,
+// clientTools, execOverrides, replyOperation, cleanupBundleMcpOnRunEnd,
+// fastMode) are intentionally ignored; `warnIgnoredFields()` logs them
+// when set to non-default values so users know rather than discovering
+// silently.
+//
+// NATIVE TOOLS: OpenClaw's own tools (message, sessions.send, cron.add,
+// plugin-contributed tools) ARE bridged into the SDK via a runtime
+// TypeBox → Zod converter. See `native-tools-adapter.ts` and
+// `typebox-to-zod.ts`. If the inventory build fails for any reason
+// (policy resolution, plugin registry, etc.), this adapter falls back
+// to built-in-only tools and logs the failure — the run still works for
+// bash/read/edit/grep workflows instead of crashing the whole session.
+
+import type { EmbeddedPiRunResult } from "../pi-embedded.js";
+import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
+import type { AgentRuntimeClaudeSdkConfig } from "../../config/types.agents.js";
+import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  HookCallbackMatcher,
+  HookEvent,
+  HookJSONOutput,
+} from "@anthropic-ai/claude-agent-sdk";
+import {
+  resolveSdkCredential,
+  rotateOnAuthFailure,
+} from "./transport-middleware.js";
+import { openSessionMirror } from "./session-mirror.js";
+import { ensureAuthProfileStore } from "../auth-profiles.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { buildOpenClawMcpServer } from "./native-tools-adapter.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
+import { buildSdkHooks } from "./hooks-adapter.js";
+import { loadWorkspaceHookEntries } from "../../hooks/workspace.js";
+import { importFileModule, resolveFunctionModuleExport } from "../../hooks/module-loader.js";
+import type { HookEntry } from "../../hooks/types.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { collectSdkDisallowedTools } from "./sdk-tool-policy.js";
+
+const log = createSubsystemLogger("agents/claude-sdk");
+
+export type RunClaudeSdkAgentOptions = RunEmbeddedPiAgentParams;
+
+/**
+ * Pull the claude-sdk runtime config for the active agent, if present.
+ */
+function resolveClaudeSdkRuntimeConfig(
+  params: RunEmbeddedPiAgentParams,
+): AgentRuntimeClaudeSdkConfig | undefined {
+  const list = params.config?.agents?.list;
+  if (!Array.isArray(list) || !params.agentId) {
+    return undefined;
+  }
+  // Match the normalization used elsewhere in agent routing so an entry
+  // declared as `id: "MyAgent"` still resolves when the runtime is
+  // invoked with the lowercased/sanitized form.
+  const normalizedTarget = normalizeAgentId(params.agentId);
+  const agentEntry = list.find(
+    (entry) => normalizeAgentId(entry.id) === normalizedTarget,
+  );
+  const runtime = agentEntry?.runtime;
+  if (!runtime || runtime.type !== "claude-sdk") {
+    return undefined;
+  }
+  return runtime.claudeSdk;
+}
+
+/**
+ * Heuristic: does this model id look like a Claude-family model? We
+ * forward it to the SDK only when it does, otherwise we let the SDK
+ * pick its own default rather than forward a non-Anthropic id that
+ * would fail the subprocess immediately. Matches "claude-*" (e.g.
+ * "claude-sonnet-4-5-20250929") and the bare "claude" alias.
+ */
+function isClaudeModelId(model: string | undefined): model is string {
+  if (!model) {
+    return false;
+  }
+  const trimmed = model.trim().toLowerCase();
+  return trimmed === "claude" || trimmed.startsWith("claude-");
+}
+
+/**
+ * Map OpenClaw's `thinkLevel` enum to an SDK `maxThinkingTokens` budget.
+ * The numbers here mirror pi-ai's conventional budgets (see
+ * `src/auto-reply/thinking.ts` for the original mapping). "off" disables
+ * thinking entirely; "adaptive" leaves the SDK default in place.
+ */
+function mapThinkBudget(level: RunEmbeddedPiAgentParams["thinkLevel"]): number | undefined {
+  switch (level) {
+    case "off":
+      return 0;
+    case "minimal":
+      return 1024;
+    case "low":
+      return 2048;
+    case "medium":
+      return 8192;
+    case "high":
+      return 16384;
+    case "xhigh":
+      return 32768;
+    case "adaptive":
+    case undefined:
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Warn on RunEmbeddedPiAgentParams fields that the claude-sdk adapter
+ * does NOT currently honor, when set to a non-default value. Running the
+ * check once per run prevents silent drops from looking like adapter
+ * bugs later.
+ */
+/**
+ * Build the SDK hooks record for this run from OpenClaw's workspace
+ * hook entries. Returns `undefined` when there are no entries — so the
+ * caller can skip setting `hooks` on the SDK options entirely.
+ *
+ * Handler invocation resolves the hook module lazily (per-call) and
+ * calls its exported function with the SDK hook input + entry metadata.
+ * Handlers that throw are swallowed with a warning so one flaky hook
+ * can't kill the run. A stricter policy can land later.
+ */
+async function buildNativeSdkHooks(
+  params: RunEmbeddedPiAgentParams,
+): Promise<Partial<Record<HookEvent, HookCallbackMatcher[]>> | undefined> {
+  let entries: HookEntry[];
+  try {
+    entries = loadWorkspaceHookEntries(params.workspaceDir, {
+      config: params.config,
+    });
+  } catch (err) {
+    log.warn(
+      `[claude-sdk hooks] failed to load workspace hook entries for runId=${params.runId}: ` +
+        (err as Error).message,
+    );
+    return undefined;
+  }
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const record = buildSdkHooks({
+    entries,
+    invoke: async ({ entry, input }): Promise<HookJSONOutput | undefined> => {
+      try {
+        const mod = await importFileModule({ modulePath: entry.hook.handlerPath });
+        const handler = resolveFunctionModuleExport<(args: unknown) => unknown>({
+          mod,
+          exportName: entry.metadata?.export,
+          fallbackExportNames: ["default"],
+        });
+        if (!handler) {
+          log.warn(
+            `[claude-sdk hooks] hook "${entry.hook.name}" has no invokable handler export`,
+          );
+          return { continue: true };
+        }
+        const result = await handler({
+          event: input.hook_event_name,
+          sdkInput: input,
+          hook: entry.hook,
+        });
+        // If the handler returns a well-shaped HookJSONOutput, forward
+        // it; otherwise default to continue.
+        if (result && typeof result === "object" && "continue" in result) {
+          return result as HookJSONOutput;
+        }
+        return { continue: true };
+      } catch (err) {
+        log.warn(
+          `[claude-sdk hooks] hook "${entry.hook.name}" handler threw: ` +
+            (err as Error).message,
+        );
+        return { continue: true };
+      }
+    },
+    warn: (msg) => log.warn(msg),
+  });
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
+/**
+ * Build OpenClaw's native tool inventory and wrap it as a
+ * `McpServerConfig` record suitable for `options.mcpServers`. Returns
+ * `undefined` when there are no tools to expose (e.g., disableTools).
+ *
+ * Errors are caught by the caller; this function is allowed to throw
+ * if the inventory build fails.
+ */
+async function buildNativeMcpServers(
+  params: RunEmbeddedPiAgentParams,
+  /**
+   * Composed abort signal from run.ts that fires on BOTH the upstream
+   * abortSignal and the per-run timeout. Passing this (rather than just
+   * `params.abortSignal`) ensures that tool execution stops when the
+   * run's timeoutMs fires — otherwise long-running tool side effects
+   * can continue after the SDK run has already been canceled.
+   */
+  runAbortSignal: AbortSignal,
+  /**
+   * Model identity for provider-scoped tool policies (tools.byProvider).
+   * Derived from the SDK runtime's effective model in run.ts — if we
+   * pass undefined here, provider-specific allow/deny/profile rules
+   * in config are silently skipped and the SDK-native inventory can
+   * expose tools the embedded runtime correctly filters out.
+   */
+  modelIdentity: { modelProvider?: string; modelId?: string },
+): Promise<Record<string, McpServerConfig> | undefined> {
+  if (params.disableTools) {
+    return undefined;
+  }
+  const tools = createOpenClawCodingTools({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    trigger: params.trigger,
+    memoryFlushWritePath: params.memoryFlushWritePath,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    abortSignal: runAbortSignal,
+    modelProvider: modelIdentity.modelProvider,
+    modelId: modelIdentity.modelId,
+    messageProvider: params.messageProvider,
+    agentAccountId: params.agentAccountId,
+    messageTo: params.messageTo,
+    messageThreadId: params.messageThreadId,
+    currentChannelId: params.currentChannelId,
+    currentThreadTs: params.currentThreadTs,
+    currentMessageId: params.currentMessageId,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    spawnedBy: params.spawnedBy,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
+    replyToMode: params.replyToMode,
+    hasRepliedRef: params.hasRepliedRef,
+    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+    disableMessageTool: params.disableMessageTool,
+  });
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return undefined;
+  }
+  const { config, name } = await buildOpenClawMcpServer({
+    tools,
+    runId: params.runId,
+  });
+  return { [name]: config };
+}
+
+function warnIgnoredFields(params: RunEmbeddedPiAgentParams): void {
+  const ignored: string[] = [];
+  if (params.streamParams) {
+    ignored.push("streamParams");
+  }
+  if (params.skillsSnapshot) {
+    ignored.push("skillsSnapshot");
+  }
+  if (params.clientTools && params.clientTools.length > 0) {
+    ignored.push("clientTools");
+  }
+  if (params.execOverrides) {
+    ignored.push("execOverrides");
+  }
+  if (params.bashElevated) {
+    ignored.push("bashElevated");
+  }
+  if (params.bootstrapContextMode) {
+    ignored.push("bootstrapContextMode");
+  }
+  if (params.replyOperation) {
+    ignored.push("replyOperation");
+  }
+  if (params.cleanupBundleMcpOnRunEnd) {
+    ignored.push("cleanupBundleMcpOnRunEnd");
+  }
+  if (params.fastMode) {
+    ignored.push("fastMode");
+  }
+  if (params.blockReplyChunking) {
+    ignored.push("blockReplyChunking");
+  }
+  // memoryFlushWritePath is passed through to createOpenClawCodingTools() by
+  // buildNativeMcpServers, so tools that consume it DO receive it. Only the
+  // post-run memory-flush semantics (handled by the calling layer, not this
+  // adapter) are unsupported — warning there would be confusing, so we don't.
+  if (params.inputProvenance) {
+    ignored.push("inputProvenance");
+  }
+  if (params.internalEvents && params.internalEvents.length > 0) {
+    ignored.push("internalEvents");
+  }
+  // Feature gaps on the claude-sdk adapter that produce observable
+  // behavior differences vs the embedded runtime. Warned about here so
+  // users running vision/streaming-tool-result flows know their inputs/
+  // outputs don't fully make it through the SDK path yet.
+  //   * images / imageOrder -- need to restructure `prompt` as an
+  //     AsyncIterable<SDKUserMessage> with image content blocks rather
+  //     than a bare string.
+  //   * onToolResult -- need to map SDK `tool_use` / `tool_result`
+  //     messages into the embedded onToolResult event shape.
+  if (params.images && params.images.length > 0) {
+    ignored.push("images");
+  }
+  if (params.imageOrder && params.imageOrder.length > 0) {
+    ignored.push("imageOrder");
+  }
+  if (params.onToolResult) {
+    ignored.push("onToolResult");
+  }
+  if (ignored.length > 0) {
+    log.warn(
+      `[claude-sdk] run with agentId=${params.agentId ?? "<none>"} runId=${params.runId} ` +
+        `ignored ${ignored.length} param field(s) not yet supported by the SDK adapter: ` +
+        ignored.join(", "),
+    );
+  }
+}
+
+/**
+ * Drive the Claude Agent SDK for a single run.
+ */
+export async function runClaudeSdkAgent(
+  params: RunClaudeSdkAgentOptions,
+): Promise<EmbeddedPiRunResult> {
+  const startedAt = Date.now();
+
+  warnIgnoredFields(params);
+
+  // Dynamic import so the SDK is not pulled into callers that stay on
+  // the legacy runtime (AGENTS.md dynamic-import guardrail).
+  const sdk = await import("@anthropic-ai/claude-agent-sdk");
+
+  const runtimeConfig = resolveClaudeSdkRuntimeConfig(params);
+  const store = ensureAuthProfileStore(params.agentDir);
+
+  const credential = await resolveSdkCredential({
+    cfg: params.config,
+    store,
+    runtimeConfig,
+    pinnedProfileId: params.authProfileId,
+    agentDir: params.agentDir,
+  });
+
+  // Build the spawn env. Start with the parent process.env, then
+  // explicitly STRIP all ANTHROPIC_* auth vars before overlaying the
+  // credential resolver's env. Without this strip, an ANTHROPIC_API_KEY
+  // accidentally exported in the operator's shell would silently route
+  // a "subscription" mode run through metered API billing — defeating
+  // the safe default. We only allow Anthropic auth vars through if the
+  // credential resolver explicitly chose them.
+  const mergedEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === "string") {
+      mergedEnv[k] = v;
+    }
+  }
+  for (const stripKey of [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ]) {
+    delete mergedEnv[stripKey];
+  }
+  for (const [k, v] of Object.entries(credential.env)) {
+    mergedEnv[k] = v;
+  }
+
+  // Compose an abort controller that fires on either the upstream abort
+  // signal OR the timeout, so `timeoutMs` stops being silently ignored.
+  // The listener is named so it can be removed in the cleanup block —
+  // otherwise a session-scoped upstream signal keeps a closure reference
+  // to this abortController for its whole lifetime.
+  const abortController = new AbortController();
+  const upstream = params.abortSignal;
+  const onUpstreamAbort = upstream
+    ? () => abortController.abort(upstream.reason)
+    : undefined;
+  if (upstream?.aborted) {
+    abortController.abort(upstream.reason);
+  } else if (upstream && onUpstreamAbort) {
+    upstream.addEventListener("abort", onUpstreamAbort);
+  }
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  if (params.timeoutMs > 0) {
+    timeoutHandle = setTimeout(() => {
+      abortController.abort(new Error(`claude-sdk run exceeded timeoutMs=${params.timeoutMs}`));
+    }, params.timeoutMs);
+  }
+  // Define a partial-cleanup helper BEFORE the mirror open so a failed
+  // open can release the timeout + upstream listener it already
+  // installed above. Without this, repeated mirror-init failures
+  // accumulate stale listeners/timers attached to long-lived signals.
+  const releaseTimerAndListener = (): void => {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    }
+    if (upstream && onUpstreamAbort) {
+      upstream.removeEventListener("abort", onUpstreamAbort);
+    }
+  };
+
+  // Model selection priority (highest → lowest):
+  //   1. agents.runtime.claudeSdk.model (explicit per-agent override)
+  //   2. params.model IF it looks like a Claude model
+  //   3. undefined (let the SDK pick its default Claude model)
+  //
+  // Rationale: params.model frequently comes from the global
+  // agents.defaults (e.g. openai/gpt-5.4). Forwarding a non-Anthropic
+  // model id into the SDK makes the subprocess fail immediately with
+  // an unsupported-model error. Falling back to the SDK default is
+  // safer than propagating a model the SDK cannot handle.
+  const effectiveModel =
+    runtimeConfig?.model ?? (isClaudeModelId(params.model) ? params.model : undefined);
+  // Provider identity for tools.byProvider policy resolution inside
+  // createOpenClawCodingTools. We pin "anthropic" because every run
+  // through this adapter goes through Anthropic's SDK; the specific
+  // model id is whatever we resolved above (or undefined, meaning the
+  // SDK will pick).
+  const modelIdentity = {
+    modelProvider: "anthropic",
+    modelId: effectiveModel,
+  };
+
+  // Open the session mirror (writes both to the canonical session
+  // file AND a tagged sidecar). Surface any open failure with an
+  // explicit error log + cleanup before re-throwing — silent mirror
+  // failure otherwise hides "the run worked but left no observable
+  // trail" bugs (we hit one on Windows where the configured primary
+  // path was a stale Linux path that Node remapped under C:\).
+  let mirror: ReturnType<typeof openSessionMirror>;
+  try {
+    mirror = openSessionMirror({
+      primaryPath: params.sessionFile,
+      sdkSessionId: params.sessionId,
+      model: effectiveModel,
+    });
+  } catch (err) {
+    log.error(
+      `[claude-sdk] failed to open session mirror runId=${params.runId} primaryPath=${params.sessionFile} err=${(err as Error).message}`,
+    );
+    releaseTimerAndListener();
+    throw err;
+  }
+
+  const releaseResources = (): void => {
+    releaseTimerAndListener();
+    mirror.close();
+  };
+
+  // Emit an AssistantMessageStart event on the first assistant SDK message,
+  // then honor onAgentEvent / onPartialReply for subsequent chunks.
+  let assistantStartEmitted = false;
+  const collectedText: string[] = [];
+  let stopReason = "completed";
+  let aborted = false;
+  const thinkBudget = mapThinkBudget(params.thinkLevel);
+  const maxTurns = runtimeConfig?.maxTurns;
+
+  // Extra system prompt: append, don't replace. SDK systemPrompt accepts
+  // `{ type: "preset", preset: "claude_code", append: string }`.
+  const systemPromptOption = params.extraSystemPrompt
+    ? ({
+        type: "preset" as const,
+        preset: "claude_code" as const,
+        append: params.extraSystemPrompt,
+      })
+    : undefined;
+
+  // disableTools wins over toolsAllow (matches pi-embedded semantics).
+  const toolsOption = params.disableTools
+    ? ([] as string[])
+    : (params.toolsAllow && params.toolsAllow.length > 0 ? params.toolsAllow : undefined);
+
+  // Effective deny list handed to the SDK. This closes a gap where the
+  // claude-sdk runtime was ignoring `tools.deny` and
+  // `tools.byProvider.<provider>.deny` for SDK built-ins (Bash, Read,
+  // Edit, Grep, Glob, ...). Native OpenClaw tools go through
+  // `createOpenClawCodingTools()` which already applies the deny policy,
+  // but the SDK offers its built-in inventory independently — without
+  // this, `tools.deny: ["Bash"]` had no effect under claude-sdk.
+  //
+  // We union:
+  //   * config.tools.deny                         (global)
+  //   * config.tools.byProvider[provider].deny    (per-provider, anthropic)
+  //   * agents.list[<id>].tools.deny              (agent scope)
+  //   * agents.list[<id>].tools.byProvider[provider].deny
+  const disallowedTools = collectSdkDisallowedTools(params);
+
+  const onAgentEvent = params.onAgentEvent;
+  const onPartialReply = params.onPartialReply;
+  const onAssistantMessageStart = params.onAssistantMessageStart;
+
+  // Build OpenClaw's native tool inventory and expose it to the SDK via
+  // an in-process MCP server. Failure is survivable: if policy
+  // resolution or tool assembly throws, we log and fall through to
+  // built-in-only tools rather than crashing the run.
+  const nativeMcpServers = await buildNativeMcpServers(
+    params,
+    abortController.signal,
+    modelIdentity,
+  ).catch((err) => {
+    log.warn(
+      `[claude-sdk] native tool inventory build failed for runId=${params.runId}: ` +
+        `${(err as Error).message}; falling back to SDK built-in tools only`,
+    );
+    return undefined;
+  });
+
+  // Load OpenClaw's workspace hook entries and translate them into SDK
+  // `hooks` matchers. Same survival policy as tools: a hook-loading
+  // failure logs but doesn't kill the run.
+  const sdkHooks = await buildNativeSdkHooks(params).catch((err) => {
+    log.warn(
+      `[claude-sdk] hook inventory build failed for runId=${params.runId}: ` +
+        `${(err as Error).message}; hooks will not fire for this run`,
+    );
+    return undefined;
+  });
+
+  try {
+    const query = sdk.query({
+      prompt: params.prompt,
+      options: {
+        abortController,
+        cwd: params.workspaceDir,
+        env: mergedEnv,
+        model: effectiveModel,
+        maxTurns,
+        systemPrompt: systemPromptOption,
+        ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+        ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
+        ...(thinkBudget !== undefined ? { maxThinkingTokens: thinkBudget } : {}),
+        ...(nativeMcpServers ? { mcpServers: nativeMcpServers } : {}),
+        ...(sdkHooks ? { hooks: sdkHooks } : {}),
+      },
+    });
+
+    for await (const message of query) {
+      // Mirror writes are best-effort — a failure to append a single
+      // frame (disk full, EPERM mid-run) shouldn't kill an otherwise
+      // successful SDK iteration. The user-visible reply still arrives;
+      // we just lose that one frame's evidence trail.
+      try {
+        mirror.writeSdkMessage(message);
+      } catch (writeErr) {
+        log.warn(
+          `[claude-sdk] mirror write failed (continuing run): ${(writeErr as Error).message}`,
+        );
+      }
+      const m = message as unknown as {
+        type?: string;
+        message?: { content?: unknown };
+        stop_reason?: string;
+      };
+
+      if (m.type === "assistant" || m.type === "partial_assistant") {
+        if (!assistantStartEmitted && onAssistantMessageStart) {
+          assistantStartEmitted = true;
+          try {
+            await onAssistantMessageStart();
+          } catch (cbErr) {
+            log.warn(`onAssistantMessageStart threw: ${(cbErr as Error).message}`);
+          }
+        }
+      }
+
+      if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+        const chunkText: string[] = [];
+        for (const rawBlock of m.message.content) {
+          if (!rawBlock || typeof rawBlock !== "object") {
+            continue;
+          }
+          const block = rawBlock as { type?: string; text?: string };
+          if (block.type === "text" && typeof block.text === "string") {
+            collectedText.push(block.text);
+            chunkText.push(block.text);
+          }
+        }
+        if (chunkText.length > 0 && onPartialReply) {
+          try {
+            await onPartialReply({ text: chunkText.join("\n") });
+          } catch (cbErr) {
+            log.warn(`onPartialReply threw: ${(cbErr as Error).message}`);
+          }
+        }
+      }
+
+      if (m.type === "result" && typeof m.stop_reason === "string") {
+        stopReason = m.stop_reason;
+        // Mirror the abort signal back to the run-level `aborted` flag
+        // when the SDK's own result frame says we stopped via abort.
+        // Without this, an SDK-detected abort (e.g., subprocess exit on
+        // signal) would leave `aborted` false and downstream
+        // consumers reading `meta.aborted` would misclassify the run
+        // as a clean completion.
+        if (/abort/i.test(stopReason)) {
+          aborted = true;
+        }
+      }
+
+      if (onAgentEvent && typeof m.type === "string") {
+        // Surface the raw SDK message type as an agent event. Downstream
+        // consumers (CLI progress, gateway event stream) can filter by
+        // `stream` name if they need to; the rich data is in the JSONL
+        // mirror so we keep the event payload minimal.
+        try {
+          onAgentEvent({
+            stream: `claude-sdk:${m.type}`,
+            data: { runId: params.runId, agentId: params.agentId ?? null },
+          });
+        } catch (cbErr) {
+          log.warn(`onAgentEvent threw: ${(cbErr as Error).message}`);
+        }
+      }
+    }
+  } catch (err) {
+    aborted = abortController.signal.aborted;
+    // Wrap rotation bookkeeping in try/finally so a failure inside
+    // `rotateOnAuthFailure` (e.g., auth-store lock contention) doesn't
+    // leave `timeoutHandle` firing or the session-mirror write stream
+    // open for the process lifetime.
+    try {
+      if (credential.profileId) {
+        await rotateOnAuthFailure({
+          store,
+          profileId: credential.profileId,
+          error: err,
+          agentDir: params.agentDir,
+          runId: params.runId,
+        });
+      }
+    } finally {
+      // Record run end in the sidecar BEFORE closing the stream.
+      // We use stopReason="aborted" if the abort signal fired, else
+      // "error" so the marker gives forensic insight without trying
+      // to serialize the err object itself.
+      mirror.writeStop(aborted ? "aborted" : "error");
+      releaseResources();
+    }
+    throw err;
+  }
+
+  mirror.writeStop(stopReason);
+  releaseResources();
+
+  const finalText = collectedText.join("\n").trim();
+  const result: EmbeddedPiRunResult = {
+    payloads: finalText ? [{ text: finalText }] : undefined,
+    meta: {
+      durationMs: Date.now() - startedAt,
+      aborted: aborted || undefined,
+      stopReason,
+      finalAssistantVisibleText: finalText || undefined,
+      // Only emit agentMeta when we have a real model id to report.
+      // EmbeddedPiAgentMeta types `model` as a required string, and
+      // forwarding "" would short-circuit downstream
+      // `meta.agentMeta?.model ?? fallback` chains (treating empty
+      // string as a real value). When the SDK picks its own default,
+      // omitting agentMeta lets those chains correctly fall through to
+      // their fallback model id.
+      ...(effectiveModel
+        ? {
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider: "anthropic",
+              model: effectiveModel,
+            },
+          }
+        : {}),
+    },
+  };
+  return result;
+}

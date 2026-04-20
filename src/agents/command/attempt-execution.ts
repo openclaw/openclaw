@@ -16,7 +16,8 @@ import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../
 import { FailoverError } from "../failover-error.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
-import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
+import { type EmbeddedPiRunResult } from "../pi-embedded.js";
+import { runAgent } from "../runtime-dispatch.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { resolveFallbackRetryPrompt } from "./attempt-execution.helpers.js";
@@ -243,6 +244,12 @@ export function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   sessionHasHistory?: boolean;
 }) {
+  return runAgentAttemptImpl(params);
+}
+
+type RunAgentAttemptParams = Parameters<typeof runAgentAttempt>[0];
+
+async function runAgentAttemptImpl(params: RunAgentAttemptParams) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
@@ -350,11 +357,11 @@ export function runAgentAttempt(params: {
     });
   }
 
-  return runEmbeddedPiAgent({
+  const embeddedParams = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
-    trigger: "user",
+    trigger: "user" as const,
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
@@ -398,7 +405,13 @@ export function runAgentAttempt(params: {
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
-  });
+  };
+
+  // Unified dispatch: legacy path (runEmbeddedPiAgent) and claude-sdk
+  // path (runClaudeSdkAgent) both flow through runAgent, which selects
+  // by the agent's configured runtime.type and honors the AGENTS.md
+  // dynamic-import guardrail for the SDK branch.
+  return runAgent(embeddedParams);
 }
 
 export function buildAcpResult(params: {

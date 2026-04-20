@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const runEmbeddedPiAgentMock = vi.fn();
+const runAgentMock = vi.fn();
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
@@ -10,16 +10,16 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentEffectiveModelPrimary: vi.fn(() => null),
 }));
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+vi.mock("../agents/runtime-dispatch.js", () => ({
+  runAgent: (...args: unknown[]) => runAgentMock(...args),
 }));
 
 import { generateSlugViaLLM } from "./llm-slug-generator.js";
 
 describe("generateSlugViaLLM", () => {
   beforeEach(() => {
-    runEmbeddedPiAgentMock.mockReset();
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runAgentMock.mockReset();
+    runAgentMock.mockResolvedValue({
       payloads: [{ text: "test-slug" }],
     });
   });
@@ -30,8 +30,8 @@ describe("generateSlugViaLLM", () => {
       cfg: {} as OpenClawConfig,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+    expect(runAgentMock).toHaveBeenCalledOnce();
+    expect(runAgentMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         timeoutMs: 15_000,
       }),
@@ -50,8 +50,8 @@ describe("generateSlugViaLLM", () => {
       } as OpenClawConfig,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+    expect(runAgentMock).toHaveBeenCalledOnce();
+    expect(runAgentMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         timeoutMs: 500_000,
       }),

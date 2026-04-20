@@ -67,6 +67,10 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
+vi.mock("../../agents/runtime-dispatch.js", () => ({
+  runAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+}));
+
 
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
