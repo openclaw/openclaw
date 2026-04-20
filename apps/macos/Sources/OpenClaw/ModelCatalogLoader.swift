@@ -133,8 +133,12 @@ enum ModelCatalogLoader {
     }
 
     private static func parseModels(source: String) throws -> [String: Any] {
-        guard let objectLiteral = self.extractModelsObjectLiteral(from: source) else {
+        guard let exportRange = self.modelsExportRange(in: source) else {
             return [:]
+        }
+        guard let objectLiteral = self.extractModelsObjectLiteral(from: source, exportRange: exportRange) else {
+            self.logger.error("model catalog parse failed: malformed MODELS export")
+            throw self.invalidCatalogError()
         }
         // Keep the loader data-only: normalize the known object-literal subset and let JSON parsing
         // reject anything expression-like instead of executing user-controlled JavaScript.
@@ -157,9 +161,15 @@ enum ModelCatalogLoader {
         return root
     }
 
-    private static func extractModelsObjectLiteral(from source: String) -> String? {
-        guard let exportRange = source.range(of: "export const MODELS"),
-              let firstBrace = source[exportRange.upperBound...].firstIndex(of: "{"),
+    private static func modelsExportRange(in source: String) -> Range<String.Index>? {
+        source.range(of: "export const MODELS")
+    }
+
+    private static func extractModelsObjectLiteral(
+        from source: String,
+        exportRange: Range<String.Index>,
+    ) -> String? {
+        guard let firstBrace = source[exportRange.upperBound...].firstIndex(of: "{"),
               let lastBrace = self.findMatchingClosingBrace(in: source, openingBrace: firstBrace)
         else {
             return nil
@@ -167,10 +177,7 @@ enum ModelCatalogLoader {
         return String(source[firstBrace...lastBrace])
     }
 
-    private static func findMatchingClosingBrace(
-        in source: String,
-        openingBrace: String.Index
-    ) -> String.Index? {
+    private static func findMatchingClosingBrace(in source: String, openingBrace: String.Index) -> String.Index? {
         var depth = 0
         var activeQuote: Character?
         var isEscaping = false
@@ -290,10 +297,7 @@ enum ModelCatalogLoader {
         return body
     }
 
-    private static func nextNonWhitespaceIndex(
-        in source: String,
-        after index: String.Index
-    ) -> String.Index? {
+    private static func nextNonWhitespaceIndex(in source: String, after index: String.Index) -> String.Index? {
         var cursor = source.index(after: index)
         while cursor < source.endIndex {
             if !source[cursor].isWhitespace {
@@ -304,10 +308,7 @@ enum ModelCatalogLoader {
         return nil
     }
 
-    private static func previousNonWhitespaceIndex(
-        in source: String,
-        before index: String.Index
-    ) -> String.Index? {
+    private static func previousNonWhitespaceIndex(in source: String, before index: String.Index) -> String.Index? {
         guard index > source.startIndex else { return nil }
         var cursor = source.index(before: index)
         while true {
@@ -330,7 +331,7 @@ enum ModelCatalogLoader {
     private static func readBareObjectKey(
         in source: String,
         at index: String.Index,
-        containers: [ContainerState]
+        containers: [ContainerState],
     ) -> (identifier: String, endIndex: String.Index)? {
         guard let top = containers.last,
               top.kind == .object,
@@ -356,7 +357,7 @@ enum ModelCatalogLoader {
     private static func typeAssertionEnd(
         in source: String,
         at index: String.Index,
-        containers: [ContainerState]
+        containers: [ContainerState],
     ) -> String.Index? {
         if let top = containers.last, top.kind == .object, top.expectsObjectKey {
             return nil

@@ -132,4 +132,25 @@ struct ModelCatalogLoaderTests {
         #expect(choices.first?.id == "qwen3:14b-q8_0")
         #expect(choices.first?.name == "Model serves as a routing layer")
     }
+
+    @Test
+    func `load rejects malformed MODELS exports`() async throws {
+        let src = """
+        export const MODELS = {
+          openai: {
+            "gpt-4o": { name: "GPT-4o", contextWindow: 128000 },
+          }
+        """
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("models-\(UUID().uuidString).ts")
+        defer { try? FileManager().removeItem(at: tmp) }
+        try src.write(to: tmp, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await ModelCatalogLoader.load(from: tmp.path)
+            Issue.record("Expected model catalog loader to reject malformed MODELS exports")
+        } catch {
+            // Expected: missing closing braces should be treated as a broken catalog, not an empty one.
+        }
+    }
 }
