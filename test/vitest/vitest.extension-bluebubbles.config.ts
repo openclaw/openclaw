@@ -17,6 +17,7 @@ export function createExtensionBlueBubblesVitestConfig(
     {
       dir: "extensions",
       env,
+      isolate: true,
       name: "extension-bluebubbles",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],
