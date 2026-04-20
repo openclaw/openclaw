@@ -174,7 +174,7 @@ API-backed providers first:
 Key-free fallbacks after that:
 
 10. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-11. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin` and can reuse Ollama provider bearer auth if the host needs it (order 110)
+11. **Ollama Web Search** -- cloud-backed fallback via `https://ollama.com/api/web_search`; requires `ollama signin` (or a provisioned `OLLAMA_API_KEY`) and reuses the Ollama provider credential (order 110)
 12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If no provider is detected, it falls back to Brave (you will get a missing-key
@@ -414,4 +414,4 @@ If you use tool profiles or allowlists, add `web_search`, `x_search`, or `group:
 - [Web Fetch](/tools/web-fetch) -- fetch a URL and extract readable content
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
 - [Grok Search](/tools/grok-search) -- Grok as the `web_search` provider
-- [Ollama Web Search](/tools/ollama-search) -- key-free web search through your Ollama host
+- [Ollama Web Search](/tools/ollama-search) -- cloud-backed web search via `https://ollama.com/api/web_search`
