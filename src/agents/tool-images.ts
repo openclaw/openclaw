@@ -108,7 +108,7 @@ function isHeifFamilyImageBuffer(buffer: Buffer): boolean {
       return false;
     }
     majorBrandOffset = 16;
-    compatibleBrandOffset = 20;
+    compatibleBrandOffset = 24;
     brandRegionEnd = clampIsoBmffBoxEnd(buffer, buffer.readBigUInt64BE(8));
   } else if (boxSize >= 16) {
     brandRegionEnd = Math.min(boxSize, buffer.length);

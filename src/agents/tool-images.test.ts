@@ -32,8 +32,9 @@ describe("tool image sanitizing", () => {
     majorBrand: string,
     compatibleBrands: string[] = [],
     sizeMode: "fixed" | "extended" | "eof" = "fixed",
+    minorVersion = "\0\0\0\0",
   ) => {
-    const brands = [majorBrand, "\0\0\0\0", ...compatibleBrands];
+    const brands = [majorBrand, minorVersion, ...compatibleBrands];
     const payload = Buffer.concat(brands.map((brand) => Buffer.from(brand, "ascii")));
     if (sizeMode === "extended") {
       const size = Buffer.alloc(4);
@@ -236,6 +237,23 @@ describe("tool image sanitizing", () => {
     );
     expect(out.content).toEqual([
       { type: "text", text: "[test] omitted image payload: Error: unsupported image format" },
+    ]);
+  });
+
+  it("does not treat extended ftyp minor version as a compatible brand", async () => {
+    const mp4 = createIsoBmffImage("mp41", [], "extended", "heic");
+    const out = await sanitizeToolResultImages(
+      {
+        content: [{ type: "image", data: mp4.toString("base64"), mimeType: "image/jpeg" }],
+        details: {},
+      },
+      "test",
+    );
+    expect(out.content).toEqual([
+      {
+        type: "text",
+        text: "[test] omitted image payload: Error: Input buffer contains unsupported image format",
+      },
     ]);
   });
 });
