@@ -123,4 +123,95 @@ describe("runMessageAction core send routing", () => {
       }),
     );
   });
+
+  it("does not reject send when only non-question poll metadata is present", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "t3",
+      chatId: "c1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+    const cfg = {
+      channels: {
+        testchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        message: "hello",
+        pollDurationHours: 2,
+        pollMulti: true,
+        pollAnonymous: true,
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+      }),
+    );
+  });
+
+  it("still rejects send when question or options indicate real poll intent", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+            },
+          }),
+        },
+      ]),
+    );
+    const cfg = {
+      channels: {
+        testchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          message: "hello",
+          pollQuestion: "Lunch?",
+          pollDurationHours: 2,
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/Poll fields require action "poll"/i);
+  });
 });
