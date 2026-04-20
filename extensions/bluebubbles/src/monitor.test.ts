@@ -593,6 +593,53 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
     });
 
+    it("threads per-group systemPrompt into ctx for group messages", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "iMessage;+;chat123456": {
+              systemPrompt: "Reply in thread with action=reply; ack via action=react.",
+            },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe(
+        "Reply in thread with action=reply; ack via action=react.",
+      );
+    });
+
+    it("omits GroupSystemPrompt for DMs even when the group config would match", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "+15551234567": { systemPrompt: "unused in DM" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi",
+        isGroup: false,
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBeUndefined();
+    });
+
     it("does not enrich group participants when the config flag is disabled", async () => {
       const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
       setupWebhookTarget({

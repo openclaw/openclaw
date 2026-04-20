@@ -1537,6 +1537,9 @@ async function processMessageAfterDedupe(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
+    GroupSystemPrompt: isGroup
+      ? normalizeOptionalString(account.config.groups?.[peerId]?.systemPrompt)
+      : undefined,
   });
 
   let sentMessage = false;
