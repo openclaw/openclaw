@@ -271,11 +271,12 @@ Once configured, all your Ollama models are available:
 
 OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
 
-| Property    | Detail                                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| Host        | Uses your configured Ollama host (`models.providers.ollama.baseUrl` when set, otherwise `http://127.0.0.1:11434`) |
-| Auth        | Key-free                                                                                                          |
-| Requirement | Ollama must be running and signed in with `ollama signin`                                                         |
+| Property    | Detail                                                                                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Host        | Prefers your configured Ollama host (`models.providers.ollama.baseUrl` when set, otherwise `http://127.0.0.1:11434`)                                                     |
+| Fallback    | Tries local `/api/web_search`, then local `/api/experimental/web_search`, then `https://ollama.com/api/web_search` when a real env-sourced `OLLAMA_API_KEY` is available |
+| Auth        | Local/self-hosted path can be key-free when the host exposes web search; Ollama Cloud requires `OLLAMA_API_KEY`                                                          |
+| Requirement | Host-backed setups may still require `ollama signin`; cloud-only setups require `OLLAMA_API_KEY`                                                                         |
 
 Choose **Ollama Web Search** during `openclaw onboard` or `openclaw configure --section web`, or set:
 
@@ -294,6 +295,12 @@ Choose **Ollama Web Search** during `openclaw onboard` or `openclaw configure --
 <Note>
 For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-search).
 </Note>
+
+<Warning>
+**Upgrade note:** previously, `models.providers.ollama.baseUrl = "https://ollama.com"` was silently redirected to the local default for web search. As of the 2026.4.x release, that config is honored and Ollama Web Search will only attempt the cloud endpoint. If you relied on the implicit local fallback, either unset `baseUrl` to use `http://127.0.0.1:11434`, or set `OLLAMA_API_KEY` for cloud access.
+
+Bearer tokens no longer cross the local/cloud boundary during the fallback: env-sourced `OLLAMA_API_KEY` is only sent to `https://ollama.com`, and `models.providers.ollama.apiKey` is only sent to your configured host. Set both if you need bearer auth on both sides.
+</Warning>
 
 ## Advanced configuration
 

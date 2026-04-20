@@ -84,7 +84,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
     Structured results via the MiniMax Coding Plan search API.
   </Card>
   <Card title="Ollama Web Search" icon="globe" href="/tools/ollama-search">
-    Key-free search via your configured Ollama host. Requires `ollama signin`.
+    Search via your configured Ollama host, with hosted Ollama fallback when `OLLAMA_API_KEY` is available.
   </Card>
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
@@ -99,20 +99,20 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 ### Provider comparison
 
-| Provider                                  | Result style               | Filters                                          | API key                                                                          |
-| ----------------------------------------- | -------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                  |
-| [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets        | --                                               | None (key-free)                                                                  |
-| [Exa](/tools/exa-search)                  | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                    |
-| [Firecrawl](/tools/firecrawl)             | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                              |
-| [Gemini](/tools/gemini-search)            | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                                                                 |
-| [Grok](/tools/grok-search)                | AI-synthesized + citations | --                                               | `XAI_API_KEY`                                                                    |
-| [Kimi](/tools/kimi-search)                | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                              |
-| [MiniMax Search](/tools/minimax-search)   | Structured snippets        | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY`                               |
-| [Ollama Web Search](/tools/ollama-search) | Structured snippets        | --                                               | None by default; `ollama signin` required, can reuse Ollama provider bearer auth |
-| [Perplexity](/tools/perplexity-search)    | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                      |
-| [SearXNG](/tools/searxng-search)          | Structured snippets        | Categories, language                             | None (self-hosted)                                                               |
-| [Tavily](/tools/tavily)                   | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                 |
+| Provider                                  | Result style               | Filters                                          | API key                                                                                |
+| ----------------------------------------- | -------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                        |
+| [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets        | --                                               | None (key-free)                                                                        |
+| [Exa](/tools/exa-search)                  | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                          |
+| [Firecrawl](/tools/firecrawl)             | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                    |
+| [Gemini](/tools/gemini-search)            | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                                                                       |
+| [Grok](/tools/grok-search)                | AI-synthesized + citations | --                                               | `XAI_API_KEY`                                                                          |
+| [Kimi](/tools/kimi-search)                | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                    |
+| [MiniMax Search](/tools/minimax-search)   | Structured snippets        | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY`                                     |
+| [Ollama Web Search](/tools/ollama-search) | Structured snippets        | --                                               | Local/self-hosted when supported; `OLLAMA_API_KEY` for Ollama Cloud or hosted fallback |
+| [Perplexity](/tools/perplexity-search)    | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                            |
+| [SearXNG](/tools/searxng-search)          | Structured snippets        | Categories, language                             | None (self-hosted)                                                                     |
+| [Tavily](/tools/tavily)                   | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                       |
 
 ## Auto-detection
 
@@ -174,7 +174,7 @@ API-backed providers first:
 Key-free fallbacks after that:
 
 10. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-11. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin` and can reuse Ollama provider bearer auth if the host needs it (order 110)
+11. **Ollama Web Search** -- prefers your configured Ollama host, tries the stable and legacy local search paths, and can fall back to Ollama Cloud when `OLLAMA_API_KEY` is available (order 110)
 12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If no provider is detected, it falls back to Brave (you will get a missing-key
@@ -414,4 +414,4 @@ If you use tool profiles or allowlists, add `web_search`, `x_search`, or `group:
 - [Web Fetch](/tools/web-fetch) -- fetch a URL and extract readable content
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
 - [Grok Search](/tools/grok-search) -- Grok as the `web_search` provider
-- [Ollama Web Search](/tools/ollama-search) -- key-free web search through your Ollama host
+- [Ollama Web Search](/tools/ollama-search) -- Ollama-hosted web search with optional cloud fallback

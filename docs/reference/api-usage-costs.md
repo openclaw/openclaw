@@ -132,7 +132,7 @@ See [Memory](/concepts/memory).
 - **Grok (xAI)**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
 - **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
 - **MiniMax Search**: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_API_KEY`, or `plugins.entries.minimax.config.webSearch.apiKey`
-- **Ollama Web Search**: key-free by default, but requires a reachable Ollama host plus `ollama signin`; can also reuse normal Ollama provider bearer auth when the host requires it
+- **Ollama Web Search**: prefers a reachable Ollama host, then can fall back to Ollama Cloud when `OLLAMA_API_KEY` is available; host-backed setups may still require `ollama signin`
 - **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
 - **Tavily**: `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 - **DuckDuckGo**: key-free fallback (no API billing, but unofficial and HTML-based)

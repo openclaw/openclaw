@@ -1563,7 +1563,7 @@ for usage/billing and raise limits as needed.
     provider:
 
     - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
-    - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
+    - Ollama Web Search prefers your configured Ollama host, and can fall back to Ollama Cloud when `OLLAMA_API_KEY` is available. Host-backed setups may still require `ollama signin`.
     - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
     - SearXNG is key-free/self-hosted; configure `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl`.
 

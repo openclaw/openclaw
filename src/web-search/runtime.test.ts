@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,
@@ -12,16 +13,29 @@ type TestPluginWebSearchConfig = {
   };
 };
 
-const { resolvePluginWebSearchProvidersMock, resolveRuntimeWebSearchProvidersMock } = vi.hoisted(
-  () => ({
-    resolvePluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
-    resolveRuntimeWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
-  }),
-);
+const OLLAMA_WEB_SEARCH_PROVIDER_MODULE_ID = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "ollama",
+  artifactBasename: "web-search-provider.js",
+});
+
+const {
+  fetchWithSsrFGuardMock,
+  resolvePluginWebSearchProvidersMock,
+  resolveRuntimeWebSearchProvidersMock,
+} = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+  resolvePluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
+  resolveRuntimeWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
+}));
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
   resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 function createCustomSearchTool() {
@@ -108,6 +122,7 @@ describe("web search runtime", () => {
   });
 
   beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
     resolveRuntimeWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReturnValue([]);
@@ -135,6 +150,93 @@ describe("web search runtime", () => {
       provider: "custom",
       result: { query: "hello", ok: true },
     });
+  });
+
+  it("routes the bundled Ollama provider through hosted fallback after local 404s", async () => {
+    const { createOllamaWebSearchProvider } = await import(OLLAMA_WEB_SEARCH_PROVIDER_MODULE_ID);
+    const ollamaProvider = {
+      pluginId: "ollama",
+      ...createOllamaWebSearchProvider(),
+    } satisfies PluginWebSearchProviderEntry;
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([ollamaProvider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([ollamaProvider]);
+
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response("404 page not found", { status: 404 }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response("404 page not found", { status: 404 }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            results: [
+              {
+                title: "OpenClaw",
+                url: "https://openclaw.ai/docs",
+                content: "Hosted fallback works",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      });
+
+    const previousApiKey = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "real-secret-from-env";
+
+    try {
+      await expect(
+        runWebSearch({
+          config: {
+            tools: {
+              web: {
+                search: {
+                  provider: "ollama",
+                },
+              },
+            },
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl: "http://ollama.local:11434",
+                  api: "ollama",
+                  apiKey: "OLLAMA_API_KEY",
+                  models: [],
+                },
+              },
+            },
+          },
+          args: { query: "hosted fallback" },
+        }),
+      ).resolves.toEqual({
+        provider: "ollama",
+        result: expect.objectContaining({
+          provider: "ollama",
+          count: 1,
+          results: [expect.objectContaining({ url: "https://openclaw.ai/docs" })],
+        }),
+      });
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previousApiKey;
+      }
+    }
+
+    expect(fetchWithSsrFGuardMock.mock.calls.map((call) => call[0]?.url)).toEqual([
+      "http://ollama.local:11434/api/web_search",
+      "http://ollama.local:11434/api/experimental/web_search",
+      "https://ollama.com/api/web_search",
+    ]);
   });
 
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
