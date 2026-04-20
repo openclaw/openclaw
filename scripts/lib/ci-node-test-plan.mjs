@@ -9,6 +9,26 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
 const SPLIT_NODE_SHARDS = new Map([
   [
+    "auto-reply",
+    [
+      {
+        shardName: "auto-reply-core",
+        configs: ["test/vitest/vitest.auto-reply-core.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "auto-reply-top-level",
+        configs: ["test/vitest/vitest.auto-reply-top-level.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "auto-reply-reply",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+      },
+    ],
+  ],
+  [
     "agentic",
     [
       {

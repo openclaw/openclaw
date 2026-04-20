@@ -77,4 +77,37 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       requiresDist: true,
     });
   });
+
+  it("splits auto-reply into independent core, top-level, and reply subtree shards", () => {
+    const shards = createNodeTestShards();
+    const autoReplyShards = shards
+      .filter((shard) => shard.shardName.startsWith("auto-reply"))
+      .map((shard) => ({
+        checkName: shard.checkName,
+        configs: shard.configs,
+        requiresDist: shard.requiresDist,
+        shardName: shard.shardName,
+      }));
+
+    expect(autoReplyShards).toEqual([
+      {
+        checkName: "checks-node-auto-reply-core",
+        configs: ["test/vitest/vitest.auto-reply-core.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-core",
+      },
+      {
+        checkName: "checks-node-auto-reply-top-level",
+        configs: ["test/vitest/vitest.auto-reply-top-level.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-top-level",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply",
+      },
+    ]);
+  });
 });
