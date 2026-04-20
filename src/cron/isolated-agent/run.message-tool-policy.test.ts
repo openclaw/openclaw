@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SkillSnapshot } from "../../agents/skills.js";
 import type { CronDeliveryMode } from "../types.js";
+import type { MutableCronSession } from "./run-session-state.js";
 import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
@@ -75,6 +77,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  const emptySkillsSnapshot: SkillSnapshot = {
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    version: 1,
+  };
+
   afterEach(() => {
     restoreFastTestEnv(previousFastTestEnv);
   });
@@ -107,7 +116,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await runCronIsolatedAgentTurn({
       ...makeParams(),
       job: {
-        ...makeParams().job,
+        id: "message-tool-policy",
+        name: "Message Tool Policy",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
         delivery: { mode: "none", channel: "telegram", to: "123:topic:42", threadId: 42 },
       } as never,
     });
@@ -133,7 +146,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await runCronIsolatedAgentTurn({
       ...makeParams(),
       job: {
-        ...makeParams().job,
+        id: "message-tool-policy",
+        name: "Message Tool Policy",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
         delivery: { mode: "none" },
       } as never,
     });
@@ -172,17 +189,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         requireExplicitMessageTarget: false,
         disableMessageTool: false,
       },
-      skillsSnapshot: {
-        prompt: "",
-        resolvedSkills: [],
-        version: 1,
-      },
+      skillsSnapshot: emptySkillsSnapshot,
       agentPayload: null,
       liveSelection: {
         provider: "openai",
         model: "gpt-5.4",
       },
-      cronSession: makeCronSession(),
+      cronSession: makeCronSession() as MutableCronSession,
       abortReason: () => "aborted",
     });
 
