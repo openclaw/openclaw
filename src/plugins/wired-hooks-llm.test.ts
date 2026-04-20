@@ -53,8 +53,9 @@ describe("llm hook runner methods", () => {
         prompt: "hello",
         historyMessages: [],
         imagesCount: 0,
+        tools: [],
       },
-      expectedEvent: { runId: "run-1", prompt: "hello" },
+      expectedEvent: { runId: "run-1", prompt: "hello", tools: [] },
     },
     {
       name: "runLlmOutput invokes registered llm_output hooks",

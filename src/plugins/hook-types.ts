@@ -161,6 +161,12 @@ export type PluginHookBeforeAgentReplyResult = {
   reason?: string;
 };
 
+export type PluginHookLlmInputToolDescriptor = {
+  name: string;
+  description?: string;
+  parameters?: unknown;
+};
+
 export type PluginHookLlmInputEvent = {
   runId: string;
   sessionId: string;
@@ -170,6 +176,8 @@ export type PluginHookLlmInputEvent = {
   prompt: string;
   historyMessages: unknown[];
   imagesCount: number;
+  tools?: PluginHookLlmInputToolDescriptor[];
+  clientTools?: PluginHookLlmInputToolDescriptor[];
 };
 
 export type PluginHookLlmOutputEvent = {
