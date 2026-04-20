@@ -16,8 +16,8 @@
     },
     "dreaming.model": {
       "label": "Dreaming Model",
-      "placeholder": "ollama/glm-5.1:cloud",
-      "help": "Optional model override for Dream Diary narrative runs. When unset, Dream Diary uses the session default model."
+      "placeholder": "provider/model",
+      "help": "Optional model override for Dream Diary narrative runs. Use a canonical provider/model ref. When unset, Dream Diary uses the session default model."
     }
   },
   "configSchema": {
