@@ -168,9 +168,27 @@ const BROAD_CHANGED_RERUN_PATTERNS = [
   /^vitest(?:\..+)?\.(?:config\.ts|paths\.mjs)$/u,
   /^test\/vitest\/vitest\.(?:config|shared\.config|scoped-config|performance-config)\.ts$/u,
   /^test\/helpers\//u,
-  /^scripts\/run-vitest\.mjs$/u,
-  /^scripts\/test-projects(?:\.test-support)?\.mjs$/u,
 ];
+const TOOLING_SOURCE_TEST_TARGETS = new Map([
+  ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
+  [
+    "scripts/run-vitest.mjs",
+    ["test/scripts/test-projects.test.ts", "test/scripts/vitest-local-scheduling.test.ts"],
+  ],
+  ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
+  ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
+  ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
+]);
+const TOOLING_TEST_TARGETS = new Map([
+  ["test/scripts/changed-lanes.test.ts", ["test/scripts/changed-lanes.test.ts"]],
+  ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
+  [
+    "test/scripts/vitest-local-scheduling.test.ts",
+    ["test/scripts/vitest-local-scheduling.test.ts"],
+  ],
+]);
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -239,7 +257,29 @@ function isVitestConfigTargetForKind(kind, targetArg, cwd) {
 }
 
 function listChangedPathsFromGit(baseRef, cwd) {
-  return execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], {
+  return [
+    ...new Set([
+      ...runGitNameOnlyDiff(cwd, [`${baseRef}...HEAD`]),
+      ...runGitNameOnlyDiff(cwd, ["--cached", "--diff-filter=ACMR"]),
+      ...runGitNameOnlyDiff(cwd, ["--diff-filter=ACMR"]),
+      ...runGitLsFiles(cwd, ["--others", "--exclude-standard"]),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function runGitNameOnlyDiff(cwd, extraArgs) {
+  return execFileSync("git", ["diff", "--name-only", ...extraArgs], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0);
+}
+
+function runGitLsFiles(cwd, extraArgs) {
+  return execFileSync("git", ["ls-files", ...extraArgs], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -290,8 +330,43 @@ function shouldKeepBroadChangedRun(changedPaths) {
   );
 }
 
+function resolveToolingChangedTestTargets(changedPaths) {
+  const targets = [];
+  for (const changedPath of changedPaths) {
+    const testTargets =
+      TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
+    if (!testTargets) {
+      return null;
+    }
+    targets.push(...testTargets);
+  }
+  return [...new Set(targets)];
+}
+
 function isRoutableChangedTarget(changedPath) {
   return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
+}
+
+export function resolveChangedTestTargetPlan(changedPaths) {
+  if (changedPaths.length === 0) {
+    return { mode: "none", targets: [] };
+  }
+  const toolingTargets = resolveToolingChangedTestTargets(changedPaths);
+  if (toolingTargets) {
+    return { mode: "targets", targets: toolingTargets };
+  }
+  if (shouldKeepBroadChangedRun(changedPaths)) {
+    return { mode: "broad", targets: [] };
+  }
+  const changedLanes = detectChangedLanes(changedPaths);
+  if (changedLanes.lanes.all) {
+    return { mode: "broad", targets: [] };
+  }
+  const targets = changedPaths.filter(isRoutableChangedTarget);
+  if (changedLanes.extensionImpactFromCore) {
+    targets.push("extensions");
+  }
+  return { mode: "targets", targets: [...new Set(targets)] };
 }
 
 export function listFullExtensionVitestProjectConfigs() {
@@ -311,19 +386,11 @@ export function resolveChangedTargetArgs(
     return null;
   }
   const changedPaths = listChangedPaths(baseRef, cwd);
-  if (changedPaths.length === 0 || shouldKeepBroadChangedRun(changedPaths)) {
+  const plan = resolveChangedTestTargetPlan(changedPaths);
+  if (plan.mode === "broad") {
     return null;
   }
-  const changedLanes = detectChangedLanes(changedPaths);
-  if (changedLanes.lanes.all) {
-    return null;
-  }
-  const routablePaths = changedPaths.filter(isRoutableChangedTarget);
-  const targets = [...routablePaths];
-  if (changedLanes.extensionImpactFromCore) {
-    targets.push("extensions");
-  }
-  return [...new Set(targets)];
+  return plan.targets;
 }
 
 function classifyTarget(arg, cwd) {

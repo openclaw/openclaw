@@ -35,6 +35,11 @@ export function resolveChangedTargetArgs(
   listChangedPaths?: (baseRef: string, cwd: string) => string[],
 ): string[] | null;
 
+export function resolveChangedTestTargetPlan(changedPaths: string[]): {
+  mode: "none" | "broad" | "targets";
+  targets: string[];
+};
+
 export function listFullExtensionVitestProjectConfigs(): string[];
 
 export function createVitestRunSpecs(

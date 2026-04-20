@@ -8,8 +8,7 @@ import {
 } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
-
-const ROUTABLE_TEST_PATH_RE = /^(?:src|test|extensions|ui|packages|apps)(?:\/|$)/u;
+import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
 export function createChangedCheckPlan(result) {
   const commands = [];
@@ -25,6 +24,7 @@ export function createChangedCheckPlan(result) {
     return {
       commands,
       testTargets: [],
+      runChangedTestsBroad: false,
       runFullTests: false,
       runExtensionTests: false,
       summary: "docs-only",
@@ -41,6 +41,7 @@ export function createChangedCheckPlan(result) {
     return {
       commands,
       testTargets: [],
+      runChangedTestsBroad: false,
       runFullTests: true,
       runExtensionTests: false,
       summary: "all",
@@ -82,10 +83,12 @@ export function createChangedCheckPlan(result) {
     add("pairing account guard", ["lint:auth:pairing-account-scope"]);
   }
 
-  const testTargets = result.paths.filter((changedPath) => ROUTABLE_TEST_PATH_RE.test(changedPath));
+  const testPlan = resolveChangedTestTargetPlan(result.paths);
+  const runChangedTestsBroad = testPlan.mode === "broad";
   return {
     commands,
-    testTargets,
+    testTargets: testPlan.targets,
+    runChangedTestsBroad,
     runFullTests: false,
     runExtensionTests: result.extensionImpactFromCore,
     summary: Object.entries(lanes)
@@ -114,6 +117,21 @@ export async function runChangedCheck(result, options = {}) {
 
   if (plan.runFullTests) {
     const status = await runPnpm({ name: "tests all", args: ["test"] }, timings);
+    if (status !== 0) {
+      printSummary(timings, options);
+      return status;
+    }
+  } else if (plan.runChangedTestsBroad) {
+    const testArgs = options.explicitPaths
+      ? ["scripts/test-projects.mjs"]
+      : ["scripts/test-projects.mjs", "--changed", options.base ?? "origin/main"];
+    const status = await runNode(
+      {
+        name: options.explicitPaths ? "tests all" : "tests changed broad",
+        args: testArgs,
+      },
+      timings,
+    );
     if (status !== 0) {
       printSummary(timings, options);
       return status;
@@ -153,6 +171,9 @@ function printPlan(result, plan, options) {
   console.error(`${prefix} lanes=${plan.summary || "none"}`);
   if (result.extensionImpactFromCore) {
     console.error(`${prefix} core contract changed; extension tests included`);
+  }
+  if (plan.runChangedTestsBroad) {
+    console.error(`${prefix} broad changed tests included`);
   }
   for (const reason of result.reasons) {
     console.error(`${prefix} ${reason}`);
@@ -246,5 +267,8 @@ if (isDirectRun()) {
         ? listStagedChangedPaths()
         : listChangedPathsFromGit({ base: args.base, head: args.head });
   const result = detectChangedLanes(paths);
-  process.exitCode = await runChangedCheck(result, args);
+  process.exitCode = await runChangedCheck(result, {
+    ...args,
+    explicitPaths: args.paths.length > 0,
+  });
 }
