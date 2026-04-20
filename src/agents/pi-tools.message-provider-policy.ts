@@ -1,5 +1,18 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
+// Dangerous tools that must not be exposed to channel auto-reply by default.
+// Prevents prompt-injection attacks from triggering RCE or credential theft.
+const DEFAULT_DENIED_TOOLS: readonly string[] = [
+  "edit",
+  "edit_file",
+  "exec",
+  "multi_edit",
+  "read",
+  "read_file",
+  "write",
+  "write_file",
+];
+
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
@@ -11,6 +24,8 @@ const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>
 export function filterToolNamesByMessageProvider(
   toolNames: readonly string[],
   messageProvider?: string,
+  /** Tools explicitly allowed by operator group policy take precedence over the default deny. */
+  groupAllowOverride?: readonly string[],
 ): string[] {
   const normalizedProvider = normalizeOptionalLowercaseString(messageProvider);
   if (!normalizedProvider) {
@@ -21,21 +36,31 @@ export function filterToolNamesByMessageProvider(
     const allowedSet = new Set(allowedTools);
     return toolNames.filter((toolName) => allowedSet.has(toolName));
   }
-  const deniedTools = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider];
-  if (!deniedTools || deniedTools.length === 0) {
-    return [...toolNames];
-  }
+  // Merge provider-specific deny list (if any) with the default deny list.
+  const providerDenied = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider];
+  const deniedTools = providerDenied
+    ? [...DEFAULT_DENIED_TOOLS, ...providerDenied]
+    : [...DEFAULT_DENIED_TOOLS];
   const deniedSet = new Set(deniedTools);
+  // Operator group policy overrides: if a tool is explicitly allowed by group
+  // config, do not strip it at the message-provider level.
+  if (groupAllowOverride && groupAllowOverride.length > 0) {
+    for (const tool of groupAllowOverride) {
+      deniedSet.delete(tool);
+    }
+  }
   return toolNames.filter((toolName) => !deniedSet.has(toolName));
 }
 
 export function filterToolsByMessageProvider<TTool extends { name: string }>(
   tools: readonly TTool[],
   messageProvider?: string,
+  groupAllowOverride?: readonly string[],
 ): TTool[] {
   const filteredToolNames = filterToolNamesByMessageProvider(
     tools.map((tool) => tool.name),
     messageProvider,
+    groupAllowOverride,
   );
   const remainingCounts = new Map<string, number>();
   for (const toolName of filteredToolNames) {
