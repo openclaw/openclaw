@@ -114,6 +114,45 @@ describe("buildApprovedPlanInjection", () => {
     const result = buildApprovedPlanInjection(["Step 1"]);
     expect(result).toContain("mark it cancelled");
   });
+
+  // Wave-4 regression: prompt-cache byte stability. The injection text
+  // is prepended to the runner prompt; any non-determinism here would
+  // break the cache prefix across otherwise-identical turns. Same-
+  // input / byte-identical-output is a hard contract.
+  it("is byte-identical across invocations for the same input (wave-4)", () => {
+    const steps = ["Grep for callers", "Add null check", "Run tests"];
+    const a = buildApprovedPlanInjection(steps);
+    const b = buildApprovedPlanInjection(steps);
+    expect(a).toBe(b);
+    // Also stable across fresh arrays with identical content.
+    const c = buildApprovedPlanInjection([...steps]);
+    expect(c).toBe(a);
+  });
+
+  it("pins the canonical prefix and numbering (wave-4)", () => {
+    const result = buildApprovedPlanInjection(["first", "second"]);
+    // Exact byte-level assertion keeps the prompt-cache prefix stable
+    // and catches accidental rewording of the leading text.
+    //
+    // PR #68939 follow-up (plan-completion enforcement): the injection
+    // now also includes "Check and record the planned status for each
+    // step" + "call update_plan to mark completed/cancelled" — soft
+    // steer to close the post-approval idle-after-subagent-returns
+    // behavior observed in live smoke testing. Snapshot updated to
+    // match; byte-stability contract preserved across same inputs.
+    expect(result).toBe(
+      "[PLAN_DECISION]: approved\n\n" +
+        "The user has approved the following plan. Execute it now without re-planning. " +
+        "Do not re-plan unless necessary. " +
+        "If a step is no longer viable, mark it cancelled and add a revised step.\n\n" +
+        "Check and record the planned status for each step as you go. " +
+        "After each step finishes (successful or not), call `update_plan` to mark " +
+        'that step\'s status as "completed" or "cancelled". The plan is not done ' +
+        "until every step is recorded as completed or cancelled.\n\n" +
+        "The approved plan:\n\n" +
+        "1. first\n2. second",
+    );
+  });
 });
 
 describe("buildPlanDecisionInjection", () => {

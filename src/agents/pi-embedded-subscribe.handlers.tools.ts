@@ -366,10 +366,7 @@ async function autoApproveIfEnabled(params: {
     if (!entry?.planMode?.autoApprove) {
       return;
     }
-    if (
-      entry.planMode.approval !== "pending" ||
-      entry.planMode.approvalId !== params.approvalId
-    ) {
+    if (entry.planMode.approval !== "pending" || entry.planMode.approvalId !== params.approvalId) {
       params.log?.warn?.(
         `auto-approve aborted: persisted approval state did not reach pending+approvalId=${params.approvalId} ` +
           `within ${MAX_WAIT_MS}ms (current: approval=${entry.planMode.approval}, approvalId=${entry.planMode.approvalId ?? "(missing)"}). ` +
@@ -437,11 +434,24 @@ async function autoApproveIfEnabled(params: {
       // the persister writes into the queue, so the agent's reasoning
       // is identical whether it picked the signal up from the queue
       // or directly from the message.
+      // PR #68939 follow-up: align this text with `buildApprovedPlanInjection`
+      // in `src/agents/plan-mode/approval.ts` so the agent sees the same
+      // instructions whether she picks up the signal from this chat.send
+      // (fresh run start) or drains the queued injection (prior run still
+      // processing). Includes the "check and record status for each step"
+      // directive that prevents post-approve idle-after-subagent-returns
+      // observed in live validation — agents were completing sub-ops but
+      // not calling update_plan to mark steps done.
       const resumeMessage =
         "[PLAN_DECISION]: approved — auto-mode resumed. " +
         "The user has auto-approved the plan you just submitted via exit_plan_mode. " +
         "Execute the approved plan now without re-planning. " +
-        "If a step is no longer viable, mark it cancelled and add a revised step.";
+        "Do not re-plan unless necessary. " +
+        "If a step is no longer viable, mark it cancelled and add a revised step. " +
+        "Check and record the planned status for each step as you go. " +
+        "After each step finishes (successful or not), call `update_plan` to mark " +
+        'that step\'s status as "completed" or "cancelled". The plan is not done ' +
+        "until every step is recorded as completed or cancelled.";
       await callGatewayTool(
         "chat.send",
         {},

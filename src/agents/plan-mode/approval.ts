@@ -142,7 +142,22 @@ export function buildApprovedPlanInjection(planSteps: string[]): string {
   const stepList = planSteps.map((s, i) => `${i + 1}. ${s}`).join("\n");
   return (
     "The user has approved the following plan. Execute it now without re-planning. " +
+    "Do not re-plan unless necessary. " +
     "If a step is no longer viable, mark it cancelled and add a revised step.\n\n" +
+    // PR #68939 follow-up (plan-completion enforcement): agents have
+    // been observed going idle after sub-operations return (e.g.,
+    // subagent returns its result, write succeeds, etc.) without
+    // marking the driving plan step as `completed`. Post-approval
+    // nudges don't fire (they're plan-mode-bound; session is now in
+    // mode:"normal"), so the reminder has to be inline in the
+    // approval injection itself. This is a soft steer — reinforced
+    // by update_plan's merge semantics and the close-on-complete
+    // detector in plan-snapshot-persister.ts — not a hard gate.
+    "Check and record the planned status for each step as you go. " +
+    "After each step finishes (successful or not), call `update_plan` to mark " +
+    'that step\'s status as "completed" or "cancelled". The plan is not done ' +
+    "until every step is recorded as completed or cancelled.\n\n" +
+    "The approved plan:\n\n" +
     stepList
   );
 }
