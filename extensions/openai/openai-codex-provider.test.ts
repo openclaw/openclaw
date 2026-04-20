@@ -5,9 +5,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const readOpenAICodexCliOAuthProfileMock = vi.hoisted(() => vi.fn());
+const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth-login", () => ({
+  loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
 }));
 
 vi.mock("./openai-codex-cli-auth.js", async (importOriginal) => {
@@ -29,6 +34,7 @@ describe("openai codex provider", () => {
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
     readOpenAICodexCliOAuthProfileMock.mockReset();
+    loginOpenAICodexOAuthMock.mockReset();
   });
 
   afterEach(async () => {
@@ -151,6 +157,43 @@ describe("openai codex provider", () => {
         store: { version: 1, profiles: {} },
       }),
     );
+  });
+
+  it("writes ChatGPT OAuth back to the canonical default profile without clobber patches", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const oauthMethod = provider.auth?.find((method) => method.id === "oauth");
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    });
+
+    await expect(
+      oauthMethod?.run({
+        config: {},
+        env: {},
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+        prompter: {} as never,
+        runtime: {} as never,
+        isRemote: false,
+        openUrl: async () => {},
+        oauth: { createVpsAwareHandlers: (() => ({})) as never },
+      }),
+    ).resolves.toMatchObject({
+      profiles: [
+        {
+          profileId: "openai-codex:default",
+          credential: expect.objectContaining({
+            provider: "openai-codex",
+            email: "user@example.com",
+          }),
+        },
+      ],
+      configPatch: undefined,
+      defaultModel: "openai-codex/gpt-5.4",
+    });
   });
 
   it("uses the provider auth context env when importing Codex CLI auth", async () => {

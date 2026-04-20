@@ -39,17 +39,7 @@ export function buildOauthProviderAuthResult(params: {
 
   return {
     profiles: [{ profileId, credential }],
-    configPatch:
-      params.configPatch ??
-      ({
-        agents: {
-          defaults: {
-            models: {
-              [params.defaultModel]: {},
-            },
-          },
-        },
-      } as Partial<OpenClawConfig>),
+    configPatch: params.configPatch,
     defaultModel: params.defaultModel,
     notes: params.notes,
   };

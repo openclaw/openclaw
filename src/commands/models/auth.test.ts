@@ -282,7 +282,7 @@ describe("modelsAuthLoginCommand", () => {
     runProviderAuth = vi.fn().mockResolvedValue({
       profiles: [
         {
-          profileId: "openai-codex:user@example.com",
+          profileId: "openai-codex:default",
           credential: {
             type: "oauth",
             provider: "openai-codex",
@@ -312,17 +312,38 @@ describe("modelsAuthLoginCommand", () => {
     restoreStdin = null;
   });
 
-  it("runs plugin-owned openai-codex login", async () => {
+  it("runs plugin-owned openai-codex login without clobbering existing model defaults", async () => {
     const runtime = createRuntime();
+    const existingModels = {
+      "anthropic/claude-sonnet-4-6": {
+        alias: "sonnet",
+        params: { maxTokens: 8192, cacheRetention: "long" },
+      },
+      "openai-codex/gpt-5.4": {
+        alias: "gpt54",
+        params: { maxTokens: 128000 },
+      },
+      "openai-codex/gpt-5.4-mini": {
+        alias: "mini",
+        params: { maxTokens: 32000, fastMode: true, transport: "auto" },
+      },
+    };
+    currentConfig = {
+      agents: {
+        defaults: {
+          models: existingModels,
+        },
+      },
+    };
     const fakeStore = {
       profiles: {
-        "openai-codex:user@example.com": {
+        "openai-codex:default": {
           type: "oauth",
           provider: "openai-codex",
         },
       },
       usageStats: {
-        "openai-codex:user@example.com": {
+        "openai-codex:default": {
           disabledUntil: Date.now() + 3_600_000,
           disabledReason: "auth_permanent",
           errorCount: 3,
@@ -330,14 +351,14 @@ describe("modelsAuthLoginCommand", () => {
       },
     };
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
-    mocks.listProfilesForProvider.mockReturnValue(["openai-codex:user@example.com"]);
+    mocks.listProfilesForProvider.mockReturnValue(["openai-codex:default"]);
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
     expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
       store: fakeStore,
-      profileId: "openai-codex:user@example.com",
+      profileId: "openai-codex:default",
       agentDir: "/tmp/openclaw/agents/main",
     });
     expect(mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0]).toBeLessThan(
@@ -345,19 +366,20 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(runProviderAuth).toHaveBeenCalledOnce();
     expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "openai-codex:user@example.com",
+      profileId: "openai-codex:default",
       credential: expect.objectContaining({
         type: "oauth",
         provider: "openai-codex",
       }),
       agentDir: "/tmp/openclaw/agents/main",
     });
-    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:default"]).toMatchObject({
       provider: "openai-codex",
       mode: "oauth",
     });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(existingModels);
     expect(runtime.log).toHaveBeenCalledWith(
-      "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
+      "Auth profile: openai-codex:default (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
