@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
@@ -10,7 +10,7 @@ import {
 import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
-import { renderChat, type ChatProps } from "./chat.ts";
+import { __testing as chatTesting, renderChat, type ChatProps } from "./chat.ts";
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
@@ -161,27 +161,32 @@ describe("chat view", () => {
   it("renders compaction and fallback indicators while they are fresh", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now");
+    const renderIndicators = (
+      compactionStatus: ChatProps["compactionStatus"],
+      fallbackStatus: ChatProps["fallbackStatus"],
+    ) => {
+      render(
+        html`${chatTesting.renderFallbackIndicator(fallbackStatus)}
+        ${chatTesting.renderCompactionIndicator(compactionStatus)}`,
+        container,
+      );
+    };
 
     try {
       nowSpy.mockReturnValue(1_000);
-      render(
-        renderChat(
-          createProps({
-            compactionStatus: {
-              phase: "active",
-              runId: "run-1",
-              startedAt: 1_000,
-              completedAt: null,
-            },
-            fallbackStatus: {
-              selected: "fireworks/minimax-m2p5",
-              active: "deepinfra/moonshotai/Kimi-K2.5",
-              attempts: ["fireworks/minimax-m2p5: rate limit"],
-              occurredAt: 900,
-            },
-          }),
-        ),
-        container,
+      renderIndicators(
+        {
+          phase: "active",
+          runId: "run-1",
+          startedAt: 1_000,
+          completedAt: null,
+        },
+        {
+          selected: "fireworks/minimax-m2p5",
+          active: "deepinfra/moonshotai/Kimi-K2.5",
+          attempts: ["fireworks/minimax-m2p5: rate limit"],
+          occurredAt: 900,
+        },
       );
 
       let indicator = container.querySelector(".compaction-indicator--active");
@@ -191,26 +196,21 @@ describe("chat view", () => {
       expect(indicator).not.toBeNull();
       expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
 
-      render(
-        renderChat(
-          createProps({
-            compactionStatus: {
-              phase: "complete",
-              runId: "run-1",
-              startedAt: 900,
-              completedAt: 900,
-            },
-            fallbackStatus: {
-              phase: "cleared",
-              selected: "fireworks/minimax-m2p5",
-              active: "fireworks/minimax-m2p5",
-              previous: "deepinfra/moonshotai/Kimi-K2.5",
-              attempts: [],
-              occurredAt: 900,
-            },
-          }),
-        ),
-        container,
+      renderIndicators(
+        {
+          phase: "complete",
+          runId: "run-1",
+          startedAt: 900,
+          completedAt: 900,
+        },
+        {
+          phase: "cleared",
+          selected: "fireworks/minimax-m2p5",
+          active: "fireworks/minimax-m2p5",
+          previous: "deepinfra/moonshotai/Kimi-K2.5",
+          attempts: [],
+          occurredAt: 900,
+        },
       );
       indicator = container.querySelector(".compaction-indicator--complete");
       expect(indicator).not.toBeNull();
@@ -220,24 +220,19 @@ describe("chat view", () => {
       expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
 
       nowSpy.mockReturnValue(20_000);
-      render(
-        renderChat(
-          createProps({
-            compactionStatus: {
-              phase: "complete",
-              runId: "run-1",
-              startedAt: 0,
-              completedAt: 0,
-            },
-            fallbackStatus: {
-              selected: "fireworks/minimax-m2p5",
-              active: "deepinfra/moonshotai/Kimi-K2.5",
-              attempts: [],
-              occurredAt: 0,
-            },
-          }),
-        ),
-        container,
+      renderIndicators(
+        {
+          phase: "complete",
+          runId: "run-1",
+          startedAt: 0,
+          completedAt: 0,
+        },
+        {
+          selected: "fireworks/minimax-m2p5",
+          active: "deepinfra/moonshotai/Kimi-K2.5",
+          attempts: [],
+          occurredAt: 0,
+        },
       );
       expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
       expect(container.querySelector(".compaction-indicator--complete")).toBeNull();
