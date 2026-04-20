@@ -7,6 +7,8 @@ const {
   buildVitestRunPlans,
   createVitestRunSpecs,
   parseTestProjectsArgs,
+  resolveChangedTargetArgs,
+  resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
 } = (await import("../../scripts/test-projects.test-support.mjs")) as unknown as {
   applyParallelVitestCachePaths: (
@@ -35,6 +37,7 @@ const {
   buildVitestRunPlans: (
     args: string[],
     cwd?: string,
+    listChangedPaths?: (baseRef: string, cwd: string) => string[],
   ) => Array<{
     config: string;
     forwardedArgs: string[];
@@ -64,6 +67,17 @@ const {
     targetArgs: string[];
     watchMode: boolean;
   };
+  resolveChangedTargetArgs: (
+    args: string[],
+    cwd?: string,
+    listChangedPaths?: (baseRef: string, cwd: string) => string[],
+  ) => string[] | null;
+  resolveChangedTestTargetPlan: (
+    changedPaths: string[],
+  ) =>
+    | { mode: "none"; targets: string[] }
+    | { mode: "targets"; targets: string[] }
+    | { mode: "broad"; targets: string[] };
   resolveParallelFullSuiteConcurrency: (
     specCount: number,
     env?: NodeJS.ProcessEnv,
@@ -848,6 +862,72 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.extensions.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/firecrawl/index.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("keeps docs-only changed runs empty instead of widening to the full suite", () => {
+    const changedPaths = ["docs/help/testing.md", "AGENTS.md"];
+
+    expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
+      mode: "targets",
+      targets: [],
+    });
+    expect(
+      resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual([]);
+    expect(
+      buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual([]);
+  });
+
+  it("keeps core test-only changes on their owning test lane", () => {
+    const changedPaths = ["src/auto-reply/reply/commands-approve.test.ts"];
+
+    expect(
+      buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/reply/commands-approve.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("widens extension-facing core contract changes to extension tests", () => {
+    const changedPaths = ["src/plugin-sdk/core.ts"];
+    const plans = buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths);
+
+    expect(
+      resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual(["src/plugin-sdk/core.ts", "extensions"]);
+    expect(plans[0]).toEqual({
+      config: "test/vitest/vitest.plugin-sdk.config.ts",
+      forwardedArgs: [],
+      includePatterns: ["src/plugin-sdk/**/*.test.ts"],
+      watchMode: false,
+    });
+    expect(plans.map((plan) => plan.config)).toContain(
+      "test/vitest/vitest.extension-discord.config.ts",
+    );
+    expect(plans.map((plan) => plan.config)).toContain(
+      "test/vitest/vitest.extension-providers.config.ts",
+    );
+  });
+
+  it("keeps extension production changes on the owning extension lane", () => {
+    const changedPaths = ["extensions/discord/src/monitor/message-handler.ts"];
+
+    expect(
+      buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extension-discord.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/discord/src/monitor/**/*.test.ts"],
         watchMode: false,
       },
     ]);

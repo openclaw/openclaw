@@ -736,6 +736,10 @@ jobs:
         env:
           SHARD_RESULT: ${{ needs.checks-fast-channel-contracts-shard.result }}
         run: |
+          if [ "$SHARD_RESULT" = "cancelled" ]; then
+            echo "Channel contract shards were cancelled, usually because a newer commit superseded this run." >&2
+            exit 1
+          fi
           if [ "$SHARD_RESULT" != "success" ]; then
             echo "Channel contract shards failed: $SHARD_RESULT" >&2
             exit 1

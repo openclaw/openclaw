@@ -12,6 +12,22 @@ function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+const CONTRACT_FILE_WEIGHTS = new Map([
+  ["channel-import-guardrails.test.ts", 18],
+  ["directory.registry-backed.contract.test.ts", 12],
+  ["outbound-payload.contract.test.ts", 18],
+  ["plugin.registry-backed.contract.test.ts", 34],
+  ["plugins-core.catalog.paths.contract.test.ts", 28],
+  ["plugins-core.catalog.entries.contract.test.ts", 16],
+  ["session-binding.registry-backed.contract.test.ts", 16],
+  ["surfaces-only.registry-backed.contract.test.ts", 36],
+]);
+
+function resolveContractFileWeight(file) {
+  const name = file.replaceAll("\\", "/").split("/").pop();
+  return CONTRACT_FILE_WEIGHTS.get(name) ?? 8;
+}
+
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
   const suffixes = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -24,18 +40,32 @@ export function createChannelContractTestShards() {
     core: suffixes.map((suffix) => `checks-fast-contracts-channels-core-${suffix}`),
     registry: suffixes.map((suffix) => `checks-fast-contracts-channels-registry-${suffix}`),
   };
+  const weights = Object.fromEntries(Object.keys(groups).map((key) => [key, 0]));
   const pushBalanced = (keys, file) => {
-    const target = keys.toSorted((a, b) => groups[a].length - groups[b].length)[0];
+    const target = keys.toSorted((a, b) => weights[a] - weights[b] || a.localeCompare(b))[0];
     groups[target].push(file);
+    weights[target] += resolveContractFileWeight(file);
   };
 
+  const coreFiles = [];
+  const registryFiles = [];
   for (const file of listContractTestFiles(rootDir)) {
     const name = relative(rootDir, file).replaceAll("\\", "/");
-    if (name.startsWith("plugins-core.") || name.startsWith("plugin.")) {
-      pushBalanced(groupKeys.core, file);
-    } else {
-      pushBalanced(groupKeys.registry, file);
-    }
+    (name.startsWith("plugins-core.") || name.startsWith("plugin.")
+      ? coreFiles
+      : registryFiles
+    ).push(file);
+  }
+
+  const byDescendingWeight = (left, right) => {
+    const delta = resolveContractFileWeight(right) - resolveContractFileWeight(left);
+    return delta === 0 ? left.localeCompare(right) : delta;
+  };
+  for (const file of registryFiles.toSorted(byDescendingWeight)) {
+    pushBalanced(groupKeys.registry, file);
+  }
+  for (const file of coreFiles.toSorted(byDescendingWeight)) {
+    pushBalanced(groupKeys.core, file);
   }
 
   return Object.entries(groups).map(([checkName, includePatterns]) => ({
