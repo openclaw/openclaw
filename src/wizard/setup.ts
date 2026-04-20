@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type {
+  AuthChoice,
   GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
@@ -19,6 +20,29 @@ import { resolveUserPath } from "../utils.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+
+type AuthChoiceModule = typeof import("../commands/auth-choice.js");
+type ConfigLoggingModule = typeof import("../config/logging.js");
+type ModelPickerModule = typeof import("../commands/model-picker.js");
+
+let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
+let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
+let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
+
+function loadAuthChoiceModule(): Promise<AuthChoiceModule> {
+  authChoiceModulePromise ??= import("../commands/auth-choice.js");
+  return authChoiceModulePromise;
+}
+
+function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
+  configLoggingModulePromise ??= import("../config/logging.js");
+  return configLoggingModulePromise;
+}
+
+function loadModelPickerModule(): Promise<ModelPickerModule> {
+  modelPickerModulePromise ??= import("../commands/model-picker.js");
+  return modelPickerModulePromise;
+}
 
 async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
@@ -57,9 +81,15 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   });
   const matchedProvider =
     resolvedChoice?.provider ??
-    (preferredProvider
-      ? providers.find((provider) => provider.id.trim() === preferredProvider.trim())
-      : undefined);
+    (() => {
+      const preferredId = preferredProvider?.trim();
+      if (!preferredId) {
+        return undefined;
+      }
+      return providers.find(
+        (provider) => typeof provider.id === "string" && provider.id.trim() === preferredId,
+      );
+    })();
   const setupPolicy =
     resolvedChoice?.wizard?.modelSelection ?? matchedProvider?.wizard?.setup?.modelSelection;
 
@@ -458,7 +488,7 @@ export async function runSetupWizard(
 
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
-    const { logConfigUpdated } = await import("../config/logging.js");
+    const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
       secretInputMode: opts.secretInputMode,
     });
@@ -484,7 +514,7 @@ export async function runSetupWizard(
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
-  let authChoice = opts.authChoice;
+  let authChoice: AuthChoice | undefined = opts.authChoice;
   if (authChoiceFromPrompt) {
     const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
     const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
@@ -498,6 +528,9 @@ export async function runSetupWizard(
       config: nextConfig,
       workspaceDir,
     });
+  }
+  if (authChoice === undefined) {
+    throw new WizardCancelledError("auth choice is required");
   }
 
   if (authChoice === "custom-api-key") {
@@ -513,7 +546,7 @@ export async function runSetupWizard(
     // Explicit skip should stay cold: do not bootstrap auth/profile machinery
     // or run model/auth checks when the caller already chose to skip setup.
     if (authChoiceFromPrompt) {
-      const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
+      const { applyPrimaryModel, promptDefaultModel } = await loadModelPickerModule();
       const modelSelection = await promptDefaultModel({
         config: nextConfig,
         prompter,
@@ -530,13 +563,14 @@ export async function runSetupWizard(
         nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
       }
 
-      const { warnIfModelConfigLooksOff } = await import("../commands/auth-choice.js");
+      const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
       await warnIfModelConfigLooksOff(nextConfig, prompter);
     }
   } else {
-    const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
-      await import("../commands/auth-choice.js");
-    const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
+    const [
+      { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
+      { applyPrimaryModel, promptDefaultModel },
+    ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     const authResult = await applyAuthChoice({
       authChoice,
       config: nextConfig,
@@ -619,7 +653,7 @@ export async function runSetupWizard(
   }
 
   await writeConfigFile(nextConfig);
-  const { logConfigUpdated } = await import("../config/logging.js");
+  const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

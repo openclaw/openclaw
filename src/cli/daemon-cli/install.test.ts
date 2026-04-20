@@ -10,14 +10,14 @@ const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const writeConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
-  vi.fn((): { ref: unknown } => ({ ref: undefined })),
+  vi.fn((_value?: unknown): { ref: unknown } => ({ ref: undefined })),
 );
 const hasConfiguredSecretInputMock = vi.hoisted(() =>
   vi.fn((value: unknown): boolean => {
     if (typeof value === "string" && value.trim()) {
       return true;
     }
-    return resolveSecretInputRefMock(value as never)?.ref != null;
+    return resolveSecretInputRefMock(value)?.ref != null;
   }),
 );
 const resolveGatewayAuthMock = vi.hoisted(() =>

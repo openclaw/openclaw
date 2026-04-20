@@ -18,7 +18,10 @@ import {
   upsertAuthProfile,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
-import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  cloneFirstTemplateModel,
+  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
@@ -38,26 +41,28 @@ import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
-const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-7";
+const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
+const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
+const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
+  ANTHROPIC_OPUS_46_MODEL_ID,
+  ANTHROPIC_OPUS_46_DOT_MODEL_ID,
+  "claude-opus-4-5",
+  "claude-opus-4.5",
+] as const;
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
+  "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-sonnet-4-6",
   "claude-opus-4-5",
   "claude-sonnet-4-5",
   "claude-haiku-4-5",
-] as const;
-const _ANTHROPIC_OAUTH_ALLOWLIST = [
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-opus-4-5",
-  "anthropic/claude-sonnet-4-5",
-  "anthropic/claude-haiku-4-5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
@@ -230,6 +235,14 @@ function resolveAnthropicForwardCompatModel(
   return (
     resolveAnthropic46ForwardCompatModel({
       ctx,
+      dashModelId: ANTHROPIC_OPUS_47_MODEL_ID,
+      dotModelId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+      dashTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
+      dotTemplateId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
+      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
+    }) ??
+    resolveAnthropic46ForwardCompatModel({
+      ctx,
       dashModelId: ANTHROPIC_OPUS_46_MODEL_ID,
       dotModelId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
       dashTemplateId: "claude-opus-4-5",
@@ -254,6 +267,14 @@ function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
     lowerModelId.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
     lowerModelId.startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
     lowerModelId.startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID)
+  );
+}
+
+function isAnthropicOpus47Model(modelId: string): boolean {
+  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
+  return (
+    lowerModelId.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID)
   );
 }
 
@@ -377,18 +398,10 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
-export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
+export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
-  const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
-  const _anthropicOauthAllowlist = [
-    "anthropic/claude-sonnet-4-6",
-    "anthropic/claude-opus-4-6",
-    "anthropic/claude-opus-4-5",
-    "anthropic/claude-sonnet-4-5",
-    "anthropic/claude-haiku-4-5",
-  ] as const;
-  api.registerCliBackend(buildAnthropicCliBackend());
-  api.registerProvider({
+  const defaultAnthropicModel = DEFAULT_ANTHROPIC_MODEL;
+  return {
     id: providerId,
     label: "Anthropic",
     docsPath: "/providers/models",
@@ -476,11 +489,14 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
+    supportsXHighThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
-      matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
-        ? "adaptive"
-        : undefined,
+      isAnthropicOpus47Model(modelId)
+        ? "off"
+        : matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
+          ? "adaptive"
+          : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
     fetchUsageSnapshot: async (ctx) =>
       await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
@@ -491,6 +507,11 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
         store: ctx.store,
         profileId: ctx.profileId,
       }),
-  });
+  };
+}
+
+export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
+  api.registerCliBackend(buildAnthropicCliBackend());
+  api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
 }

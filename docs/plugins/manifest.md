@@ -56,6 +56,8 @@ Use it for:
   plugin before runtime loads
 - static capability ownership snapshots used for bundled compat wiring and
   contract coverage
+- cheap QA runner metadata that the shared `openclaw qa` host can inspect
+  before plugin runtime loads
 - channel-specific config metadata that should merge into catalog and validation
   surfaces without loading runtime
 - config UI hints
@@ -93,7 +95,14 @@ Those belong in your plugin code and `package.json`.
   "modelSupport": {
     "modelPrefixes": ["router-"]
   },
+  "providerEndpoints": [
+    {
+      "endpointClass": "xai-native",
+      "hosts": ["api.x.ai"]
+    }
+  ],
   "cliBackends": ["openrouter-cli"],
+  "syntheticAuthRefs": ["openrouter-cli"],
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
   },
@@ -150,7 +159,10 @@ Those belong in your plugin code and `package.json`.
 | `channels`                          | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                  |
 | `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                           |
 | `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
+| `providerEndpoints`                 | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                     |
 | `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
+| `syntheticAuthRefs`                 | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                       |
+| `nonSecretAuthMarkers`              | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                         |
 | `commandAliases`                    | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                         |
 | `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
 | `providerAuthAliases`               | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                   |
@@ -158,6 +170,7 @@ Those belong in your plugin code and `package.json`.
 | `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
 | `activation`                        | No       | `object`                         | Cheap activation hints for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                    |
 | `setup`                             | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                             |
+| `qaRunners`                         | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                               |
 | `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
 | `channelConfigs`                    | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                   |
 | `skills`                            | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                      |
@@ -218,6 +231,29 @@ uses this metadata for diagnostics without importing plugin runtime code.
 
 Use `activation` when the plugin can cheaply declare which control-plane events
 should activate it later.
+
+## qaRunners reference
+
+Use `qaRunners` when a plugin contributes one or more transport runners beneath
+the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
+runtime still owns actual CLI registration through a lightweight
+`runtime-api.ts` surface that exports `qaRunnerCliRegistrations`.
+
+```json
+{
+  "qaRunners": [
+    {
+      "commandName": "matrix",
+      "description": "Run the Docker-backed Matrix live QA lane against a disposable homeserver"
+    }
+  ]
+}
+```
+
+| Field         | Required | Type     | What it means                                                      |
+| ------------- | -------- | -------- | ------------------------------------------------------------------ |
+| `commandName` | Yes      | `string` | Subcommand mounted beneath `openclaw qa`, for example `matrix`.    |
+| `description` | No       | `string` | Fallback help text used when the shared host needs a stub command. |
 
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
@@ -573,6 +609,17 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `providerAuthAliases` lets provider variants reuse another provider's auth
   env vars, auth profiles, config-backed auth, and API-key onboarding choice
   without hardcoding that relationship in core.
+- `providerEndpoints` lets provider plugins own simple endpoint host/baseUrl
+  matching metadata. Use it only for endpoint classes core already supports;
+  the plugin still owns runtime behavior.
+- `syntheticAuthRefs` is the cheap metadata path for provider-owned synthetic
+  auth hooks that must be visible to cold model discovery before the runtime
+  registry exists. Only list refs whose runtime provider or CLI backend actually
+  implements `resolveSyntheticAuth`.
+- `nonSecretAuthMarkers` is the cheap metadata path for bundled plugin-owned
+  placeholder API keys such as local, OAuth, or ambient credential markers.
+  Core treats these as non-secrets for auth display and secret audits without
+  hardcoding the owning provider.
 - `channelEnvVars` is the cheap metadata path for shell-env fallback, setup
   prompts, and similar channel surfaces that should not boot plugin runtime
   just to inspect env names.
