@@ -116,6 +116,109 @@ describe("discord route resolution helpers", () => {
     });
   });
 
+  it("mention overrides configured route when no bound session key", () => {
+    const base: ResolvedAgentRoute = {
+      agentId: "eng",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:eng:discord:channel:c1",
+      mainSessionKey: "agent:eng:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    };
+    const mentionRoute: ResolvedAgentRoute = {
+      ...base,
+      agentId: "chain",
+      sessionKey: "agent:chain:discord:channel:c1",
+      mainSessionKey: "agent:chain:main",
+      matchedBy: "mention.role",
+      isMentionRoute: true,
+    };
+    expect(
+      resolveDiscordEffectiveRoute({
+        route: mentionRoute,
+        configuredRoute: { route: base },
+        mentionedRoleAgentId: "chain",
+      }),
+    ).toMatchObject({ agentId: "chain", isMentionRoute: true });
+  });
+
+  it("mention overrides configured channel binding used as boundSessionKey", () => {
+    const mentionRoute: ResolvedAgentRoute = {
+      agentId: "chain",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:chain:discord:channel:c1",
+      mainSessionKey: "agent:chain:main",
+      lastRoutePolicy: "session",
+      matchedBy: "mention.role",
+      isMentionRoute: true,
+    };
+    const configuredRoute = {
+      route: {
+        ...mentionRoute,
+        agentId: "eng",
+        sessionKey: "agent:eng:discord:channel:c1",
+        mainSessionKey: "agent:eng:main",
+        matchedBy: "binding.channel" as const,
+        isMentionRoute: false,
+      },
+    };
+    // boundSessionKey came from configured channel binding (configuredRoute non-null)
+    expect(
+      resolveDiscordEffectiveRoute({
+        route: mentionRoute,
+        boundSessionKey: "agent:eng:discord:channel:c1",
+        configuredRoute,
+        matchedBy: "binding.channel",
+        mentionedRoleAgentId: "chain",
+      }),
+    ).toMatchObject({ agentId: "chain", isMentionRoute: true });
+  });
+
+  it("explicit /focus binding wins over mention when configuredRoute is null", () => {
+    const mentionRoute: ResolvedAgentRoute = {
+      agentId: "chain",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:chain:discord:channel:c1",
+      mainSessionKey: "agent:chain:main",
+      lastRoutePolicy: "session",
+      matchedBy: "mention.role",
+      isMentionRoute: true,
+    };
+    // configuredRoute: null means boundSessionKey is from an explicit /focus bind
+    expect(
+      resolveDiscordEffectiveRoute({
+        route: mentionRoute,
+        boundSessionKey: "agent:eng:discord:channel:c1",
+        configuredRoute: null,
+        matchedBy: "binding.channel",
+        mentionedRoleAgentId: "chain",
+      }),
+    ).toMatchObject({ agentId: "eng", sessionKey: "agent:eng:discord:channel:c1" });
+  });
+
+  it("configured channel binding routes normally when no mention override", () => {
+    const base: ResolvedAgentRoute = {
+      agentId: "eng",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:eng:discord:channel:c1",
+      mainSessionKey: "agent:eng:main",
+      lastRoutePolicy: "session",
+      matchedBy: "binding.channel",
+    };
+    expect(
+      resolveDiscordEffectiveRoute({
+        route: base,
+        boundSessionKey: "agent:eng:discord:channel:c1",
+        configuredRoute: { route: base },
+        matchedBy: "binding.channel",
+      }),
+    ).toMatchObject({ agentId: "eng", sessionKey: "agent:eng:discord:channel:c1" });
+  });
+
   it("composes route building with effective-route overrides", () => {
     const cfg = buildWorkerBindingConfig({ kind: "direct", id: "user-1" });
 
