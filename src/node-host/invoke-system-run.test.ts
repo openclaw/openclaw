@@ -29,6 +29,10 @@ import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
 
+vi.mock("../logger.js", () => ({
+  logWarn: vi.fn(),
+}));
+
 type MockedRunCommand = Mock<HandleSystemRunInvokeOptions["runCommand"]>;
 type MockedRunViaMacAppExecHost = Mock<HandleSystemRunInvokeOptions["runViaMacAppExecHost"]>;
 type MockedSendInvokeResult = Mock<HandleSystemRunInvokeOptions["sendInvokeResult"]>;
