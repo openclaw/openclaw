@@ -5,7 +5,11 @@ import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 import { loadConfig } from "../config/config.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../gateway/protocol/client-info.js";
 import { isMainModule } from "../infra/is-main.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { readSecretFromFile } from "./secret-file.js";
@@ -60,6 +64,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
+    // Without TOOL_EVENTS the gateway never registers this connection as a
+    // toolEventRecipient, so `tool` stream events are dropped before they
+    // reach `AcpGatewayAgent.handleAgentEvent`. The agent already filters
+    // for `stream === "tool"` (see translator.ts), so it's a no-op when the
+    // events do arrive — we only need to opt in to the firehose.
+    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
       void agent?.handleGatewayEvent(evt);
     },
