@@ -16,8 +16,7 @@ export function resolveSessionTracingHeaders(params: {
   const sessionKey = params.sessionKey;
   if (!sessionKey) return undefined;
 
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) return undefined;
+  if (!parseAgentSessionKey(sessionKey)) return undefined;
 
   const headers: Record<string, string> = {};
 
