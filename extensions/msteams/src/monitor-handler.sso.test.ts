@@ -90,6 +90,15 @@ function createSsoDeps(params: { fetchImpl: MSTeamsSsoFetch }) {
   };
 }
 
+function createRegisteredSsoHandler(sso: MSTeamsMessageHandlerDeps["sso"]) {
+  const deps = createDepsWithoutSso({ sso });
+  const { handler } = createActivityHandler();
+  const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+    run: NonNullable<MSTeamsActivityHandler["run"]>;
+  };
+  return { deps, registered };
+}
+
 function createSigninInvokeContext(params: {
   name: "signin/tokenExchange" | "signin/verifyState";
   value: unknown;
@@ -506,11 +515,7 @@ describe("msteams signin invoke handler registration", () => {
       }),
     ]);
     const { sso, tokenStore } = createSsoDeps({ fetchImpl });
-    const deps = createDepsWithoutSso({ sso });
-    const { handler } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
+    const { deps, registered } = createRegisteredSsoHandler(sso);
 
     const ctx = createSigninInvokeContext({
       name: "signin/tokenExchange",
@@ -541,11 +546,7 @@ describe("msteams signin invoke handler registration", () => {
       () => ({ ok: false, status: 400, body: "bad request" }),
     ]);
     const { sso } = createSsoDeps({ fetchImpl });
-    const deps = createDepsWithoutSso({ sso });
-    const { handler } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
+    const { deps, registered } = createRegisteredSsoHandler(sso);
 
     const ctx = createSigninInvokeContext({
       name: "signin/tokenExchange",
