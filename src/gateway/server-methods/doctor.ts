@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -107,6 +111,14 @@ type DoctorMemoryDreamingPayload = {
   };
 };
 
+export type DoctorMemoryAgentStatusPayload = {
+  agentId: string;
+  dirty: boolean;
+  files: number;
+  chunks: number;
+  error?: string;
+};
+
 export type DoctorMemoryStatusPayload = {
   agentId: string;
   provider?: string;
@@ -115,6 +127,7 @@ export type DoctorMemoryStatusPayload = {
     error?: string;
   };
   dreaming?: DoctorMemoryDreamingPayload;
+  perAgent?: DoctorMemoryAgentStatusPayload[];
 };
 
 export type DoctorMemoryDreamDiaryPayload = {
@@ -781,22 +794,74 @@ async function readDreamDiary(
   };
 }
 
+async function collectMemoryAgentStatus(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<DoctorMemoryAgentStatusPayload> {
+  const { manager, error } = await getActiveMemorySearchManager({
+    cfg,
+    agentId,
+    purpose: "status",
+  });
+  if (!manager) {
+    return {
+      agentId,
+      dirty: false,
+      files: 0,
+      chunks: 0,
+      error: error ?? "memory search unavailable",
+    };
+  }
+  try {
+    const status = manager.status();
+    return {
+      agentId,
+      dirty: Boolean(status.dirty),
+      files: status.files ?? 0,
+      chunks: status.chunks ?? 0,
+    };
+  } catch (err) {
+    return {
+      agentId,
+      dirty: false,
+      files: 0,
+      chunks: 0,
+      error: `gateway memory probe failed: ${formatError(err)}`,
+    };
+  } finally {
+    await manager.close?.().catch(() => {});
+  }
+}
+
 export const doctorHandlers: GatewayRequestHandlers = {
   "doctor.memory.status": async ({ respond, context }) => {
     const cfg = loadConfig();
     const agentId = resolveDefaultAgentId(cfg);
+    const configuredAgentIds = listAgentIds(cfg);
+    const otherAgentIds = configuredAgentIds.filter((id) => id !== agentId);
     const { manager, error } = await getActiveMemorySearchManager({
       cfg,
       agentId,
       purpose: "status",
     });
     if (!manager) {
+      const defaultEntry: DoctorMemoryAgentStatusPayload = {
+        agentId,
+        dirty: false,
+        files: 0,
+        chunks: 0,
+        error: error ?? "memory search unavailable",
+      };
+      const otherEntries = await Promise.all(
+        otherAgentIds.map((id) => collectMemoryAgentStatus(cfg, id)),
+      );
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         embedding: {
           ok: false,
           error: error ?? "memory search unavailable",
         },
+        perAgent: [defaultEntry, ...otherEntries],
       };
       respond(true, payload, undefined);
       return;
@@ -838,6 +903,15 @@ export const doctorHandlers: GatewayRequestHandlers = {
               promotedToday: 0,
             };
       const cronStatuses = await resolveAllManagedDreamingCronStatuses(context);
+      const defaultEntry: DoctorMemoryAgentStatusPayload = {
+        agentId,
+        dirty: Boolean(status.dirty),
+        files: status.files ?? 0,
+        chunks: status.chunks ?? 0,
+      };
+      const otherEntries = await Promise.all(
+        otherAgentIds.map((id) => collectMemoryAgentStatus(cfg, id)),
+      );
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         provider: status.provider,
@@ -860,15 +934,27 @@ export const doctorHandlers: GatewayRequestHandlers = {
             },
           },
         },
+        perAgent: [defaultEntry, ...otherEntries],
       };
       respond(true, payload, undefined);
     } catch (err) {
+      const defaultEntry: DoctorMemoryAgentStatusPayload = {
+        agentId,
+        dirty: false,
+        files: 0,
+        chunks: 0,
+        error: `gateway memory probe failed: ${formatError(err)}`,
+      };
+      const otherEntries = await Promise.all(
+        otherAgentIds.map((id) => collectMemoryAgentStatus(cfg, id)),
+      );
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         embedding: {
           ok: false,
           error: `gateway memory probe failed: ${formatError(err)}`,
         },
+        perAgent: [defaultEntry, ...otherEntries],
       };
       respond(true, payload, undefined);
     } finally {
