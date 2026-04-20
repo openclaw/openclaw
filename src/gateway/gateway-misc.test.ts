@@ -374,6 +374,7 @@ describe("gateway broadcaster", () => {
       "update.available",
     ]);
     expect(nodeSocket.sent.map((frame) => frame.event)).toEqual([
+      "voicewake.changed",
       "heartbeat",
       "presence",
       "health",

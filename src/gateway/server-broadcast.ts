@@ -41,6 +41,11 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.tool": [READ_SCOPE],
 };
 
+// Events that node-role sessions must receive even when the event's operator
+// scope would otherwise reject non-operator roles. Nodes act on these updates
+// (e.g. reconfiguring wake-word triggers).
+const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed"]);
+
 export type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
@@ -58,7 +63,7 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   }
   const role = client.connect.role ?? "operator";
   if (role !== "operator") {
-    return false;
+    return role === "node" && NODE_ALLOWED_EVENTS.has(event);
   }
   const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
