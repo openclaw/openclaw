@@ -19,7 +19,6 @@ export function createChannelContractTestShards() {
     "checks-fast-contracts-channels-registry-b": [],
     "checks-fast-contracts-channels-core-a": [],
     "checks-fast-contracts-channels-core-b": [],
-    "checks-fast-contracts-channels-extensions": [],
   };
   const pushBalanced = (firstKey, secondKey, file) => {
     const target = groups[firstKey].length <= groups[secondKey].length ? firstKey : secondKey;
@@ -28,9 +27,7 @@ export function createChannelContractTestShards() {
 
   for (const file of listContractTestFiles(rootDir)) {
     const name = relative(rootDir, file).replaceAll("\\", "/");
-    if (name.startsWith("plugins-core-extension.")) {
-      groups["checks-fast-contracts-channels-extensions"].push(file);
-    } else if (name.startsWith("plugins-core.") || name.startsWith("plugin.")) {
+    if (name.startsWith("plugins-core.") || name.startsWith("plugin.")) {
       pushBalanced(
         "checks-fast-contracts-channels-core-a",
         "checks-fast-contracts-channels-core-b",

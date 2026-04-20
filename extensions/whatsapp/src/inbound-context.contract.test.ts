@@ -1,8 +1,8 @@
-import { it } from "vitest";
-import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
-import { expectChannelInboundContextContract } from "../../../src/channels/plugins/contracts/test-helpers.js";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/testing";
+import { describe, it } from "vitest";
 
-export function installWhatsAppInboundContractSuite() {
+describe("WhatsApp inbound context contract", () => {
   it("keeps inbound context finalized", () => {
     const ctx = finalizeInboundContext({
       Body: "Alice: hi",
@@ -30,4 +30,4 @@ export function installWhatsAppInboundContractSuite() {
 
     expectChannelInboundContextContract(ctx);
   });
-}
+});

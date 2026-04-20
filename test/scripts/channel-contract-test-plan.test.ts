@@ -43,11 +43,6 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
         runtime: "node",
         task: "contracts-channels",
       },
-      {
-        checkName: "checks-fast-contracts-channels-extensions",
-        runtime: "node",
-        task: "contracts-channels",
-      },
     ]);
   });
 

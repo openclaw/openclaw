@@ -23,6 +23,14 @@ function createTelegramAccount(
   };
 }
 
+function getTelegramConfig(cfg: OpenClawConfig) {
+  const config = cfg.channels?.telegram;
+  if (!config) {
+    throw new Error("expected telegram config");
+  }
+  return config;
+}
+
 describe("Telegram security audit findings", () => {
   it("flags group commands without a sender allowlist", async () => {
     const cfg: OpenClawConfig = {
@@ -39,7 +47,7 @@ describe("Telegram security audit findings", () => {
     readChannelAllowFromStoreMock.mockResolvedValue([]);
     const findings = await collectTelegramSecurityAuditFindings({
       cfg,
-      account: createTelegramAccount(cfg.channels!.telegram),
+      account: createTelegramAccount(getTelegramConfig(cfg)),
       accountId: "default",
     });
 
@@ -69,7 +77,7 @@ describe("Telegram security audit findings", () => {
     readChannelAllowFromStoreMock.mockResolvedValue([]);
     const findings = await collectTelegramSecurityAuditFindings({
       cfg,
-      account: createTelegramAccount(cfg.channels!.telegram),
+      account: createTelegramAccount(getTelegramConfig(cfg)),
       accountId: "default",
     });
 
