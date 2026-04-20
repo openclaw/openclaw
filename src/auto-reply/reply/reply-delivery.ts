@@ -86,7 +86,8 @@ export function createBlockReplyDeliveryHandler(params: {
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
-    if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
+    const hasDroppedMedia = (payload.droppedMedia?.length ?? 0) > 0;
+    if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia && !hasDroppedMedia) {
       return;
     }
 
@@ -131,11 +132,17 @@ export function createBlockReplyDeliveryHandler(params: {
     );
     const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
 
-    // Skip empty payloads unless they have audioAsVoice flag (need to track it).
-    if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
+    const blockHasDroppedMedia = (blockPayload.droppedMedia?.length ?? 0) > 0;
+    // Skip empty payloads unless they have audioAsVoice flag or dropped media notice.
+    if (
+      !blockPayload.text &&
+      !blockHasMedia &&
+      !blockPayload.audioAsVoice &&
+      !blockHasDroppedMedia
+    ) {
       return;
     }
-    if (normalized.isSilent && !blockHasMedia) {
+    if (normalized.isSilent && !blockHasMedia && !blockHasDroppedMedia) {
       return;
     }
 

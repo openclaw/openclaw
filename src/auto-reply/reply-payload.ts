@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   InteractiveReply,
   MessagePresentation,
@@ -46,7 +47,50 @@ export type ReplyPayload = {
   isCompactionNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /** Media items that were dropped during normalization (blocked, inaccessible, etc.). */
+  droppedMedia?: DroppedMediaItem[];
 };
+
+export type DroppedMediaReasonCode =
+  | "normalization-failed"
+  | "blocked-path"
+  | "file-not-accessible"
+  | "data-url-rejected"
+  | "unknown";
+
+export type DroppedMediaItem = {
+  displayName: string;
+  code: DroppedMediaReasonCode;
+};
+
+/** Strip directory components from a media source so user-facing notices
+ *  never expose full filesystem paths. */
+export function sanitizeMediaDisplayName(mediaSource: string): string {
+  return path.basename(mediaSource) || mediaSource;
+}
+
+/** Derive a reason code from the error thrown during media normalization. */
+export function resolveDroppedMediaCode(err: unknown): DroppedMediaReasonCode {
+  if (!(err instanceof Error)) {
+    return "unknown";
+  }
+  const msg = err.message.toLowerCase();
+  if (msg.includes("blocked")) {
+    return "blocked-path";
+  }
+  if (msg.includes("data url") || msg.includes("data:")) {
+    return "data-url-rejected";
+  }
+  if (
+    msg.includes("enoent") ||
+    msg.includes("not found") ||
+    msg.includes("no such file") ||
+    msg.includes("not accessible")
+  ) {
+    return "file-not-accessible";
+  }
+  return "unknown";
+}
 
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;

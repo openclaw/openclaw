@@ -1,4 +1,11 @@
-import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { sendMediaWithLeadingCaption } from "openclaw/plugin-sdk/reply-payload";
+import {
+  chunkByParagraph,
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
+import type { DroppedMediaItem, DroppedMediaReasonCode } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
@@ -110,6 +117,29 @@ export type OutboundDurableDeliverySupport =
     };
 
 const log = createSubsystemLogger("outbound/deliver");
+
+const REASON_LABELS: Record<DroppedMediaReasonCode, string> = {
+  "normalization-failed": "file not accessible",
+  "blocked-path": "file path blocked",
+  "file-not-accessible": "file not accessible",
+  "data-url-rejected": "data URL not supported",
+  unknown: "file not accessible",
+};
+
+export function formatDroppedMediaNotice(dropped: readonly DroppedMediaItem[]): string {
+  if (dropped.length === 0) {
+    return "";
+  }
+  if (dropped.length === 1) {
+    const item = dropped[0];
+    return `\u26a0 Attachment not sent: ${item.displayName} (${REASON_LABELS[item.code]})`;
+  }
+  const lines = dropped.map(
+    (item) => `\u2022 ${item.displayName} \u2014 ${REASON_LABELS[item.code]}`,
+  );
+  return `\u26a0 ${dropped.length} attachments not sent:\n${lines.join("\n")}`;
+}
+
 let transcriptRuntimePromise:
   | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
   | undefined;
@@ -717,7 +747,7 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }) && !payload.droppedMedia?.length) {
       return null;
     }
     if (text) {
@@ -1410,7 +1440,7 @@ async function deliverOutboundPayloadsCore(
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
         : renderedPayload;
-      const effectivePayload = normalizedEffectivePayload
+      let effectivePayload = normalizedEffectivePayload
         ? normalizeEmptyPayloadForDelivery(
             stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
           )
@@ -1420,6 +1450,22 @@ async function deliverOutboundPayloadsCore(
       }
       payloadSummary = buildPayloadSummary(effectivePayload);
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
+
+      // Append dropped-media user notice to text before sending.
+      if (payloadSummary.droppedMedia?.length) {
+        const notice = formatDroppedMediaNotice(payloadSummary.droppedMedia);
+        if (notice) {
+          const separator = payloadSummary.text.trim() ? "\n\n" : "";
+          effectivePayload = {
+            ...effectivePayload,
+            text: (effectivePayload.text ?? "") + separator + notice,
+          };
+          payloadSummary = {
+            ...payloadSummary,
+            text: payloadSummary.text + separator + notice,
+          };
+        }
+      }
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
@@ -1606,16 +1652,21 @@ async function deliverOutboundPayloadsCore(
     }
   }
   if (params.mirror && results.length > 0) {
+    // Collect all dropped media notices across payloads for transcript mirror.
+    const allDropped = payloads.flatMap((p) => p.droppedMedia ?? []);
+    const droppedNotice = allDropped.length > 0 ? formatDroppedMediaNotice(allDropped) : "";
     const mirrorText = resolveMirroredTranscriptText({
       text: params.mirror.text,
       mediaUrls: params.mirror.mediaUrls,
     });
-    if (mirrorText) {
+    const combinedMirrorText =
+      [mirrorText, droppedNotice].filter(Boolean).join("\n\n") || undefined;
+    if (combinedMirrorText) {
       const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
       await appendAssistantMessageToSessionTranscript({
         agentId: params.mirror.agentId,
         sessionKey: params.mirror.sessionKey,
-        text: mirrorText,
+        text: combinedMirrorText,
         idempotencyKey: params.mirror.idempotencyKey,
         config: params.cfg,
       });
