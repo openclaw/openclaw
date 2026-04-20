@@ -387,6 +387,10 @@ export function createCliJsonlStreamingParser(params: {
   const seenRecordKeys = new Set<string>();
   const emittedToolUseKeys = new Set<string>();
   const emittedToolResultKeys = new Set<string>();
+  const toolUseBlocksByIndex = new Map<
+    number,
+    { name: string; toolUseId?: string; input: unknown; partialJson: string }
+  >();
 
   const emitToolUseFromBlock = (block: Record<string, unknown>) => {
     if (!params.onToolUse) {
@@ -414,6 +418,25 @@ export function createCliJsonlStreamingParser(params: {
         toolUseId: typeof block.id === "string" ? block.id : undefined,
         input: block.arguments,
       });
+    }
+  };
+
+  const parseToolUseInputJsonDelta = (
+    current: string,
+    delta: Record<string, unknown>,
+  ): { nextText: string; parsedInput?: unknown } | null => {
+    if (delta.type !== "input_json_delta") {
+      return null;
+    }
+    const partialJson = typeof delta.partial_json === "string" ? delta.partial_json : "";
+    const nextText = `${current}${partialJson}`;
+    if (!nextText.trim()) {
+      return { nextText };
+    }
+    try {
+      return { nextText, parsedInput: JSON.parse(nextText) };
+    } catch {
+      return { nextText };
     }
   };
 
@@ -510,9 +533,60 @@ export function createCliJsonlStreamingParser(params: {
     ) {
       const event = isRecord(parsed.event) ? parsed.event : parsed;
       if (event.type === "content_block_start" && isRecord(event.content_block)) {
+        const blockIndex =
+          typeof event.index === "number" && Number.isFinite(event.index)
+            ? Math.floor(event.index)
+            : undefined;
+        if (
+          blockIndex !== undefined &&
+          event.content_block.type === "tool_use" &&
+          typeof event.content_block.name === "string"
+        ) {
+          toolUseBlocksByIndex.set(blockIndex, {
+            name: event.content_block.name,
+            toolUseId:
+              typeof event.content_block.id === "string" ? event.content_block.id : undefined,
+            input: event.content_block.input,
+            partialJson: "",
+          });
+        }
         emitToolUseFromBlock(event.content_block);
         emitToolResultFromBlock(event.content_block);
         emitThinkingFromBlock(event.content_block);
+      }
+
+      if (event.type === "content_block_delta" && isRecord(event.delta) && params.onToolUse) {
+        const blockIndex =
+          typeof event.index === "number" && Number.isFinite(event.index)
+            ? Math.floor(event.index)
+            : undefined;
+        const trackedBlock =
+          blockIndex !== undefined ? toolUseBlocksByIndex.get(blockIndex) : undefined;
+        if (trackedBlock) {
+          const parsedDelta = parseToolUseInputJsonDelta(trackedBlock.partialJson, event.delta);
+          if (parsedDelta) {
+            trackedBlock.partialJson = parsedDelta.nextText;
+            if (parsedDelta.parsedInput !== undefined) {
+              trackedBlock.input = parsedDelta.parsedInput;
+              emitToolUseFromBlock({
+                type: "tool_use",
+                id: trackedBlock.toolUseId,
+                name: trackedBlock.name,
+                input: parsedDelta.parsedInput,
+              });
+            }
+          }
+        }
+      }
+
+      if (event.type === "content_block_stop") {
+        const blockIndex =
+          typeof event.index === "number" && Number.isFinite(event.index)
+            ? Math.floor(event.index)
+            : undefined;
+        if (blockIndex !== undefined) {
+          toolUseBlocksByIndex.delete(blockIndex);
+        }
       }
 
       const message = isRecord(parsed.message) ? parsed.message : undefined;

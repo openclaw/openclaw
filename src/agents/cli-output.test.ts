@@ -480,4 +480,77 @@ describe("createCliJsonlStreamingParser", () => {
       input: { file_path: "/tmp/prompt.txt", limit: 200 },
     });
   });
+
+  it("re-emits Claude tool use when input_json_delta gradually fills tool input", () => {
+    const onToolUse = vi.fn();
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: vi.fn(),
+      onToolUse,
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          session_id: "session-bash-delta",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_bash",
+              name: "Bash",
+              input: {},
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          session_id: "session-bash-delta",
+          event: {
+            type: "content_block_delta",
+            index: 1,
+            delta: {
+              type: "input_json_delta",
+              partial_json: '{"command":"cd ~/Projects/lm-router && ',
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          session_id: "session-bash-delta",
+          event: {
+            type: "content_block_delta",
+            index: 1,
+            delta: {
+              type: "input_json_delta",
+              partial_json: 'npm test","description":"run unit tests"}',
+            },
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(onToolUse).toHaveBeenCalledTimes(2);
+    expect(onToolUse.mock.calls[0]?.[0]).toEqual({
+      name: "Bash",
+      toolUseId: "toolu_bash",
+      input: {},
+    });
+    expect(onToolUse.mock.calls[1]?.[0]).toEqual({
+      name: "Bash",
+      toolUseId: "toolu_bash",
+      input: {
+        command: "cd ~/Projects/lm-router && npm test",
+        description: "run unit tests",
+      },
+    });
+  });
 });
