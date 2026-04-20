@@ -1,5 +1,5 @@
-import { loadShellEnvFallback } from "../src/infra/shell-env.js";
-import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
+import { loadShellEnvFallback } from "../../src/infra/shell-env.js";
+import { getProviderEnvVars } from "../../src/secrets/provider-env-vars.js";
 
 export function maybeLoadShellEnvForGenerationProviders(providerIds: string[]): void {
   const expectedKeys = [
