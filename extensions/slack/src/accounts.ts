@@ -96,13 +96,13 @@ export function resolveSlackAccount(params: {
     baseAllowEnv && !blockAppEnv ? resolveSlackAppToken(process.env.SLACK_APP_TOKEN) : undefined;
   const envUser =
     baseAllowEnv && !blockUserEnv ? resolveSlackUserToken(process.env.SLACK_USER_TOKEN) : undefined;
-  const configBot = params.tolerateUnresolvedSecrets
+  const configBot = tolerantMode
     ? normalizeSecretInputString(merged.botToken)
     : resolveSlackBotToken(merged.botToken, `channels.slack.accounts.${accountId}.botToken`);
-  const configApp = params.tolerateUnresolvedSecrets
+  const configApp = tolerantMode
     ? normalizeSecretInputString(merged.appToken)
     : resolveSlackAppToken(merged.appToken, `channels.slack.accounts.${accountId}.appToken`);
-  const configUser = params.tolerateUnresolvedSecrets
+  const configUser = tolerantMode
     ? normalizeSecretInputString(merged.userToken)
     : resolveSlackUserToken(merged.userToken, `channels.slack.accounts.${accountId}.userToken`);
   const botToken = configBot ?? envBot;
