@@ -386,7 +386,7 @@ export async function expectFeishuReplyPipelineDedupedAfterPostSendFailure(param
           expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
           expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
         },
-        { timeout: waitTimeoutMs },
+        waitTimeoutMs == null ? undefined : { timeout: waitTimeoutMs },
       ),
     waitForSecond: () =>
       vi.waitFor(
@@ -394,7 +394,7 @@ export async function expectFeishuReplyPipelineDedupedAfterPostSendFailure(param
           expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
           expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
         },
-        { timeout: waitTimeoutMs },
+        waitTimeoutMs == null ? undefined : { timeout: waitTimeoutMs },
       ),
   });
 }
@@ -413,13 +413,13 @@ async function loadMonitorSingleAccount() {
   return module.monitorSingleAccount;
 }
 
-export async function setupFeishuLifecycleHandler<T extends RuntimeEnv>(params: {
+export async function setupFeishuLifecycleHandler(params: {
   createEventDispatcherMock: {
     mockReturnValue: (value: unknown) => unknown;
     mockReturnValueOnce: (value: unknown) => unknown;
   };
   onRegister: (registered: Record<string, (data: unknown) => Promise<void>>) => void;
-  runtime: T;
+  runtime: RuntimeEnv;
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   handlerKey: string;

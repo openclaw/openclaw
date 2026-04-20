@@ -10,6 +10,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -34,6 +35,7 @@ import { resolveSlackRoomContextHints } from "./room-context.js";
 type SlackBlock = { type: string; [key: string]: unknown };
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
+const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
 const SLACK_COMMAND_ARG_BUTTON_ROW_SIZE = 5;
 const SLACK_COMMAND_ARG_OVERFLOW_MIN = 3;
@@ -221,16 +223,18 @@ function buildSlackCommandArgMenuBlocks(params: {
           },
         ]
       : encodedChoices.length <= SLACK_COMMAND_ARG_BUTTON_ROW_SIZE || !canUseStaticSelect
-        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map((choices) => ({
-            type: "actions",
-            elements: choices.map((choice) => ({
-              type: "button",
-              action_id: SLACK_COMMAND_ARG_ACTION_ID,
-              text: { type: "plain_text", text: choice.label },
-              value: choice.value,
-              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
-            })),
-          }))
+        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map(
+            (choices, rowIndex) => ({
+              type: "actions",
+              elements: choices.map((choice, colIndex) => ({
+                type: "button",
+                action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
+                text: { type: "plain_text", text: choice.label },
+                value: choice.value,
+                confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
+              })),
+            }),
+          )
         : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map(
             (choices, index) => ({
               type: "actions",
@@ -573,6 +577,7 @@ export async function registerSlackMonitorSlashCommands(params: {
                 : `slack:group:${command.channel_id}`,
           }) ?? (isDirectMessage ? senderName : roomLabel),
         GroupSubject: isRoomish ? roomLabel : undefined,
+        GroupSpace: ctx.teamId || undefined,
         GroupSystemPrompt: groupSystemPrompt,
         UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
         SenderName: senderName,
@@ -597,7 +602,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
         ctx: ctxPayload,
         onError: (err) =>
-          runtime.error?.(danger(`slack slash: failed updating session meta: ${String(err)}`)),
+          runtime.error?.(
+            danger(`slack slash: failed updating session meta: ${formatErrorMessage(err)}`),
+          ),
       });
 
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -629,7 +636,9 @@ export async function registerSlackMonitorSlashCommands(params: {
           ...replyPipeline,
           deliver: async (payload) => deliverSlashPayloads([payload]),
           onError: (err, info) => {
-            runtime.error?.(danger(`slack slash ${info.kind} reply failed: ${String(err)}`));
+            runtime.error?.(
+              danger(`slack slash ${info.kind} reply failed: ${formatErrorMessage(err)}`),
+            );
           },
         },
         replyOptions: {
@@ -641,7 +650,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         await deliverSlashPayloads([]);
       }
     } catch (err) {
-      runtime.error?.(danger(`slack slash handler failed: ${String(err)}`));
+      runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
       await respond({
         text: "Sorry, something went wrong handling that command.",
         response_type: "ephemeral",
@@ -800,11 +809,11 @@ export async function registerSlackMonitorSlashCommands(params: {
   } catch (err) {
     supportsExternalArgMenus = false;
     logVerbose(
-      `slack: external arg-menu registration failed, falling back to static menus: ${String(err)}`,
+      `slack: external arg-menu registration failed, falling back to static menus: ${formatErrorMessage(err)}`,
     );
   }
 
-  const registerArgAction = (actionId: string) => {
+  const registerArgAction = (actionId: string | RegExp) => {
     (
       ctx.app as unknown as {
         action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]>;
@@ -882,5 +891,5 @@ export async function registerSlackMonitorSlashCommands(params: {
       });
     });
   };
-  registerArgAction(SLACK_COMMAND_ARG_ACTION_ID);
+  registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
 }

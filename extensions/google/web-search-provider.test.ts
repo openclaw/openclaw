@@ -32,4 +32,38 @@ describe("google web search provider", () => {
     expect(__testing.resolveGeminiModel()).toBe("gemini-2.5-flash");
     expect(__testing.resolveGeminiModel({ model: "  gemini-2.5-pro  " })).toBe("gemini-2.5-pro");
   });
+
+  it("resolves the Gemini base URL from config and environment", () => {
+    withEnv(
+      {
+        GEMINI_BASE_URL: "https://custom.gemini.api/v1",
+        GOOGLE_GEMINI_BASE_URL: undefined,
+        GOOGLE_GEMINI_ENDPOINT: undefined,
+      },
+      () => {
+        expect(__testing.resolveGeminiBaseUrl()).toBe("https://custom.gemini.api/v1");
+        expect(__testing.resolveGeminiBaseUrl({ baseUrl: "https://override.api" })).toBe(
+          "https://override.api",
+        );
+      },
+    );
+  });
+
+  it("auto-detects OpenAI-compatible API type based on base URL", () => {
+    expect(__testing.resolveGeminiApiType({ baseUrl: "https://api.groq.com/openai/v1" })).toBe(
+      "openai-compatible",
+    );
+    expect(__testing.resolveGeminiApiType({ baseUrl: "https://generativelanguage.googleapis.com" })).toBe(
+      "gemini",
+    );
+  });
+
+  it("respects explicit API type overrides", () => {
+    expect(__testing.resolveGeminiApiType({ apiType: "openai-compatible" })).toBe(
+      "openai-compatible",
+    );
+    withEnv({ GEMINI_API_TYPE: "openai-compatible" }, () => {
+      expect(__testing.resolveGeminiApiType()).toBe("openai-compatible");
+    });
+  });
 });

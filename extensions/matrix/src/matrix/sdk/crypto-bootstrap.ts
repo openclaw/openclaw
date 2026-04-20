@@ -47,26 +47,42 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     options: MatrixCryptoBootstrapOptions = {},
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
+    const deferSecretStorageBootstrapUntilAfterCrossSigning =
+      options.forceResetCrossSigning === true;
     // Register verification listeners before expensive bootstrap work so incoming requests
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
-    await this.bootstrapSecretStorage(crypto, {
-      strict,
-      allowSecretStorageRecreateWithoutRecoveryKey:
-        options.allowSecretStorageRecreateWithoutRecoveryKey === true,
-    });
-    const crossSigning = await this.bootstrapCrossSigning(crypto, {
+    if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
+      await this.bootstrapSecretStorage(crypto, {
+        strict,
+        allowSecretStorageRecreateWithoutRecoveryKey:
+          options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+      });
+    }
+    let crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: options.forceResetCrossSigning === true,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
       allowSecretStorageRecreateWithoutRecoveryKey:
         options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       strict,
     });
+    // Forced repair may need password UIA to upload new cross-signing keys. Delay any
+    // secret-storage repair/recreation until after that step succeeds so passwordless bots do
+    // not partially mutate SSSS on homeservers that require password-based UIA.
     await this.bootstrapSecretStorage(crypto, {
       strict,
       allowSecretStorageRecreateWithoutRecoveryKey:
         options.allowSecretStorageRecreateWithoutRecoveryKey === true,
     });
+    if (deferSecretStorageBootstrapUntilAfterCrossSigning) {
+      crossSigning = await this.bootstrapCrossSigning(crypto, {
+        forceResetCrossSigning: false,
+        allowAutomaticCrossSigningReset: false,
+        allowSecretStorageRecreateWithoutRecoveryKey:
+          options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+        strict,
+      });
+    }
     const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, strict);
     return {
       crossSigningReady: crossSigning.ready,
@@ -126,6 +142,16 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         return false;
       }
     };
+    const refreshPublishedCrossSigningKeys = async (): Promise<void> => {
+      if (typeof crypto.userHasCrossSigningKeys !== "function") {
+        return;
+      }
+      try {
+        await crypto.userHasCrossSigningKeys(userId, true);
+      } catch {
+        // The normal bootstrap flow below handles missing or unavailable keys.
+      }
+    };
     const isCrossSigningReady = async (): Promise<boolean> => {
       if (typeof crypto.isCrossSigningReady !== "function") {
         return true;
@@ -153,12 +179,38 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     };
 
     if (options.forceResetCrossSigning) {
-      try {
+      const resetCrossSigning = async (): Promise<void> => {
         await crypto.bootstrapCrossSigning({
           setupNewCrossSigning: true,
           authUploadDeviceSigningKeys,
         });
+      };
+      try {
+        await resetCrossSigning();
       } catch (err) {
+        const shouldRepairSecretStorage =
+          options.allowSecretStorageRecreateWithoutRecoveryKey &&
+          isRepairableSecretStorageAccessError(err);
+        if (shouldRepairSecretStorage) {
+          LogService.warn(
+            "MatrixClientLite",
+            "Forced cross-signing reset could not unlock secret storage; recreating secret storage and retrying.",
+          );
+          try {
+            await this.deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
+              allowSecretStorageRecreateWithoutRecoveryKey: true,
+              forceNewSecretStorage: true,
+            });
+            await resetCrossSigning();
+          } catch (repairErr) {
+            LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", repairErr);
+            if (options.strict) {
+              throw repairErr instanceof Error ? repairErr : new Error(String(repairErr));
+            }
+            return { ready: false, published: false };
+          }
+          return await finalize();
+        }
         LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", err);
         if (options.strict) {
           throw err instanceof Error ? err : new Error(String(err));
@@ -170,6 +222,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
     // First pass: preserve existing cross-signing identity and ensure public keys are uploaded.
     try {
+      await refreshPublishedCrossSigningKeys();
       await crypto.bootstrapCrossSigning({
         authUploadDeviceSigningKeys,
       });

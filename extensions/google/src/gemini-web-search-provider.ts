@@ -1,356 +1,57 @@
-import { Type } from "@sinclair/typebox";
 import {
-  buildSearchCacheKey,
-  buildUnsupportedSearchFilterResponse,
-  DEFAULT_SEARCH_COUNT,
-  getScopedCredentialValue,
-  MAX_SEARCH_COUNT,
+  createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
-  readCachedSearchPayload,
-  readConfiguredSecretString,
-  readNumberParam,
-  readProviderEnvValue,
-  readStringParam,
-  resolveCitationRedirectUrl,
   resolveProviderWebSearchPluginConfig,
-  resolveSearchCacheTtlMs,
-  resolveSearchCount,
-  resolveSearchTimeoutSeconds,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
-  type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
-  withTrustedWebSearchEndpoint,
-  wrapWebContent,
-  writeCachedSearchPayload,
-} from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeGoogleApiBaseUrl } from "../api.js";
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import {
+  resolveGeminiApiKey,
+  resolveGeminiApiType,
+  resolveGeminiBaseUrl,
+  resolveGeminiModel,
+} from "./gemini-web-search-provider.shared.js";
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
 
-type GeminiConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  apiType?: "gemini" | "openai-compatible";
-};
+type GeminiWebSearchRuntime = typeof import("./gemini-web-search-provider.runtime.js");
 
-type GeminiGroundingResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-      }>;
-    };
-    groundingMetadata?: {
-      groundingChunks?: Array<{
-        web?: {
-          uri?: string;
-          title?: string;
-        };
-      }>;
-    };
-  }>;
-  error?: {
-    code?: number;
-    message?: string;
-    status?: string;
-  };
-};
+let geminiWebSearchRuntimePromise: Promise<GeminiWebSearchRuntime> | undefined;
 
-type OpenAICompatibleChatResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
-  // LiteLLM often passes through grounding metadata in hidden params or extra fields
-  grounding_metadata?: {
-    groundingChunks?: Array<{
-      web?: {
-        uri?: string;
-        title?: string;
-      };
-    }>;
-  };
-  error?: {
-    message?: string;
-  };
-};
-
-function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
-  const gemini = searchConfig?.gemini;
-  return gemini && typeof gemini === "object" && !Array.isArray(gemini)
-    ? (gemini as GeminiConfig)
-    : {};
+function loadGeminiWebSearchRuntime(): Promise<GeminiWebSearchRuntime> {
+  geminiWebSearchRuntimePromise ??= import("./gemini-web-search-provider.runtime.js");
+  return geminiWebSearchRuntimePromise;
 }
 
-function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
-  return (
-    readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
-    readProviderEnvValue(["GEMINI_API_KEY", "GOOGLE_API_KEY"])
-  );
-}
-
-function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
-  const fromConfig = typeof gemini?.baseUrl === "string" ? gemini.baseUrl.trim() : "";
-  // Note: GOOGLE_GEMINI_BASE_URL is often blocked in .env files due to the _BASE_URL suffix.
-  // We check GEMINI_BASE_URL and GOOGLE_GEMINI_ENDPOINT as fallbacks.
-  const fromEnv = readProviderEnvValue([
-    "GOOGLE_GEMINI_BASE_URL",
-    "GEMINI_BASE_URL",
-    "GOOGLE_GEMINI_ENDPOINT",
-  ]);
-  return normalizeGoogleApiBaseUrl(fromConfig || fromEnv);
-}
-
-function resolveGeminiApiType(gemini?: GeminiConfig): "gemini" | "openai-compatible" {
-  if (gemini?.apiType === "openai-compatible" || gemini?.apiType === "gemini") {
-    return gemini.apiType;
-  }
-  const fromEnv = readProviderEnvValue(["GEMINI_API_TYPE"]);
-  if (fromEnv === "openai-compatible" || fromEnv === "gemini") {
-    return fromEnv;
-  }
-
-  // Robust fallback: if baseUrl contains /v1 and is NOT googleapis.com, it's likely OpenAI-compatible
-  const baseUrl = resolveGeminiBaseUrl(gemini);
-  if (
-    !baseUrl.includes("googleapis.com") &&
-    (baseUrl.endsWith("/v1") || baseUrl.includes("/v1/"))
-  ) {
-    return "openai-compatible";
-  }
-  return "gemini";
-}
-
-function resolveGeminiModel(gemini?: GeminiConfig): string {
-  const model = normalizeOptionalString(gemini?.model) ?? "";
-  return model || DEFAULT_GEMINI_MODEL;
-}
-
-async function runGeminiSearch(params: {
-  query: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  apiType: "gemini" | "openai-compatible";
-  timeoutSeconds: number;
-}): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
-  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
-
-  if (params.apiType === "openai-compatible") {
-    const endpoint = `${baseUrl}/chat/completions`;
-    return withTrustedWebSearchEndpoint(
-      {
-        url: endpoint,
-        timeoutSeconds: params.timeoutSeconds,
-        init: {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${params.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: params.model,
-            messages: [{ role: "user", content: params.query }],
-            tools: [{ google_search: {} }],
-          }),
-        },
-      },
-      async (res) => {
-        if (!res.ok) {
-          const detail = (await res.text()) || res.statusText;
-          throw new Error(`OpenAI-compatible API error (${res.status}) at ${endpoint}: ${detail}`);
-        }
-        const data = (await res.json()) as OpenAICompatibleChatResponse;
-        if (data.error) {
-          throw new Error(`API error: ${data.error.message}`);
-        }
-
-        const choice = data.choices?.[0];
-        const content = choice?.message?.content ?? "No response";
-        const rawCitations = (data.grounding_metadata?.groundingChunks ?? [])
-          .filter((chunk) => chunk.web?.uri)
-          .map((chunk) => ({
-            url: chunk.web!.uri!,
-            title: chunk.web?.title || undefined,
-          }));
-
-        const citations: Array<{ url: string; title?: string }> = [];
-        for (const citation of rawCitations) {
-          citations.push({
-            ...citation,
-            url: await resolveCitationRedirectUrl(citation.url),
-          });
-        }
-        return { content, citations };
-      },
-    );
-  }
-
-  const endpoint = `${baseUrl}/models/${params.model}:generateContent`;
-  return withTrustedWebSearchEndpoint(
-    {
-      url: endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      init: {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": params.apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: params.query }] }],
-          tools: [{ google_search: {} }],
-        }),
-      },
+const GEMINI_TOOL_PARAMETERS = {
+  type: "object",
+  properties: {
+    query: { type: "string", description: "Search query string." },
+    count: {
+      type: "number",
+      description: "Number of results to return (1-10).",
+      minimum: 1,
+      maximum: 10,
     },
-    async (res) => {
-      if (!res.ok) {
-        const safeDetail = ((await res.text()) || res.statusText).replace(
-          /key=[^&\s]+/gi,
-          "key=***",
-        );
-        throw new Error(`Gemini API error (${res.status}) at ${endpoint}: ${safeDetail}`);
-      }
-
-      let data: GeminiGroundingResponse;
-      try {
-        data = (await res.json()) as GeminiGroundingResponse;
-      } catch (error) {
-        const safeError = String(error).replace(/key=[^&\s]+/gi, "key=***");
-        throw new Error(`Gemini API returned invalid JSON: ${safeError}`, { cause: error });
-      }
-
-      if (data.error) {
-        const rawMessage = data.error.message || data.error.status || "unknown";
-        throw new Error(
-          `Gemini API error (${data.error.code}) at ${endpoint}: ${rawMessage.replace(/key=[^&\s]+/gi, "key=***")}`,
-        );
-      }
-
-      const candidate = data.candidates?.[0];
-      const content =
-        candidate?.content?.parts
-          ?.map((part) => part.text)
-          .filter(Boolean)
-          .join("\n") ?? "No response";
-      const rawCitations = (candidate?.groundingMetadata?.groundingChunks ?? [])
-        .filter((chunk) => chunk.web?.uri)
-        .map((chunk) => ({
-          url: chunk.web!.uri!,
-          title: chunk.web?.title || undefined,
-        }));
-
-      const citations: Array<{ url: string; title?: string }> = [];
-      for (let index = 0; index < rawCitations.length; index += 10) {
-        const batch = rawCitations.slice(index, index + 10);
-        const resolved = await Promise.all(
-          batch.map(async (citation) => ({
-            ...citation,
-            url: await resolveCitationRedirectUrl(citation.url),
-          })),
-        );
-        citations.push(...resolved);
-      }
-
-      return { content, citations };
-    },
-  );
-}
-
-function createGeminiSchema() {
-  return Type.Object({
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: MAX_SEARCH_COUNT,
-      }),
-    ),
-    country: Type.Optional(Type.String({ description: "Not supported by Gemini." })),
-    language: Type.Optional(Type.String({ description: "Not supported by Gemini." })),
-    freshness: Type.Optional(Type.String({ description: "Not supported by Gemini." })),
-    date_after: Type.Optional(Type.String({ description: "Not supported by Gemini." })),
-    date_before: Type.Optional(Type.String({ description: "Not supported by Gemini." })),
-  });
-}
+    country: { type: "string", description: "Not supported by Gemini." },
+    language: { type: "string", description: "Not supported by Gemini." },
+    freshness: { type: "string", description: "Not supported by Gemini." },
+    date_after: { type: "string", description: "Not supported by Gemini." },
+    date_before: { type: "string", description: "Not supported by Gemini." },
+  },
+  required: ["query"],
+} satisfies Record<string, unknown>;
 
 function createGeminiToolDefinition(
-  searchConfig?: SearchConfigRecord,
+  searchConfig?: Record<string, unknown>,
 ): WebSearchProviderToolDefinition {
   return {
     description:
       "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search.",
-    parameters: createGeminiSchema(),
+    parameters: GEMINI_TOOL_PARAMETERS,
     execute: async (args) => {
-      const params = args;
-      const unsupportedResponse = buildUnsupportedSearchFilterResponse(params, "gemini");
-      if (unsupportedResponse) {
-        return unsupportedResponse;
-      }
-
-      const geminiConfig = resolveGeminiConfig(searchConfig);
-      const apiKey = resolveGeminiApiKey(geminiConfig);
-      if (!apiKey) {
-        return {
-          error: "missing_gemini_api_key",
-          message:
-            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
-
-      const query = readStringParam(params, "query", { required: true });
-      const count =
-        readNumberParam(params, "count", { integer: true }) ??
-        searchConfig?.maxResults ??
-        undefined;
-      const model = resolveGeminiModel(geminiConfig);
-      const baseUrl = resolveGeminiBaseUrl(geminiConfig);
-      const apiType = resolveGeminiApiType(geminiConfig);
-      const cacheKey = buildSearchCacheKey([
-        "gemini",
-        query,
-        resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        model,
-        baseUrl,
-        apiType,
-      ]);
-      const cached = readCachedSearchPayload(cacheKey);
-      if (cached) {
-        return cached;
-      }
-
-      const start = Date.now();
-      const result = await runGeminiSearch({
-        query,
-        apiKey,
-        baseUrl,
-        model,
-        apiType,
-        timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
-      });
-      const payload = {
-        query,
-        provider: "gemini",
-        model,
-        tookMs: Date.now() - start,
-        externalContent: {
-          untrusted: true,
-          source: "web_search",
-          provider: "gemini",
-          wrapped: true,
-        },
-        content: wrapWebContent(result.content),
-        citations: result.citations,
-      };
-      writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
-      return payload;
+      const { executeGeminiSearch } = await loadGeminiWebSearchRuntime();
+      return await executeGeminiSearch(args, searchConfig);
     },
   };
 }
@@ -373,23 +74,19 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://aistudio.google.com/apikey",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 20,
-    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "gemini", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
-    },
+    credentialPath: GEMINI_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: GEMINI_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "gemini" },
+      configuredCredential: { pluginId: "google" },
+    }),
     createTool: (ctx) =>
       createGeminiToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "gemini",
           resolveProviderWebSearchPluginConfig(ctx.config, "google"),
-        ) as SearchConfigRecord | undefined,
+        ),
       ),
   };
 }

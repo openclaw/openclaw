@@ -8,6 +8,7 @@ import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js
 import {
   mergeModelProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
+  sanitizeConfiguredProviderRequest,
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
@@ -430,8 +431,9 @@ async function resolveProviderExecutionContext(params: {
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
   const request = mergeModelProviderRequestOverrides(
-    sanitizeConfiguredModelProviderRequest(params.config?.request),
-    sanitizeConfiguredModelProviderRequest(params.entry.request),
+    sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+    sanitizeConfiguredProviderRequest(params.config?.request),
+    sanitizeConfiguredProviderRequest(params.entry.request),
   );
   return { apiKeys, baseUrl, headers, request };
 }

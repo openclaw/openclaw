@@ -6,7 +6,6 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
@@ -14,6 +13,7 @@ import {
   normalizeGoogleModelId,
   parseGeminiAuth,
 } from "./api.js";
+import { resolveGoogleApiType, resolveGoogleBaseUrl } from "./env-utils.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_OUTPUT_MIME = "image/png";
@@ -36,23 +36,6 @@ const GOOGLE_SUPPORTED_ASPECT_RATIOS = [
   "16:9",
   "21:9",
 ] as const;
-
-/**
- * Browser-safe environment variable reader.
- */
-function readProviderEnvValue(envVars: string[]): string | undefined {
-  const env = typeof process !== "undefined" ? process.env : undefined;
-  if (!env) {
-    return undefined;
-  }
-  for (const envVar of envVars) {
-    const value = normalizeSecretInput(env[envVar]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
 
 type GoogleInlineDataPart = {
   mimeType?: string;
@@ -81,38 +64,6 @@ type OpenAICompatibleImageResponse = {
     message?: string;
   };
 };
-
-function resolveGoogleBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
-  const fromConfig = cfg?.models?.providers?.google?.baseUrl;
-  const fromEnv = readProviderEnvValue([
-    "GOOGLE_GEMINI_ENDPOINT",
-    "GEMINI_BASE_URL",
-    "GOOGLE_GEMINI_BASE_URL",
-  ]);
-  return normalizeGoogleApiBaseUrl(fromConfig || fromEnv);
-}
-
-function resolveGoogleApiType(
-  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
-): "gemini" | "openai-compatible" {
-  const googleConfig = cfg?.models?.providers?.google as Record<string, unknown> | undefined;
-  const configuredApiType = googleConfig?.apiType;
-  const envApiType = readProviderEnvValue(["GEMINI_API_TYPE"]);
-
-  if (configuredApiType === "openai-compatible" || envApiType === "openai-compatible") {
-    return "openai-compatible";
-  }
-
-  const baseUrl = resolveGoogleBaseUrl(cfg);
-  if (
-    !baseUrl.includes("googleapis.com") &&
-    (baseUrl.endsWith("/v1") || baseUrl.includes("/v1/"))
-  ) {
-    return "openai-compatible";
-  }
-
-  return "gemini";
-}
 
 function normalizeGoogleImageModel(model: string | undefined): string {
   const trimmed = model?.trim();
@@ -197,10 +148,14 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const apiType = resolveGoogleApiType(req.cfg);
+      const googleBaseUrl = resolveGoogleBaseUrl(req.cfg?.models?.providers?.google?.baseUrl);
+      const apiType = resolveGoogleApiType(
+        googleBaseUrl,
+        req.cfg?.models?.providers?.google?.apiType,
+      );
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveGoogleBaseUrl(req.cfg),
+          baseUrl: googleBaseUrl,
           defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
           allowPrivateNetwork: true, // Always allow for custom endpoints
           defaultHeaders: parseGeminiAuth(auth.apiKey).headers,

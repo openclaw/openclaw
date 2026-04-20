@@ -13,13 +13,12 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
-  normalizeGoogleApiBaseUrl,
   normalizeGoogleModelId,
   parseGeminiAuth,
 } from "./api.js";
+import { resolveGoogleApiType, resolveGoogleBaseUrl } from "./env-utils.js";
 
 export const DEFAULT_GOOGLE_AUDIO_BASE_URL = DEFAULT_GOOGLE_API_BASE_URL;
 export const DEFAULT_GOOGLE_VIDEO_BASE_URL = DEFAULT_GOOGLE_API_BASE_URL;
@@ -27,49 +26,6 @@ const DEFAULT_GOOGLE_AUDIO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_VIDEO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 const DEFAULT_GOOGLE_VIDEO_PROMPT = "Describe the video.";
-
-/**
- * Browser-safe environment variable reader.
- */
-function readProviderEnvValue(envVars: string[]): string | undefined {
-  const env = typeof process !== "undefined" ? process.env : undefined;
-  if (!env) {
-    return undefined;
-  }
-  for (const envVar of envVars) {
-    const value = normalizeSecretInput(env[envVar]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function resolveGoogleBaseUrl(baseUrl?: string): string {
-  const fromEnv = readProviderEnvValue([
-    "GOOGLE_GEMINI_ENDPOINT",
-    "GEMINI_BASE_URL",
-    "GOOGLE_GEMINI_BASE_URL",
-  ]);
-  return normalizeGoogleApiBaseUrl(baseUrl || fromEnv);
-}
-
-function resolveGoogleApiType(
-  baseUrl: string,
-  apiTypeOverride?: string,
-): "gemini" | "openai-compatible" {
-  const envApiType = readProviderEnvValue(["GEMINI_API_TYPE"]);
-  if (apiTypeOverride === "openai-compatible" || envApiType === "openai-compatible") {
-    return "openai-compatible";
-  }
-  if (
-    !baseUrl.includes("googleapis.com") &&
-    (baseUrl.endsWith("/v1") || baseUrl.includes("/v1/"))
-  ) {
-    return "openai-compatible";
-  }
-  return "gemini";
-}
 
 async function generateGeminiInlineDataText(params: {
   buffer: Buffer;
@@ -98,7 +54,7 @@ async function generateGeminiInlineDataText(params: {
     return normalizeGoogleModelId(trimmed);
   })();
 
-  const rawBaseUrl = resolveGoogleBaseUrl(params.baseUrl ?? params.defaultBaseUrl);
+  const rawBaseUrl = resolveGoogleBaseUrl(params.baseUrl);
   const apiType = resolveGoogleApiType(
     rawBaseUrl,
     (params.request as Record<string, unknown> | undefined)?.apiType as

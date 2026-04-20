@@ -24,12 +24,6 @@ function findExplicitProviderConfig(
   );
   return isRecord(match?.[1]) ? match[1] : undefined;
 }
-
-function _buildKimiReplayPolicy() {
-  return {
-    preserveSignatures: false,
-  };
-}
 export default definePluginEntry({
   id: PLUGIN_ID,
   name: "Kimi Provider",
@@ -102,6 +96,8 @@ export default definePluginEntry({
         },
       },
       buildReplayPolicy: () => KIMI_REPLAY_POLICY,
+      isBinaryThinking: () => true,
+      resolveDefaultThinkingLevel: () => "off",
       wrapStreamFn: wrapKimiProviderStream,
     });
   },

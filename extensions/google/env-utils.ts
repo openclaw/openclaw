@@ -44,12 +44,21 @@ export function resolveGoogleApiType(
   }
 
   const urlString = typeof baseUrl === "string" ? baseUrl : "";
-  if (
-    urlString &&
-    !urlString.includes("googleapis.com") &&
-    (urlString.endsWith("/v1") || urlString.includes("/v1/"))
-  ) {
+  if (!urlString || urlString.includes("googleapis.com")) {
+    return "gemini";
+  }
+
+  // Auto-detect OpenAI-compatible for non-Google hosts (localhost, custom proxies, etc)
+  // especially if they have /v1 or if they are NOT clearly targeting Gemini native API.
+  if (urlString.endsWith("/v1") || urlString.includes("/v1/")) {
     return "openai-compatible";
   }
+
+  // If it's a custom host and doesn't look like Gemini v1beta endpoint, 
+  // we default to OpenAI-compatible as it's the most common proxy protocol.
+  if (!urlString.includes("/v1beta")) {
+    return "openai-compatible";
+  }
+
   return "gemini";
 }
