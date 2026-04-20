@@ -13,6 +13,7 @@ describe("moonshot provider catalog", () => {
     expect(provider.baseUrl).toBe(MOONSHOT_BASE_URL);
     expect(provider.api).toBe("openai-completions");
     expect(provider.models.map((model) => model.id)).toEqual([
+      "kimi-k2.6",
       "kimi-k2.5",
       "kimi-k2-thinking",
       "kimi-k2-thinking-turbo",
