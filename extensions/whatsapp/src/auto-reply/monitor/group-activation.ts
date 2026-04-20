@@ -67,7 +67,7 @@ export async function resolveGroupActivationFor(params: {
   const requireMention = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
     accountId: params.accountId,
-  }).resolveConversationRequireMention(params.conversationId);
+  }).resolveConversationRequireMention(params.conversationId, null);
   const defaultActivation = !requireMention ? "always" : "mention";
   return normalizeGroupActivation(activation) ?? defaultActivation;
 }

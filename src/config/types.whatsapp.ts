@@ -26,6 +26,7 @@ export type WhatsAppGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  admin?: string; // WhatsApp number (E.164 format) of the group admin
   /** Optional system prompt for this group. */
   systemPrompt?: string;
 };

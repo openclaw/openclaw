@@ -21,4 +21,12 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Config Writes",
     help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   },
+  groups: {
+    label: "WhatsApp Groups",
+    help: "Per-group configuration for WhatsApp groups. Configure admin, mention requirements, and tool policies.",
+  },
+  "groups.*.admin": {
+    label: "Group Admin",
+    help: "WhatsApp number (E.164 format) of the group administrator. Only the admin can run commands and doesn't need to mention the bot.",
+  },
 } satisfies Record<string, ChannelConfigUiHint>;
