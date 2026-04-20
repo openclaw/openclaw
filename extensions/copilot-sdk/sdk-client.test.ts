@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createDedicatedClient,
   denyAllPermissionHandler,
   getSdkClient,
   __resetSdkClientForTests,
@@ -108,5 +109,37 @@ describe("sdk-client wrapper", () => {
     await expect(
       getSdkClient({ sdkFactory: async () => hangingModule, startTimeoutMs: 100 }),
     ).rejects.toThrow(/timed out/);
+  });
+
+  it("createDedicatedClient returns a fresh non-singleton client each time", async () => {
+    const fake = buildFakeSdk();
+    const factory = vi.fn(async () => fake.module);
+
+    // Get the singleton first.
+    const singleton = await getSdkClient({ sdkFactory: factory });
+
+    // Create two dedicated clients with the same options.
+    const dedicatedA = await createDedicatedClient({ sdkFactory: factory });
+    const dedicatedB = await createDedicatedClient({ sdkFactory: factory });
+
+    // Each call creates a distinct object.
+    expect(dedicatedA).not.toBe(dedicatedB);
+
+    // Neither is the singleton.
+    expect(dedicatedA).not.toBe(singleton);
+    expect(dedicatedB).not.toBe(singleton);
+
+    // Closing one dedicated client does not affect the other or the singleton.
+    await dedicatedA.close();
+    // Singleton still works.
+    expect(await singleton.listModels()).toEqual([{ id: "gpt-5", name: "GPT-5" }]);
+    // Other dedicated client still works.
+    expect(await dedicatedB.listModels()).toEqual([{ id: "gpt-5", name: "GPT-5" }]);
+
+    // After closing dedicatedA, the singleton is still returned by getSdkClient.
+    const singletonAgain = await getSdkClient({ sdkFactory: factory });
+    expect(singletonAgain).toBe(singleton);
+
+    await dedicatedB.close();
   });
 });

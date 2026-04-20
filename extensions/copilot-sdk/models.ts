@@ -18,33 +18,7 @@ export const FALLBACK_MODEL_IDS = [
   "claude-opus-4.5",
 ] as const;
 
-export function buildFallbackModelDefinition(modelId: string): ModelDefinitionConfig {
-  return {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-    compat: { supportsTools: false },
-  };
-}
-
-export function buildFallbackModelCatalog(): ModelDefinitionConfig[] {
-  return FALLBACK_MODEL_IDS.map((id) => buildFallbackModelDefinition(id));
-}
-
-/**
- * Converts an SDK-reported model id into an OpenClaw model definition.
- * We intentionally do not import the SDK's `ModelInfo` type here to keep this
- * module side-effect free and easy to test.
- */
-export function buildModelDefinitionFromSdk(
-  modelId: string,
-  displayName?: string,
-): ModelDefinitionConfig {
+export function buildModelDefinition(modelId: string, displayName?: string): ModelDefinitionConfig {
   return {
     id: modelId,
     name: displayName ?? modelId,
@@ -56,4 +30,8 @@ export function buildModelDefinitionFromSdk(
     maxTokens: DEFAULT_MAX_TOKENS,
     compat: { supportsTools: false },
   };
+}
+
+export function buildFallbackModelCatalog(): ModelDefinitionConfig[] {
+  return FALLBACK_MODEL_IDS.map((id) => buildModelDefinition(id));
 }

@@ -118,6 +118,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+// Note: concurrent getSdkClient() calls with different option fingerprints can race.
+// This is acceptable for catalog-only use but would need per-fingerprint tracking
+// if used more broadly.
 let cachedClient: SdkClient | undefined;
 let cachedOptionsFingerprint = "";
 let inflightInit: Promise<SdkClient> | undefined;
@@ -162,7 +165,13 @@ export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkC
   }
 }
 
-async function initClient(options: SdkClientOptions, key: string): Promise<SdkClient> {
+/**
+ * Core init logic shared by the singleton (`getSdkClient`) and dedicated
+ * (`createDedicatedClient`) paths. Returns a raw `SdkClient` whose `close()`
+ * only tears down the underlying SDK instance — callers that need singleton
+ * cache management wrap it themselves.
+ */
+async function buildClient(options: SdkClientOptions): Promise<SdkClient> {
   const sdk = options.sdkFactory
     ? await options.sdkFactory()
     : ((await import("@github/copilot-sdk")) as unknown as SdkModule);
@@ -193,7 +202,7 @@ async function initClient(options: SdkClientOptions, key: string): Promise<SdkCl
     throw startErr;
   }
 
-  const wrapper: SdkClient = {
+  return {
     async listModels() {
       const list = await withTimeout(
         instance.listModels(),
@@ -230,6 +239,19 @@ async function initClient(options: SdkClientOptions, key: string): Promise<SdkCl
       } else if (instance.close) {
         await Promise.resolve(instance.close()).catch(() => undefined);
       }
+    },
+  };
+}
+
+async function initClient(options: SdkClientOptions, key: string): Promise<SdkClient> {
+  const inner = await buildClient(options);
+
+  // Wrap close() to also clear the singleton cache.
+  const wrapper: SdkClient = {
+    listModels: (...args) => inner.listModels(...args),
+    runPrompt: (...args) => inner.runPrompt(...args),
+    async close() {
+      await inner.close();
       cachedClient = undefined;
       cachedOptionsFingerprint = "";
     },
@@ -238,6 +260,18 @@ async function initClient(options: SdkClientOptions, key: string): Promise<SdkCl
   cachedClient = wrapper;
   cachedOptionsFingerprint = key;
   return wrapper;
+}
+
+/**
+ * Creates a fresh, non-singleton SDK client. Each call spawns a new CLI
+ * subprocess. The returned client's `close()` tears down only its own
+ * resources and does not affect the singleton cache used by `getSdkClient`.
+ *
+ * Use this when the caller needs a long-lived connection that must not be
+ * interrupted by catalog or other code that closes the singleton.
+ */
+export async function createDedicatedClient(options: SdkClientOptions = {}): Promise<SdkClient> {
+  return buildClient(options);
 }
 
 /** Test-only helper to reset the cached singleton between cases. */
