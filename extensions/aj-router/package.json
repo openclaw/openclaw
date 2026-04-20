@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/aj-router",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "OpenClaw AJ Router plugin: classifier-driven model selection with sensitivity gating",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.16"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

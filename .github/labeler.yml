@@ -225,6 +225,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lobster/**"
+"extensions: aj-router":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/aj-router/**"
+          - "docs/plugins/aj-router.md"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:

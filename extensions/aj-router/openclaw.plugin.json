@@ -1,0 +1,73 @@
+{
+  "id": "aj-router",
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "defaultAlias": {
+        "type": "string",
+        "description": "Alias used when no classification is available. Must be a key in `aliases`."
+      },
+      "aliases": {
+        "type": "object",
+        "description": "Map of alias name to concrete provider/model reference (e.g. 'anthropic/claude-sonnet-4-6').",
+        "additionalProperties": { "type": "string" }
+      },
+      "classificationRules": {
+        "type": "object",
+        "description": "Map of classifier tier ('simple'|'medium'|'complex') to alias.",
+        "additionalProperties": { "type": "string" }
+      },
+      "classifier": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["heuristic", "llm"],
+            "description": "Classifier implementation. 'heuristic' uses cheap pattern matching; 'llm' calls a classifier model (Phase-2 follow-up)."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model used when mode='llm'. Ignored in heuristic mode."
+          }
+        }
+      },
+      "sensitivity": {
+        "type": "object",
+        "description": "Sensitivity policy. Keys are sensitivity labels, values gate allowed providers and/or force an alias.",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "forceAlias": { "type": "string" },
+            "blockExternal": { "type": "boolean" },
+            "allowedProviders": {
+              "oneOf": [
+                { "type": "array", "items": { "type": "string" } },
+                { "type": "string", "enum": ["*"] }
+              ]
+            }
+          }
+        }
+      },
+      "defaultSensitivity": {
+        "type": "string",
+        "description": "Sensitivity label applied when the request does not declare one. Defaults to 'internal'."
+      },
+      "escalationThreshold": {
+        "type": "number",
+        "description": "Confidence floor. Requests below this threshold escalate one alias up the ladder."
+      },
+      "budgetCeilingUsdPerRequest": {
+        "type": "number",
+        "description": "Abort a request if the estimated per-request cost exceeds this value."
+      },
+      "logsDir": {
+        "type": "string",
+        "description": "Directory for routing decision logs. Default: ~/.openclaw/logs/aj-router."
+      }
+    }
+  }
+}
