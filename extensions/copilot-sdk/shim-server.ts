@@ -30,6 +30,13 @@ export type ShimServerOptions = {
    * tools. When false, tools are silently dropped.
    */
   rejectToolRequests?: boolean;
+  /**
+   * When true, the SDK session approves tool-execution permissions so the
+   * Copilot CLI's built-in tools (bash, file read/write, grep, etc.) can run.
+   * The SDK handles the full agentic loop — sendAndWait returns the final
+   * assistant message after all tool calls complete.
+   */
+  allowBuiltinTools?: boolean;
 };
 
 export type ShimServerHandle = {
@@ -156,6 +163,7 @@ async function handle(
       model: body.model,
       prompt,
       timeoutMs: 120_000,
+      allowBuiltinTools: options.allowBuiltinTools ?? false,
     });
     if (body.stream) {
       writeSseHeaders(res);
