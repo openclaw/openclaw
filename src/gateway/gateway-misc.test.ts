@@ -220,6 +220,67 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
+
+  it("requires operator.read for chat-class broadcast events", () => {
+    const pairingSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const nodeSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const readSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const writeSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: pairingSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
+        connId: "c-pairing",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: nodeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "node", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-node",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: readSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-read",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: writeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.write"] } as GatewayWsClient["connect"],
+        connId: "c-write",
+        usesSharedGatewayAuth: false,
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" });
+    broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
+    broadcast("chat.side_result", { sessionKey: "agent:main:main", text: "tool output" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).toHaveBeenCalledTimes(3);
+    expect(writeSocket.send).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("chat run registry", () => {

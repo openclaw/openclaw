@@ -16,6 +16,9 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
+  agent: [READ_SCOPE],
+  chat: [READ_SCOPE],
+  "chat.side_result": [READ_SCOPE],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
   "plugin.approval.requested": [APPROVALS_SCOPE],
