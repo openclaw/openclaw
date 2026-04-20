@@ -55,9 +55,9 @@ Adds comprehensive media support to OpenClaw across multiple channels:
 - WebP
 - SVG
 - BMP
-
-## WebChat message resizing
-
+  
+## WebChat message resizing, video playback memory, and download_video tool
+  
 - Added resize handles on webchat messages so you can resize media!
 - Added video memory playback. Close or refresh the browser, it remembers where you stopped watching.
 - Added new core tool for downloading YouTube and other video's called download_video using yt-dlp
