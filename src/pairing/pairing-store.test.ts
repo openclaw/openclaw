@@ -263,11 +263,16 @@ async function withMockRandomInt(params: {
 async function expectAllowFromReadConsistencyCase(params: {
   accountId?: string;
   expected: readonly string[];
+  expectedLegacy?: readonly string[];
 }) {
   const asyncScoped = await readChannelAllowFromStore("telegram", process.env, params.accountId);
   const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, params.accountId);
   expect(asyncScoped).toEqual(params.expected);
   expect(syncScoped).toEqual(params.expected);
+  if (params.expectedLegacy) {
+    expect(await readLegacyChannelAllowFromStore("telegram")).toEqual(params.expectedLegacy);
+    expect(readLegacyChannelAllowFromStoreSync("telegram")).toEqual(params.expectedLegacy);
+  }
 }
 
 async function expectPendingPairingRequestsIsolatedByAccount(params: {
@@ -304,32 +309,6 @@ async function expectPendingPairingRequestsIsolatedByAccount(params: {
   expect(secondList).toHaveLength(1);
   expect(firstList[0]?.code).toBe(first.code);
   expect(secondList[0]?.code).toBe(second.code);
-}
-
-async function expectScopedAllowFromReadCase(params: {
-  stateDir: string;
-  legacyAllowFrom: string[];
-  scopedAllowFrom: string[];
-  accountId: string;
-  expectedScoped: string[];
-  expectedLegacy: string[];
-}) {
-  await writeAllowFromFixture({
-    stateDir: params.stateDir,
-    channel: "telegram",
-    allowFrom: params.legacyAllowFrom,
-  });
-  await writeAllowFromFixture({
-    stateDir: params.stateDir,
-    channel: "telegram",
-    accountId: params.accountId,
-    allowFrom: params.scopedAllowFrom,
-  });
-
-  const scoped = readChannelAllowFromStoreSync("telegram", process.env, params.accountId);
-  const channelScoped = readLegacyChannelAllowFromStoreSync("telegram");
-  expect(scoped).toEqual(params.expectedScoped);
-  expect(channelScoped).toEqual(params.expectedLegacy);
 }
 
 describe("pairing store", () => {
@@ -496,33 +475,21 @@ describe("pairing store", () => {
     });
   });
 
-  it("reads sync allowFrom with account-scoped isolation and wildcard filtering", async () => {
-    await withTempStateDir(async (stateDir) => {
-      await expectScopedAllowFromReadCase({
-        stateDir,
-        legacyAllowFrom: ["1001", "*", " 1001 ", "  "],
-        scopedAllowFrom: [" 1002 ", "1001", "1002"],
-        accountId: "yy",
-        expectedScoped: ["1002", "1001"],
-        expectedLegacy: ["1001"],
-      });
-    });
-  });
-
   it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir) => {
-      for (const { setup, accountId, expected } of [
+      for (const { setup, accountId, expected, expectedLegacy } of [
         {
           setup: async () => {
             await seedTelegramAllowFromFixtures({
               stateDir,
               scopedAccountId: "yy",
-              scopedAllowFrom: ["1003"],
+              scopedAllowFrom: [" 1003 ", "*", "1003"],
               legacyAllowFrom: ["1001", "*", "1002", "1001"],
             });
           },
           accountId: "yy",
           expected: ["1003"],
+          expectedLegacy: ["1001", "1002"],
         },
         {
           setup: async () => {
@@ -569,6 +536,7 @@ describe("pairing store", () => {
         await expectAllowFromReadConsistencyCase({
           ...(accountId !== undefined ? { accountId } : {}),
           expected,
+          ...(expectedLegacy !== undefined ? { expectedLegacy } : {}),
         });
       }
     });
