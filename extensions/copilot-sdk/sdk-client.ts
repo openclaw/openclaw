@@ -155,11 +155,22 @@ export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkC
 
   // The SDK requires an explicit start() call to spawn the CLI subprocess and
   // establish the JSON-RPC connection before any other method can be used.
-  await withTimeout(
-    instance.start(),
-    options.startTimeoutMs ?? START_TIMEOUT_MS,
-    "CopilotClient.start()",
-  );
+  try {
+    await withTimeout(
+      instance.start(),
+      options.startTimeoutMs ?? START_TIMEOUT_MS,
+      "CopilotClient.start()",
+    );
+  } catch (startErr) {
+    // Clean up the spawned subprocess so it doesn't leak on timeout/failure.
+    const inst = instance as Record<string, unknown>;
+    if (typeof inst.stop === "function") {
+      await Promise.resolve((inst.stop as () => unknown)()).catch(() => undefined);
+    } else if (typeof inst.dispose === "function") {
+      await Promise.resolve((inst.dispose as () => unknown)()).catch(() => undefined);
+    }
+    throw startErr;
+  }
 
   const wrapper: SdkClient = {
     async listModels() {

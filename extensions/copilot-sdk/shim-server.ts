@@ -44,7 +44,13 @@ export async function startShimServer(options: ShimServerOptions): Promise<ShimS
     try {
       await handle(req, res, options);
     } catch (error) {
-      writeJson(res, 500, { error: { message: toMessage(error), type: "internal_error" } });
+      // Distinguish client errors (bad JSON, oversized body) from server errors.
+      const msg = toMessage(error);
+      const isClientError =
+        msg.includes("JSON") || msg.includes("exceeds") || msg.includes("parse");
+      const status = isClientError ? 400 : 500;
+      const type = isClientError ? "invalid_request" : "internal_error";
+      writeJson(res, status, { error: { message: msg, type } });
     }
   });
 
@@ -136,7 +142,11 @@ async function handle(
       return;
     }
 
-    const { content } = await options.client.runPrompt({ model: body.model, prompt });
+    const { content } = await options.client.runPrompt({
+      model: body.model,
+      prompt,
+      timeoutMs: 120_000,
+    });
     if (body.stream) {
       writeSseHeaders(res);
       for (const chunk of buildChatCompletionStreamChunks({ model: body.model, content })) {
