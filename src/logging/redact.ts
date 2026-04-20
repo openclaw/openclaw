@@ -12,7 +12,6 @@ const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
 const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
-const DEFAULT_MASK_CHAR = "*";
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments.
