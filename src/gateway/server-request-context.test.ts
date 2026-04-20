@@ -11,6 +11,7 @@ describe("createGatewayRequestContext", () => {
         cron: cronA,
         storePath: "/tmp/cron-a",
         cronEnabled: true,
+        runLogPrune: { maxBytes: 1024, keepLines: 100 },
       },
     };
 
@@ -72,6 +73,7 @@ describe("createGatewayRequestContext", () => {
       cron: cronB,
       storePath: "/tmp/cron-b",
       cronEnabled: true,
+      runLogPrune: { maxBytes: 2048, keepLines: 200 },
     };
 
     expect(context.cron).toBe(cronB);

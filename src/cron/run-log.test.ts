@@ -8,6 +8,8 @@ import {
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  readCronRunLogEntriesPage,
+  readCronRunLogEntriesPageAll,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -310,6 +312,342 @@ describe("cron run log", () => {
 
       // Clean up
       await writePromise.catch(() => undefined);
+    });
+  });
+
+  it("readCronRunLogEntriesPage prunes oversized files before reading", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-read-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-prune.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write many lines to exceed DEFAULT_CRON_RUN_LOG_MAX_BYTES without going
+      // through appendCronRunLog (simulating failed async prune)
+      const lines: string[] = [];
+      for (let i = 0; i < 8000; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-prune",
+            action: "finished",
+            status: "ok",
+            summary: "x".repeat(200),
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      // Verify file is larger than default max
+      const sizeBefore = (await fs.stat(logPath)).size;
+      expect(sizeBefore).toBeGreaterThan(DEFAULT_CRON_RUN_LOG_MAX_BYTES);
+
+      // Reading should trigger defensive prune and not OOM
+      const page = await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        offset: 0,
+        sortDir: "desc",
+      });
+
+      // Should still return valid entries
+      expect(page.entries.length).toBeGreaterThan(0);
+      expect(page.entries.length).toBeLessThanOrEqual(10);
+
+      // File should be pruned after reading
+      const sizeAfter = (await fs.stat(logPath)).size;
+      expect(sizeAfter).toBeLessThanOrEqual(DEFAULT_CRON_RUN_LOG_MAX_BYTES);
+    });
+  });
+
+  it("readCronRunLogEntriesPage succeeds even when prune would fail (read-only dir)", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-fail-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-fail.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write a small valid log file
+      const lines: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-fail",
+            action: "finished",
+            status: "ok",
+            summary: "entry " + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      // Make the directory read-only so pruneIfNeeded cannot write temp files
+      const runsDir = path.dirname(logPath);
+      await fs.chmod(runsDir, 0o555);
+
+      try {
+        // Reading should still succeed — prune error is swallowed
+        const page = await readCronRunLogEntriesPage(logPath, {
+          limit: 10,
+          offset: 0,
+          sortDir: "desc",
+        });
+
+        expect(page.entries.length).toBe(5);
+        expect(page.entries[0].summary).toBe("entry 4");
+      } finally {
+        // Restore permissions so cleanup works
+        await fs.chmod(runsDir, 0o755);
+      }
+    });
+  });
+
+  it("readCronRunLogEntriesPage respects custom pruneOptions", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-opts-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-opts.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write lines totalling more than 500 bytes but less than DEFAULT_CRON_RUN_LOG_MAX_BYTES
+      const lines: string[] = [];
+      for (let i = 0; i < 50; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-opts",
+            action: "finished",
+            status: "ok",
+            summary: "entry-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      const sizeBefore = (await fs.stat(logPath)).size;
+      // With default prune options this file would NOT be pruned (it is under 2 MB).
+      // Pass a very small maxBytes to trigger pruning via custom pruneOptions.
+      const page = await readCronRunLogEntriesPage(logPath, {
+        limit: 100,
+        offset: 0,
+        sortDir: "desc",
+        pruneOptions: { maxBytes: 500, keepLines: 10 },
+      });
+
+      // File should have been pruned to ~10 lines
+      const sizeAfter = (await fs.stat(logPath)).size;
+      expect(sizeAfter).toBeLessThan(sizeBefore);
+      // We should still get valid entries back (the kept lines)
+      expect(page.entries.length).toBeGreaterThan(0);
+      expect(page.entries.length).toBeLessThanOrEqual(10);
+    });
+  });
+
+  it("readCronRunLogEntriesPageAll succeeds even when prune would fail (read-only dir)", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-fail-all-", async (dir) => {
+      const storePath = path.join(dir, "jobs.json");
+      const logPath = path.join(dir, "runs", "job-fail-all.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      const lines: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 2000 + i,
+            jobId: "job-fail-all",
+            action: "finished",
+            status: "ok",
+            summary: "entry-all-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      const runsDir = path.dirname(logPath);
+      await fs.chmod(runsDir, 0o555);
+
+      try {
+        const page = await readCronRunLogEntriesPageAll({
+          storePath,
+          limit: 10,
+          offset: 0,
+          sortDir: "desc",
+        });
+
+        expect(page.entries.length).toBe(5);
+        expect(page.entries[0].summary).toBe("entry-all-4");
+      } finally {
+        await fs.chmod(runsDir, 0o755);
+      }
+    });
+  });
+
+  it("readCronRunLogEntriesPageAll respects custom pruneOptions", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-opts-all-", async (dir) => {
+      const storePath = path.join(dir, "jobs.json");
+      const logPath = path.join(dir, "runs", "job-opts-all.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      const lines: string[] = [];
+      for (let i = 0; i < 50; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 3000 + i,
+            jobId: "job-opts-all",
+            action: "finished",
+            status: "ok",
+            summary: "entry-all-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      const sizeBefore = (await fs.stat(logPath)).size;
+      const page = await readCronRunLogEntriesPageAll({
+        storePath,
+        limit: 100,
+        offset: 0,
+        sortDir: "desc",
+        pruneOptions: { maxBytes: 500, keepLines: 10 },
+      });
+
+      const sizeAfter = (await fs.stat(logPath)).size;
+      expect(sizeAfter).toBeLessThan(sizeBefore);
+      expect(page.entries.length).toBeGreaterThan(0);
+      expect(page.entries.length).toBeLessThanOrEqual(10);
+    });
+  });
+
+  it("concurrent append and read-side prune do not lose append data", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-race-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-race.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write enough lines to exceed a small maxBytes so prune triggers on read
+      const lines: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-race",
+            action: "finished",
+            status: "ok",
+            summary: "seed-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      // Fire append and prune-triggering read concurrently
+      const appendEntry = {
+        ts: 9999,
+        jobId: "job-race",
+        action: "finished" as const,
+        status: "ok" as const,
+        summary: "concurrent-append",
+      };
+
+      await Promise.all([
+        appendCronRunLog(logPath, appendEntry),
+        readCronRunLogEntriesPage(logPath, {
+          limit: 200,
+          offset: 0,
+          sortDir: "desc",
+          pruneOptions: { maxBytes: 500, keepLines: 20 },
+        }),
+      ]);
+
+      // After both complete, re-read to verify the appended entry survived
+      const finalPage = await readCronRunLogEntriesPage(logPath, {
+        limit: 200,
+        offset: 0,
+        sortDir: "desc",
+      });
+      const hasConcurrentAppend = finalPage.entries.some((e) => e.summary === "concurrent-append");
+      expect(hasConcurrentAppend).toBe(true);
+    });
+  });
+
+  it("serialized prune failure does not poison the write queue", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-poison-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-poison.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write enough to trigger prune
+      const lines: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-poison",
+            action: "finished",
+            status: "ok",
+            summary: "seed-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      // Make directory read-only so prune fails
+      const runsDir = path.dirname(logPath);
+      await fs.chmod(runsDir, 0o555);
+
+      try {
+        // Read with small pruneOptions — prune will fail but read succeeds
+        await readCronRunLogEntriesPage(logPath, {
+          limit: 10,
+          offset: 0,
+          sortDir: "desc",
+          pruneOptions: { maxBytes: 500, keepLines: 10 },
+        });
+      } finally {
+        await fs.chmod(runsDir, 0o755);
+      }
+
+      // Subsequent append should still work — write queue not poisoned
+      await appendCronRunLog(logPath, {
+        ts: 9999,
+        jobId: "job-poison",
+        action: "finished",
+        status: "ok",
+        summary: "post-failure-append",
+      });
+
+      const page = await readCronRunLogEntriesPage(logPath, {
+        limit: 200,
+        offset: 0,
+        sortDir: "desc",
+      });
+      const hasPostFailure = page.entries.some((e) => e.summary === "post-failure-append");
+      expect(hasPostFailure).toBe(true);
+    });
+  });
+
+  it("write queue is cleaned up after serialized prune completes", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-cleanup-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-cleanup.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      const lines: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-cleanup",
+            action: "finished",
+            status: "ok",
+            summary: "entry-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      const pendingBefore = getPendingCronRunLogWriteCountForTests();
+
+      // Trigger read (which does serialized prune internally)
+      await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        offset: 0,
+        sortDir: "desc",
+      });
+
+      // Write queue should not be leaking entries
+      const pendingAfter = getPendingCronRunLogWriteCountForTests();
+      expect(pendingAfter).toBeLessThanOrEqual(pendingBefore);
     });
   });
 });

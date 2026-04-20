@@ -39,6 +39,7 @@ export type GatewayRequestContext = {
   deps: CliDeps;
   cron: CronServiceContract;
   cronStorePath: string;
+  cronRunLogPrune: { maxBytes: number; keepLines: number };
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
