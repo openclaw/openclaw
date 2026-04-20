@@ -12,6 +12,14 @@ import type { OpenAiChatRequest } from "./shared-types.js";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
+/** Thrown by request-parsing helpers so the top-level handler can return 400. */
+class ClientRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ClientRequestError";
+  }
+}
+
 export type ShimServerOptions = {
   /** SDK client used to fulfill chat completions. Injected so tests can mock it. */
   client: SdkClient;
@@ -44,13 +52,12 @@ export async function startShimServer(options: ShimServerOptions): Promise<ShimS
     try {
       await handle(req, res, options);
     } catch (error) {
-      // Distinguish client errors (bad JSON, oversized body) from server errors.
       const msg = toMessage(error);
-      const isClientError =
-        msg.includes("JSON") || msg.includes("exceeds") || msg.includes("parse");
-      const status = isClientError ? 400 : 500;
-      const type = isClientError ? "invalid_request" : "internal_error";
-      writeJson(res, status, { error: { message: msg, type } });
+      if (error instanceof ClientRequestError) {
+        writeJson(res, 400, { error: { message: msg, type: "invalid_request" } });
+      } else {
+        writeJson(res, 500, { error: { message: msg, type: "internal_error" } });
+      }
     }
   });
 
@@ -166,16 +173,25 @@ async function readJsonBody<T>(req: http.IncomingMessage): Promise<T | undefined
   return new Promise<T | undefined>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let rejected = false;
     req.on("data", (chunk: Buffer) => {
+      if (rejected) {
+        return;
+      }
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error("Request body exceeds 4 MiB"));
-        req.destroy();
+        rejected = true;
+        reject(new ClientRequestError("Request body exceeds 4 MiB"));
+        // Don't destroy the socket — let the caller write the 400 response first.
+        req.resume();
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (rejected) {
+        return;
+      }
       const raw = Buffer.concat(chunks).toString("utf8");
       if (!raw) {
         resolve(undefined);
@@ -184,7 +200,7 @@ async function readJsonBody<T>(req: http.IncomingMessage): Promise<T | undefined
       try {
         resolve(JSON.parse(raw) as T);
       } catch (error) {
-        reject(new Error(`Invalid JSON body: ${toMessage(error)}`));
+        reject(new ClientRequestError(`Invalid JSON body: ${toMessage(error)}`));
       }
     });
     req.on("error", reject);
