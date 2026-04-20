@@ -19,18 +19,22 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { createCronPromptExecutor } = await import("./run-executor.js");
 
+function makeMessageToolPolicyJob(delivery: Record<string, unknown> = { mode: "none" }) {
+  return {
+    id: "message-tool-policy",
+    name: "Message Tool Policy",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    payload: { kind: "agentTurn", message: "send a message" },
+    delivery,
+  } as never;
+}
+
 function makeParams() {
   return {
     cfg: {},
     deps: {} as never,
-    job: {
-      id: "message-tool-policy",
-      name: "Message Tool Policy",
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "send a message" },
-      delivery: { mode: "none" },
-    } as never,
+    job: makeMessageToolPolicyJob(),
     message: "send a message",
     sessionKey: "cron:message-tool-policy",
   };
@@ -65,6 +69,35 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   }
 
+  async function runModeNoneDeliveryCase(params: {
+    delivery: Record<string, unknown>;
+    plan: Record<string, unknown>;
+  }) {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "last",
+      ...params.plan,
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(params.delivery),
+    });
+
+    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      messageChannel: undefined,
+      messageTo: undefined,
+      messageThreadId: undefined,
+      currentChannelId: undefined,
+      agentAccountId: undefined,
+    });
+  }
+
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
@@ -83,6 +116,37 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     resolvedSkills: [],
     version: 1,
   };
+
+  function createMessageToolExecutor(
+    overrides: Partial<Parameters<typeof createCronPromptExecutor>[0]>,
+  ) {
+    return createCronPromptExecutor({
+      cfg: {},
+      cfgWithAgentDefaults: {},
+      job: makeMessageToolPolicyJob(),
+      agentId: "default",
+      agentDir: "/tmp/agent-dir",
+      agentSessionKey: "cron:message-tool-policy",
+      workspaceDir: "/tmp/workspace",
+      resolvedVerboseLevel: "off",
+      thinkLevel: undefined,
+      timeoutMs: 60_000,
+      messageChannel: "telegram",
+      toolPolicy: {
+        requireExplicitMessageTarget: false,
+        disableMessageTool: false,
+      },
+      skillsSnapshot: emptySkillsSnapshot,
+      agentPayload: null,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      cronSession: makeCronSession() as MutableCronSession,
+      abortReason: () => "aborted",
+      ...overrides,
+    });
+  }
 
   afterEach(() => {
     restoreFastTestEnv(previousFastTestEnv);
@@ -167,102 +231,27 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("does not resolve implicit last-target context for delivery.mode none with only accountId", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: false,
-      mode: "none",
-      channel: "last",
-      accountId: "ops",
-    });
-
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: {
-        id: "message-tool-policy",
-        name: "Message Tool Policy",
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        payload: { kind: "agentTurn", message: "send a message" },
-        delivery: { mode: "none", accountId: "ops" },
-      } as never,
-    });
-
-    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      disableMessageTool: false,
-      messageChannel: undefined,
-      messageTo: undefined,
-      messageThreadId: undefined,
-      currentChannelId: undefined,
-      agentAccountId: undefined,
+    await runModeNoneDeliveryCase({
+      delivery: { mode: "none", accountId: "ops" },
+      plan: { accountId: "ops" },
     });
   });
 
   it("does not resolve implicit last-target context for delivery.mode none with only threadId", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: false,
-      mode: "none",
-      channel: "last",
-      threadId: 42,
-    });
-
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: {
-        id: "message-tool-policy",
-        name: "Message Tool Policy",
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        payload: { kind: "agentTurn", message: "send a message" },
-        delivery: { mode: "none", threadId: 42 },
-      } as never,
-    });
-
-    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      disableMessageTool: false,
-      messageChannel: undefined,
-      messageTo: undefined,
-      messageThreadId: undefined,
-      currentChannelId: undefined,
-      agentAccountId: undefined,
+    await runModeNoneDeliveryCase({
+      delivery: { mode: "none", threadId: 42 },
+      plan: { threadId: 42 },
     });
   });
 
   it("forwards explicit message targets into the embedded run", async () => {
     mockRunCronFallbackPassthrough();
-    const executor = createCronPromptExecutor({
-      cfg: {},
-      cfgWithAgentDefaults: {},
-      job: makeParams().job,
-      agentId: "default",
-      agentDir: "/tmp/agent-dir",
-      agentSessionKey: "cron:message-tool-policy",
-      workspaceDir: "/tmp/workspace",
-      resolvedVerboseLevel: "off",
-      thinkLevel: undefined,
-      timeoutMs: 60_000,
-      messageChannel: "telegram",
+    const executor = createMessageToolExecutor({
       resolvedDelivery: {
         accountId: "ops",
         to: "123:topic:42",
         threadId: 42,
       },
-      toolPolicy: {
-        requireExplicitMessageTarget: false,
-        disableMessageTool: false,
-      },
-      skillsSnapshot: emptySkillsSnapshot,
-      agentPayload: null,
-      liveSelection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      cronSession: makeCronSession() as MutableCronSession,
-      abortReason: () => "aborted",
     });
 
     await executor.runPrompt("send a message");
@@ -279,35 +268,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   it("preserves topic routing when inferred currentChannelId is built from split delivery fields", async () => {
     mockRunCronFallbackPassthrough();
-    const executor = createCronPromptExecutor({
-      cfg: {},
-      cfgWithAgentDefaults: {},
-      job: makeParams().job,
-      agentId: "default",
-      agentDir: "/tmp/agent-dir",
-      agentSessionKey: "cron:message-tool-policy",
-      workspaceDir: "/tmp/workspace",
-      resolvedVerboseLevel: "off",
-      thinkLevel: undefined,
-      timeoutMs: 60_000,
-      messageChannel: "telegram",
+    const executor = createMessageToolExecutor({
       resolvedDelivery: {
         accountId: "ops",
         to: "123",
         threadId: 42,
       },
-      toolPolicy: {
-        requireExplicitMessageTarget: false,
-        disableMessageTool: false,
-      },
-      skillsSnapshot: emptySkillsSnapshot,
-      agentPayload: null,
-      liveSelection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      cronSession: makeCronSession() as MutableCronSession,
-      abortReason: () => "aborted",
     });
 
     await executor.runPrompt("send a message");
