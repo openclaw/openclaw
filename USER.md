@@ -357,6 +357,28 @@ Single commit on the existing `fix/gateway-broadcast-read-scopes` branch. The ch
     - The current unresolved review is actionable and now fixed locally.
     - Do not resolve the GitHub thread or retrigger bot review until this seq fix is committed and pushed; otherwise we just create another false cycle.
 
+- Follow-up pass on 2026-04-20 for the latest unresolved Codex thread:
+  - Re-pulled PR `openclaw/openclaw#69373` review threads. Current state:
+    - 2 earlier Codex P1 threads are already resolved.
+    - 1 Codex P1 thread remained unresolved on `src/gateway/server-broadcast.ts` for `dropIfSlow` handling.
+  - Why comments kept coming back:
+    - This was not a GitHub resolution failure loop.
+    - The branch fixed the original scope leak, then fixed the seq-gap regression from scope filtering, and the newest Codex comment exposed one more seq edge: eligible clients that miss a `dropIfSlow` event would no longer see a gap and could keep stale gateway state.
+    - The repeat comments were coming from real follow-on broadcaster issues plus explicit `@codex review` retriggers after each code round.
+  - Fixed the remaining actionable issue locally:
+    - `src/gateway/server-broadcast.ts`
+      - advance the per-client seq counter before `dropIfSlow` skips an eligible non-targeted event
+      - preserve targeted broadcasts as unsequenced
+    - `src/gateway/gateway-misc.test.ts`
+      - added a regression test proving a slow read-scoped client receives the next public event with `seq: 2` after a skipped `dropIfSlow` `chat` event, while a healthy read client still sees `seq: 1`, `2`
+  - Validation:
+    - `corepack pnpm test src/gateway/gateway-misc.test.ts` passed with 27/27 tests.
+    - `corepack pnpm test src/gateway/server.models-voicewake-misc.test.ts` still fails in an unrelated pre-existing lane on `auto-enables configured channel plugins on startup` expecting configured Discord state at line 554.
+  - Next GitHub actions after commit/push:
+    - resolve the last Codex review thread
+    - delete stale `@codex review` trigger comment(s) before retriggering
+    - post a single fresh `@codex review` comment only if another bot pass is still needed
+
 [CLAUDE COMMENTS RESOLUTION]
 
 - Re-loaded NVIDIA-dev/openclaw-tracking#470 via `gh issue view 470 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url` and pulled live PR state for `openclaw/openclaw#69373` via `gh pr view`, GraphQL `reviewThreads`, REST `pulls/69373/comments`, and REST `issues/69373/comments`.
@@ -406,3 +428,32 @@ Validation:
 - Ran `gh issue view 470 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`
 - Reviewed pushed PR metadata for `openclaw/openclaw#69373`
 - Ran `corepack pnpm test src/gateway/gateway-misc.test.ts` (passed)
+
+[CLAUDE COMMENTS RESOLUTION]
+
+- Re-loaded NVIDIA-dev/openclaw-tracking#470 via `gh issue view` and pulled live PR state for `openclaw/openclaw#69373` (`gh pr view`, GraphQL `reviewThreads`, REST `pulls/69373/comments`, REST `issues/69373/comments`).
+- Live review state at entry (2026-04-20):
+  - GraphQL `reviewThreads`: 2 threads.
+    - `PRRT_kwDOQb6kR858SxjH` — resolved. Codex P1 "Avoid artificial seq gaps for filtered chat-class events" on `src/gateway/server-broadcast.ts`. Already addressed by d91e5a960a (per-recipient seq).
+    - `PRRT_kwDOQb6kR858TFLp` — **unresolved**. Codex P1 "Allow node sessions to receive voicewake.changed updates": classifying `voicewake.changed` as `[READ_SCOPE]` blocks `role: "node"` clients because `hasEventScope` rejects non-operator roles, regressing the existing `server.models-voicewake-misc.test.ts` contract "pushes voicewake.changed to nodes on connect and on updates".
+  - Issue comments: Greptile summary + Codex no-issues bot reply + prior eleqtrizit `@codex review` trigger.
+- Root cause of the "comments keep coming back" loop:
+  1. The initial minimal patch (`chat` / `agent` / `chat.side_result`) left the allow-all default, exposed in Claude's review → prompted the structural hardening commit.
+  2. The structural hardening swapped to default-deny and classified every remaining broadcast, which introduced the seq-gap regression (Codex P1 #1) → fixed by the per-recipient seq commit.
+  3. The per-recipient seq commit left `voicewake.changed` classified as `[READ_SCOPE]`, which silently dropped it for node-role clients (Codex P1 #2, the currently unresolved thread). Same underlying issue as earlier rounds: each systemic change peels back the next layer of the broadcaster's contract.
+- The comments aren't spam this time. They are legitimate follow-up regressions introduced by prior rounds. The fix for this round has to target the voicewake regression specifically, not skip another round of triggers.
+- Fix implemented in `src/gateway/server-broadcast.ts`:
+  - Added a `NODE_ALLOWED_EVENTS` set containing `voicewake.changed` — events that node-role sessions must still receive even when the event's operator scope would otherwise reject non-operator roles.
+  - Updated `hasEventScope` so that when `role !== "operator"`, the client is accepted iff `role === "node" && NODE_ALLOWED_EVENTS.has(event)`. Pairing-only operators still get blocked on `voicewake.changed` as before (they fail the scope check). Chat-class events stay blocked for nodes (not in `NODE_ALLOWED_EVENTS`).
+- Test update in `src/gateway/gateway-misc.test.ts`: the `defaults unknown events to deny and classifies remaining gateway broadcast events` case now asserts the node-role socket receives `voicewake.changed` along with the public events, preserving the existing chat-class guard assertions.
+- Validation:
+  - `corepack pnpm test src/gateway/gateway-misc.test.ts` → 26/26 passed.
+  - `corepack pnpm test src/gateway/server.models-voicewake-misc.test.ts -t "pushes voicewake.changed to nodes"` → passed. (The unrelated `auto-enables configured channel plugins on startup` failure reproduces on the pre-change branch, so it is pre-existing / environmental.)
+  - `pnpm check:changed --staged` passed typecheck, lint, cycles, auth guards; the `tests changed` lane failed on the pre-existing non-loopback Control UI / preauth-hardening suites unrelated to this patch, documented in prior USER.md passes. Committed via `scripts/committer --fast` to skip the broken unrelated lane (format/lint/types still ran).
+- Resolution actions this round:
+  - Pushed `294d5a1493 fix(gateway): let nodes receive voicewake broadcasts` to `fork/fix/gateway-broadcast-read-scopes`.
+  - Resolved thread `PRRT_kwDOQb6kR858TFLp` via GraphQL `resolveReviewThread` mutation.
+  - Deleted the stale `@codex review` issue comment (4283494817) from the prior round to keep the thread clean per skill guidance.
+  - Posted fresh `@codex review` (4283585545) and `@greptile review` (4283585666) triggers so both bots verify the current HEAD. The diff has changed materially since their last passes (greptile last saw 9b2eac35e9, codex last saw d91e5a960a).
+- Why I'm not skipping the retriggers this round: the prior USER.md pass deliberately skipped them to avoid bot-reply spam, but that was when the only PR state was approvals. This round has a real unresolved review thread addressed by a real commit, so the bots need to see the new HEAD to close the cycle properly. If they come back clean we exit `[READY FOR REVIEW]`; if they flag something else, that is the next real layer, not a spam loop.
+- Exit state: `[AGENTS ARE REVIEWING]`. Waiting on Codex + Greptile passes against `294d5a1493`.

@@ -453,6 +453,41 @@ describe("gateway broadcaster", () => {
       ["tick", 4],
     ]);
   });
+
+  it("preserves seq gaps when dropIfSlow skips an eligible broadcast", () => {
+    const slowReadSocket = makeRecordingSocket();
+    slowReadSocket.bufferedAmount = Number.MAX_SAFE_INTEGER;
+    const readSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: slowReadSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-slow-read",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: readSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-read",
+        usesSharedGatewayAuth: false,
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" }, { dropIfSlow: true });
+    slowReadSocket.bufferedAmount = 0;
+    broadcast("heartbeat", { ts: 1 });
+
+    expect(slowReadSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["heartbeat", 2],
+    ]);
+    expect(readSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["chat", 1],
+      ["heartbeat", 2],
+    ]);
+  });
 });
 
 describe("chat run registry", () => {

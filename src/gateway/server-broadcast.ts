@@ -110,8 +110,12 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       if (!hasEventScope(c, event)) {
         continue;
       }
+      const nextSeq = (clientSeq.get(c) ?? 0) + 1;
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
       if (slow && opts?.dropIfSlow) {
+        if (!isTargeted) {
+          clientSeq.set(c, nextSeq);
+        }
         continue;
       }
       if (slow) {
@@ -123,7 +127,6 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       try {
-        const nextSeq = (clientSeq.get(c) ?? 0) + 1;
         const eventSeq = isTargeted ? undefined : nextSeq;
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);
