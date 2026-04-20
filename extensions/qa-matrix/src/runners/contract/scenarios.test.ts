@@ -35,6 +35,7 @@ import {
 
 const MATRIX_SUBAGENT_MISSING_HOOK_ERROR =
   "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.";
+const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
 
 function matrixQaScenarioContext(): MatrixQaScenarioContext {
   return {
@@ -102,12 +103,15 @@ describe("matrix live qa scenarios", () => {
       "matrix-reaction-redaction-observed",
       "matrix-restart-resume",
       "matrix-post-restart-room-continue",
+      "matrix-initial-catchup-then-incremental",
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
       "matrix-mention-gating",
+      "matrix-mxid-prefixed-command-block",
       "matrix-mention-metadata-spoof-block",
       "matrix-observer-allowlist-override",
       "matrix-allowlist-block",
+      "matrix-allowlist-hot-reload",
       "matrix-multi-actor-ordering",
       "matrix-inbound-edit-ignored",
       "matrix-inbound-edit-no-duplicate-trigger",
@@ -513,6 +517,264 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!room:matrix-qa.test",
     });
+  });
+
+  it("blocks MXID-prefixed Matrix control commands from non-allowlisted observers", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$observer-command-trigger");
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => {
+      expect(params.since).toBe("observer-sync-start");
+      return {
+        matched: false,
+        since: "observer-sync-next",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-mxid-prefixed-command-block",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        actorUserId: "@observer:matrix-qa.test",
+        driverEventId: "$observer-command-trigger",
+      },
+    });
+
+    expect(createMatrixQaClient).toHaveBeenCalledWith({
+      accessToken: "observer-token",
+      baseUrl: "http://127.0.0.1:28008/",
+    });
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: "@sut:matrix-qa.test /new",
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+    expect(waitForOptionalRoomEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roomId: "!main:matrix-qa.test",
+      }),
+    );
+  });
+
+  it("hot-reloads group allowlist removals inside one running Matrix gateway", async () => {
+    const patchGatewayConfig = vi.fn(async () => {});
+    const primeRoom = vi.fn().mockResolvedValue("sync-start");
+    const sendTextMessage = vi
+      .fn()
+      .mockResolvedValueOnce("$group-accepted")
+      .mockResolvedValueOnce("$group-removed");
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => ({
+      matched: false,
+      since: `${params.roomId}:no-reply`,
+    }));
+    const waitForRoomEvent = vi.fn().mockImplementation(async (params) => {
+      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const token = sentBody
+        .replace("@sut:matrix-qa.test reply with only this exact marker: ", "")
+        .replace("reply with only this exact marker: ", "");
+      return {
+        event: {
+          kind: "message",
+          roomId: params.roomId,
+          eventId: "$group-reply",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: token,
+        },
+        since: `${params.roomId}:reply`,
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-allowlist-hot-reload",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        ...matrixQaScenarioContext(),
+        patchGatewayConfig,
+        topology: {
+          defaultRoomId: "!main:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "main",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Main",
+              requireMention: true,
+              roomId: "!main:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        secondDriverEventId: "$group-removed",
+        firstReply: {
+          eventId: "$group-reply",
+          tokenMatched: true,
+        },
+      },
+    });
+
+    expect(patchGatewayConfig).toHaveBeenCalledWith(
+      {
+        channels: {
+          matrix: {
+            accounts: {
+              sut: {
+                groupAllowFrom: ["@driver:matrix-qa.test"],
+              },
+            },
+          },
+        },
+        gateway: {
+          reload: {
+            mode: "off",
+          },
+        },
+      },
+      {
+        restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
+      },
+    );
+    expect(sendTextMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!main:matrix-qa.test",
+      }),
+    );
+    expect(sendTextMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!main:matrix-qa.test",
+      }),
+    );
+  });
+
+  it("queues a Matrix trigger during restart before proving incremental sync continues", async () => {
+    const callOrder: string[] = [];
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockImplementation(async (params) => {
+      callOrder.push(`send:${String(params.body).includes("CATCHUP") ? "catchup" : "incremental"}`);
+      return String(params.body).includes("CATCHUP") ? "$catchup-trigger" : "$incremental-trigger";
+    });
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
+      callOrder.push(`wait:${token.includes("CATCHUP") ? "catchup" : "incremental"}`);
+      return {
+        event: {
+          kind: "message",
+          roomId: "!restart:matrix-qa.test",
+          eventId: token.includes("CATCHUP") ? "$catchup-reply" : "$incremental-reply",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: token,
+        },
+        since: token.includes("CATCHUP")
+          ? "driver-sync-after-catchup"
+          : "driver-sync-after-incremental",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-initial-catchup-then-incremental",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        baseUrl: "http://127.0.0.1:28008/",
+        canary: undefined,
+        driverAccessToken: "driver-token",
+        driverUserId: "@driver:matrix-qa.test",
+        observedEvents: [],
+        observerAccessToken: "observer-token",
+        observerUserId: "@observer:matrix-qa.test",
+        restartGatewayWithQueuedMessage: async (queueMessage) => {
+          callOrder.push("restart");
+          await queueMessage();
+          callOrder.push("ready");
+        },
+        roomId: "!room:matrix-qa.test",
+        syncState: {},
+        sutAccessToken: "sut-token",
+        sutUserId: "@sut:matrix-qa.test",
+        timeoutMs: 8_000,
+        topology: {
+          defaultRoomId: "!room:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "restart",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Restart room",
+              requireMention: true,
+              roomId: "!restart:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        catchupDriverEventId: "$catchup-trigger",
+        catchupReply: {
+          eventId: "$catchup-reply",
+          tokenMatched: true,
+        },
+        incrementalDriverEventId: "$incremental-trigger",
+        incrementalReply: {
+          eventId: "$incremental-reply",
+          tokenMatched: true,
+        },
+      },
+    });
+
+    expect(callOrder).toEqual([
+      "restart",
+      "send:catchup",
+      "ready",
+      "wait:catchup",
+      "send:incremental",
+      "wait:incremental",
+    ]);
   });
 
   it("runs the DM scenario against the provisioned DM room without a mention", async () => {
