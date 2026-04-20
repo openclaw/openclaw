@@ -624,4 +624,17 @@ describe("routeReply", () => {
       mirror: undefined,
     });
   });
+
+  it("does not skip dropped-media-only payloads", async () => {
+    const res = await routeReply({
+      payload: {
+        droppedMedia: [{ displayName: "photo.jpg", reason: "normalization-failed" }],
+      },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
 });

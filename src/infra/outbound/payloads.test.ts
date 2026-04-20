@@ -555,6 +555,19 @@ describe("normalizeOutboundPayloadsForJson", () => {
       { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
     ]);
   });
+
+  it("includes droppedMedia in JSON projection", () => {
+    const droppedMedia = [{ displayName: "photo.jpg", reason: "normalization-failed" as const }];
+    expect(normalizeOutboundPayloadsForJson([{ text: "warning", droppedMedia }])).toEqual([
+      {
+        text: "warning",
+        mediaUrl: null,
+        mediaUrls: undefined,
+        audioAsVoice: undefined,
+        droppedMedia,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {

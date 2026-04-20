@@ -286,6 +286,16 @@ describe("normalizeReplyPayload", () => {
     );
     expect(result!.interactive).toBeUndefined();
   });
+
+  it("preserves dropped-media-only payloads", () => {
+    const result = normalizeReplyPayload({
+      droppedMedia: [{ displayName: "photo.jpg", reason: "normalization-failed" }],
+    });
+    expect(result).not.toBeNull();
+    expect(result!.droppedMedia).toEqual([
+      { displayName: "photo.jpg", reason: "normalization-failed" },
+    ]);
+  });
 });
 
 describe("typing controller", () => {
