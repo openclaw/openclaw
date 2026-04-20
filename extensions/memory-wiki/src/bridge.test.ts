@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-events";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  clearMemoryPluginState,
+  _resetMemoryPluginState,
   registerMemoryCapability,
 } from "../../../src/plugins/memory-state.js";
 import type { OpenClawConfig } from "../api.js";
@@ -33,7 +33,7 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   afterEach(() => {
-    clearMemoryPluginState();
+    _resetMemoryPluginState();
   });
 
   function nextCaseRoot(name: string): string {

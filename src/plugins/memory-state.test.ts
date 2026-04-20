@@ -52,7 +52,6 @@ function expectClearedMemoryState() {
 
 function createMemoryStateSnapshot() {
   return {
-    capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
     promptBuilder: getMemoryPromptSectionBuilder(),
     promptSupplements: listMemoryPromptSupplements(),
@@ -80,7 +79,7 @@ function registerMemoryState(params: {
 
 describe("memory plugin state", () => {
   afterEach(() => {
-    clearMemoryPluginState();
+    _resetMemoryPluginState();
   });
 
   it("returns empty defaults when no memory plugin state is registered", () => {
@@ -274,7 +273,7 @@ describe("memory plugin state", () => {
     expect(getMemoryRuntime()).toBe(runtime);
   });
 
-  it("clearMemoryPluginState resets both registries", () => {
+  it("clearMemoryPluginState resets legacy prompt/flush/runtime state and supplements", () => {
     registerMemoryState({
       promptSection: ["stale section"],
       relativePath: "memory/stale.md",
@@ -284,5 +283,80 @@ describe("memory plugin state", () => {
     clearMemoryPluginState();
 
     expectClearedMemoryState();
+  });
+
+  it("clearMemoryPluginState preserves the active memory capability", () => {
+    const runtime = createMemoryRuntime();
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["capability prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/capability.md"),
+      runtime,
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+    registerMemoryPromptSupplement("memory-wiki", () => ["wiki supplement"]);
+
+    clearMemoryPluginState();
+
+    expect(getMemoryCapabilityRegistration()).toMatchObject({ pluginId: "memory-core" });
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability prompt"]);
+    expect(listMemoryPromptSupplements()).toEqual([]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
+    expect(getMemoryRuntime()).toBe(runtime);
+  });
+
+  it("_resetMemoryPluginState also clears the active memory capability", () => {
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["capability prompt"],
+    });
+
+    _resetMemoryPluginState();
+
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+  });
+
+  it("listActiveMemoryPublicArtifacts survives a clearMemoryPluginState between register and read", async () => {
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    clearMemoryPluginState();
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
   });
 });

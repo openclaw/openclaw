@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  clearMemoryPluginState,
+  _resetMemoryPluginState,
   registerMemoryCapability,
   registerMemoryPromptSection,
 } from "../plugins/memory-state.js";
@@ -11,7 +11,7 @@ import {
 
 describe("memory-host-core helpers", () => {
   afterEach(() => {
-    clearMemoryPluginState();
+    _resetMemoryPluginState();
   });
 
   it("exposes the active memory prompt guidance builder for context engines", () => {

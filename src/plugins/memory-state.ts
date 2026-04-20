@@ -137,7 +137,6 @@ export type MemoryPluginCapabilityRegistration = {
 };
 
 type MemoryPluginState = {
-  capability?: MemoryPluginCapabilityRegistration;
   corpusSupplements: MemoryCorpusSupplementRegistration[];
   promptSupplements: MemoryPromptSupplementRegistration[];
   // LEGACY(memory-v1): kept for external plugins still registering the older
@@ -156,6 +155,14 @@ const memoryPluginState: MemoryPluginState = {
   promptSupplements: [],
 };
 
+// The active memory capability is workspace-scoped: it reflects the selected
+// `plugins.slots.memory` and must remain visible across plugin-scope swaps
+// (e.g. so the memory-wiki bridge in one scope can read memory-core's public
+// artifacts even when memory-core was loaded under a different cache key).
+// Keeping it outside `memoryPluginState` means `clearMemoryPluginState` /
+// `restoreMemoryPluginState` do not disturb it. See OC-40.
+let activeMemoryCapability: MemoryPluginCapabilityRegistration | undefined;
+
 export function registerMemoryCorpusSupplement(
   pluginId: string,
   supplement: MemoryCorpusSupplement,
@@ -171,16 +178,20 @@ export function registerMemoryCapability(
   pluginId: string,
   capability: MemoryPluginCapability,
 ): void {
-  memoryPluginState.capability = { pluginId, capability: { ...capability } };
+  activeMemoryCapability = { pluginId, capability: { ...capability } };
 }
 
 export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
-  return memoryPluginState.capability
+  return activeMemoryCapability
     ? {
-        pluginId: memoryPluginState.capability.pluginId,
-        capability: { ...memoryPluginState.capability.capability },
+        pluginId: activeMemoryCapability.pluginId,
+        capability: { ...activeMemoryCapability.capability },
       }
     : undefined;
+}
+
+export function clearActiveMemoryCapability(): void {
+  activeMemoryCapability = undefined;
 }
 
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
@@ -208,7 +219,7 @@ export function buildMemoryPromptSection(params: {
   citationsMode?: MemoryCitationsMode;
 }): string[] {
   const primary =
-    memoryPluginState.capability?.capability.promptBuilder?.(params) ??
+    activeMemoryCapability?.capability.promptBuilder?.(params) ??
     memoryPluginState.promptBuilder?.(params) ??
     [];
   const supplements = memoryPluginState.promptSupplements
@@ -219,7 +230,7 @@ export function buildMemoryPromptSection(params: {
 }
 
 export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.capability?.capability.promptBuilder ?? memoryPluginState.promptBuilder;
+  return activeMemoryCapability?.capability.promptBuilder ?? memoryPluginState.promptBuilder;
 }
 
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
@@ -236,7 +247,7 @@ export function resolveMemoryFlushPlan(params: {
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return (
-    memoryPluginState.capability?.capability.flushPlanResolver?.(params) ??
+    activeMemoryCapability?.capability.flushPlanResolver?.(params) ??
     memoryPluginState.flushPlanResolver?.(params) ??
     null
   );
@@ -244,8 +255,7 @@ export function resolveMemoryFlushPlan(params: {
 
 export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
   return (
-    memoryPluginState.capability?.capability.flushPlanResolver ??
-    memoryPluginState.flushPlanResolver
+    activeMemoryCapability?.capability.flushPlanResolver ?? memoryPluginState.flushPlanResolver
   );
 }
 
@@ -255,7 +265,7 @@ export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
 }
 
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
-  return memoryPluginState.capability?.capability.runtime ?? memoryPluginState.runtime;
+  return activeMemoryCapability?.capability.runtime ?? memoryPluginState.runtime;
 }
 
 export function hasMemoryRuntime(): boolean {
@@ -274,14 +284,14 @@ function cloneMemoryPublicArtifact(
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const cap = memoryPluginState.capability;
+  const cap = activeMemoryCapability;
   const artifacts = (await cap?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
   if (process.env.OPENCLAW_DEBUG_PLUGIN_SCOPE === "1") {
     // eslint-disable-next-line no-console
     console.warn(
       `[memory-bridge-probe] ${JSON.stringify({
         capabilityPluginId: cap?.pluginId ?? null,
-        hasPublicArtifacts: Boolean(cap?.capability.publicArtifacts?.listArtifacts),
+        hasPublicArtifacts: cap?.capability.publicArtifacts !== undefined,
         artifactCount: artifacts.length,
       })}`,
     );
@@ -312,12 +322,6 @@ export async function listActiveMemoryPublicArtifacts(params: {
 }
 
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
-  memoryPluginState.capability = state.capability
-    ? {
-        pluginId: state.capability.pluginId,
-        capability: { ...state.capability.capability },
-      }
-    : undefined;
   memoryPluginState.corpusSupplements = [...state.corpusSupplements];
   memoryPluginState.promptBuilder = state.promptBuilder;
   memoryPluginState.promptSupplements = [...state.promptSupplements];
@@ -326,7 +330,6 @@ export function restoreMemoryPluginState(state: MemoryPluginState): void {
 }
 
 export function clearMemoryPluginState(): void {
-  memoryPluginState.capability = undefined;
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptBuilder = undefined;
   memoryPluginState.promptSupplements = [];
@@ -334,4 +337,7 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.runtime = undefined;
 }
 
-export const _resetMemoryPluginState = clearMemoryPluginState;
+export function _resetMemoryPluginState(): void {
+  clearMemoryPluginState();
+  clearActiveMemoryCapability();
+}
