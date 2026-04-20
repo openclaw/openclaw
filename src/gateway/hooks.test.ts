@@ -288,7 +288,7 @@ describe("gateway hooks helpers", () => {
       hooks: {
         enabled: true,
         token: "secret",
-        allowedSessionKeyPrefixes: ["hook:gmail:"],
+        allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
       },
     } as OpenClawConfig;
     const resolved = resolveHooksConfig(cfg);
@@ -310,7 +310,7 @@ describe("gateway hooks helpers", () => {
       hooks: {
         enabled: true,
         token: "secret",
-        allowedSessionKeyPrefixes: ["hook:gmail:"],
+        allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
       },
     } as OpenClawConfig;
     const resolved = resolveHooksConfig(cfg);

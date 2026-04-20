@@ -336,10 +336,11 @@ function validateAction(action: HookAction): HookMappingResult {
 function getSessionKeyTemplateSource(
   sessionKeyTemplate: string | undefined,
 ): HookSessionKeyTemplateSource | undefined {
-  if (!normalizeOptionalString(sessionKeyTemplate)) {
+  const normalizedTemplate = normalizeOptionalString(sessionKeyTemplate);
+  if (!normalizedTemplate) {
     return undefined;
   }
-  return hasHookTemplateExpressions(sessionKeyTemplate) ? "templated" : "static";
+  return hasHookTemplateExpressions(normalizedTemplate) ? "templated" : "static";
 }
 
 function resolveMergedSessionKeySource(
