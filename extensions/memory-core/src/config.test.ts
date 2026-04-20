@@ -6,6 +6,10 @@ const manifest = JSON.parse(
   fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
 ) as { configSchema: Record<string, unknown> };
 
+// Example-only model ref for manifest schema coverage. This is not a
+// recommended default and does not imply any preferred provider or model.
+const TEST_DREAMING_MODEL = "example/dreaming-model";
+
 describe("memory-core manifest config schema", () => {
   it("accepts dreaming phase thresholds used by QA and runtime", () => {
     const result = validateJsonSchemaValue({
@@ -14,7 +18,7 @@ describe("memory-core manifest config schema", () => {
       value: {
         dreaming: {
           enabled: true,
-          model: "ollama/glm-5.1:cloud",
+          model: TEST_DREAMING_MODEL,
           timezone: "Europe/London",
           verboseLogging: true,
           storage: {

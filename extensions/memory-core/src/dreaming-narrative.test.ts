@@ -27,6 +27,9 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+// Example-only model ref for narrative wiring tests. This is not a recommended
+// default and does not imply any preferred provider or model.
+const TEST_DREAMING_MODEL = "example/dreaming-model";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -625,13 +628,13 @@ describe("generateAndAppendDreamNarrative", () => {
         phase: "light",
         snippets: ["API endpoints need authentication"],
       },
-      model: "ollama/glm-5.1:cloud",
+      model: TEST_DREAMING_MODEL,
       logger,
     });
 
     expect(subagent.run).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "ollama/glm-5.1:cloud",
+        model: TEST_DREAMING_MODEL,
       }),
     );
   });
@@ -651,13 +654,13 @@ describe("generateAndAppendDreamNarrative", () => {
         phase: "light",
         snippets: ["API endpoints need authentication"],
       },
-      model: "ollama/glm-5.1:cloud",
+      model: TEST_DREAMING_MODEL,
       logger,
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(2);
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
-      model: "ollama/glm-5.1:cloud",
+      model: TEST_DREAMING_MODEL,
     });
     expect(subagent.run.mock.calls[1][0]).not.toHaveProperty("model");
     expect(logger.warn).toHaveBeenCalledWith(

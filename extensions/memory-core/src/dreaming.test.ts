@@ -21,6 +21,9 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const constants = __testing.constants;
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+// Example-only model ref for config propagation tests. This is not a
+// recommended default and does not imply any preferred provider or model.
+const TEST_DREAMING_MODEL = "example/dreaming-model";
 
 afterEach(() => {
   resetSystemEventsForTest();
@@ -45,6 +48,19 @@ function createLogger() {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+  };
+}
+
+function createMockNarrativeSubagent(response = "The archive hummed softly.") {
+  return {
+    run: vi.fn(async (_params: { sessionKey: string; message: string; model?: string }) => ({
+      runId: "dream-run-1",
+    })),
+    waitForRun: vi.fn(async () => ({ status: "ok" })),
+    getSessionMessages: vi.fn(async () => ({
+      messages: [{ role: "assistant", content: response }],
+    })),
+    deleteSession: vi.fn(async () => {}),
   };
 }
 
@@ -324,7 +340,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
-          model: "ollama/glm-5.1:cloud",
+          model: TEST_DREAMING_MODEL,
         },
       },
     });
@@ -333,7 +349,7 @@ describe("short-term dreaming config", () => {
       speed: "balanced",
       thinking: "high",
       budget: "medium",
-      model: "ollama/glm-5.1:cloud",
+      model: TEST_DREAMING_MODEL,
     });
   });
 
@@ -1558,6 +1574,61 @@ describe("short-term dreaming trigger", () => {
     expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.conceptTags).toEqual(
       expect.arrayContaining(["glacier", "router", "failover"]),
     );
+  });
+
+  it("passes the configured deep dreaming model into the narrative subagent run", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-deep-model-");
+    const subagent = createMockNarrativeSubagent("The archive hummed softly.");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.95,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+        execution: {
+          speed: "balanced",
+          thinking: "high",
+          budget: "medium",
+          model: TEST_DREAMING_MODEL,
+        },
+      },
+      logger,
+      subagent,
+    });
+
+    expect(result?.handled).toBe(true);
+    // Light/REM may also emit narrative runs through the shared sweep, but only
+    // the deep promotion config in this test carries TEST_DREAMING_MODEL.
+    expect(
+      subagent.run.mock.calls.some(
+        (call) => (call[0] as { model?: string } | undefined)?.model === TEST_DREAMING_MODEL,
+      ),
+    ).toBe(true);
   });
 
   it("emits detailed run logs when verboseLogging is enabled", async () => {

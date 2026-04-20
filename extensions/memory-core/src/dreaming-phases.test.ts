@@ -19,6 +19,9 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
+// Example-only model ref for phase-to-subagent wiring tests. This is not a
+// recommended default and does not imply any preferred provider or model.
+const TEST_DREAMING_MODEL = "example/dreaming-model";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
     entries: {
@@ -1704,7 +1707,7 @@ describe("memory-core dreaming phases", () => {
             "memory-core": {
               config: {
                 dreaming: Object.assign({}, baseDreamingConfig, {
-                  model: "ollama/glm-5.1:cloud",
+                  model: TEST_DREAMING_MODEL,
                 }),
               },
             },
@@ -1730,7 +1733,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
-    expect(firstRun?.model).toBe("ollama/glm-5.1:cloud");
+    expect(firstRun?.model).toBe(TEST_DREAMING_MODEL);
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );

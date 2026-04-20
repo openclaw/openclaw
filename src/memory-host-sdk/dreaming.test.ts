@@ -20,6 +20,11 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "./dreaming.js";
 
+// Example-only model refs for config-wiring tests. These are not recommended
+// defaults and do not imply any preferred provider or model.
+const TEST_DREAMING_MODEL = "example/dreaming-model";
+const TEST_REM_OVERRIDE_MODEL = "example/rem-override-model";
+
 describe("memory dreaming host helpers", () => {
   it("normalizes string settings from the dreaming config", () => {
     const resolved = resolveMemoryDreamingConfig({
@@ -135,7 +140,7 @@ describe("memory dreaming host helpers", () => {
     const resolved = resolveMemoryDreamingConfig({
       pluginConfig: {
         dreaming: {
-          model: "ollama/glm-5.1:cloud",
+          model: TEST_DREAMING_MODEL,
           execution: {
             defaults: {
               timeoutMs: 45_000,
@@ -144,7 +149,7 @@ describe("memory dreaming host helpers", () => {
           phases: {
             rem: {
               execution: {
-                model: "openai/gpt-5.4",
+                model: TEST_REM_OVERRIDE_MODEL,
               },
             },
           },
@@ -153,19 +158,19 @@ describe("memory dreaming host helpers", () => {
     });
 
     expect(resolved.execution.defaults).toMatchObject({
-      model: "ollama/glm-5.1:cloud",
+      model: TEST_DREAMING_MODEL,
       timeoutMs: 45_000,
     });
     expect(resolved.phases.light.execution).toMatchObject({
-      model: "ollama/glm-5.1:cloud",
+      model: TEST_DREAMING_MODEL,
       timeoutMs: 45_000,
     });
     expect(resolved.phases.deep.execution).toMatchObject({
-      model: "ollama/glm-5.1:cloud",
+      model: TEST_DREAMING_MODEL,
       timeoutMs: 45_000,
     });
     expect(resolved.phases.rem.execution).toMatchObject({
-      model: "openai/gpt-5.4",
+      model: TEST_REM_OVERRIDE_MODEL,
       timeoutMs: 45_000,
     });
   });
