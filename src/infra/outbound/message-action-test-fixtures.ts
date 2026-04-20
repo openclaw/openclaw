@@ -1,6 +1,6 @@
-export function createFeishuMessageActionBootstrapRegistryMock() {
+export function createPinboardMessageActionBootstrapRegistryMock() {
   return (channel: string) =>
-    channel === "feishu"
+    channel === "pinboard"
       ? {
           actions: {
             messageActionTargetAliases: {
