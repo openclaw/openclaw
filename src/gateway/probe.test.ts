@@ -8,7 +8,7 @@ const gatewayClientState = vi.hoisted(() => ({
   helloAuth: {
     role: "operator",
     scopes: ["operator.read"],
-  },
+  } as { role?: string; scopes?: string[] } | undefined,
 }));
 
 const deviceIdentityState = vi.hoisted(() => ({
@@ -235,6 +235,40 @@ describe("probeGateway", () => {
     expect(result.auth).toMatchObject({
       scopes: ["operator.write"],
       capability: "write_capable",
+    });
+  });
+
+  it("keeps capability unknown when hello-ok omits auth metadata", async () => {
+    gatewayClientState.helloAuth = undefined;
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      includeDetails: false,
+    });
+
+    expect(result.auth).toMatchObject({
+      role: null,
+      scopes: [],
+      capability: "unknown",
+    });
+  });
+
+  it("reports connect-only only when hello-ok explicitly includes empty auth metadata", async () => {
+    gatewayClientState.helloAuth = {};
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      includeDetails: false,
+    });
+
+    expect(result.auth).toMatchObject({
+      role: null,
+      scopes: [],
+      capability: "connected_no_operator_scope",
     });
   });
 });

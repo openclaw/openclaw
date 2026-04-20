@@ -63,6 +63,14 @@ describe("probeGatewayStatus", () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
     callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        capability: "admin_capable",
+      },
+    });
 
     const result = await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",
@@ -77,10 +85,23 @@ describe("probeGatewayStatus", () => {
     expect(result).toEqual({
       ok: true,
       kind: "read",
-      capability: "read_only",
-      auth: undefined,
+      capability: "admin_capable",
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        capability: "admin_capable",
+      },
     });
-    expect(probeGatewayMock).not.toHaveBeenCalled();
+    expect(probeGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      auth: {
+        token: "temp-token",
+        password: undefined,
+      },
+      tlsFingerprint: "abc123",
+      timeoutMs: 5_000,
+      includeDetails: false,
+    });
     expect(callGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
       token: "temp-token",
@@ -89,6 +110,38 @@ describe("probeGatewayStatus", () => {
       method: "status",
       timeoutMs: 5_000,
       configPath: "/tmp/openclaw-daemon/openclaw.json",
+    });
+  });
+
+  it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
     });
   });
 

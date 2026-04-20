@@ -70,6 +70,7 @@ function emptyProbeAuth(): GatewayProbeAuthSummary {
 function resolveProbeAuthSummary(params: {
   role?: string | null;
   scopes?: string[];
+  authMetadataPresent?: boolean;
   error?: string | null;
   close?: GatewayProbeClose | null;
   verifiedRead?: boolean;
@@ -81,6 +82,7 @@ function resolveProbeAuthSummary(params: {
     scopes,
     capability: resolveGatewayProbeCapability({
       auth: { scopes },
+      authMetadataPresent: params.authMetadataPresent,
       error: params.error,
       close: params.close,
       verifiedRead: params.verifiedRead,
@@ -98,6 +100,7 @@ export function isPairingPendingProbeFailure(params: {
 
 export function resolveGatewayProbeCapability(params: {
   auth?: Pick<GatewayProbeAuthSummary, "scopes"> | null;
+  authMetadataPresent?: boolean;
   error?: string | null;
   close?: GatewayProbeClose | null;
   verifiedRead?: boolean;
@@ -116,7 +119,7 @@ export function resolveGatewayProbeCapability(params: {
   if (scopes.includes(OPERATOR_READ_SCOPE) || params.verifiedRead === true) {
     return "read_only";
   }
-  if (params.connectLatencyMs != null) {
+  if (params.connectLatencyMs != null && params.authMetadataPresent === true) {
     return "connected_no_operator_scope";
   }
   return "unknown";
@@ -136,6 +139,7 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
   let auth = emptyProbeAuth();
+  let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
@@ -200,6 +204,7 @@ export async function probeGateway(opts: {
         auth: resolveProbeAuthSummary({
           role: auth.role,
           scopes: auth.scopes,
+          authMetadataPresent,
           error: params.error,
           close,
           verifiedRead: params.verifiedRead,
@@ -241,11 +246,13 @@ export async function probeGateway(opts: {
       },
       onHelloOk: async (hello) => {
         connectLatencyMs = Date.now() - startedAt;
+        authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
         auth = resolveProbeAuthSummary({
           role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
           scopes: Array.isArray(hello?.auth?.scopes)
             ? hello.auth.scopes.filter((scope): scope is string => typeof scope === "string")
             : [],
+          authMetadataPresent,
         });
         if (detailLevel === "none") {
           settleProbe({

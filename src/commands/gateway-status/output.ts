@@ -99,7 +99,7 @@ export function writeGatewayStatusJson(params: {
 }) {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
   const degraded = params.probed.some((entry) => isScopeLimitedProbeFailure(entry.probe));
-  const capability = summarizeGatewayProbeCapability(params.probed.map((entry) => entry.probe));
+  const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
   writeRuntimeJson(params.runtime, {
     ok: reachable.length > 0,
     degraded,
@@ -153,7 +153,7 @@ export function writeGatewayStatusText(params: {
 }) {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
   const ok = reachable.length > 0;
-  const capability = summarizeGatewayProbeCapability(params.probed.map((entry) => entry.probe));
+  const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
   params.runtime.log(colorize(params.rich, theme.heading, "Gateway Status"));
   params.runtime.log(
     ok

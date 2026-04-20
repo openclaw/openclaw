@@ -46,7 +46,18 @@ export async function probeGatewayStatus(opts: {
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
-          return { ok: true } as const;
+          const { probeGateway } = await import("../../gateway/probe.js");
+          const authProbe = await probeGateway({
+            url: opts.url,
+            auth: {
+              token: opts.token,
+              password: opts.password,
+            },
+            tlsFingerprint: opts.tlsFingerprint,
+            timeoutMs: opts.timeoutMs,
+            includeDetails: false,
+          }).catch(() => null);
+          return { ok: true as const, authProbe };
         }
         const { probeGateway } = await import("../../gateway/probe.js");
         return await probeGateway({
@@ -61,12 +72,20 @@ export async function probeGatewayStatus(opts: {
         });
       },
     );
-    const auth = "auth" in result ? result.auth : undefined;
+    const auth =
+      "auth" in result ? result.auth : "authProbe" in result ? result.authProbe?.auth : undefined;
     if (result.ok) {
       return {
         ok: true,
         kind,
-        capability: opts.requireRpc ? "read_only" : auth?.capability,
+        capability:
+          kind === "read"
+            ? auth?.capability && auth.capability !== "unknown"
+              ? auth.capability
+              : // The status RPC proves read access even when a follow-up hello probe
+                // cannot recover richer scope metadata.
+                "read_only"
+            : auth?.capability,
         auth,
       } as const;
     }
