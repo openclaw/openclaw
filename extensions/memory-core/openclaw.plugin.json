@@ -13,6 +13,11 @@
       "label": "Dreaming Frequency",
       "placeholder": "0 3 * * *",
       "help": "Optional cron cadence for the full dreaming sweep (light, REM, then deep)."
+    },
+    "dreaming.model": {
+      "label": "Dreaming Model",
+      "placeholder": "ollama/glm-5.1:cloud",
+      "help": "Optional model override for Dream Diary narrative runs. When unset, Dream Diary uses the session default model."
     }
   },
   "configSchema": {
@@ -25,6 +30,9 @@
         "properties": {
           "enabled": {
             "type": "boolean"
+          },
+          "model": {
+            "type": "string"
           },
           "frequency": {
             "type": "string"

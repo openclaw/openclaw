@@ -187,6 +187,11 @@ describe("short-term dreaming config", () => {
         mode: "separate",
         separateReports: false,
       },
+      execution: {
+        speed: "balanced",
+        thinking: "high",
+        budget: "medium",
+      },
     });
   });
 
@@ -226,6 +231,11 @@ describe("short-term dreaming config", () => {
         mode: "separate",
         separateReports: false,
       },
+      execution: {
+        speed: "balanced",
+        thinking: "high",
+        budget: "medium",
+      },
     });
   });
 
@@ -262,6 +272,11 @@ describe("short-term dreaming config", () => {
         mode: "separate",
         separateReports: false,
       },
+      execution: {
+        speed: "balanced",
+        thinking: "high",
+        budget: "medium",
+      },
     });
   });
 
@@ -297,6 +312,28 @@ describe("short-term dreaming config", () => {
         mode: "separate",
         separateReports: false,
       },
+      execution: {
+        speed: "balanced",
+        thinking: "high",
+        budget: "medium",
+      },
+    });
+  });
+
+  it("inherits dreaming.model into the deep narrative execution config", () => {
+    const resolved = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          model: "ollama/glm-5.1:cloud",
+        },
+      },
+    });
+
+    expect(resolved.execution).toEqual({
+      speed: "balanced",
+      thinking: "high",
+      budget: "medium",
+      model: "ollama/glm-5.1:cloud",
     });
   });
 

@@ -613,6 +613,58 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(logger.info).toHaveBeenCalled();
   });
 
+  it("passes an explicit model override into the narrative subagent run", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "light",
+        snippets: ["API endpoints need authentication"],
+      },
+      model: "ollama/glm-5.1:cloud",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "ollama/glm-5.1:cloud",
+      }),
+    );
+  });
+
+  it("falls back to the session default model when the configured model cannot start", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
+    subagent.run
+      .mockRejectedValueOnce(new Error("model unavailable"))
+      .mockResolvedValueOnce({ runId: "run-456" });
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "light",
+        snippets: ["API endpoints need authentication"],
+      },
+      model: "ollama/glm-5.1:cloud",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledTimes(2);
+    expect(subagent.run.mock.calls[0][0]).toMatchObject({
+      model: "ollama/glm-5.1:cloud",
+    });
+    expect(subagent.run.mock.calls[1][0]).not.toHaveProperty("model");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("retrying with the session default"),
+    );
+  });
+
   it("skips narrative when no snippets are available", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("Should not appear.");

@@ -10,6 +10,7 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  type MemoryDreamingExecutionConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
@@ -109,6 +110,7 @@ export type ShortTermPromotionDreamingConfig = {
     mode: "inline" | "separate" | "both";
     separateReports: boolean;
   };
+  execution?: MemoryDreamingExecutionConfig;
 };
 
 type ReconcileResult =
@@ -392,6 +394,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
+    execution: resolved.execution,
   };
 }
 
@@ -628,6 +631,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           subagent: params.subagent,
           workspaceDir,
           data,
+          model: params.config.execution?.model,
           nowMs: sweepNowMs,
           timezone: params.config.timezone,
           logger: params.logger,

@@ -131,6 +131,45 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.rem.cron).toBe("15 */8 * * *");
   });
 
+  it("propagates dreaming.model through execution defaults and phase execution overrides", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          model: "ollama/glm-5.1:cloud",
+          execution: {
+            defaults: {
+              timeoutMs: 45_000,
+            },
+          },
+          phases: {
+            rem: {
+              execution: {
+                model: "openai/gpt-5.4",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.execution.defaults).toMatchObject({
+      model: "ollama/glm-5.1:cloud",
+      timeoutMs: 45_000,
+    });
+    expect(resolved.phases.light.execution).toMatchObject({
+      model: "ollama/glm-5.1:cloud",
+      timeoutMs: 45_000,
+    });
+    expect(resolved.phases.deep.execution).toMatchObject({
+      model: "ollama/glm-5.1:cloud",
+      timeoutMs: 45_000,
+    });
+    expect(resolved.phases.rem.execution).toMatchObject({
+      model: "openai/gpt-5.4",
+      timeoutMs: 45_000,
+    });
+  });
+
   it("dedupes shared workspaces across all configured agents", () => {
     resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
       if (agentId === "alpha") {

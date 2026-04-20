@@ -26,6 +26,7 @@ type SubagentSurface = {
     idempotencyKey: string;
     sessionKey: string;
     message: string;
+    model?: string;
     extraSystemPrompt?: string;
     deliver?: boolean;
   }) => Promise<{ runId: string }>;
@@ -135,45 +136,75 @@ function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
   );
 }
 
+async function writeRequestScopedFallbackNarrative(params: {
+  data: NarrativePhaseData;
+  workspaceDir: string;
+  nowMs: number;
+  timezone?: string;
+  logger: Logger;
+}): Promise<void> {
+  try {
+    await appendNarrativeEntry({
+      workspaceDir: params.workspaceDir,
+      narrative: buildRequestScopedFallbackNarrative(params.data),
+      nowMs: params.nowMs,
+      timezone: params.timezone,
+    });
+    params.logger.warn(
+      `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped.`,
+    );
+  } catch (fallbackErr) {
+    params.logger.warn(
+      `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
+    );
+  }
+}
+
 async function startNarrativeRunOrFallback(params: {
   subagent: SubagentSurface;
   sessionKey: string;
   message: string;
+  model?: string;
   data: NarrativePhaseData;
   workspaceDir: string;
   nowMs: number;
   timezone?: string;
   logger: Logger;
 }): Promise<string | null> {
-  try {
-    const run = await params.subagent.run({
+  const startRun = async (model?: string) =>
+    await params.subagent.run({
       idempotencyKey: params.sessionKey,
       sessionKey: params.sessionKey,
       message: params.message,
+      ...(model ? { model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
       deliver: false,
     });
+
+  try {
+    const run = await startRun(params.model);
     return run.runId;
   } catch (runErr) {
-    if (!isRequestScopedSubagentRuntimeError(runErr)) {
-      throw runErr;
+    if (isRequestScopedSubagentRuntimeError(runErr)) {
+      await writeRequestScopedFallbackNarrative(params);
+      return null;
     }
-    try {
-      await appendNarrativeEntry({
-        workspaceDir: params.workspaceDir,
-        narrative: buildRequestScopedFallbackNarrative(params.data),
-        nowMs: params.nowMs,
-        timezone: params.timezone,
-      });
+    if (params.model) {
       params.logger.warn(
-        `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped.`,
+        `memory-core: narrative generation could not start with configured model "${params.model}" for ${params.data.phase} phase; retrying with the session default (${formatErrorMessage(runErr)}).`,
       );
-    } catch (fallbackErr) {
-      params.logger.warn(
-        `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
-      );
+      try {
+        const run = await startRun();
+        return run.runId;
+      } catch (retryErr) {
+        if (isRequestScopedSubagentRuntimeError(retryErr)) {
+          await writeRequestScopedFallbackNarrative(params);
+          return null;
+        }
+        throw retryErr;
+      }
     }
-    return null;
+    throw runErr;
   }
 }
 
@@ -835,6 +866,7 @@ export async function generateAndAppendDreamNarrative(params: {
   subagent: SubagentSurface;
   workspaceDir: string;
   data: NarrativePhaseData;
+  model?: string;
   nowMs?: number;
   timezone?: string;
   logger: Logger;
@@ -859,6 +891,7 @@ export async function generateAndAppendDreamNarrative(params: {
       subagent: params.subagent,
       sessionKey,
       message,
+      model: params.model,
       data: params.data,
       workspaceDir: params.workspaceDir,
       nowMs,

@@ -116,7 +116,7 @@ function createHarness(
 }
 
 function createMockNarrativeSubagent(response = "The archive hummed softly.") {
-  const run = vi.fn(async (_params: { sessionKey: string; message: string }) => ({
+  const run = vi.fn(async (_params: { sessionKey: string; message: string; model?: string }) => ({
     runId: "dream-run-1",
   }));
   const waitForRun = vi.fn(async () => ({ status: "ok" }));
@@ -1695,7 +1695,25 @@ describe("memory-core dreaming phases", () => {
   it("passes staged light-dreaming snippets into the narrative pipeline", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The backup plan glowed like cold storage.");
-    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
+    const baseDreamingConfig =
+      LIGHT_DREAMING_TEST_CONFIG.plugins?.entries?.["memory-core"]?.config?.dreaming;
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: Object.assign({}, baseDreamingConfig, {
+                  model: "ollama/glm-5.1:cloud",
+                }),
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir,
+      subagent,
+    );
 
     await withDreamingTestClock(async () => {
       await writeDailyNote(workspaceDir, [
@@ -1712,6 +1730,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    expect(firstRun?.model).toBe("ollama/glm-5.1:cloud");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );

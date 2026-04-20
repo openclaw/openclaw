@@ -14,6 +14,7 @@ describe("memory-core manifest config schema", () => {
       value: {
         dreaming: {
           enabled: true,
+          model: "ollama/glm-5.1:cloud",
           timezone: "Europe/London",
           verboseLogging: true,
           storage: {
