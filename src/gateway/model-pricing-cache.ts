@@ -94,11 +94,35 @@ function parseNumberString(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function toPricePerMillion(value: number | null): number {
+function toPricePerMillion(value: number | null, context?: string): number {
   if (value === null || value < 0 || !Number.isFinite(value)) {
     return 0;
   }
-  return value * 1_000_000;
+  const result = value * 1_000_000;
+  
+  // Sanity check: reject pricing > $100/million as suspicious
+  // Typical LLM pricing: $0.10-$10/million for input, $0.30-$30/million for output
+  // Values >$100/million indicate corrupted data or format mismatch
+  if (result > 100) {
+    log.warn(
+      `Suspicious pricing detected${context ? ` (${context})` : ""}: ` +
+      `${value} per-token → ${result.toFixed(4)} per-million USD. ` +
+      `Expected range: $0.01-$100/million. Using 0 to avoid cost inflation.`,
+    );
+    return 0;
+  }
+  
+  // Also warn on unusually low pricing (< $0.0001/million) which might indicate
+  // the value was already in per-million format and got double-converted
+  if (result > 0 && result < 0.0001) {
+    log.warn(
+      `Unusually low pricing detected${context ? ` (${context})` : ""}: ` +
+      `${value} per-token → ${result} per-million USD. ` +
+      `Verify source format is per-token (not per-million).`,
+    );
+  }
+  
+  return result;
 }
 
 function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
@@ -112,10 +136,10 @@ function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
     return null;
   }
   return {
-    input: toPricePerMillion(prompt),
-    output: toPricePerMillion(completion),
-    cacheRead: toPricePerMillion(parseNumberString(pricing.input_cache_read)),
-    cacheWrite: toPricePerMillion(parseNumberString(pricing.input_cache_write)),
+    input: toPricePerMillion(prompt, "input"),
+    output: toPricePerMillion(completion, "output"),
+    cacheRead: toPricePerMillion(parseNumberString(pricing.input_cache_read), "cacheRead"),
+    cacheWrite: toPricePerMillion(parseNumberString(pricing.input_cache_write), "cacheWrite"),
   };
 }
 
