@@ -6,6 +6,7 @@ type TestProfileConfig = {
   cdpUrl?: string;
   color?: string;
   headless?: boolean;
+  driver?: "openclaw" | "existing-session";
 };
 type TestConfig = {
   browser: {
@@ -272,5 +273,60 @@ describe("server-context hot-reload profiles", () => {
     expect(runtime?.profile.headless).toBe(false);
     expect(runtime?.lastTargetId).toBeNull();
     expect(runtime?.reconcile?.reason).toContain("headless");
+  });
+
+  it("does not reconcile existing-session runtime when only headless changes", async () => {
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://127.0.0.1:9222",
+      color: "#0066CC",
+      headless: true,
+      driver: "existing-session",
+    };
+
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const remoteProfile = resolveProfile(resolved, "remote");
+    expect(remoteProfile).toBeTruthy();
+    expect(remoteProfile?.driver).toBe("existing-session");
+    expect(remoteProfile?.attachOnly).toBe(true);
+    expect(remoteProfile?.headless).toBe(true);
+
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "remote",
+          {
+            profile: remoteProfile!,
+            running: { pid: 456 } as never,
+            lastTargetId: "tab-remote",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://127.0.0.1:9222",
+      color: "#0066CC",
+      headless: false,
+      driver: "existing-session",
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("remote");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.driver).toBe("existing-session");
+    expect(runtime?.profile.headless).toBe(false);
+    expect(runtime?.lastTargetId).toBe("tab-remote");
+    expect(runtime?.reconcile).toBeNull();
   });
 });
