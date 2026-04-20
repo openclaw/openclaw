@@ -1644,5 +1644,37 @@ describe("gateway agent handler", () => {
 
       resolveAgent();
     });
+
+    it("does not register a controller when resolvedSessionKey is missing", async () => {
+      // chat.abort matches entries by exact sessionKey equality (chat.ts:1723).
+      // Registering an entry with an empty sessionKey would leave the run
+      // unabortable anyway — chat.abort always passes a non-empty key — and
+      // would pollute chatAbortControllers with an entry keyed to "". Skip
+      // registration in that case so the map only contains abort-capable
+      // entries.
+      const context = makeContextWithAbort();
+      let resolveAgent!: () => void;
+      mocks.agentCommand.mockImplementation(
+        () =>
+          new Promise<{ payloads: []; meta: { durationMs: number } }>((r) => {
+            resolveAgent = () => r({ payloads: [], meta: { durationMs: 0 } });
+          }),
+      );
+
+      // Omit both agentId and sessionKey so resolveExplicitAgentSessionKey
+      // returns undefined and resolvedSessionKey stays unset through dispatch.
+      await invokeAgent(
+        {
+          message: "hello",
+          idempotencyKey: "no-session-key-idem",
+        },
+        { context },
+      );
+
+      expect(context.chatAbortControllers.has("no-session-key-idem")).toBe(false);
+      expect(context.chatAbortControllers.size).toBe(0);
+
+      resolveAgent();
+    });
   });
 });

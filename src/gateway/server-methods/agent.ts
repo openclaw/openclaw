@@ -914,21 +914,26 @@ export const agentHandlers: GatewayRequestHandlers = {
       cfg: cfgForAgent ?? cfg,
       overrideSeconds,
     });
-    const abortEntry: ChatAbortControllerEntry = {
-      controller: abortController,
-      sessionId: resolvedSessionId ?? runId,
-      sessionKey: resolvedSessionKey ?? "",
-      startedAtMs: now,
-      expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: runTimeoutMs }),
-      ownerConnId: normalizeOptionalString(client?.connId),
-      ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
-      kind: "agent",
-    };
-    // Only register if no other run with the same runId is already tracked.
-    // A concurrent chat.send with the same idempotency key may already hold
-    // an entry; overwriting it would discard the chat.send's controller and
-    // the .finally() cleanup below would remove the entry prematurely.
-    if (!context.chatAbortControllers.has(runId)) {
+    // Register the run so chat.abort can target it. Two guard conditions:
+    // (1) resolvedSessionKey must be set — chat.abort matches entries by
+    //     exact sessionKey equality (see chat.ts "runId does not match
+    //     sessionKey"), and the RPC schema requires a non-empty sessionKey.
+    //     An entry keyed with "" would never match.
+    // (2) no other run with the same runId is already tracked — a concurrent
+    //     chat.send with the same idempotency key may already hold an entry;
+    //     overwriting it would discard the chat.send's controller, and the
+    //     .finally() cleanup above would then remove the entry prematurely.
+    if (resolvedSessionKey && !context.chatAbortControllers.has(runId)) {
+      const abortEntry: ChatAbortControllerEntry = {
+        controller: abortController,
+        sessionId: resolvedSessionId ?? runId,
+        sessionKey: resolvedSessionKey,
+        startedAtMs: now,
+        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: runTimeoutMs }),
+        ownerConnId: normalizeOptionalString(client?.connId),
+        ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
+        kind: "agent",
+      };
       context.chatAbortControllers.set(runId, abortEntry);
     }
 
