@@ -337,6 +337,29 @@ describe("agentCommand", () => {
     });
   });
 
+  it('defaults trigger to "user" when caller does not set it', async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      await agentCommandFromIngress({ message: "hi", to: "+1555", senderIsOwner: true }, runtime);
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.trigger).toBe("user");
+    });
+  });
+
+  it('forwards an explicit trigger (e.g. "broadcast") to the embedded runner', async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      await agentCommandFromIngress(
+        { message: "hi", to: "+1555", senderIsOwner: true, trigger: "broadcast" },
+        runtime,
+      );
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.trigger).toBe("broadcast");
+    });
+  });
+
   it("resumes when session-id is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

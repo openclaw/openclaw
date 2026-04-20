@@ -78,6 +78,13 @@ export type AgentCommandOpts = {
   extraSystemPrompt?: string;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /**
+   * Classifies what initiated this agent run. Surfaced on every LLM request
+   * as the `X-Trigger-Source` header, letting downstream proxies / quota
+   * layers route by run kind (e.g. "broadcast" → Haiku, "cron" → Sonnet).
+   * Defaults to "user" when unset.
+   */
+  trigger?: string;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
 };

@@ -281,7 +281,11 @@ function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
-    trigger: "user",
+    // Ingress callers (e.g. Gateway agent RPC) can override to classify the
+    // run — the value surfaces as the X-Trigger-Source header on every LLM
+    // request and lets the proxy / quota layer route by run kind
+    // (e.g. "broadcast" → Haiku, "cron" → Sonnet). Defaults to "user".
+    trigger: params.opts.trigger ?? "user",
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,

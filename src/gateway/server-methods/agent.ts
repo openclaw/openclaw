@@ -205,6 +205,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
+      trigger?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
@@ -634,6 +635,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         internalEvents: request.internalEvents,
         inputProvenance,
         senderIsOwner,
+        trigger: request.trigger,
       },
       defaultRuntime,
       context.deps,
