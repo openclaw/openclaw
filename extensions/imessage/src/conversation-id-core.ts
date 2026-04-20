@@ -39,10 +39,7 @@ export function matchIMessageAcpConversation(params: {
   if (binding.conversationId !== conversation.conversationId) {
     return null;
   }
-  return {
-    conversationId: conversation.conversationId,
-    matchPriority: 2,
-  };
+  return { conversationId: conversation.conversationId, matchPriority: 2 };
 }
 
 export function resolveIMessageConversationIdFromTarget(target: string): string | undefined {

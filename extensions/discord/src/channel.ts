@@ -5,10 +5,7 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
@@ -181,7 +178,7 @@ async function resolveDiscordSend(deps?: { [channelId: string]: unknown }): Prom
 const discordMessageActions = {
   describeMessageTool: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
-  ): ChannelMessageToolDiscovery | null =>
+  ) =>
     resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
     discordMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
@@ -317,7 +314,8 @@ function matchDiscordAcpConversation(params: {
     params.bindingConversationId === params.parentConversationId
   ) {
     return {
-      conversationId: params.parentConversationId,
+      conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
       matchPriority: 1,
     };
   }
@@ -610,15 +608,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             includeApplication: true,
           }),
         formatCapabilitiesProbe: ({ probe }) => {
-          const discordProbe = probe as DiscordProbe | undefined;
           const lines = [];
-          if (discordProbe?.bot?.username) {
-            const botId = discordProbe.bot.id ? ` (${discordProbe.bot.id})` : "";
-            lines.push({ text: `Bot: @${discordProbe.bot.username}${botId}` });
+          if (probe?.bot?.username) {
+            const botId = probe.bot.id ? ` (${probe.bot.id})` : "";
+            lines.push({ text: `Bot: @${probe.bot.username}${botId}` });
           }
-          if (discordProbe?.application?.intents) {
+          if (probe?.application?.intents) {
             lines.push({
-              text: `Intents: ${formatDiscordIntents(discordProbe.application.intents)}`,
+              text: `Intents: ${formatDiscordIntents(probe.application.intents)}`,
             });
           }
           return lines;

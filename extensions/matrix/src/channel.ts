@@ -235,10 +235,7 @@ function matchMatrixAcpConversation(params: {
     params.parentConversationId !== params.conversationId &&
     binding.conversationId === params.parentConversationId
   ) {
-    return {
-      conversationId: params.parentConversationId,
-      matchPriority: 1,
-    };
+    return { conversationId: params.parentConversationId, matchPriority: 1 };
   }
   return null;
 }

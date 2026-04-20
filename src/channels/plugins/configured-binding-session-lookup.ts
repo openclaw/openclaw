@@ -42,6 +42,11 @@ export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
       if (accountMatchPriority === 0) {
         continue;
       }
+      // NOTE: rule.target holds the compile-time conversation ref from config (e.g. the parent
+      // channel ID). Per-thread session keys embed a runtime thread ID that is never stored in
+      // compiled bindings, so this lookup will always return null for thread-derived sessions.
+      // Callers that need per-thread resolution should go through resolveConfiguredBindingRecord
+      // with the live conversationId/parentConversationId pair instead.
       const materializedTarget = materializeConfiguredBindingRecord({
         rule,
         accountId: parsed.accountId,

@@ -8,6 +8,7 @@ import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindin
 import {
   buildConfiguredAcpSessionKey,
   normalizeText,
+  parseConfiguredAcpSessionKey,
   type ConfiguredAcpBindingSpec,
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
@@ -157,7 +158,9 @@ export async function resetAcpSessionInPlace(params: {
     cfg: params.cfg,
     sessionKey,
   });
-  const clearMeta = params.clearMeta ?? Boolean(configuredBinding);
+  const clearMeta =
+    params.clearMeta ??
+    (Boolean(configuredBinding) || Boolean(parseConfiguredAcpSessionKey(sessionKey)));
   if (!meta) {
     if (clearMeta) {
       return { ok: true };
