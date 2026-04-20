@@ -15,6 +15,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
+import { readWebAuthExistsForDecision } from "./auth-store.js";
 import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
@@ -401,42 +402,55 @@ export async function finalizeWhatsAppSetup(params: {
           input: {},
         });
 
-  const linked = await detectWhatsAppLinked(next, accountId);
   const { authDir } = resolveWhatsAppAuthDir({
     cfg: next,
     accountId,
   });
+  const authDecision = await readWebAuthExistsForDecision(authDir);
 
-  if (!linked) {
+  if (authDecision.outcome === "unstable") {
     await params.prompter.note(
       [
-        "Scan the QR with WhatsApp on your phone.",
+        "WhatsApp auth state is still stabilizing.",
+        "Skip QR linking for now and retry linking in a moment if needed.",
         `Credentials are stored under ${authDir}/ for future runs.`,
         `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
       ].join("\n"),
       "WhatsApp linking",
     );
-  }
-
-  const wantsLink = await params.prompter.confirm({
-    message: linked ? "WhatsApp already linked. Re-link now?" : "Link WhatsApp now (QR)?",
-    initialValue: !linked,
-  });
-  if (wantsLink) {
-    try {
-      await loginWeb(false, undefined, params.runtime, accountId);
-    } catch (error) {
-      params.runtime.error(`WhatsApp login failed: ${String(error)}`);
+  } else {
+    const linked = authDecision.exists;
+    if (!linked) {
       await params.prompter.note(
-        `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
-        "WhatsApp help",
+        [
+          "Scan the QR with WhatsApp on your phone.",
+          `Credentials are stored under ${authDir}/ for future runs.`,
+          `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
+        ].join("\n"),
+        "WhatsApp linking",
       );
     }
-  } else if (!linked) {
-    await params.prompter.note(
-      `Run \`${formatCliCommand("openclaw channels login")}\` later to link WhatsApp.`,
-      "WhatsApp",
-    );
+
+    const wantsLink = await params.prompter.confirm({
+      message: linked ? "WhatsApp already linked. Re-link now?" : "Link WhatsApp now (QR)?",
+      initialValue: !linked,
+    });
+    if (wantsLink) {
+      try {
+        await loginWeb(false, undefined, params.runtime, accountId);
+      } catch (error) {
+        params.runtime.error(`WhatsApp login failed: ${String(error)}`);
+        await params.prompter.note(
+          `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
+          "WhatsApp help",
+        );
+      }
+    } else if (!linked) {
+      await params.prompter.note(
+        `Run \`${formatCliCommand("openclaw channels login")}\` later to link WhatsApp.`,
+        "WhatsApp",
+      );
+    }
   }
 
   next = await promptWhatsAppDmAccess({

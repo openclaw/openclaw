@@ -294,12 +294,16 @@ export async function logoutWeb(params: {
   const runtime = params.runtime ?? defaultRuntime;
   const resolvedAuthDir = resolveUserPath(params.authDir ?? resolveDefaultWebAuthDir());
   const barrierResult = await waitForWebAuthBarrier(resolvedAuthDir, "logoutWeb");
+  const forceClear = barrierResult === "timed_out";
   if (barrierResult === "timed_out") {
     runtime.log(
       info("WhatsApp auth state is still stabilizing; clearing cached credentials anyway."),
     );
   }
-  if (!(await shouldClearOnLogout(resolvedAuthDir, Boolean(params.isLegacyAuthDir)))) {
+  if (
+    !forceClear &&
+    !(await shouldClearOnLogout(resolvedAuthDir, Boolean(params.isLegacyAuthDir)))
+  ) {
     runtime.log(info("No WhatsApp Web session found; nothing to delete."));
     return false;
   }

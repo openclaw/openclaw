@@ -49,6 +49,12 @@ const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
 
+function resolveConfiguredStateOnAuthTimeout(params: { snapshotConfigured?: boolean }): boolean {
+  // For observational status timeouts, preserve the last known configured bit when present.
+  // Otherwise fall back to the account-derived channel-configured state for WhatsApp.
+  return params.snapshotConfigured ?? true;
+}
+
 function parseWhatsAppExplicitTarget(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
   if (!normalized) {
@@ -76,8 +82,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
         isConfigured: async (account) => {
-          const channelRuntime = await loadWhatsAppChannelRuntime();
-          return (await channelRuntime.readWebAuthState(account.authDir)) === "linked";
+          const auth = await (
+            await loadWhatsAppChannelRuntime()
+          ).readWebAuthExistsBestEffort(account.authDir);
+          return auth.exists || auth.timedOut;
         },
       }),
       agentTools: () => [createWhatsAppLoginTool()],
@@ -187,35 +195,27 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           const channelRuntime = await loadWhatsAppChannelRuntime();
           const authDir = account.authDir;
           const auth = authDir
-            ? await channelRuntime.readWebAuthSnapshot(authDir)
+            ? await channelRuntime.readWebAuthSnapshotBestEffort(authDir)
             : {
-                state: "not-linked" as const,
+                linked: false,
+                timedOut: false,
                 authAgeMs: null,
                 selfId: { e164: null, jid: null, lid: null },
               };
           const linked =
             typeof snapshot.linked === "boolean"
               ? snapshot.linked
-              : auth.state === "unstable"
+              : auth.timedOut
                 ? undefined
-                : auth.state === "linked";
-          const summaryAuthState =
-            auth.state === "unstable"
-              ? auth.state
-              : linked === true
-                ? "linked"
-                : linked === false
-                  ? "not-linked"
-                  : undefined;
-          const statusState = summaryAuthState === undefined ? undefined : summaryAuthState;
-          const configured =
-            auth.state === "unstable"
-              ? typeof snapshot.configured === "boolean"
-                ? snapshot.configured
-                : true
-              : typeof linked === "boolean"
-                ? linked
-                : auth.state === "linked";
+                : auth.linked;
+          const configured = auth.timedOut
+            ? resolveConfiguredStateOnAuthTimeout({
+                snapshotConfigured:
+                  typeof snapshot.configured === "boolean" ? snapshot.configured : undefined,
+              })
+            : typeof linked === "boolean"
+              ? linked
+              : auth.linked;
           const authAgeMs = typeof linked === "boolean" && linked ? auth.authAgeMs : null;
           const self =
             typeof linked === "boolean" && linked
@@ -223,7 +223,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               : { e164: null, jid: null, lid: null };
           return {
             configured,
-            ...(statusState ? { statusState } : {}),
             ...(typeof linked === "boolean" ? { linked } : {}),
             authAgeMs,
             self,
@@ -241,19 +240,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         resolveAccountSnapshot: async ({ account, runtime }) => {
           const channelRuntime = await loadWhatsAppChannelRuntime();
-          const authState = await channelRuntime.readWebAuthState(account.authDir);
+          const auth = await channelRuntime.readWebAuthExistsBestEffort(account.authDir);
           return {
             accountId: account.accountId,
             name: account.name,
             enabled: account.enabled,
-            configured: true,
+            configured: auth.timedOut ? resolveConfiguredStateOnAuthTimeout({}) : auth.exists,
             extra: {
-              statusState: authState,
-              ...(authState === "linked"
-                ? { linked: true }
-                : authState === "not-linked"
-                  ? { linked: false }
-                  : {}),
+              ...(auth.timedOut ? {} : { linked: auth.exists }),
               connected: runtime?.connected ?? false,
               reconnectAttempts: runtime?.reconnectAttempts,
               lastConnectedAt: runtime?.lastConnectedAt ?? null,

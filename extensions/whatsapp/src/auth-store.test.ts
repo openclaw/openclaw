@@ -176,18 +176,18 @@ describe("auth-store", () => {
     readdirSpy.mockRestore();
   });
 
-  it("does not delete unrelated non-empty directories on logout", async () => {
-    const authDir = createTempAuthDir("openclaw-wa-auth-unrelated");
-    fsSync.writeFileSync(path.join(authDir, "notes.txt"), "keep me", "utf-8");
+  it("clears auth state even when the auth barrier times out", async () => {
+    hoisted.waitForCredsSaveQueueWithTimeout.mockResolvedValueOnce("timed_out");
+    const authDir = createTempAuthDir("openclaw-wa-auth-timeout");
+    fsSync.mkdirSync(path.join(authDir, "nested"));
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
     };
 
-    await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(false);
-    expect(fsSync.existsSync(authDir)).toBe(true);
-    expect(fsSync.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
+    await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
+    expect(fsSync.existsSync(authDir)).toBe(false);
   });
 
   it("throws a typed unstable-auth error when channel selection times out", async () => {

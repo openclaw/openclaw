@@ -137,8 +137,18 @@ export type ChannelAccountState =
   | "enabled"
   | "disabled";
 
+export type ChannelAuthExistsDecision =
+  | {
+      outcome: "stable";
+      exists: boolean;
+    }
+  | {
+      outcome: "unstable";
+    };
+
 export type ChannelHeartbeatDeps = {
   webAuthExists?: () => Promise<boolean>;
+  readWebAuthExistsForDecision?: () => Promise<ChannelAuthExistsDecision>;
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
