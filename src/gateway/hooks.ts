@@ -11,7 +11,11 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
+import {
+  hasHookTemplateExpressions,
+  type HookMappingResolved,
+  resolveHookMappings,
+} from "./hooks-mapping.js";
 import { resolveAllowedAgentIds } from "./hooks-policy.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
@@ -350,7 +354,7 @@ export function resolveHookSessionKey(params: {
 }
 
 function hasTemplatedHookSessionKey(sessionKey: string | undefined): boolean {
-  return typeof sessionKey === "string" && /\{\{\s*[^}]+\s*\}\}/.test(sessionKey);
+  return typeof sessionKey === "string" && hasHookTemplateExpressions(sessionKey);
 }
 
 export function normalizeHookDispatchSessionKey(params: {

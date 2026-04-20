@@ -62,6 +62,8 @@ export type HookAction =
       timeoutSeconds?: number;
     };
 
+export type HookSessionKeyTemplateSource = "static" | "templated";
+
 export type HookMappingResult =
   | { ok: true; action: HookAction }
   | { ok: true; action: null; skipped: true }
@@ -93,6 +95,7 @@ type HookTransformResult = Partial<{
   wakeMode: "now" | "next-heartbeat";
   name: string;
   sessionKey: string;
+  sessionKeySource: HookSessionKeyTemplateSource;
   deliver: boolean;
   allowUnsafeExternalContent: boolean;
   channel: HookMessageChannel;
@@ -264,7 +267,7 @@ function buildActionFromMapping(
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
-      sessionKeySource: getTemplatedSessionKeySource(mapping.sessionKey),
+      sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
@@ -303,7 +306,7 @@ function mergeAction(
     name: override.name ?? baseAgent?.name,
     agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
-    sessionKeySource: baseAgent?.sessionKeySource,
+    sessionKeySource: resolveMergedSessionKeySource(baseAgent, override),
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
       typeof override.allowUnsafeExternalContent === "boolean"
@@ -330,16 +333,26 @@ function validateAction(action: HookAction): HookMappingResult {
   return { ok: true, action };
 }
 
-function getTemplatedSessionKeySource(
+function getSessionKeyTemplateSource(
   sessionKeyTemplate: string | undefined,
-): "static" | "templated" | undefined {
+): HookSessionKeyTemplateSource | undefined {
   if (!normalizeOptionalString(sessionKeyTemplate)) {
     return undefined;
   }
-  return hasTemplateExpressions(sessionKeyTemplate) ? "templated" : "static";
+  return hasHookTemplateExpressions(sessionKeyTemplate) ? "templated" : "static";
 }
 
-function hasTemplateExpressions(template: string): boolean {
+function resolveMergedSessionKeySource(
+  baseAgent: Extract<HookAction, { kind: "agent" }> | undefined,
+  override: Exclude<HookTransformResult, null>,
+): HookSessionKeyTemplateSource | undefined {
+  if (typeof override.sessionKey === "string") {
+    return override.sessionKeySource ?? "templated";
+  }
+  return baseAgent?.sessionKeySource;
+}
+
+export function hasHookTemplateExpressions(template: string): boolean {
   return /\{\{\s*[^}]+\s*\}\}/.test(template);
 }
 
