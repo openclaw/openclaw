@@ -19,16 +19,17 @@ import {
   type CoreGatewayContext,
 } from "../engine/gateway/gateway.js";
 import type { GatewayAccount } from "../engine/gateway/types.js";
+import { registerOutboundAudioAdapterFactory } from "../engine/messaging/outbound.js";
 import { initSender, registerAccount } from "../engine/messaging/sender.js";
 import type { EngineLogger } from "../engine/types.js";
+import * as _audioModule from "../engine/utils/audio.js";
 import { debugLog, debugError } from "../engine/utils/log.js";
 import { registerTextChunker } from "../engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "../types.js";
+import { ensurePlatformAdapter } from "./bootstrap.js";
 import { setBridgeLogger } from "./logger.js";
 import { resolveQQBotPluginVersion } from "./plugin-version.js";
-import { getQQBotRuntime } from "./runtime.js";
-import { getQQBotRuntimeForEngine } from "./runtime.js";
-import { ensurePlatformAdapter } from "./bootstrap.js";
+import { getQQBotRuntime, getQQBotRuntimeForEngine } from "./runtime.js";
 
 // Register framework SDK version resolver for core/ slash commands.
 registerVersionResolver(resolveRuntimeServiceVersion);
@@ -52,6 +53,21 @@ registerApproveRuntimeGetter(() => {
       loadConfig: () => Record<string, unknown>;
       writeConfigFile: (cfg: unknown) => Promise<void>;
     },
+  };
+});
+
+// Register audio adapter factory so outbound.sendMedia can lazy-init even
+// when startGateway() hasn't run yet (bundler chunk-splitting scenario).
+registerOutboundAudioAdapterFactory(() => {
+  // Use a synchronous require-like approach: the audio module should already
+  // be loaded by the time the factory is invoked (gateway has started).
+  // We import it at the top and reference it here.
+  return {
+    audioFileToSilkBase64: async (p: string, f?: string[]) =>
+      (await _audioModule.audioFileToSilkBase64(p, f)) ?? undefined,
+    isAudioFile: (p: string, m?: string) => _audioModule.isAudioFile(p, m),
+    shouldTranscodeVoice: (p: string) => _audioModule.shouldTranscodeVoice(p),
+    waitForFile: (p: string, ms?: number) => _audioModule.waitForFile(p, ms),
   };
 });
 

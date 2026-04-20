@@ -20,13 +20,22 @@ export interface OutboundAudioAdapter {
 }
 
 let _audioAdapter: OutboundAudioAdapter | null = null;
+let _audioAdapterFactory: (() => OutboundAudioAdapter) | null = null;
 
 /** Register the audio conversion adapter — called by gateway startup. */
 export function registerOutboundAudioAdapter(adapter: OutboundAudioAdapter): void {
   _audioAdapter = adapter;
 }
 
+/** Register a factory that creates the adapter on first access (lazy init). */
+export function registerOutboundAudioAdapterFactory(factory: () => OutboundAudioAdapter): void {
+  _audioAdapterFactory = factory;
+}
+
 function getAudio(): OutboundAudioAdapter {
+  if (!_audioAdapter && _audioAdapterFactory) {
+    _audioAdapter = _audioAdapterFactory();
+  }
   if (!_audioAdapter) {
     throw new Error("OutboundAudioAdapter not registered");
   }
@@ -38,7 +47,13 @@ function audioFileToSilkBase64(p: string, f?: string[]): Promise<string | undefi
   return getAudio().audioFileToSilkBase64(p, f);
 }
 function isAudioFile(p: string, m?: string): boolean {
-  return getAudio().isAudioFile(p, m);
+  // Safe to return false when adapter is unavailable — this is a type-check
+  // function called by sendMedia's dispatch logic before any audio processing.
+  try {
+    return getAudio().isAudioFile(p, m);
+  } catch {
+    return false;
+  }
 }
 function shouldTranscodeVoice(p: string): boolean {
   return getAudio().shouldTranscodeVoice(p);

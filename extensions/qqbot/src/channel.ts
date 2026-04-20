@@ -115,6 +115,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         hint,
       }),
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
+      // Ensure bridge/gateway.ts module-level registrations (audio adapter factory,
+      // platform adapter, etc.) have executed before engine code runs.
+      await loadGatewayModule();
       const account = resolveQQBotAccount(cfg, accountId);
       const { sendText } = await import("./engine/messaging/outbound.js");
       const result = await sendText({ to, text, accountId, replyToId, account: account as never });
@@ -125,6 +128,8 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
+      // Same guard as sendText — ensure adapters are registered.
+      await loadGatewayModule();
       const account = resolveQQBotAccount(cfg, accountId);
       const { sendMedia } = await import("./engine/messaging/outbound.js");
       const result = await sendMedia({
