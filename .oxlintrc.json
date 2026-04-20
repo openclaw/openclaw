@@ -89,6 +89,56 @@
         "typescript/unbound-method": "off",
         "eslint/no-unsafe-optional-chaining": "off"
       }
+    },
+    {
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "rules": {
+        "eslint/no-console": "error"
+      }
+    },
+    {
+      "files": [
+        "src/acp/client.ts",
+        "src/acp/server.ts",
+        "src/channels/plugins/pairing-adapters.ts",
+        "src/cli/completion-runtime.ts",
+        "src/cli/program/help.ts",
+        "src/cli/run-main.ts",
+        "src/commands/health.ts",
+        "src/config/defaults.ts",
+        "src/entry.ts",
+        "src/globals.ts",
+        "src/index.ts",
+        "src/infra/bonjour.ts",
+        "src/infra/dotenv.ts",
+        "src/infra/tailscale.ts",
+        "src/infra/tmp-openclaw-dir.ts",
+        "src/infra/unhandled-rejections.ts",
+        "src/logger.ts",
+        "src/logging/console.ts",
+        "src/logging/subsystem.ts",
+        "src/logging/test-helpers/console-snapshot.ts",
+        "src/runtime.ts",
+        "src/security/windows-acl.ts",
+        "src/terminal/restore.ts"
+      ],
+      "rules": {
+        "eslint/no-console": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.e2e.test.ts",
+        "**/*.live.test.ts",
+        "**/*test-harness.ts",
+        "**/*test-helpers.ts",
+        "**/*test-support.ts"
+      ],
+      "rules": {
+        "eslint/no-console": "off"
+      }
     }
   ]
 }
