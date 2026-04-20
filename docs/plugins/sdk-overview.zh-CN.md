@@ -59,12 +59,12 @@ SDK 子路径，核心
 
 ### 插件入口
 
-| 子路径 | 主要导出 |
-| --- | --- |
-| `plugin-sdk/plugin-entry` | `definePluginEntry` |
-| `plugin-sdk/core` | `defineChannelPluginEntry`、`createChatChannelPlugin`、`createChannelPluginBase`、`defineSetupPluginEntry`、`buildChannelConfigSchema` |
-| `plugin-sdk/config-schema` | `OpenClawSchema` |
-| `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` |
+| 子路径                      | 主要导出                                                                                                                               |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/plugin-entry`   | `definePluginEntry`                                                                                                                    |
+| `plugin-sdk/core`           | `defineChannelPluginEntry`、`createChatChannelPlugin`、`createChannelPluginBase`、`defineSetupPluginEntry`、`buildChannelConfigSchema` |
+| `plugin-sdk/config-schema`  | `OpenClawSchema`                                                                                                                       |
+| `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry`                                                                                                      |
 
 <AccordionGroup>
   <Accordion title="通道子路径">
@@ -315,41 +315,41 @@ SDK 子路径，核心
 
 ### 能力注册
 
-| 方法 | 它注册什么 |
-| --- | --- |
-| `api.registerProvider(...)` | 文本推理（LLM） |
-| `api.registerAgentHarness(...)` | 实验性低级别代理执行器 |
-| `api.registerCliBackend(...)` | 本地 CLI 推理后端 |
-| `api.registerChannel(...)` | 消息通道 |
-| `api.registerSpeechProvider(...)` | 文本到语音 / STT 合成 |
-| `api.registerRealtimeTranscriptionProvider(...)` | 流式实时转录 |
-| `api.registerRealtimeVoiceProvider(...)` | 双工实时语音会话 |
-| `api.registerMediaUnderstandingProvider(...)` | 图像/音频/视频分析 |
-| `api.registerImageGenerationProvider(...)` | 图像生成 |
-| `api.registerMusicGenerationProvider(...)` | 音乐生成 |
-| `api.registerVideoGenerationProvider(...)` | 视频生成 |
-| `api.registerWebFetchProvider(...)` | 网络获取 / 抓取提供者 |
-| `api.registerWebSearchProvider(...)` | 网络搜索 |
+| 方法                                             | 它注册什么             |
+| ------------------------------------------------ | ---------------------- |
+| `api.registerProvider(...)`                      | 文本推理（LLM）        |
+| `api.registerAgentHarness(...)`                  | 实验性低级别代理执行器 |
+| `api.registerCliBackend(...)`                    | 本地 CLI 推理后端      |
+| `api.registerChannel(...)`                       | 消息通道               |
+| `api.registerSpeechProvider(...)`                | 文本到语音 / STT 合成  |
+| `api.registerRealtimeTranscriptionProvider(...)` | 流式实时转录           |
+| `api.registerRealtimeVoiceProvider(...)`         | 双工实时语音会话       |
+| `api.registerMediaUnderstandingProvider(...)`    | 图像/音频/视频分析     |
+| `api.registerImageGenerationProvider(...)`       | 图像生成               |
+| `api.registerMusicGenerationProvider(...)`       | 音乐生成               |
+| `api.registerVideoGenerationProvider(...)`       | 视频生成               |
+| `api.registerWebFetchProvider(...)`              | 网络获取 / 抓取提供者  |
+| `api.registerWebSearchProvider(...)`             | 网络搜索               |
 
 ### 工具和命令
 
-| 方法 | 它注册什么 |
-| --- | --- |
+| 方法                            | 它注册什么                              |
+| ------------------------------- | --------------------------------------- |
 | `api.registerTool(tool, opts?)` | 代理工具（必需或 `{ optional: true }`） |
-| `api.registerCommand(def)` | 自定义命令（绕过 LLM） |
+| `api.registerCommand(def)`      | 自定义命令（绕过 LLM）                  |
 
 ### 基础设施
 
-| 方法 | 它注册什么 |
-| --- | --- |
-| `api.registerHook(events, handler, opts?)` | 事件钩子 |
-| `api.registerHttpRoute(params)` | 网关 HTTP 端点 |
-| `api.registerGatewayMethod(name, handler)` | 网关 RPC 方法 |
-| `api.registerCli(registrar, opts?)` | CLI 子命令 |
-| `api.registerService(service)` | 后台服务 |
-| `api.registerInteractiveHandler(registration)` | 交互式处理程序 |
-| `api.registerMemoryPromptSupplement(builder)` | 附加内存相邻提示部分 |
-| `api.registerMemoryCorpusSupplement(adapter)` | 附加内存搜索/读取语料库 |
+| 方法                                           | 它注册什么              |
+| ---------------------------------------------- | ----------------------- |
+| `api.registerHook(events, handler, opts?)`     | 事件钩子                |
+| `api.registerHttpRoute(params)`                | 网关 HTTP 端点          |
+| `api.registerGatewayMethod(name, handler)`     | 网关 RPC 方法           |
+| `api.registerCli(registrar, opts?)`            | CLI 子命令              |
+| `api.registerService(service)`                 | 后台服务                |
+| `api.registerInteractiveHandler(registration)` | 交互式处理程序          |
+| `api.registerMemoryPromptSupplement(builder)`  | 附加内存相邻提示部分    |
+| `api.registerMemoryCorpusSupplement(adapter)`  | 附加内存搜索/读取语料库 |
 
 保留的核心管理命名空间（`config.*`、`exec.approvals.*`、`wizard.*`、
 `update.*`）始终保持 `operator.admin`，即使插件尝试分配
@@ -403,18 +403,18 @@ AI CLI 后端（如 `codex-cli`）的默认配置。
 
 ### 独占插槽
 
-| 方法 | 它注册什么 |
-| --- | --- |
-| `api.registerContextEngine(id, factory)` | 上下文引擎（一次激活一个）。`assemble()` 回调接收 `availableTools` 和 `citationsMode`，以便引擎可以定制提示添加。 |
-| `api.registerMemoryCapability(capability)` | 统一内存能力 |
-| `api.registerMemoryPromptSection(builder)` | 内存提示部分构建器 |
-| `api.registerMemoryFlushPlan(resolver)` | 内存刷新计划解析器 |
-| `api.registerMemoryRuntime(runtime)` | 内存运行时适配器 |
+| 方法                                       | 它注册什么                                                                                                        |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | 上下文引擎（一次激活一个）。`assemble()` 回调接收 `availableTools` 和 `citationsMode`，以便引擎可以定制提示添加。 |
+| `api.registerMemoryCapability(capability)` | 统一内存能力                                                                                                      |
+| `api.registerMemoryPromptSection(builder)` | 内存提示部分构建器                                                                                                |
+| `api.registerMemoryFlushPlan(resolver)`    | 内存刷新计划解析器                                                                                                |
+| `api.registerMemoryRuntime(runtime)`       | 内存运行时适配器                                                                                                  |
 
 ### 内存嵌入适配器
 
-| 方法 | 它注册什么 |
-| --- | --- |
+| 方法                                           | 它注册什么               |
+| ---------------------------------------------- | ------------------------ |
 | `api.registerMemoryEmbeddingProvider(adapter)` | 活动插件的内存嵌入适配器 |
 
 - `registerMemoryCapability` 是首选的独占内存插件 API。
@@ -433,10 +433,10 @@ AI CLI 后端（如 `codex-cli`）的默认配置。
 
 ### 事件和生命周期
 
-| 方法 | 它做什么 |
-| --- | --- |
-| `api.on(hookName, handler, opts?)` | 类型化生命周期钩子 |
-| `api.onConversationBindingResolved(handler)` | 对话绑定回调 |
+| 方法                                         | 它做什么           |
+| -------------------------------------------- | ------------------ |
+| `api.on(hookName, handler, opts?)`           | 类型化生命周期钩子 |
+| `api.onConversationBindingResolved(handler)` | 对话绑定回调       |
 
 ### 钩子决策语义
 
@@ -450,20 +450,20 @@ AI CLI 后端（如 `codex-cli`）的默认配置。
 
 ### API 对象字段
 
-| 字段 | 类型 | 描述 |
-| --- | --- | --- |
-| `api.id` | `string` | 插件 ID |
-| `api.name` | `string` | 显示名称 |
-| `api.version` | `string?` | 插件版本（可选） |
-| `api.description` | `string?` | 插件描述（可选） |
-| `api.source` | `string` | 插件源路径 |
-| `api.rootDir` | `string?` | 插件根目录（可选） |
-| `api.config` | `OpenClawConfig` | 当前配置快照（可用时为活动的内存中运行时快照） |
-| `api.pluginConfig` | `Record<string, unknown>` | 来自 `plugins.entries.<id>.config` 的插件特定配置 |
-| `api.runtime` | `PluginRuntime` | [运行时助手](/plugins/sdk-runtime) |
-| `api.logger` | `PluginLogger` | 作用域日志记录器（`debug`、`info`、`warn`、`error`） |
-| `api.registrationMode` | `PluginRegistrationMode` | 当前加载模式；`"setup-runtime"` 是轻量级预完整入口启动/设置窗口 |
-| `api.resolvePath(input)` | `(string) => string` | 解析相对于插件根的路径 |
+| 字段                     | 类型                      | 描述                                                            |
+| ------------------------ | ------------------------- | --------------------------------------------------------------- |
+| `api.id`                 | `string`                  | 插件 ID                                                         |
+| `api.name`               | `string`                  | 显示名称                                                        |
+| `api.version`            | `string?`                 | 插件版本（可选）                                                |
+| `api.description`        | `string?`                 | 插件描述（可选）                                                |
+| `api.source`             | `string`                  | 插件源路径                                                      |
+| `api.rootDir`            | `string?`                 | 插件根目录（可选）                                              |
+| `api.config`             | `OpenClawConfig`          | 当前配置快照（可用时为活动的内存中运行时快照）                  |
+| `api.pluginConfig`       | `Record<string, unknown>` | 来自 `plugins.entries.<id>.config` 的插件特定配置               |
+| `api.runtime`            | `PluginRuntime`           | [运行时助手](/plugins/sdk-runtime)                              |
+| `api.logger`             | `PluginLogger`            | 作用域日志记录器（`debug`、`info`、`warn`、`error`）            |
+| `api.registrationMode`   | `PluginRegistrationMode`  | 当前加载模式；`"setup-runtime"` 是轻量级预完整入口启动/设置窗口 |
+| `api.resolvePath(input)` | `(string) => string`      | 解析相对于插件根的路径                                          |
 
 ## 内部模块约定
 

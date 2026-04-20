@@ -145,25 +145,25 @@ read_when:
 
 单个插件可以通过 `api` 对象注册任意数量的能力：
 
-| 能力 | 注册方法 | 详细指南 |
-| --- | --- | --- |
-| 文本推理（LLM） | `api.registerProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins) |
-| CLI 推理后端 | `api.registerCliBackend(...)` | [CLI 后端](/gateway/cli-backends) |
-| 通道 / 消息 | `api.registerChannel(...)` | [通道插件](/plugins/sdk-channel-plugins) |
-| 语音（TTS/STT） | `api.registerSpeechProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 实时转录 | `api.registerRealtimeTranscriptionProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 实时语音 | `api.registerRealtimeVoiceProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 媒体理解 | `api.registerMediaUnderstandingProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 图像生成 | `api.registerImageGenerationProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 音乐生成 | `api.registerMusicGenerationProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 视频生成 | `api.registerVideoGenerationProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 网络获取 | `api.registerWebFetchProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 网络搜索 | `api.registerWebSearchProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| 代理工具 | `api.registerTool(...)` | 下方 |
-| 自定义命令 | `api.registerCommand(...)` | [入口点](/plugins/sdk-entrypoints) |
-| 事件钩子 | `api.registerHook(...)` | [入口点](/plugins/sdk-entrypoints) |
-| HTTP 路由 | `api.registerHttpRoute(...)` | [内部结构](/plugins/architecture#gateway-http-routes) |
-| CLI 子命令 | `api.registerCli(...)` | [入口点](/plugins/sdk-entrypoints) |
+| 能力            | 注册方法                                         | 详细指南                                                                  |
+| --------------- | ------------------------------------------------ | ------------------------------------------------------------------------- |
+| 文本推理（LLM） | `api.registerProvider(...)`                      | [提供者插件](/plugins/sdk-provider-plugins)                               |
+| CLI 推理后端    | `api.registerCliBackend(...)`                    | [CLI 后端](/gateway/cli-backends)                                         |
+| 通道 / 消息     | `api.registerChannel(...)`                       | [通道插件](/plugins/sdk-channel-plugins)                                  |
+| 语音（TTS/STT） | `api.registerSpeechProvider(...)`                | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 实时转录        | `api.registerRealtimeTranscriptionProvider(...)` | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 实时语音        | `api.registerRealtimeVoiceProvider(...)`         | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 媒体理解        | `api.registerMediaUnderstandingProvider(...)`    | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 图像生成        | `api.registerImageGenerationProvider(...)`       | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 音乐生成        | `api.registerMusicGenerationProvider(...)`       | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 视频生成        | `api.registerVideoGenerationProvider(...)`       | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 网络获取        | `api.registerWebFetchProvider(...)`              | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 网络搜索        | `api.registerWebSearchProvider(...)`             | [提供者插件](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| 代理工具        | `api.registerTool(...)`                          | 下方                                                                      |
+| 自定义命令      | `api.registerCommand(...)`                       | [入口点](/plugins/sdk-entrypoints)                                        |
+| 事件钩子        | `api.registerHook(...)`                          | [入口点](/plugins/sdk-entrypoints)                                        |
+| HTTP 路由       | `api.registerHttpRoute(...)`                     | [内部结构](/plugins/architecture#gateway-http-routes)                     |
+| CLI 子命令      | `api.registerCli(...)`                           | [入口点](/plugins/sdk-entrypoints)                                        |
 
 有关完整的注册 API，请参阅 [SDK 概述](/plugins/sdk-overview#registration-api)。
 
