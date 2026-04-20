@@ -886,6 +886,25 @@ export async function runAgentTurnWithFallback(params: {
     };
   };
 
+  // Codex P1 review #68939 (2026-04-20): consume the pending agent
+  // injection ONCE, BEFORE entering the outer attempt loop.
+  // Pre-fix, the consume call lived inside `while (true)`, so any
+  // retry path that `continue`d back (transient HTTP retry at
+  // line ~1504 / ~1640, empty-response retry paths, etc.) drained
+  // the queue on the first iteration and then re-invoked consume
+  // with an already-cleared queue, losing the original
+  // `[PLAN_DECISION]` / `[QUESTION_ANSWER]` context for every
+  // subsequent attempt. Hoisting OUTSIDE the loop makes the
+  // captured text survive across every retry, matching the queue's
+  // once-per-turn drain contract from the nuclear-fix-stack
+  // (commit 70a6e4b23a). The fallback-loop hoisting already in
+  // place for runWithModelFallback is preserved — this is a
+  // second, outer-scope hoist that covers the while(true) retry
+  // loop on top of it.
+  const hoistedPendingInjectionAcrossRetries = params.sessionKey
+    ? (await consumePendingAgentInjection(params.sessionKey)).text
+    : undefined;
+
   while (true) {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
@@ -966,21 +985,14 @@ export async function runAgentTurnWithFallback(params: {
         : undefined;
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
-      // Codex P1 review #68939 (post-nuclear-fix-stack): consume the
-      // pending agent injection ONCE, BEFORE entering the
-      // runWithModelFallback loop. Pre-fix, the consume call lived
-      // inside the `run:` callback below — every fallback retry
-      // re-invoked the callback, but the queue had already been
-      // drained by the first attempt, so retries on a different
-      // model/provider lost the [PLAN_DECISION] / [QUESTION_ANSWER]
-      // context. Hoisting it here means every retry sees the same
-      // composed prompt; the queue is consumed exactly once across
-      // all fallback attempts. Aligns with the queue's once-per-turn
-      // drain contract from cherry-pick of 70a6e4b23a (typed
-      // injection queue).
-      const hoistedPendingInjection = params.sessionKey
-        ? (await consumePendingAgentInjection(params.sessionKey)).text
-        : undefined;
+      // Codex P1 review #68939: the injection was already consumed
+      // ONCE above `while (true)` so this iteration re-uses the same
+      // captured text. Keeps the fallback-loop hoist semantics
+      // (every fallback in `runWithModelFallback` sees the same
+      // composed prompt) while ALSO covering the outer
+      // transient-HTTP / empty-response retry paths that `continue`
+      // back to the top of this loop.
+      const hoistedPendingInjection = hoistedPendingInjectionAcrossRetries;
       const hoistedComposedPrompt = composePromptWithPendingInjection(
         hoistedPendingInjection,
         params.commandBody,

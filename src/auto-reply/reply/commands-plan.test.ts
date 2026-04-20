@@ -660,4 +660,83 @@ describe("/plan handler — parser dispatch", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Plan mode is **off**");
   });
+
+  // Codex review #68939 (2026-04-20): regression coverage for the
+  // `/plan` parser bugs flagged post-C1 follow-up.
+  describe("parser regressions (2026-04-20)", () => {
+    const pendingSessionEntry = {
+      planMode: {
+        mode: "plan",
+        approval: "pending",
+        approvalId: "a-parser",
+        rejectionCount: 0,
+        updatedAt: 1,
+      },
+    } as unknown as SessionEntry;
+
+    it("bare `/plan accept` resolves as approve (second token is empty string, not undefined)", async () => {
+      callGatewayMock.mockResolvedValueOnce({});
+      await handlePlanCommand(
+        makeParams({
+          body: "/plan accept",
+          sessionEntry: pendingSessionEntry,
+        }),
+        true,
+      );
+      // Success path — the patch is sent with action=approve. Pre-fix,
+      // this returned the "unknown argument" error because
+      // `second === ""` wasn't matched by the strict-edit check (the
+      // `second !== undefined` guard was tautological since the
+      // normalize helper returns `""`, never undefined).
+      expect(callGatewayMock).toHaveBeenCalled();
+      const args = callGatewayMock.mock.calls[0][0];
+      expect(args.method).toBe("sessions.patch");
+      expect(args.params).toMatchObject({
+        planApproval: { action: "approve" },
+      });
+    });
+
+    it("rejects typo `/plan accept editss` with usage error", async () => {
+      const result = await handlePlanCommand(
+        makeParams({ body: "/plan accept editss", sessionEntry: pendingSessionEntry }),
+        true,
+      );
+      expect(result?.reply?.text).toContain("Usage: /plan accept");
+      expect(result?.reply?.text).toContain("editss");
+    });
+
+    it("rejects trailing tokens after `/plan accept edits`", async () => {
+      const result = await handlePlanCommand(
+        makeParams({ body: "/plan accept edits now", sessionEntry: pendingSessionEntry }),
+        true,
+      );
+      expect(result?.reply?.text).toContain("unexpected trailing argument");
+    });
+
+    it("rejects trailing tokens after `/plan accept` (bare)", async () => {
+      const result = await handlePlanCommand(
+        makeParams({ body: "/plan accept now", sessionEntry: pendingSessionEntry }),
+        true,
+      );
+      // Either the unknown-argument usage or the trailing-argument
+      // message fires — both are terminal user-visible errors that
+      // stop the silent-approve regression. We don't care which.
+      expect(result?.reply?.text).toMatch(/unknown argument|trailing argument/);
+    });
+
+    it("rejects trailing tokens after `/plan off`", async () => {
+      const result = await handlePlanCommand(makeParams({ body: "/plan off later" }), true);
+      expect(result?.reply?.text).toContain("unexpected trailing argument");
+    });
+
+    it("rejects trailing tokens after `/plan on`", async () => {
+      const result = await handlePlanCommand(makeParams({ body: "/plan on please" }), true);
+      expect(result?.reply?.text).toContain("unexpected trailing argument");
+    });
+
+    it("rejects trailing tokens after `/plan status`", async () => {
+      const result = await handlePlanCommand(makeParams({ body: "/plan status now" }), true);
+      expect(result?.reply?.text).toContain("unexpected trailing argument");
+    });
+  });
 });

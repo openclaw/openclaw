@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { checkAcceptEditsConstraint } from "./accept-edits-gate.js";
+import { checkAcceptEditsConstraint, extractApplyPatchTargetPaths } from "./accept-edits-gate.js";
 
 describe("checkAcceptEditsConstraint — allowed (baseline)", () => {
   it("allows an unknown tool with no exec command", () => {
@@ -547,5 +547,83 @@ describe("checkAcceptEditsConstraint — C4 shell-escape layered defense", () =>
       // Backticks around `date` have no destructive verb inside.
       expect(blocked("cat /tmp/logs/`date +%Y-%m-%d`.log").blocked).toBe(false);
     });
+  });
+});
+
+// Codex review #68939 (2026-04-20): the move-path extractor used a
+// non-existent `*** Move File: <src> -> <dst>` form, but the actual
+// apply_patch grammar uses `*** Move to: <dst>` nested under an
+// `*** Update File: <src>` hunk. Pre-fix, every Move destination
+// path was silently skipped — a move INTO `~/.openclaw/config.toml`
+// would bypass the protected-config-path gate.
+describe("extractApplyPatchTargetPaths — `*** Move to:` grammar (Codex #68939 2026-04-20)", () => {
+  it("extracts destination from `*** Move to:` inside an `*** Update File:` hunk", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: src/old/name.ts",
+      "*** Move to: src/new/name.ts",
+      "@@",
+      "- const x = 1;",
+      "+ const x = 2;",
+      "*** End Patch",
+    ].join("\n");
+    const paths = extractApplyPatchTargetPaths(patch);
+    expect(paths).toContain("src/old/name.ts"); // source from Update File
+    expect(paths).toContain("src/new/name.ts"); // destination from Move to
+  });
+
+  it("catches a Move INTO a protected config path (the security-critical case)", () => {
+    const patch = [
+      "*** Update File: src/scratch/temp.toml",
+      "*** Move to: ~/.openclaw/config.toml",
+      "@@",
+      "+ [protected]",
+    ].join("\n");
+    const paths = extractApplyPatchTargetPaths(patch);
+    expect(paths).toContain("~/.openclaw/config.toml");
+  });
+
+  it("catches a Move OUT OF a protected config path", () => {
+    const patch = [
+      "*** Update File: ~/.openclaw/config.toml",
+      "*** Move to: /tmp/stolen.toml",
+      "@@",
+      "+ exported",
+    ].join("\n");
+    const paths = extractApplyPatchTargetPaths(patch);
+    expect(paths).toContain("~/.openclaw/config.toml");
+    expect(paths).toContain("/tmp/stolen.toml");
+  });
+
+  it("still extracts plain `*** Update File:` / `*** Add File:` / `*** Delete File:` single-path hunks", () => {
+    const patch = [
+      "*** Update File: src/a.ts",
+      "*** Add File: src/b.ts",
+      "*** Delete File: src/c.ts",
+    ].join("\n");
+    const paths = extractApplyPatchTargetPaths(patch);
+    expect(paths.toSorted()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+  });
+
+  it("handles multiple moves in one patch", () => {
+    const patch = [
+      "*** Update File: src/a.ts",
+      "*** Move to: src/renamed-a.ts",
+      "@@",
+      "  code",
+      "*** Update File: src/b.ts",
+      "*** Move to: src/renamed-b.ts",
+      "@@",
+      "  code",
+    ].join("\n");
+    const paths = extractApplyPatchTargetPaths(patch);
+    expect(paths).toContain("src/renamed-a.ts");
+    expect(paths).toContain("src/renamed-b.ts");
+  });
+
+  it("returns empty for non-string / empty input", () => {
+    expect(extractApplyPatchTargetPaths(undefined)).toEqual([]);
+    expect(extractApplyPatchTargetPaths("")).toEqual([]);
+    expect(extractApplyPatchTargetPaths(42)).toEqual([]);
   });
 });

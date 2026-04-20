@@ -522,12 +522,19 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
   if (typeof input !== "string" || input.length === 0) {
     return [];
   }
-  // Match both single-path verbs (Update/Add/Delete) and Move's
-  // `*** Move File: <src> -> <dst>` form. For Move, both source and
-  // destination paths need to flow into the protected-path check so
-  // moving ~/.openclaw/config.toml → /tmp/x (or vice-versa) is gated.
+  // Match the three single-path envelope verbs (Update/Add/Delete)
+  // and the Move destination marker. Codex review #68939 (2026-04-20):
+  // the actual apply_patch grammar (see `src/agents/apply-patch.ts:22-23`)
+  // uses `*** Move to: <dst>` as a SUB-marker nested inside an
+  // `*** Update File: <src>` hunk — NOT the older `*** Move File:
+  // <src> -> <dst>` single-line form. Pre-fix, the regex here matched
+  // the non-existent form and therefore missed every real Move
+  // destination path, letting `apply_patch` bypass the protected-
+  // config-path check for moves INTO a protected path. The source
+  // path is already caught by `singlePathRe` (the surrounding `***
+  // Update File:` line); the new `moveToRe` catches the destination.
   const singlePathRe = /^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+(.+?)\s*$/gim;
-  const moveRe = /^\*\*\*\s+Move\s+File:\s+(.+?)\s+->\s+(.+?)\s*$/gim;
+  const moveToRe = /^\*\*\*\s+Move\s+to:\s+(.+?)\s*$/gim;
   const found = new Set<string>();
   let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: standard regex iteration pattern
@@ -537,12 +544,9 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
     }
   }
   // biome-ignore lint/suspicious/noAssignInExpressions: standard regex iteration pattern
-  while ((match = moveRe.exec(input)) !== null) {
+  while ((match = moveToRe.exec(input)) !== null) {
     if (match[1]) {
       found.add(match[1].trim());
-    }
-    if (match[2]) {
-      found.add(match[2].trim());
     }
   }
   return [...found];
