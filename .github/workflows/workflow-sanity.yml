@@ -17,6 +17,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  fork-skip:
+    if: github.repository != 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "Workflow sanity runs on the canonical repository."
+
   no-tabs:
     if: github.repository == 'openclaw/openclaw' && github.event_name != 'workflow_dispatch'
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
