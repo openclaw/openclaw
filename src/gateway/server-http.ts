@@ -932,6 +932,12 @@ export function createGatewayHttpServer(opts: {
         endpointKey: corsEndpoint,
         config: corsConfig,
       });
+      // Preserve Origin variance on every CORS-applicable response (including
+      // origin misses and missing Origin headers) so intermediate caches do
+      // not reuse allow-origin-bearing responses across different origins.
+      if (corsEndpoint !== null && corsConfig?.enabled === true) {
+        res.setHeader("Vary", "Origin");
+      }
       if (corsDecision?.isPreflight) {
         applyCorsHeaders(res, corsDecision);
         res.statusCode = 204;

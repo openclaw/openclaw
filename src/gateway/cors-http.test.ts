@@ -79,6 +79,9 @@ describe("gateway CORS HTTP integration", () => {
         const { res, setHeader } = createResponse();
         await dispatchRequest(server, req, res);
         expect(findHeader(setHeader, "Access-Control-Allow-Origin")).toBeUndefined();
+        // Vary: Origin must still be present so intermediate caches partition
+        // by origin even when the origin fails the allowlist.
+        expect(findHeader(setHeader, "Vary")).toBe("Origin");
       },
     });
   });
