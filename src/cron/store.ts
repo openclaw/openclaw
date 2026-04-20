@@ -97,6 +97,19 @@ function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>)
   );
 }
 
+function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
+  if (!job.state || typeof job.state !== "object") {
+    job.state = {} as never;
+  }
+}
+
+function backfillMissingRuntimeFields(job: CronStoreFile["jobs"][number]): void {
+  ensureJobStateObject(job);
+  if (typeof job.updatedAtMs !== "number") {
+    job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
+  }
+}
+
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
@@ -130,32 +143,20 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
           job.updatedAtMs = entry.updatedAtMs ?? job.updatedAtMs;
           job.state = (entry.state ?? {}) as never;
         } else {
-          // Job exists in config but not in state file: default to empty state.
-          if (!job.state || typeof job.state !== "object") {
-            job.state = {} as never;
-          }
-          // Backfill updatedAtMs for manually-added jobs that have no state entry yet.
-          if (typeof job.updatedAtMs !== "number") {
-            job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
-          }
+          backfillMissingRuntimeFields(job);
         }
       }
     } else if (!hasInlineState(jobs as unknown as Array<Record<string, unknown>>)) {
       // No state file, no inline state: fresh clone or first run.
       for (const job of store.jobs) {
-        job.state = (job.state && typeof job.state === "object" ? job.state : {}) as never;
-        if (typeof job.updatedAtMs !== "number") {
-          job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
-        }
+        backfillMissingRuntimeFields(job);
       }
     }
     // else: migration mode — no state file but jobs.json has inline state. Use as-is.
 
     // Ensure every job has a state object (defensive).
     for (const job of store.jobs) {
-      if (!job.state || typeof job.state !== "object") {
-        job.state = {} as never;
-      }
+      ensureJobStateObject(job);
     }
 
     const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
@@ -203,10 +204,9 @@ export async function saveCronStore(
   const stateJson = JSON.stringify(stateFile, null, 2);
 
   const statePath = resolveStatePath(storePath);
-  const configCacheKey = storePath;
   const stateCacheKey = `${storePath}:state`;
 
-  const cachedConfig = serializedStoreCache.get(configCacheKey);
+  const cachedConfig = serializedStoreCache.get(storePath);
   const cachedState = serializedStoreCache.get(stateCacheKey);
 
   const configChanged = cachedConfig !== configJson;
@@ -245,7 +245,7 @@ export async function saveCronStore(
       }
     }
     await atomicWrite(storePath, configJson);
-    serializedStoreCache.set(configCacheKey, configJson);
+    serializedStoreCache.set(storePath, configJson);
   }
 }
 
