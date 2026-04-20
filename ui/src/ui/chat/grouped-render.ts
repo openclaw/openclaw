@@ -102,6 +102,42 @@ function generateDetailsId(message: unknown, index: number): string {
   return `tool-${idString}-${index}`;
 }
 
+function getVideoStorageKey(videoSrc: string, messageId: string): string {
+  // Create a unique key based on video source and message
+  const hash = btoa(videoSrc).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50);
+  return `video_progress_${hash}_${messageId}`;
+}
+
+function saveVideoProgress(videoSrc: string, messageId: string, currentTime: number) {
+  try {
+    const key = getVideoStorageKey(videoSrc, messageId);
+    localStorage.setItem(key, JSON.stringify({
+      currentTime,
+      timestamp: Date.now()
+    }));
+  } catch (e) {
+    console.warn('Failed to save video progress:', e);
+  }
+}
+
+function getVideoProgress(videoSrc: string, messageId: string): number | null {
+  try {
+    const key = getVideoStorageKey(videoSrc, messageId);
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      const data = JSON.parse(saved);
+      // Optional: expire after 30 days
+      if (Date.now() - data.timestamp < 30 * 24 * 60 * 60 * 1000) {
+        return data.currentTime;
+      }
+      localStorage.removeItem(key);
+    }
+  } catch (e) {
+    console.warn('Failed to load video progress:', e);
+  }
+  return null;
+}
+
 // Helper function to check if a path is already a gateway-routed path
 function isGatewayRoutedPath(path: string): boolean {
   return path.startsWith('/__openclaw__/') || 
@@ -883,7 +919,7 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
-function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]) {
+function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[], messageId?: string) {
   const elements = [];
 
   for (let i = 0; i < audioBlocks.length; i++) {
@@ -913,6 +949,9 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
 
   for (let i = 0; i < videoBlocks.length; i++) {
     const video = videoBlocks[i];
+    const videoInstanceId = messageId ? `${messageId}_video_${i}` : `video_${Date.now()}_${i}`;
+    const videoSrc = video.data;
+    
     const handleError = (e: Event) => {
       const videoEl = e.target as HTMLVideoElement;
       const wrapper = videoEl.closest('.chat-media-wrapper') as HTMLElement;
@@ -929,6 +968,34 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
           style="width: 100%; max-width: 1024px; height: auto; max-height: 576px;"
           playsinline
           @error=${handleError}
+          @loadedmetadata=${(e: Event) => {
+            const videoEl = e.target as HTMLVideoElement;
+            const savedTime = getVideoProgress(videoSrc, videoInstanceId);
+            if (savedTime && savedTime < videoEl.duration) {
+              videoEl.currentTime = savedTime;
+              // Optional: show a small indicator that resume happened
+              console.log(`Resumed video at ${savedTime}s`);
+            }
+          }}
+          @timeupdate=${(e: Event) => {
+            const videoEl = e.target as HTMLVideoElement;
+            // Save every 5 seconds to avoid too many writes
+            const currentTime = Math.floor(videoEl.currentTime);
+            if (currentTime % 5 === 0 && currentTime !== Math.floor(videoEl.lastSavedTime || 0)) {
+              saveVideoProgress(videoSrc, videoInstanceId, videoEl.currentTime);
+              (videoEl as any).lastSavedTime = videoEl.currentTime;
+            }
+          }}
+          @pause=${(e: Event) => {
+            const videoEl = e.target as HTMLVideoElement;
+            saveVideoProgress(videoSrc, videoInstanceId, videoEl.currentTime);
+          }}
+          @ended=${(e: Event) => {
+            const videoEl = e.target as HTMLVideoElement;
+            // Clear progress when video finishes
+            const key = getVideoStorageKey(videoSrc, videoInstanceId);
+            localStorage.removeItem(key);
+          }}
         >
           <source src=${video.data} type=${video.mimeType} />
           Your browser does not support the video element.
@@ -1644,7 +1711,7 @@ function renderGroupedMessage(
             </summary>
             <div class="chat-tool-msg-body">
               ${renderMessageImages(images)}
-              ${renderMessageMedia(audioBlocks, videoBlocks)}
+              ${renderMessageMedia(audioBlocks, videoBlocks, messageId)}
               ${renderAssistantAttachments(
                 assistantAttachments,
                 opts.localMediaPreviewRoots ?? [],
@@ -1747,7 +1814,7 @@ function renderGroupedMessage(
           </div>`
         : nothing}
       ${renderMessageImages(images)}
-      ${renderMessageMedia(audioBlocks, videoBlocks)}
+      ${renderMessageMedia(audioBlocks, videoBlocks, messageId)}
       ${renderAssistantAttachments(
         assistantAttachments,
         opts.localMediaPreviewRoots ?? [],
