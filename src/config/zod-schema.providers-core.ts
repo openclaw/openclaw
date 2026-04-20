@@ -336,7 +336,10 @@ export const TelegramAccountSchemaBase = z
   })
   .strict();
 
-export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
+export const TelegramAccountSchema = TelegramAccountSchemaBase.extend({
+  /** Default-route this account to a specific agent when no explicit binding matches. */
+  agentId: z.string().optional(),
+}).superRefine((value, ctx) => {
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime (resolveTelegramAccount
   // shallow-merges top-level and account values in src/telegram/accounts.ts).

@@ -140,6 +140,41 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     expect(ctx).toBeNull();
   });
 
+  it("allows named-account group messages when the account config sets agentId", async () => {
+    const cfg = {
+      ...baseCfg,
+      agents: { list: [{ id: "main", default: true }, { id: "atlas" }] },
+      channels: {
+        telegram: {
+          accounts: {
+            atlas: {
+              agentId: "atlas",
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      accountId: "atlas",
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+      message: {
+        message_id: 1,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        date: 1700000000,
+        text: "@bot hello",
+        from: { id: 814912386, first_name: "Alice" },
+      },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.route.agentId).toBe("atlas");
+    expect(ctx?.route.matchedBy).toBe("binding.account");
+  });
+
   it("does not change the default-account DM session key", async () => {
     setRuntimeConfigSnapshot(baseCfg);
 
