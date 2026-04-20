@@ -135,6 +135,13 @@ function replaceBlockReplyBuffer(ctx: EmbeddedPiSubscribeContext, text: string) 
   ctx.state.blockBuffer = text;
 }
 
+function replaceFinalBlockReplyBuffer(ctx: EmbeddedPiSubscribeContext, text: string) {
+  replaceBlockReplyBuffer(ctx, text);
+  ctx.state.blockState.thinking = false;
+  ctx.state.blockState.final = false;
+  ctx.state.blockState.inlineCode = createInlineCodeState();
+}
+
 function resolveAssistantTextChunk(params: {
   evtType: "text_delta" | "text_start" | "text_end";
   delta: string;
@@ -449,10 +456,10 @@ export function handleMessageUpdate(
       }
 
       if (evtType === "text_end" && !ctx.state.lastBlockReplyText && finalBufferedText) {
-        replaceBlockReplyBuffer(ctx, finalBufferedText);
+        replaceFinalBlockReplyBuffer(ctx, finalBufferedText);
       }
     } else if (evtType === "text_end" && !ctx.state.lastBlockReplyText && finalBufferedText) {
-      replaceBlockReplyBuffer(ctx, finalBufferedText);
+      replaceFinalBlockReplyBuffer(ctx, finalBufferedText);
     }
 
     ctx.state.lastStreamedAssistant = next;
