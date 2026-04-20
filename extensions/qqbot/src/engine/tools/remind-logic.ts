@@ -4,7 +4,8 @@
  *
  * Pure functions for time parsing, cron detection, job building,
  * and remind execution. The framework registration shell
- * (old tools/remind.ts) delegates all business logic here.
+ * (bridge/tools/remind.ts) delegates all business logic here and
+ * supplies request-level context fallbacks (`to`, `accountId`).
  */
 
 /**
@@ -19,6 +20,17 @@ export interface RemindParams {
   timezone?: string;
   name?: string;
   jobId?: string;
+}
+
+/**
+ * Context supplied by the bridge layer so the engine can remain free of
+ * framework / AsyncLocalStorage dependencies. `fallbackTo` and
+ * `fallbackAccountId` are consulted only when the corresponding AI-supplied
+ * parameter is missing.
+ */
+export interface RemindExecuteContext {
+  fallbackTo?: string;
+  fallbackAccountId?: string;
 }
 
 /**
@@ -42,8 +54,9 @@ export const RemindSchema = {
     to: {
       type: "string",
       description:
-        "Delivery target from the `[QQBot] to=` context value. " +
-        "Direct-message format: qqbot:c2c:user_openid. Group format: qqbot:group:group_openid. Required when action=add.",
+        "Optional delivery target. The runtime automatically resolves the current " +
+        "conversation target, so you usually do not need to supply this. " +
+        "Direct-message format: qqbot:c2c:user_openid. Group format: qqbot:group:group_openid.",
     },
     time: {
       type: "string",
@@ -143,9 +156,8 @@ export function buildReminderPrompt(content: string): string {
 }
 
 /** Build cron job params for a one-shot delayed reminder. */
-export function buildOnceJob(params: RemindParams, delayMs: number) {
+export function buildOnceJob(params: RemindParams, delayMs: number, to: string, accountId: string) {
   const atMs = Date.now() + delayMs;
-  const to = params.to!;
   const content = params.content!;
   const name = params.name || generateJobName(content);
   return {
@@ -159,17 +171,19 @@ export function buildOnceJob(params: RemindParams, delayMs: number) {
       payload: {
         kind: "agentTurn",
         message: buildReminderPrompt(content),
-        deliver: true,
+      },
+      delivery: {
+        mode: "announce",
         channel: "qqbot",
         to,
+        accountId,
       },
     },
   };
 }
 
 /** Build cron job params for a recurring cron reminder. */
-export function buildCronJob(params: RemindParams) {
-  const to = params.to!;
+export function buildCronJob(params: RemindParams, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
   const tz = params.timezone || "Asia/Shanghai";
@@ -183,9 +197,12 @@ export function buildCronJob(params: RemindParams) {
       payload: {
         kind: "agentTurn",
         message: buildReminderPrompt(content),
-        deliver: true,
+      },
+      delivery: {
+        mode: "announce",
         channel: "qqbot",
         to,
+        accountId,
       },
     },
   };
@@ -223,8 +240,12 @@ function json(data: unknown) {
  * Validates params, parses time, and returns a structured result
  * containing cron job params that the framework shell passes back
  * as the tool output.
+ *
+ * When the AI omits `to` / `accountId`, the bridge layer can supply
+ * `ctx.fallbackTo` / `ctx.fallbackAccountId` (typically resolved from
+ * the request-scoped AsyncLocalStorage) to fill them in.
  */
-export function executeRemind(params: RemindParams) {
+export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = {}) {
   if (params.action === "list") {
     return json({
       _instruction: "Use the cron tool immediately with the following parameters.",
@@ -247,18 +268,25 @@ export function executeRemind(params: RemindParams) {
   if (!params.content) {
     return json({ error: "content is required when action=add" });
   }
-  if (!params.to) {
-    return json({ error: "to is required when action=add" });
+  const resolvedTo = params.to || ctx.fallbackTo;
+  if (!resolvedTo) {
+    return json({
+      error:
+        "Unable to determine delivery target for action=add. " +
+        "The reminder can only be scheduled from within an active conversation.",
+    });
   }
   if (!params.time) {
     return json({ error: "time is required when action=add" });
   }
+  const resolvedAccountId = ctx.fallbackAccountId || "default";
 
   if (isCronExpression(params.time)) {
     return json({
       _instruction:
-        "Use the cron tool immediately with the following parameters, then tell the user the reminder has been scheduled.",
-      cronParams: buildCronJob(params),
+        "Use the cron tool immediately with the following parameters. " +
+        "Pass cronParams verbatim — do not modify or omit any field, especially delivery.accountId — then tell the user the reminder has been scheduled.",
+      cronParams: buildCronJob(params, resolvedTo, resolvedAccountId),
       summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || "Asia/Shanghai"})`,
     });
   }
@@ -275,8 +303,9 @@ export function executeRemind(params: RemindParams) {
 
   return json({
     _instruction:
-      "Use the cron tool immediately with the following parameters, then tell the user the reminder has been scheduled.",
-    cronParams: buildOnceJob(params, delayMs),
+      "Use the cron tool immediately with the following parameters. " +
+      "Pass cronParams verbatim — do not modify or omit any field, especially delivery.accountId — then tell the user the reminder has been scheduled.",
+    cronParams: buildOnceJob(params, delayMs, resolvedTo, resolvedAccountId),
     summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
   });
 }

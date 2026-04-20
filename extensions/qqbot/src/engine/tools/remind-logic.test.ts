@@ -128,26 +128,78 @@ describe("engine/tools/remind-logic", () => {
       expect((result.details as { error: string }).error).toContain("30 seconds");
     });
 
-    it("builds once job for relative time", () => {
+    it("builds once job with delivery envelope for relative time", () => {
       const result = executeRemind({
         action: "add",
         content: "test reminder",
         to: "qqbot:c2c:123",
         time: "5m",
       });
-      const details = result.details as { cronParams: { job: { schedule: { kind: string } } } };
+      const details = result.details as {
+        cronParams: {
+          job: {
+            schedule: { kind: string };
+            payload: { kind: string; message: string };
+            delivery: { mode: string; channel: string; to: string; accountId: string };
+          };
+        };
+      };
       expect(details.cronParams.job.schedule.kind).toBe("at");
+      expect(details.cronParams.job.payload.kind).toBe("agentTurn");
+      expect(details.cronParams.job.delivery).toEqual({
+        mode: "announce",
+        channel: "qqbot",
+        to: "qqbot:c2c:123",
+        accountId: "default",
+      });
     });
 
-    it("builds cron job for cron expression", () => {
+    it("builds cron job with delivery envelope for cron expression", () => {
       const result = executeRemind({
         action: "add",
         content: "test reminder",
         to: "qqbot:c2c:123",
         time: "0 8 * * *",
       });
-      const details = result.details as { cronParams: { job: { schedule: { kind: string } } } };
+      const details = result.details as {
+        cronParams: {
+          job: {
+            schedule: { kind: string };
+            delivery: { channel: string; to: string; accountId: string };
+          };
+        };
+      };
       expect(details.cronParams.job.schedule.kind).toBe("cron");
+      expect(details.cronParams.job.delivery.to).toBe("qqbot:c2c:123");
+    });
+
+    it("falls back to ctx.fallbackTo when to is omitted", () => {
+      const result = executeRemind(
+        { action: "add", content: "test", time: "5m" },
+        { fallbackTo: "qqbot:c2c:ctx-target", fallbackAccountId: "alt" },
+      );
+      const details = result.details as {
+        cronParams: { job: { delivery: { to: string; accountId: string } } };
+      };
+      expect(details.cronParams.job.delivery.to).toBe("qqbot:c2c:ctx-target");
+      expect(details.cronParams.job.delivery.accountId).toBe("alt");
+    });
+
+    it("prefers AI-supplied to over ctx fallback", () => {
+      const result = executeRemind(
+        { action: "add", content: "test", time: "5m", to: "qqbot:group:ai-chosen" },
+        { fallbackTo: "qqbot:c2c:ctx-target", fallbackAccountId: "alt" },
+      );
+      const details = result.details as {
+        cronParams: { job: { delivery: { to: string; accountId: string } } };
+      };
+      expect(details.cronParams.job.delivery.to).toBe("qqbot:group:ai-chosen");
+      expect(details.cronParams.job.delivery.accountId).toBe("alt");
+    });
+
+    it("returns error when neither AI nor ctx provides a target", () => {
+      const result = executeRemind({ action: "add", content: "test", time: "5m" });
+      expect((result.details as { error: string }).error).toMatch(/delivery target/i);
     });
   });
 });

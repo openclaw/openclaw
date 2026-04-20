@@ -38,6 +38,8 @@ export interface GatewayConnectionContext {
   log?: EngineLogger;
   runtime: GatewayPluginRuntime;
   onReady?: (data: unknown) => void;
+  /** Called when a RESUMED event is received (reconnect success). */
+  onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
   /** Process a queued message (inbound pipeline → outbound dispatch). */
   handleMessage: (event: QueuedMessage) => Promise<void>;
@@ -246,7 +248,7 @@ export class GatewayConnection {
                 this.saveCurrentSession();
                 this.ctx.onReady?.(result.data);
               } else if (result.action === "resumed") {
-                this.ctx.onReady?.(result.data);
+                (this.ctx.onResumed ?? this.ctx.onReady)?.(result.data);
                 this.saveCurrentSession();
               } else if (result.action === "interaction") {
                 this.ctx.onInteraction?.(result.event);

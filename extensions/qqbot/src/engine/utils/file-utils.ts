@@ -179,9 +179,7 @@ export async function downloadFile(
       console.error(`[qqbot:downloadFile] stack=${err.stack.split("\n").slice(0, 3).join(" | ")}`);
     }
     if (err instanceof Error && err.cause) {
-      console.error(
-        `[qqbot:downloadFile] cause=${err.cause instanceof Error ? err.cause.message : String(err.cause)}`,
-      );
+      console.error(`[qqbot:downloadFile] cause=${formatErrorMessage(err.cause)}`);
     }
     return null;
   }

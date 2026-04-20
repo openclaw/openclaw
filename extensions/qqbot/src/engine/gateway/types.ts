@@ -157,6 +157,12 @@ export interface CoreGatewayContext {
   abortSignal: AbortSignal;
   cfg: unknown;
   onReady?: (data: unknown) => void;
+  /**
+   * Invoked when a RESUMED event is received after reconnect.
+   * Falls back to `onReady` when not provided so existing callers
+   * keep their current behaviour.
+   */
+  onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
   log?: EngineLogger;
   /** PluginRuntime injected by the framework — same object in both versions. */

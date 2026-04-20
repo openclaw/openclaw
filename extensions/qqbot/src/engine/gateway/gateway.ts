@@ -38,6 +38,7 @@ import {
 } from "../utils/audio.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { formatDuration } from "../utils/format.js";
+import { runWithRequestContext } from "../utils/request-context.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { registerAudioConvertAdapter } from "./inbound-attachments.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
@@ -144,7 +145,15 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     }
 
     try {
-      await dispatchOutbound(inbound, { runtime, cfg: ctx.cfg, account, log });
+      await runWithRequestContext(
+        {
+          accountId: account.accountId,
+          target: inbound.qualifiedTarget,
+          targetId: inbound.peerId,
+          chatType: event.type,
+        },
+        () => dispatchOutbound(inbound, { runtime, cfg: ctx.cfg, account, log }),
+      );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -163,6 +172,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     log,
     runtime,
     onReady: ctx.onReady,
+    onResumed: ctx.onResumed,
     onError: ctx.onError,
     onInteraction: handleInteraction,
     handleMessage,

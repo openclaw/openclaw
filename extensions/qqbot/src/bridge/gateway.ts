@@ -58,6 +58,7 @@ export interface GatewayContext {
   abortSignal: AbortSignal;
   cfg: OpenClawConfig;
   onReady?: (data: unknown) => void;
+  onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
   log?: {
     info: (msg: string) => void;
@@ -117,6 +118,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     abortSignal: ctx.abortSignal,
     cfg: ctx.cfg,
     onReady: ctx.onReady,
+    onResumed: ctx.onResumed,
     onError: ctx.onError,
     log: accountLogger,
     runtime,

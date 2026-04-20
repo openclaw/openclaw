@@ -1141,6 +1141,25 @@ const isImageFile = coreIsImageFile;
 const isVideoFile = coreIsVideoFile;
 
 /**
+ * Send a proactive (no reply context) text message to a qualified target.
+ *
+ * Thin wrapper around {@link sendText} for callers that have a fully-qualified
+ * target string (e.g. `"qqbot:c2c:<openid>"`) and a {@link GatewayAccount},
+ * and do not want to manage access tokens or delivery-target parsing manually.
+ *
+ * @param account Resolved gateway account.
+ * @param to Fully-qualified target address (`qqbot:c2c:<openid>`, `qqbot:group:<id>`, etc.).
+ * @param content Message content.
+ */
+export async function sendProactiveMessage(
+  account: GatewayAccount,
+  to: string,
+  content: string,
+): Promise<OutboundResult> {
+  return sendText({ account, to, text: content });
+}
+
+/**
  * Send a message emitted by an OpenClaw cron task.
  *
  * Cron output may be either:
