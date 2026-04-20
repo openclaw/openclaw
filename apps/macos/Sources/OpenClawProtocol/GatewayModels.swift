@@ -3397,6 +3397,24 @@ public struct SkillsDetailResult: Codable, Sendable {
     }
 }
 
+public struct SkillsUninstallParams: Codable, Sendable {
+    public let slug: String
+    public let source: String?
+
+    public init(
+        slug: String,
+        source: String?)
+    {
+        self.slug = slug
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slug
+        case source
+    }
+}
+
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?
