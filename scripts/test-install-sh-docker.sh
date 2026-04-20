@@ -58,6 +58,39 @@ console.log(
 ' "$label" "$pack_json_file"
 }
 
+assert_pack_unpacked_size_budget() {
+  local label="$1"
+  local pack_json_file="$2"
+  node --input-type=module - "$label" "$pack_json_file" <<'NODE'
+import { readFileSync } from "node:fs";
+import { collectPackUnpackedSizeErrors } from "./scripts/lib/npm-pack-budget.mjs";
+
+const label = process.argv[2];
+const packJsonFile = process.argv[3];
+const raw = readFileSync(packJsonFile, "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const budgetOverride = process.env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
+const budgetBytes = budgetOverride ? Number(budgetOverride) : undefined;
+if (budgetOverride && !Number.isFinite(budgetBytes)) {
+  throw new Error(
+    `OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES must be numeric, got ${JSON.stringify(
+      budgetOverride,
+    )}`,
+  );
+}
+const errors = collectPackUnpackedSizeErrors(parsed, {
+  budgetBytes,
+  missingDataMessage: `${label} npm pack output did not include unpackedSize; install smoke cannot verify pack budget.`,
+});
+for (const error of errors) {
+  console.error(`ERROR: ${error}`);
+}
+if (errors.length > 0) {
+  process.exit(1);
+}
+NODE
+}
+
 print_pack_delta_audit() {
   local baseline_pack_json_file="$1"
   local update_pack_json_file="$2"
@@ -114,8 +147,10 @@ SKIP_NONROOT="${OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT:-0}"
 SKIP_SMOKE_IMAGE_BUILD="${OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD:-0}"
 SKIP_NONROOT_IMAGE_BUILD="${OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD:-0}"
 SKIP_UPDATE="${OPENCLAW_INSTALL_SMOKE_SKIP_UPDATE:-0}"
+SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"
 UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE:-2026.4.10}"
 UPDATE_PACKAGE_SPEC="${OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC:-}"
+UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"
 UPDATE_SKIP_LOCAL_BUILD="${OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD:-0}"
 UPDATE_HOST_ALIAS="${OPENCLAW_INSTALL_SMOKE_UPDATE_HOST:-host.docker.internal}"
 UPDATE_PORT="${OPENCLAW_INSTALL_SMOKE_UPDATE_PORT:-}"
@@ -157,6 +192,20 @@ allocate_host_port() {
   '
 }
 
+restore_local_dist_from_image() {
+  local image="$1"
+  local container_id=""
+
+  echo "==> Reuse local dist/ from Docker image: $image"
+  container_id="$(docker create "$image")"
+  rm -rf "$ROOT_DIR/dist"
+  if ! docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
+    docker rm -f "$container_id" >/dev/null 2>&1 || true
+    return 1
+  fi
+  docker rm -f "$container_id" >/dev/null
+}
+
 prepare_update_tarball() {
   local pack_json
   local baseline_pack_json
@@ -170,13 +219,16 @@ prepare_update_tarball() {
     quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
-    if [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
+    if [[ -n "$UPDATE_DIST_IMAGE" ]]; then
+      restore_local_dist_from_image "$UPDATE_DIST_IMAGE"
+    elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
       pnpm build
       pnpm ui:build
     fi
     UPDATE_EXPECT_VERSION="$(
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
     )"
+    node --import tsx scripts/write-package-dist-inventory.ts
     quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   fi
   UPDATE_TGZ_FILE="$(
@@ -191,6 +243,7 @@ process.stdout.write(last.filename);
 ' "$pack_json_file"
   )"
   print_pack_audit "update" "$pack_json_file"
+  assert_pack_unpacked_size_budget "update" "$pack_json_file"
   packed_update_version="$(
     node -e '
 const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
@@ -310,6 +363,25 @@ else
     -e OPENCLAW_NO_PROMPT=1 \
     -e DEBIAN_FRONTEND=noninteractive \
     "$SMOKE_IMAGE"
+
+  if [[ "$SKIP_NPM_GLOBAL" == "1" ]]; then
+    echo "==> Skip direct npm global smoke (OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1)"
+  else
+    echo "==> Run direct npm global smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
+    docker run --rm -t \
+      --platform "$SMOKE_PLATFORM" \
+      "${UPDATE_DOCKER_HOST_ARGS[@]}" \
+      -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
+      -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
+      -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
+      -e OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL="$BASELINE_TAG_URL" \
+      -e OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
+      -e OPENCLAW_INSTALL_UPDATE_TAG_URL="$UPDATE_TAG_URL" \
+      -e OPENCLAW_NO_ONBOARD=1 \
+      -e OPENCLAW_NO_PROMPT=1 \
+      -e DEBIAN_FRONTEND=noninteractive \
+      "$SMOKE_IMAGE"
+  fi
 fi
 
 LATEST_VERSION="${LATEST_VERSION:-}"

@@ -2,6 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
   clearPendingQueueItemsForRun,
@@ -97,6 +98,10 @@ type GatewayHost = {
   updateAvailable: UpdateAvailable | null;
 };
 
+type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
+  pendingSessionMessageReloadSessionKey?: string | null;
+};
+
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
   mainKey?: string;
@@ -113,6 +118,25 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
 };
+
+function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
+  if (!entry) {
+    return;
+  }
+  host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+  host.execApprovalError = null;
+  const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+  window.setTimeout(() => {
+    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
+  }, delay);
+}
+
+function removeResolvedApprovalRequest(host: GatewayHost, payload: unknown) {
+  const resolved = parseExecApprovalResolved(payload);
+  if (resolved) {
+    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+  }
+}
 
 function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
@@ -303,7 +327,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (code !== 1012) {
         if (error?.message) {
           host.lastError =
-            host.lastErrorCode && isGenericBrowserFetchFailure(error.message)
+            host.lastErrorCode &&
+            (host.lastErrorCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
+              isGenericBrowserFetchFailure(error.message))
               ? formatConnectError({
                   message: error.message,
                   details: error.details,
@@ -409,7 +435,25 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
+  const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
+  const payloadSessionKey = payload?.sessionKey?.trim();
+  const shouldReplayDeferredSessionMessageReload = Boolean(
+    deferredSessionKey &&
+    payloadSessionKey &&
+    deferredSessionKey === payloadSessionKey &&
+    isTerminalChatState(state) &&
+    payloadSessionKey === host.sessionKey &&
+    !host.chatRunId,
+  );
+  if (deferredSessionKey && payloadSessionKey && deferredSessionKey === payloadSessionKey) {
+    deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  }
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
+    void loadChatHistory(host as unknown as ChatState);
+    return;
+  }
+  if (shouldReplayDeferredSessionMessageReload && !historyReloaded) {
     void loadChatHistory(host as unknown as ChatState);
   }
 }
@@ -418,10 +462,21 @@ function handleSessionMessageGatewayEvent(
   host: GatewayHost,
   payload: { sessionKey?: string } | undefined,
 ) {
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
+  // Skip history reload while a chat run is active. The chat event handler
+  // manages streaming state and appends the final assistant message. Reloading
+  // history mid-run races with the optimistic user-message update and resets
+  // chatStream, which delays the user message card from appearing until the
+  // first LLM delta arrives.
+  if (host.chatRunId) {
+    deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    return;
+  }
+  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   void loadChatHistory(host as unknown as ChatState);
 }
 
@@ -506,44 +561,22 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "exec.approval.requested") {
-    const entry = parseExecApprovalRequested(evt.payload);
-    if (entry) {
-      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
-      host.execApprovalError = null;
-      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-      window.setTimeout(() => {
-        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-      }, delay);
-    }
+    enqueueApprovalRequest(host, parseExecApprovalRequested(evt.payload));
     return;
   }
 
   if (evt.event === "exec.approval.resolved") {
-    const resolved = parseExecApprovalResolved(evt.payload);
-    if (resolved) {
-      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
-    }
+    removeResolvedApprovalRequest(host, evt.payload);
     return;
   }
 
   if (evt.event === "plugin.approval.requested") {
-    const entry = parsePluginApprovalRequested(evt.payload);
-    if (entry) {
-      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
-      host.execApprovalError = null;
-      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-      window.setTimeout(() => {
-        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-      }, delay);
-    }
+    enqueueApprovalRequest(host, parsePluginApprovalRequested(evt.payload));
     return;
   }
 
   if (evt.event === "plugin.approval.resolved") {
-    const resolved = parseExecApprovalResolved(evt.payload);
-    if (resolved) {
-      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
-    }
+    removeResolvedApprovalRequest(host, evt.payload);
     return;
   }
 

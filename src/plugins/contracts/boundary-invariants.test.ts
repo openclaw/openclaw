@@ -40,6 +40,11 @@ type FileFilter = {
 };
 
 function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[] {
+  const cacheKey = `${rootRelativePath}:${filter.excludeTests ? "exclude-tests" : ""}:${filter.testOnly ? "test-only" : ""}`;
+  const cached = tsFilesCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const root = resolve(REPO_ROOT, rootRelativePath);
   const files: string[] = [];
 
@@ -65,18 +70,33 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
   }
 
   walk(root);
-  return files.toSorted();
+  const sorted = files.toSorted();
+  tsFilesCache.set(cacheKey, sorted);
+  return sorted;
+}
+
+function readRepoSource(file: string): string {
+  const cached = sourceCache.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+  sourceCache.set(file, source);
+  return source;
 }
 
 describe("plugin contract boundary invariants", () => {
   it("keeps bundled-capability-metadata confined to contract/test inventory", () => {
     const files = listTsFiles("src");
     const offenders = files.filter((file) => {
-      if (ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS.has(file)) {
+      if (
+        file === "src/plugins/contracts/boundary-invariants.test.ts" ||
+        file.endsWith(".contract.test.ts") ||
+        file.endsWith("-capability-metadata.test.ts")
+      ) {
         return false;
       }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("contracts/inventory/bundled-capability-metadata");
+      return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
     });
     expect(offenders).toEqual([]);
   });
@@ -84,8 +104,7 @@ describe("plugin contract boundary invariants", () => {
   it("keeps the bundled contract inventory out of non-test runtime code", () => {
     const files = listTsFiles("src", { excludeTests: true });
     const offenders = files.filter((file) => {
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("contracts/inventory/bundled-capability-metadata");
+      return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
     });
     expect(offenders).toEqual([]);
   });
@@ -93,10 +112,7 @@ describe("plugin contract boundary invariants", () => {
   it("keeps core tests off bundled extension deep imports", () => {
     const files = listTsFiles("src", { testOnly: true });
     const offenders = files.filter((file) => {
-      if (ALLOWED_EXTENSION_PATH_STRING_TESTS.has(file)) {
-        return false;
-      }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+      const source = readRepoSource(file);
       return (
         /from\s+["'][^"']*extensions\/.+(?:api|runtime-api|test-api)\.js["']/u.test(source) ||
         /vi\.(?:mock|doMock)\(\s*["'][^"']*extensions\/.+["']/u.test(source) ||
@@ -109,11 +125,10 @@ describe("plugin contract boundary invariants", () => {
   it("keeps plugin contract tests off bundled path helpers unless the test is explicitly about paths", () => {
     const files = listTsFiles("src/plugins/contracts", { testOnly: true });
     const offenders = files.filter((file) => {
-      if (ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS.has(file)) {
+      if (file === "src/plugins/contracts/boundary-invariants.test.ts") {
         return false;
       }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("test/helpers/bundled-plugin-paths");
+      return readRepoSource(file).includes("test/helpers/bundled-plugin-paths");
     });
     expect(offenders).toEqual([]);
   });
@@ -121,11 +136,7 @@ describe("plugin contract boundary invariants", () => {
   it("keeps channel production code off bundled-plugin-metadata helpers", () => {
     const files = listTsFiles("src/channels", { excludeTests: true });
     const offenders = files.filter((file) => {
-      if (ALLOWED_CHANNEL_BUNDLED_METADATA_CONSUMERS.has(file)) {
-        return false;
-      }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("plugins/bundled-plugin-metadata");
+      return readRepoSource(file).includes("plugins/bundled-plugin-metadata");
     });
     expect(offenders).toEqual([]);
   });
@@ -136,7 +147,7 @@ describe("plugin contract boundary invariants", () => {
       ...listTsFiles("src/channels", { excludeTests: true }),
     ].toSorted();
     const offenders = files.filter((file) => {
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+      const source = readRepoSource(file);
       return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
     });
     expect(offenders).toEqual([]);

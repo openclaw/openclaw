@@ -1328,6 +1328,7 @@ describe("task-registry", () => {
 
       expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 1,
+        recovered: 0,
         cleanupStamped: 0,
         pruned: 0,
       });
@@ -1363,6 +1364,7 @@ describe("task-registry", () => {
 
       expect(await sweepTaskRegistry()).toEqual({
         reconciled: 0,
+        recovered: 0,
         cleanupStamped: 0,
         pruned: 1,
       });
@@ -1406,12 +1408,14 @@ describe("task-registry", () => {
 
       expect(previewTaskRegistryMaintenance()).toEqual({
         reconciled: 0,
+        recovered: 0,
         cleanupStamped: 1,
         pruned: 0,
       });
 
       expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 0,
+        recovered: 0,
         cleanupStamped: 1,
         pruned: 0,
       });
@@ -1530,6 +1534,7 @@ describe("task-registry", () => {
 
     expect(await runTaskRegistryMaintenance()).toEqual({
       reconciled: 0,
+      recovered: 0,
       cleanupStamped: 0,
       pruned: 0,
     });
@@ -1570,6 +1575,7 @@ describe("task-registry", () => {
 
     expect(await sweepTaskRegistry()).toEqual({
       reconciled: 0,
+      recovered: 0,
       cleanupStamped: 0,
       pruned: 0,
     });

@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAccessToken } from "../api.js";
 import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
 import { debugError, debugLog } from "../utils/debug-log.js";
+import { jsonToolResult as json } from "./result.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -43,13 +44,6 @@ const ChannelApiSchema = {
   },
   required: ["method", "path"],
 } as const;
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
 
 function buildUrl(path: string, query?: Record<string, string>): string {
   let url = `${API_BASE}${path}`;

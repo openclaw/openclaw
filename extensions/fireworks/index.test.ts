@@ -35,6 +35,21 @@ function createDynamicContext(params: {
   };
 }
 
+function createFireworksDefaultRuntimeModel(params: { reasoning: boolean }): ProviderRuntimeModel {
+  return {
+    id: FIREWORKS_DEFAULT_MODEL_ID,
+    name: FIREWORKS_DEFAULT_MODEL_ID,
+    provider: "fireworks",
+    api: "openai-completions",
+    baseUrl: FIREWORKS_BASE_URL,
+    reasoning: params.reasoning,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
+  };
+}
+
 describe("fireworks provider plugin", () => {
   it("registers Fireworks with api-key auth wizard metadata", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
@@ -87,20 +102,7 @@ describe("fireworks provider plugin", () => {
       createDynamicContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/models/qwen3.6-plus",
-        models: [
-          {
-            id: FIREWORKS_DEFAULT_MODEL_ID,
-            name: FIREWORKS_DEFAULT_MODEL_ID,
-            provider: "fireworks",
-            api: "openai-completions",
-            baseUrl: FIREWORKS_BASE_URL,
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
-          },
-        ],
+        models: [createFireworksDefaultRuntimeModel({ reasoning: true })],
       }),
     );
 
@@ -119,20 +121,7 @@ describe("fireworks provider plugin", () => {
       createDynamicContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/models/kimi-k2p5",
-        models: [
-          {
-            id: FIREWORKS_DEFAULT_MODEL_ID,
-            name: FIREWORKS_DEFAULT_MODEL_ID,
-            provider: "fireworks",
-            api: "openai-completions",
-            baseUrl: FIREWORKS_BASE_URL,
-            reasoning: false,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
-          },
-        ],
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
       }),
     );
 
@@ -149,20 +138,7 @@ describe("fireworks provider plugin", () => {
       createDynamicContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/routers/kimi-k2.5-turbo",
-        models: [
-          {
-            id: FIREWORKS_DEFAULT_MODEL_ID,
-            name: FIREWORKS_DEFAULT_MODEL_ID,
-            provider: "fireworks",
-            api: "openai-completions",
-            baseUrl: FIREWORKS_BASE_URL,
-            reasoning: false,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
-          },
-        ],
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
       }),
     );
 

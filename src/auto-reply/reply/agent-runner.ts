@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
+import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -249,13 +249,17 @@ function mergeExecutionTrace(params: {
   runner: "embedded" | "cli";
 }): TraceExecutionView | undefined {
   const attempts: TraceAttemptView[] = [
-    ...(params.fallbackAttempts ?? []).map((attempt) => ({
-      provider: attempt.provider,
-      model: attempt.model,
-      result: inferFallbackAttemptResult(attempt),
-      ...(attempt.reason ? { reason: attempt.reason } : {}),
-      ...(typeof attempt.status === "number" ? { status: attempt.status } : {}),
-    })),
+    ...(params.fallbackAttempts ?? []).map((attempt) =>
+      Object.assign(
+        {
+          provider: attempt.provider,
+          model: attempt.model,
+          result: inferFallbackAttemptResult(attempt),
+        },
+        attempt.reason ? { reason: attempt.reason } : {},
+        typeof attempt.status === `number` ? { status: attempt.status } : {},
+      ),
+    ),
     ...(params.executionTrace?.attempts ?? []),
   ];
   const winnerProvider =
@@ -1013,7 +1017,12 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
-  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config);
+  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
+    originatingChannel: sessionCtx.OriginatingChannel,
+    messageProvider: followupRun.run.messageProvider,
+    originatingAccountId: followupRun.originatingAccountId,
+    agentAccountId: followupRun.run.agentAccountId,
+  });
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -1031,6 +1040,15 @@ export async function runReplyAgent(params: {
     cfg,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
+    messageProvider: followupRun.run.messageProvider,
+    accountId: followupRun.originatingAccountId ?? followupRun.run.agentAccountId,
+    groupId: followupRun.run.groupId,
+    groupChannel: followupRun.run.groupChannel,
+    groupSpace: followupRun.run.groupSpace,
+    requesterSenderId: followupRun.run.senderId,
+    requesterSenderName: followupRun.run.senderName,
+    requesterSenderUsername: followupRun.run.senderUsername,
+    requesterSenderE164: followupRun.run.senderE164,
   });
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
@@ -1544,7 +1562,10 @@ export async function runReplyAgent(params: {
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
         const workspaceDir = process.cwd();
-        readPostCompactionContext(workspaceDir, cfg)
+        readPostCompactionContext(workspaceDir, {
+          cfg,
+          agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        })
           .then((contextContent) => {
             if (contextContent) {
               enqueueSystemEvent(contextContent, { sessionKey });

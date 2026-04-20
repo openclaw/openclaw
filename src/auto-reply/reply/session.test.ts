@@ -26,6 +26,31 @@ import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
+const sessionForkMocks = vi.hoisted(() => ({
+  forkSessionFromParent: vi.fn(),
+  nextSessionId: 0,
+}));
+
+type ForkSessionParamsForTest = {
+  parentEntry: SessionEntry;
+  sessionsDir: string;
+};
+
+vi.mock("./session-fork.js", () => ({
+  forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
+    sessionForkMocks.forkSessionFromParent(...args),
+  resolveParentForkMaxTokens: (cfg: { session?: { parentForkMaxTokens?: unknown } }) => {
+    const configured = cfg.session?.parentForkMaxTokens;
+    return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
+      ? Math.floor(configured)
+      : 100_000;
+  },
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => null,
+}));
+
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
 vi.mock("../../agents/session-write-lock.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
@@ -216,6 +241,30 @@ function registerCurrentConversationBindingAdapterForTest(params: {
 
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  sessionForkMocks.nextSessionId = 0;
+  sessionForkMocks.forkSessionFromParent
+    .mockReset()
+    .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
+      if (!parentEntry.sessionFile) {
+        return null;
+      }
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
+      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+          parentSession: parentEntry.sessionFile,
+        })}\n`,
+        "utf-8",
+      );
+      return { sessionId, sessionFile: await fs.realpath(sessionFile) };
+    });
 });
 afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
@@ -1526,6 +1575,48 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
         expect(result.sessionId, testCase.name).toBe(existingSessionId);
       }
     }
+  });
+
+  it("starts a fresh session when a scoped WhatsApp group entry only contains activation state", async () => {
+    const sessionKey =
+      "agent:main:whatsapp:group:120363406150318674@g.us:thread:whatsapp-account-work";
+    const storePath = await createStorePath("openclaw-group-activation-backfill-");
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        groupActivation: "always",
+      },
+    });
+    const cfg = makeCfg({
+      storePath,
+      allowFrom: ["+41796666864"],
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello without mention",
+        RawBody: "hello without mention",
+        CommandBody: "hello without mention",
+        From: "120363406150318674@g.us",
+        To: "+41779241027",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SenderName: "Peschiño",
+        SenderE164: "+41796666864",
+        SenderId: "41796666864:0@s.whatsapp.net",
+      },
+      cfg,
+      commandAuthorized: false,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    expect(result.sessionEntry.groupActivation).toBe("always");
+    expect(result.sessionEntry.sessionId).toBe(result.sessionId);
+    expect(typeof result.sessionEntry.updatedAt).toBe("number");
   });
 });
 
