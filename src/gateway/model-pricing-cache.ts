@@ -502,13 +502,17 @@ export async function refreshGatewayModelPricingCache(params: {
 
     // Fetch both pricing catalogs in parallel.  Each source is
     // independently optional — a failure in one does not block the other.
+    let openRouterFailed = false;
+    let litellmFailed = false;
     const [catalogById, litellmCatalog] = await Promise.all([
       fetchOpenRouterPricingCatalog(fetchImpl).catch((error: unknown) => {
         log.warn(`OpenRouter pricing fetch failed: ${String(error)}`);
+        openRouterFailed = true;
         return new Map<string, OpenRouterPricingEntry>();
       }),
       fetchLiteLLMPricingCatalog(fetchImpl).catch((error: unknown) => {
         log.warn(`LiteLLM pricing fetch failed: ${String(error)}`);
+        litellmFailed = true;
         return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
       }),
     ]);
@@ -555,14 +559,31 @@ export async function refreshGatewayModelPricingCache(params: {
       }
     }
 
-    // If both upstream fetches failed (empty catalogs) and we already have
-    // a healthy cache, preserve it instead of replacing with empty data.
-    // This avoids cost-lookup regressions during transient network outages.
-    const existingMeta = getGatewayModelPricingCacheMetaState();
-    if (nextPricing.size === 0 && existingMeta.size > 0) {
-      log.warn("Both pricing sources returned empty data — retaining existing cache");
-      scheduleRefresh({ config: params.config, fetchImpl });
-      return;
+    // When either upstream source failed, preserve previously-cached entries
+    // for any models that the refresh could not resolve.  This prevents a
+    // single-source outage from silently dropping pricing for models that
+    // depended on the failed source.
+    if (openRouterFailed || litellmFailed) {
+      const existingMeta = getGatewayModelPricingCacheMetaState();
+      if (nextPricing.size === 0 && existingMeta.size > 0) {
+        // Both sources failed — retain the entire existing cache.
+        log.warn("Both pricing sources returned empty data — retaining existing cache");
+        scheduleRefresh({ config: params.config, fetchImpl });
+        return;
+      }
+      // Partial failure — back-fill missing models from the existing cache.
+      for (const ref of refs) {
+        const key = modelKey(ref.provider, ref.model);
+        if (!nextPricing.has(key)) {
+          const existing = getCachedGatewayModelPricing({
+            provider: ref.provider,
+            model: ref.model,
+          });
+          if (existing) {
+            nextPricing.set(key, existing);
+          }
+        }
+      }
     }
 
     replaceGatewayModelPricingCache(nextPricing);
