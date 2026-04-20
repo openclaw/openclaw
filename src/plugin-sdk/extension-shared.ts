@@ -3,6 +3,7 @@ import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
+export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
 type PassiveChannelStatusSnapshot = {
   configured?: boolean;
