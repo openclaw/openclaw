@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
+import { SAFE_SESSION_ID_RE } from "../config/sessions/paths.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -91,13 +92,6 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
-const GENERATED_SESSION_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function looksLikeGeneratedSessionId(value: string): boolean {
-  return GENERATED_SESSION_ID_RE.test(value);
-}
-
 type SessionMessagesStoreContext = {
   sessionsDir: string;
   key?: string;
@@ -153,14 +147,15 @@ function listExistingTranscriptVariantsForSessionId(
   sessionId: string,
   sessionsDir: string,
 ): string[] {
-  if (!sessionsDir || !looksLikeGeneratedSessionId(sessionId)) {
+  if (!sessionsDir || !SAFE_SESSION_ID_RE.test(sessionId)) {
     return [];
   }
+  const jsonlName = `${sessionId}.jsonl`;
+  const resetPrefix = `${sessionId}.jsonl.reset.`;
   try {
     return fs
       .readdirSync(sessionsDir)
-      .filter((name) => name === `${sessionId}.jsonl` || name.startsWith(`${sessionId}.jsonl.`))
-      .filter((name) => !name.endsWith(".lock"))
+      .filter((name) => name === jsonlName || name.startsWith(resetPrefix))
       .map((name) => path.join(sessionsDir, name))
       .filter((filePath) => fs.existsSync(filePath));
   } catch {
@@ -201,9 +196,7 @@ function resolveMainSessionTranscriptFiles(
         .filter((value): value is string => typeof value === "string")
     : [];
   const orderedSessionIds = Array.from(
-    new Set(
-      [...checkpointSessionIds, sessionId].filter((value) => looksLikeGeneratedSessionId(value)),
-    ),
+    new Set([...checkpointSessionIds, sessionId].filter((value) => SAFE_SESSION_ID_RE.test(value))),
   );
   for (const chainedSessionId of orderedSessionIds) {
     for (const filePath of listExistingTranscriptVariantsForSessionId(
