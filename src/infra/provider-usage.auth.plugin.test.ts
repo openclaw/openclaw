@@ -10,6 +10,7 @@ const ensureAuthProfileStoreMock = vi.fn(() => ({
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
+  hasAnyAuthProfileStoreSource: () => false,
   listProfilesForProvider: () => [],
   resolveApiKeyForProfile: async () => null,
   resolveAuthProfileOrder: () => [],
@@ -53,6 +54,19 @@ describe("resolveProviderAuths plugin boundary", () => {
         token: "plugin-zai-token",
       },
     ]);
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("skips plugin usage auth when requested and no direct credential source exists", async () => {
+    await expect(
+      resolveProviderAuths({
+        providers: ["zai"],
+        skipPluginAuthWithoutCredentialSource: true,
+        env: {},
+      }),
+    ).resolves.toEqual([]);
+
+    expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 });

@@ -10,7 +10,7 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default/workspace"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
-const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 const checkQmdBinaryAvailability = vi.hoisted(() =>
@@ -37,10 +37,15 @@ vi.mock("../agents/memory-search.js", () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider,
+  resolveEnvApiKey: vi.fn(() => null),
+  resolveUsableCustomProviderApiKey: vi.fn(() => null),
+}));
+
+vi.mock("../agents/auth-profiles.js", () => ({
+  hasAnyAuthProfileStoreSource,
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  resolveActiveMemoryBackendConfig,
   getActiveMemorySearchManager,
 }));
 
@@ -145,8 +150,8 @@ describe("noteMemorySearchHealth", () => {
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
-    resolveActiveMemoryBackendConfig.mockReset();
-    resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    hasAnyAuthProfileStoreSource.mockReset();
+    hasAnyAuthProfileStoreSource.mockReturnValue(true);
     getActiveMemorySearchManager.mockReset();
     getActiveMemorySearchManager.mockResolvedValue({
       manager: {
@@ -215,18 +220,14 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("does not warn when QMD backend is active", async () => {
-    resolveActiveMemoryBackendConfig.mockReturnValue({
-      backend: "qmd",
-      citations: "auto",
-      qmd: { command: "qmd" },
-    });
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       local: {},
       remote: {},
     });
 
-    await noteMemorySearchHealth(cfg, {});
+    await noteMemorySearchHealth(qmdCfg, {});
 
     expect(note).not.toHaveBeenCalled();
     expect(checkQmdBinaryAvailability).toHaveBeenCalledWith({
@@ -237,11 +238,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("warns when QMD backend is active but the qmd binary is unavailable", async () => {
-    resolveActiveMemoryBackendConfig.mockReturnValue({
-      backend: "qmd",
-      citations: "auto",
-      qmd: { command: "qmd" },
-    });
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
     checkQmdBinaryAvailability.mockResolvedValueOnce({
       available: false,
       error: "spawn qmd ENOENT",
@@ -252,7 +249,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
 
-    await noteMemorySearchHealth(cfg, {});
+    await noteMemorySearchHealth(qmdCfg, {});
 
     expect(note).toHaveBeenCalledTimes(1);
     const message = String(note.mock.calls[0]?.[0] ?? "");
@@ -460,7 +457,29 @@ describe("noteMemorySearchHealth", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
-    expect(providersChecked).toEqual(["openai"]);
+    expect(providersChecked).toEqual([
+      "github-copilot",
+      "openai",
+      "google",
+      "voyage",
+      "mistral",
+      "amazon-bedrock",
+    ]);
+  });
+
+  it("skips auth-profile probing in auto mode when no auth store exists", async () => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
+    const providersChecked = providerCalls.map(([arg]) => arg.provider);
+    expect(providersChecked).toEqual(["amazon-bedrock"]);
   });
 
   it("uses runtime-derived env var hints for explicit providers", async () => {

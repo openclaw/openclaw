@@ -406,6 +406,18 @@ export function buildPluginCompatibilityNotices(params?: {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
 }
 
+export function buildPluginCompatibilitySnapshotNotices(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginCompatibilityNotice[] {
+  const report = buildPluginSnapshotReport(params);
+  return buildPluginCompatibilityNotices({
+    ...params,
+    report,
+  });
+}
+
 export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
   return `${notice.pluginId} ${notice.message}`;
 }

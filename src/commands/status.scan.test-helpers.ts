@@ -109,9 +109,13 @@ export function createStatusPluginRegistryModuleMock(
 
 export function createStatusPluginStatusModuleMock(
   mocks: Pick<StatusScanSharedMocks, "buildPluginCompatibilityNotices">,
-): { buildPluginCompatibilityNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"] } {
+): {
+  buildPluginCompatibilityNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
+  buildPluginCompatibilitySnapshotNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
+} {
   return {
     buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+    buildPluginCompatibilitySnapshotNotices: mocks.buildPluginCompatibilityNotices,
   };
 }
 

@@ -27,4 +27,47 @@ describe("command secret targets module import", () => {
     expect(() => mod.getChannelsCommandSecretTargetIds()).toThrow("registry touched too early");
     expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
   });
+
+  it("can resolve configured-channel status targets without the full registry", async () => {
+    const listSecretTargetRegistryEntries = vi.fn(() => {
+      throw new Error("registry touched too early");
+    });
+    const loadBundledChannelSecretContractApi = vi.fn((channelId: string) =>
+      channelId === "telegram"
+        ? {
+            secretTargetRegistryEntries: [
+              {
+                id: "channels.telegram.botToken",
+                targetType: "channels.telegram.botToken",
+                configFile: "openclaw.json",
+                pathPattern: "channels.telegram.botToken",
+                secretShape: "secret_input",
+                expectedResolvedValue: "string",
+                includeInPlan: true,
+                includeInConfigure: true,
+                includeInAudit: true,
+              },
+            ],
+          }
+        : undefined,
+    );
+
+    vi.doMock("../secrets/target-registry.js", () => ({
+      discoverConfigSecretTargetsByIds: vi.fn(() => []),
+      listSecretTargetRegistryEntries,
+    }));
+    vi.doMock("../secrets/channel-contract-api.js", () => ({
+      loadBundledChannelSecretContractApi,
+    }));
+
+    const mod = await import("./command-secret-targets.js");
+    const targets = mod.getStatusCommandSecretTargetIds({
+      channels: { telegram: { botToken: "123456:ABCDEF" } },
+    });
+
+    expect(targets.has("channels.telegram.botToken")).toBe(true);
+    expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(loadBundledChannelSecretContractApi).toHaveBeenCalledWith("telegram");
+    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
+  });
 });

@@ -1,5 +1,4 @@
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
@@ -12,6 +11,7 @@ import type { StatusScanResult } from "./status.scan-result.ts";
 type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
+  includeChannelSummary?: boolean;
   resolveHasConfiguredChannels: (
     cfg: Parameters<typeof hasPotentialConfiguredChannels>[0],
   ) => boolean;
@@ -35,18 +35,12 @@ export async function scanStatusJsonWithPolicy(
     resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
     includeChannelsData: false,
   });
-  if (overview.hasConfiguredChannels) {
-    await ensureCliPluginRegistryLoaded({
-      scope: "configured-channels",
-      routeLogsToStderr: true,
-      config: overview.cfg,
-      activationSourceConfig: overview.sourceConfig,
-    });
-  }
-
   return await executeStatusScanFromOverview({
     overview,
     runtime,
+    summary: {
+      includeChannelSummary: policy.includeChannelSummary,
+    },
     resolveMemory: policy.resolveMemory,
     channelIssues: [],
     channels: { rows: [], details: [] },
@@ -64,6 +58,7 @@ export async function scanStatusJsonFast(
   return await scanStatusJsonWithPolicy(opts, runtime, {
     commandName: "status --json",
     allowMissingConfigFastPath: true,
+    includeChannelSummary: false,
     resolveHasConfiguredChannels: (cfg) =>
       hasPotentialConfiguredChannels(cfg, process.env, {
         includePersistedAuthState: false,

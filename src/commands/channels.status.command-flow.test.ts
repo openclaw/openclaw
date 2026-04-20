@@ -33,6 +33,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
 }));
 
+vi.mock("../channels/config-presence.js", () => ({
+  listPotentialConfiguredChannelIds: () => ["discord"],
+}));
+
 vi.mock("./channels/shared.js", () => ({
   requireValidConfigSnapshot: (runtime: unknown) => mocks.requireValidConfigSnapshot(runtime),
   formatChannelAccountLabel: ({
@@ -82,6 +86,10 @@ vi.mock("../channels/plugins/index.js", () => ({
     (mocks.listChannelPlugins() as Array<{ id: string }>).find((plugin) => plugin.id === channel),
 }));
 
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => mocks.listChannelPlugins(),
+}));
+
 vi.mock("../channels/account-snapshot-fields.js", () => ({
   hasConfiguredUnavailableCredentialStatus: (account: Record<string, unknown>) =>
     Object.values(account).includes("configured_unavailable"),
@@ -119,7 +127,7 @@ vi.mock("../channels/plugins/status.js", () => ({
 }));
 
 vi.mock("../cli/command-secret-targets.js", () => ({
-  getChannelsCommandSecretTargetIds: () => [],
+  getConfiguredChannelsCommandSecretTargetIds: () => [],
 }));
 
 vi.mock("../infra/channels-status-issues.js", () => ({
@@ -236,5 +244,28 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).toContain("token:config");
     expect(joined).not.toContain("secret unavailable in this command path");
     expect(joined).not.toContain("token:config (unavailable)");
+  });
+
+  it("keeps JSON fallback structured without rendering config-only text", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: { secretResolved: true, channels: {} },
+      effectiveConfig: { secretResolved: true, channels: {} },
+      diagnostics: [],
+    });
+    const { runtime, logs } = createRuntimeCapture();
+
+    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+
+    expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+    const payload = JSON.parse(logs.at(-1) ?? "{}");
+    expect(payload).toEqual(
+      expect.objectContaining({
+        gatewayReachable: false,
+        configOnly: true,
+        configuredChannels: ["discord"],
+      }),
+    );
   });
 });

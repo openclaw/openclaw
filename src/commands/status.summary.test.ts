@@ -150,6 +150,16 @@ describe("getStatusSummary", () => {
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });
 
+  it("skips channel summary imports when explicitly disabled", async () => {
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(summary.channelSummary).toEqual([]);
+    expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasPotentialConfiguredChannels).not.toHaveBeenCalled();
+    expect(buildChannelSummary).not.toHaveBeenCalled();
+    expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 

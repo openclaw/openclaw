@@ -1,10 +1,12 @@
 import {
   dedupeProfileIds,
   ensureAuthProfileStore,
+  hasAnyAuthProfileStoreSource,
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
+import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
@@ -25,6 +27,7 @@ type UsageAuthState = {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   agentDir?: string;
+  allowAuthProfileStore: boolean;
   store?: AuthStore;
 };
 
@@ -35,7 +38,7 @@ function resolveUsageAuthStore(state: UsageAuthState): AuthStore {
   return state.store;
 }
 
-function resolveProviderApiKeyFromConfigAndStore(params: {
+function resolveProviderApiKeyFromConfig(params: {
   state: UsageAuthState;
   providerIds: string[];
   envDirect?: Array<string | undefined>;
@@ -46,13 +49,30 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
   }
 
   for (const providerId of params.providerIds) {
+    const envKey = resolveEnvApiKey(providerId, params.state.env)?.apiKey;
+    if (envKey) {
+      return envKey;
+    }
     const key = resolveUsableCustomProviderApiKey({
       cfg: params.state.cfg,
       provider: providerId,
+      env: params.state.env,
     })?.apiKey;
     if (key) {
       return key;
     }
+  }
+  return undefined;
+}
+
+function resolveProviderApiKeyFromConfigAndStore(params: {
+  state: UsageAuthState;
+  providerIds: string[];
+  envDirect?: Array<string | undefined>;
+}): string | undefined {
+  const configKey = resolveProviderApiKeyFromConfig(params);
+  if (configKey || !params.state.allowAuthProfileStore) {
+    return configKey;
   }
 
   const normalizedProviderIds = new Set(
@@ -92,6 +112,9 @@ async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
 }): Promise<ProviderAuth | null> {
+  if (!params.state.allowAuthProfileStore) {
+    return null;
+  }
   const store = resolveUsageAuthStore(params.state);
   const order = resolveAuthProfileOrder({
     cfg: params.state.cfg,
@@ -208,26 +231,45 @@ export async function resolveProviderAuths(params: {
   agentDir?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  skipPluginAuthWithoutCredentialSource?: boolean;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
     return params.auth;
   }
 
-  const state: UsageAuthState = {
+  const stateBase = {
     cfg: params.config ?? loadConfig(),
     env: params.env ?? process.env,
     agentDir: params.agentDir,
   };
+  const hasDirectCredentialSource = params.providers.some((provider) =>
+    Boolean(
+      resolveProviderApiKeyFromConfig({
+        state: { ...stateBase, allowAuthProfileStore: false },
+        providerIds: [provider],
+      }),
+    ),
+  );
+  const allowAuthProfileStore =
+    !params.skipPluginAuthWithoutCredentialSource ||
+    hasDirectCredentialSource ||
+    hasAnyAuthProfileStoreSource(params.agentDir);
+  const state: UsageAuthState = {
+    ...stateBase,
+    allowAuthProfileStore,
+  };
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
-    const pluginAuth = await resolveProviderUsageAuthViaPlugin({
-      state,
-      provider,
-    });
-    if (pluginAuth) {
-      auths.push(pluginAuth);
-      continue;
+    if (!params.skipPluginAuthWithoutCredentialSource || allowAuthProfileStore) {
+      const pluginAuth = await resolveProviderUsageAuthViaPlugin({
+        state,
+        provider,
+      });
+      if (pluginAuth) {
+        auths.push(pluginAuth);
+        continue;
+      }
     }
     const fallbackAuth = await resolveProviderUsageAuthFallback({
       state,

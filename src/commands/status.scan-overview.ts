@@ -168,7 +168,9 @@ export async function collectStatusScanOverview(params: {
       ).resolveCommandConfigWithSecrets({
         config: loadedConfig,
         commandName: params.commandName,
-        targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(),
+        targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(
+          loadedConfig,
+        ),
         mode: "read_only_status",
         ...(params.runtime ? { runtime: params.runtime } : {}),
       }),
@@ -279,6 +281,7 @@ export async function collectStatusScanOverview(params: {
 
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
+  includeChannelSummary?: boolean;
 }) {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
@@ -287,6 +290,7 @@ export async function resolveStatusSummaryFromOverview(params: {
     getStatusSummary({
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
+      includeChannelSummary: params.includeChannelSummary,
     }),
   );
 }

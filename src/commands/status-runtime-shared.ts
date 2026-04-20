@@ -1,3 +1,4 @@
+import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { HealthSummary } from "./health.js";
@@ -33,6 +34,7 @@ export async function resolveStatusSecurityAudit(params: {
     deep: false,
     includeFilesystem: true,
     includeChannelSecurity: true,
+    plugins: listReadOnlyChannelPluginsForConfig(params.config),
   });
 }
 

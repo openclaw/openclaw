@@ -1,7 +1,7 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { withProgress } from "../../cli/progress.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -109,20 +109,19 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       return buildChannelAccountLine(provider, account, bits);
     });
 
-  const plugins = listChannelPlugins();
   const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
   const accountPayloads: Partial<Record<string, Array<Record<string, unknown>>>> = {};
-  for (const plugin of plugins) {
-    const raw = accountsByChannel?.[plugin.id];
+  for (const channelId of Object.keys(accountsByChannel ?? {}).toSorted()) {
+    const raw = accountsByChannel?.[channelId];
     if (Array.isArray(raw)) {
-      accountPayloads[plugin.id] = raw as Array<Record<string, unknown>>;
+      accountPayloads[channelId] = raw as Array<Record<string, unknown>>;
     }
   }
 
-  for (const plugin of plugins) {
-    const accounts = accountPayloads[plugin.id];
+  for (const channelId of Object.keys(accountPayloads).toSorted()) {
+    const accounts = accountPayloads[channelId];
     if (accounts && accounts.length > 0) {
-      lines.push(...accountLines(plugin.id, accounts));
+      lines.push(...accountLines(channelId, accounts));
     }
   }
 
@@ -182,12 +181,27 @@ export async function channelsStatusCommand(
     const { resolvedConfig } = await resolveCommandConfigWithSecrets({
       config: cfg,
       commandName: "channels status",
-      targetIds: getChannelsCommandSecretTargetIds(),
+      targetIds: getConfiguredChannelsCommandSecretTargetIds(cfg),
       mode: "read_only_status",
       runtime,
     });
     const snapshot = await readConfigFileSnapshot();
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        gatewayReachable: false,
+        error: String(err),
+        configOnly: true,
+        config: {
+          path: snapshot.path,
+          mode,
+        },
+        configuredChannels: listPotentialConfiguredChannelIds(resolvedConfig, process.env, {
+          includePersistedAuthState: false,
+        }).toSorted(),
+      });
+      return;
+    }
     runtime.log(
       (
         await formatConfigChannelsStatusLines(

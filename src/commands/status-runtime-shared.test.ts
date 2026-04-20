@@ -57,6 +57,7 @@ describe("status-runtime-shared", () => {
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      plugins: expect.any(Array),
     });
   });
 
@@ -244,6 +245,7 @@ describe("status-runtime-shared", () => {
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      plugins: expect.any(Array),
     });
   });
 });

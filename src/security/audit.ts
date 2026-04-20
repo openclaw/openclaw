@@ -1,6 +1,9 @@
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
+import {
+  hasPotentialConfiguredChannels,
+  listPotentialConfiguredChannelIds,
+} from "../channels/config-presence.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -350,6 +353,14 @@ async function collectPluginSecurityAuditFindings(
       const normalized = pluginId.trim();
       if (normalized) {
         requestedPluginIds.add(normalized);
+      }
+    }
+    if (context.includeChannelSecurity && context.plugins !== undefined) {
+      for (const channelId of listPotentialConfiguredChannelIds(
+        context.sourceConfig,
+        context.env,
+      )) {
+        requestedPluginIds.delete(channelId);
       }
     }
     if (requestedPluginIds.size === 0) {
