@@ -1,4 +1,7 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const modelSelectionLog = createSubsystemLogger("model-selection");
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -271,8 +274,8 @@ export async function createModelSelectionState(params: {
       return;
     }
     const suffix = extra ? ` ${extra}` : "";
-    console.log(
-      `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
+    modelSelectionLog.debug(
+      `session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
     );
   };
   const {

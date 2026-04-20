@@ -6,6 +6,9 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const commandAuthLog = createSubsystemLogger("command-auth");
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -203,8 +206,8 @@ function resolveProviderAllowFrom(params: {
       };
     }
     if (!Array.isArray(allowFrom)) {
-      console.warn(
-        `[command-auth] resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom: invalid_result`,
+      commandAuthLog.warn(
+        `resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom: invalid_result`,
       );
       return {
         allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
@@ -216,8 +219,8 @@ function resolveProviderAllowFrom(params: {
       hadResolutionError: false,
     };
   } catch (err) {
-    console.warn(
-      `[command-auth] resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeAllowFromResolutionError(err)}`,
+    commandAuthLog.warn(
+      `resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeAllowFromResolutionError(err)}`,
     );
     return {
       allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   normalizeOptionalLowercaseString,
@@ -14,6 +15,8 @@ import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
 
+const mcpLoopbackHttpLog = createSubsystemLogger("mcp-loopback");
+
 function shouldLogMcpLoopbackHttp(): boolean {
   return (
     isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) ||
@@ -25,7 +28,7 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
   if (!shouldLogMcpLoopbackHttp()) {
     return;
   }
-  console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
+  mcpLoopbackHttpLog.debug(step, details);
 }
 
 export type McpRequestContext = {

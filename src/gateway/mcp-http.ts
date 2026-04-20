@@ -4,6 +4,9 @@ import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const mcpLoopbackLog = createSubsystemLogger("mcp-loopback");
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntime,
@@ -43,7 +46,7 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
   if (!shouldLogMcpLoopbackTraffic()) {
     return;
   }
-  console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
+  mcpLoopbackLog.debug(step, details);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

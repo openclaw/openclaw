@@ -13,6 +13,7 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -46,12 +47,13 @@ function shouldLogCliCronProbe(): boolean {
   );
 }
 
+const cliCronProbeLog = createSubsystemLogger("gateway-cli-live/cron");
+
 function logCliCronProbe(step: string, details?: Record<string, unknown>): void {
   if (!shouldLogCliCronProbe()) {
     return;
   }
-  const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
-  console.error(`[gateway-cli-live:cron] ${step}${suffix}`);
+  cliCronProbeLog.debug(step, details);
 }
 
 export type BootstrapWorkspaceContext = {

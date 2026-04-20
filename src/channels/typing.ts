@@ -1,5 +1,8 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
+
+const typingLog = createSubsystemLogger("typing");
 
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
@@ -55,7 +58,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     clearTtlTimer();
     ttlTimer = setTimeout(() => {
       if (!closed) {
-        console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
+        typingLog.warn(`TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
         fireStop();
       }
     }, maxDurationMs);
