@@ -16,6 +16,23 @@ vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
+vi.mock("../chat/export.ts", () => ({
+  exportChatMarkdown: vi.fn(),
+}));
+
+vi.mock("../chat/speech.ts", () => ({
+  isSttActive: () => false,
+  isSttSupported: () => false,
+  isTtsSpeaking: () => false,
+  isTtsSupported: () => false,
+  speakText: () => false,
+  startStt: () => false,
+  stopStt: () => undefined,
+  stopTts: () => undefined,
+}));
+
+vi.mock("../components/resizable-divider.ts", () => ({}));
+
 vi.mock("./markdown-sidebar.ts", async () => {
   const { html } = await import("lit");
   return {
