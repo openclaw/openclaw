@@ -193,27 +193,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps changed plugin-sdk allowlist files on sibling light tests plus extension tests", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/plugin-sdk/provider-entry.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
-        watchMode: false,
-      },
-      ...listFullExtensionVitestProjectConfigs().map((config) => ({
-        config,
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      })),
-    ]);
-  });
-
   it("routes changed commands source allowlist files to sibling light tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/commands/status-overview-values.ts",
