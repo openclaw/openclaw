@@ -44,6 +44,21 @@ describe("telegram custom commands schema", () => {
 });
 
 describe("telegram topic agentId schema", () => {
+  it("accepts nested groupPolicy overrides", () => {
+    expectTelegramConfigValid({
+      groups: {
+        "-1001234567890": {
+          groupPolicy: "open",
+          topics: {
+            "42": {
+              groupPolicy: "disabled",
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("accepts valid agentId in forum group topic config", () => {
     const res = TelegramConfigSchema.safeParse({
       groups: {
@@ -237,6 +252,15 @@ describe("telegram token schema", () => {
 });
 
 describe("telegram poll actions schema", () => {
+  it("accepts editMessage and createForumTopic actions", () => {
+    expectTelegramConfigValid({
+      actions: {
+        editMessage: true,
+        createForumTopic: false,
+      },
+    });
+  });
+
   it("accepts actions.poll", () => {
     expectTelegramConfigValid({ actions: { poll: false } });
   });
