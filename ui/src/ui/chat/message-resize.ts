@@ -114,7 +114,7 @@ handleRight.style.border = '1px solid white';
     }
     
     const minWidth = 200;
-    const maxWidth = Math.min(900, window.innerWidth - 100);
+    const maxWidth = 1024;
     const minHeight = 100;
     
     newWidth = Math.min(Math.max(newWidth, minWidth), maxWidth);

@@ -922,11 +922,11 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
     };
     
     elements.push(html`
-      <div class="chat-media-wrapper" style="width: 100%; max-width: 854px;">
+      <div class="chat-media-wrapper" style="width: 100%; max-width: 1024px;">
         <video
           controls
           class="chat-message-video"
-          style="width: 100%; max-width: 854px; height: auto; max-height: 480px;"
+          style="width: 100%; max-width: 1024px; height: auto; max-height: 576px;"
           playsinline
           @error=${handleError}
         >
