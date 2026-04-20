@@ -46,6 +46,36 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("uses trusted requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+        senderUserId: "spoofed-admin-id",
+      },
+      cfg: {
+        channels: { discord: { token: "tok", actions: { channels: true } } },
+      } as OpenClawConfig,
+      requesterSenderId: "trusted-sender-id",
+      toolContext: { currentChannelProvider: "discord" },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channelDelete",
+        channelId: "channel-1",
+        senderUserId: "trusted-sender-id",
+      }),
+      expect.objectContaining({
+        channels: {
+          discord: expect.objectContaining({
+            token: "tok",
+          }),
+        },
+      }),
+    );
+  });
+
   it("falls back to toolContext.currentMessageId for reactions", async () => {
     await handleDiscordMessageAction({
       action: "react",

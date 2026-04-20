@@ -18,6 +18,24 @@ import {
 } from "./accounts.js";
 import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
 
+const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
+  "emoji-upload",
+  "sticker-upload",
+  "role-add",
+  "role-remove",
+  "channel-create",
+  "channel-edit",
+  "channel-delete",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
+  "event-create",
+  "timeout",
+  "kick",
+  "ban",
+]);
+
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
   | undefined;
@@ -168,6 +186,8 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeDiscordMessageTool,
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    Boolean(toolContext && trustedRequesterGuildAdminActions.has(action)),
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {

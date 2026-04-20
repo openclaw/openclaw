@@ -173,4 +173,25 @@ describe("discordMessageActions", () => {
       mediaLocalRoots,
     });
   });
+
+  it("requires trusted requester sender for privileged guild admin actions in tool contexts", () => {
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(true);
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "read",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
+  });
 });

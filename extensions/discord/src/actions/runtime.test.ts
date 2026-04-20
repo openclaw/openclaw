@@ -32,9 +32,11 @@ const discordSendMocks = {
     name: "edited",
   })),
   editMessageDiscord: vi.fn(async () => ({})),
+  fetchChannelInfoDiscord: vi.fn(async () => ({ guild_id: "G1" })),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
   fetchMessageDiscord: vi.fn(async () => ({})),
   fetchReactionsDiscord: vi.fn(async () => ({})),
+  hasAnyGuildPermissionDiscord: vi.fn(async () => true),
   kickMemberDiscord: vi.fn(async () => ({})),
   listGuildChannelsDiscord: vi.fn(async () => []),
   listPinsDiscord: vi.fn(async () => ({})),
@@ -537,6 +539,7 @@ describe("handleDiscordGuildAction", () => {
 
 const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
 const channelsDisabled = () => false;
+const privilegedSender = { senderUserId: "sender-1" };
 
 describe("handleDiscordGuildAction - channel management", () => {
   beforeEach(() => {
@@ -551,6 +554,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         name: "test-channel",
         type: 0,
         topic: "Test topic",
+        ...privilegedSender,
       },
       channelsEnabled,
     );
@@ -588,6 +592,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         channelId: "C1",
         name: "new-name",
         topic: "new topic",
+        ...privilegedSender,
       },
       channelsEnabled,
     );
@@ -613,6 +618,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         archived: true,
         locked: false,
         autoArchiveDuration: 1440,
+        ...privilegedSender,
       },
       channelsEnabled,
     );
@@ -639,6 +645,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       {
         channelId: "C1",
         ...payload,
+        ...privilegedSender,
       },
       channelsEnabled,
     );
@@ -657,7 +664,11 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a channel", async () => {
-    await handleDiscordGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
+    await handleDiscordGuildAction(
+      "channelDelete",
+      { channelId: "C1", ...privilegedSender },
+      channelsEnabled,
+    );
     expect(deleteChannelDiscord).toHaveBeenCalledWith("C1");
   });
 
@@ -669,6 +680,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         channelId: "C1",
         parentId: "P1",
         position: 5,
+        ...privilegedSender,
       },
       channelsEnabled,
     );
@@ -690,6 +702,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         guildId: "G1",
         channelId: "C1",
         ...payload,
+        ...privilegedSender,
       },
       channelsEnabled,
     );
@@ -704,7 +717,7 @@ describe("handleDiscordGuildAction - channel management", () => {
   it("creates a category with type=4", async () => {
     await handleDiscordGuildAction(
       "categoryCreate",
-      { guildId: "G1", name: "My Category" },
+      { guildId: "G1", name: "My Category", ...privilegedSender },
       channelsEnabled,
     );
     expect(createChannelDiscord).toHaveBeenCalledWith({
@@ -718,7 +731,7 @@ describe("handleDiscordGuildAction - channel management", () => {
   it("edits a category", async () => {
     await handleDiscordGuildAction(
       "categoryEdit",
-      { categoryId: "CAT1", name: "Renamed Category" },
+      { categoryId: "CAT1", name: "Renamed Category", ...privilegedSender },
       channelsEnabled,
     );
     expect(editChannelDiscord).toHaveBeenCalledWith({
@@ -729,7 +742,11 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a category", async () => {
-    await handleDiscordGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
+    await handleDiscordGuildAction(
+      "categoryDelete",
+      { categoryId: "CAT1", ...privilegedSender },
+      channelsEnabled,
+    );
     expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1");
   });
 
@@ -768,14 +785,18 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
     },
   ])("sets channel permissions for $name", async ({ params, expected }) => {
-    await handleDiscordGuildAction("channelPermissionSet", params, channelsEnabled);
+    await handleDiscordGuildAction(
+      "channelPermissionSet",
+      { ...params, ...privilegedSender },
+      channelsEnabled,
+    );
     expect(setChannelPermissionDiscord).toHaveBeenCalledWith(expected);
   });
 
   it("removes channel permissions", async () => {
     await handleDiscordGuildAction(
       "channelPermissionRemove",
-      { channelId: "C1", targetId: "R1" },
+      { channelId: "C1", targetId: "R1", ...privilegedSender },
       channelsEnabled,
     );
     expect(removeChannelPermissionDiscord).toHaveBeenCalledWith("C1", "R1");
@@ -902,7 +923,13 @@ describe("handleDiscordAction per-account gating", () => {
     } as OpenClawConfig;
 
     await handleDiscordAction(
-      { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+      {
+        action: "channelCreate",
+        guildId: "G1",
+        name: "alerts",
+        accountId: "ops",
+        senderUserId: "sender-1",
+      },
       cfg,
     );
 
