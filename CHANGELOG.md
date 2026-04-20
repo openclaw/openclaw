@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Context engine/plugins: stop rejecting third-party context engines whose `info.id` differs from the registered plugin slot id. The strict-match contract added in 2026.4.14 broke `lossless-claw` and other plugins whose internal engine id does not equal the slot id they are registered under, producing repeated `info.id must match registered id` lane failures on every turn. Fixes #66601. (#66678) Thanks @GodsBoy.
 - Agents/compaction: rename embedded Pi compaction lifecycle events to `compaction_start` / `compaction_end` so OpenClaw stays aligned with `pi-coding-agent` 0.66.1 event naming. (#67713) Thanks @mpz4life.
 - Security/dotenv: block all `OPENCLAW_*` keys from untrusted workspace `.env` files so workspace-local env loading fails closed for new runtime-control variables instead of silently inheriting them. (#473)
+- Config/io: resolve the config path through `fs.promises.realpath` before the atomic temp-file+rename write, so user-managed symlinks at `~/.openclaw/openclaw.json` (git-tracked workspace config, dotfiles, Nix, Chezmoi layouts documented in TOOLS.md) are written through to their target file instead of being clobbered with a freshly created regular file on every config touch. Addresses the symlink-clobber half of #69396; the companion SecretRef-plaintext-serialization bug is tracked separately. [AI-assisted]
 
 ## 2026.4.20
 
