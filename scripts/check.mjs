@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 export async function main(argv = process.argv.slice(2)) {
   const timed = argv.includes("--timed");
   const includeArchitecture = argv.includes("--include-architecture");
+  const includeTestTypes = argv.includes("--include-test-types");
 
   const tailChecks = [
     { name: "webhook body guard", args: ["lint:webhook:no-low-level-body-read"] },
@@ -17,7 +18,7 @@ export async function main(argv = process.argv.slice(2)) {
   const stages = [
     {
       name: "preflight guards",
-      parallel: false,
+      parallel: true,
       commands: [
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
         { name: "tool display", args: ["tool-display:check"] },
@@ -27,7 +28,12 @@ export async function main(argv = process.argv.slice(2)) {
     {
       name: "typecheck",
       parallel: false,
-      commands: [{ name: "typecheck", args: ["tsgo:all"] }],
+      commands: [
+        {
+          name: includeTestTypes ? "typecheck all" : "typecheck prod",
+          args: [includeTestTypes ? "tsgo:all" : "tsgo:prod"],
+        },
+      ],
     },
     {
       name: "lint",
