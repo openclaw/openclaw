@@ -97,7 +97,7 @@ async function importResolveContextTokensForModel() {
   return resolveContextTokensForModel;
 }
 
-function setStdoutIsTTY(value: boolean): () => void {
+function setStdoutIsTTY(value: boolean | undefined): () => void {
   const stdout = process.stdout as NodeJS.WriteStream & { isTTY?: boolean };
   const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdout, "isTTY");
   const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdout, "isTTY");
@@ -219,6 +219,17 @@ describe("lookupContextTokens", () => {
         {
           argv: ["node", "openclaw", "chat"],
           expectedCalls: 1,
+          stdoutIsTTY: true,
+        },
+        {
+          argv: ["node", "openclaw", "chat"],
+          expectedCalls: 0,
+          stdoutIsTTY: false,
+        },
+        {
+          argv: ["node", "openclaw", "chat"],
+          expectedCalls: 0,
+          stdoutIsTTY: undefined,
         },
         {
           argv: ["node", "openclaw", "--profile", "--", "config", "validate"],
@@ -233,8 +244,18 @@ describe("lookupContextTokens", () => {
           expectedCalls: 0,
         },
         {
+          argv: ["node", "openclaw", "sessions"],
+          expectedCalls: 0,
+          stdoutIsTTY: true,
+        },
+        {
+          argv: ["node", "openclaw", "sessions"],
+          expectedCalls: 0,
+          stdoutIsTTY: false,
+        },
+        {
           argv: ["node", "openclaw", "sessions", "--json"],
-          expectedCalls: 1,
+          expectedCalls: 0,
           stdoutIsTTY: true,
         },
         {
@@ -243,16 +264,21 @@ describe("lookupContextTokens", () => {
           stdoutIsTTY: false,
         },
         {
+          argv: ["node", "openclaw", "sessions", "cleanup", "--dry-run"],
+          expectedCalls: 0,
+          stdoutIsTTY: true,
+        },
+        {
           argv: ["node", "scripts/test-built-plugin-singleton.mjs"],
           expectedCalls: 0,
         },
       ]) {
         const loadConfigMock = vi.fn(() => ({ models: {} }));
         const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
-        contextModule.resetContextWindowCacheForTest();
         process.argv = scenario.argv;
-        const restoreStdoutIsTTY =
-          typeof scenario.stdoutIsTTY === "boolean" ? setStdoutIsTTY(scenario.stdoutIsTTY) : null;
+        const restoreStdoutIsTTY = Object.prototype.hasOwnProperty.call(scenario, "stdoutIsTTY")
+          ? setStdoutIsTTY(scenario.stdoutIsTTY)
+          : null;
         try {
           await importFreshContextModule();
         } finally {

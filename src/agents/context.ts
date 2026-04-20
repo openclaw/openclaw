@@ -140,6 +140,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "models",
   "plugins",
   "secrets",
+  "sessions",
   "status",
   "update",
   "webhooks",
@@ -157,10 +158,17 @@ function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boole
     return false;
   }
   const [primary] = getCommandPathFromArgv(argv);
-  if (primary === "sessions" && argv.includes("--json") && !process.stdout.isTTY) {
+  if (!primary || SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary)) {
     return false;
   }
-  return Boolean(primary) && !SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary);
+  // Non-interactive CLI runs should avoid import-time warmup because bundled
+  // model discovery can leave active AWS SDK credential-provider FS/DNS work
+  // alive after the command has already written its output.
+  const stdoutIsTTY = Reflect.get(process.stdout, "isTTY") as boolean | undefined;
+  if (stdoutIsTTY !== true) {
+    return false;
+  }
+  return true;
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
