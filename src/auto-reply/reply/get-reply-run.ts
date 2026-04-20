@@ -375,11 +375,11 @@ export async function runPreparedReply(
   const baseBodyForPrompt = isBareSessionReset
     ? [startupContextPrelude, baseBodyFinal].filter(Boolean).join("\n\n")
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-  const hasUserBody = baseBodyFinal.trim().length > 0;
+  const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
-  if (!hasUserBody && !hasMediaAttachment) {
+  if (!baseBodyTrimmed && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
     // otherwise channels that wire onReplyStart to typing indicators leak
     // visible signals even though outbound delivery is suppressed.
@@ -392,12 +392,11 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // Prefix-only inbound metadata should not force a run on empty turns. When media
-  // arrives without text, keep the contextual prefix but append a minimal placeholder
-  // so the embedded runner can inject the attachment.
-  const effectiveBaseBody = hasUserBody
+  // When the user sends media without text, provide a minimal body so the agent
+  // run proceeds and the image/document is injected by the embedded runner.
+  const effectiveBaseBody = baseBodyTrimmed
     ? baseBodyForPrompt
-    : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
+    : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
