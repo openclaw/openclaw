@@ -14,14 +14,17 @@ const createLazyFacadeObjectValue = vi.hoisted(() => {
     ) as T;
 });
 const createLazyFacadeValue = vi.hoisted(() => {
-  return <T extends object, K extends keyof T>(load: () => T, key: K): T[K] =>
+  return <TFacade extends object, K extends keyof TFacade>(
+    load: () => TFacade,
+    key: K,
+  ): TFacade[K] =>
     ((...args: unknown[]) => {
       const value = load()[key];
       if (typeof value !== "function") {
         return value;
       }
       return (value as (...innerArgs: unknown[]) => unknown)(...args);
-    }) as T[K];
+    }) as TFacade[K];
 });
 
 vi.mock("../plugin-sdk/facade-runtime.js", () => ({
