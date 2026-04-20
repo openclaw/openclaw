@@ -140,6 +140,10 @@
 - Do not add `tsc --noEmit`, `typecheck`, or `check:types` lanes for repo type checking. Use `tsgo` graphs. `tsc` is allowed only when emitting declaration/package-boundary compatibility artifacts that `tsgo` does not replace.
 - Boundary rule: core must not know extension implementation details. Extensions hook into core through manifests, registries, capabilities, and public `openclaw/plugin-sdk/*` contracts. If you find core production code naming a specific extension, or a core test that is really testing extension-owned behavior, call it out and prefer moving coverage/logic to the owning extension or a generic contract test.
 - Lint/format: `pnpm check`
+  - `pnpm lint`: type-aware lint shards for core, extensions, and scripts, run in parallel after shared boundary artifacts are prepared once.
+  - `pnpm lint:core`, `pnpm lint:extensions`, `pnpm lint:scripts`: focused lint shards.
+  - `pnpm lint:all`: legacy single-pass repo-wide oxlint, useful when comparing shard behavior.
+  - `pnpm lint:apps`: app lint surface such as Swift; keep app lint separate from repo TypeScript lint.
 - Local agent/dev shells default to host-aware `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK_MODE=throttled` to force the lower-memory profile, `OPENCLAW_LOCAL_CHECK_MODE=full` to keep lock-only behavior, or `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
 - Format check: `pnpm format:check` (oxfmt --check)
 - Format fix: `pnpm format` or `pnpm format:fix` (oxfmt --write)
@@ -148,7 +152,7 @@
   - A local dev gate is the fast default loop, usually `pnpm check` plus any scoped test you actually need.
   - A landing gate is the broader bar before pushing `main`, usually `pnpm check`, `pnpm test`, and `pnpm build` when the touched surface can affect build output, packaging, lazy-loading/module boundaries, or published surfaces.
   - A CI gate is whatever the relevant workflow enforces for that lane (for example `check`, `check-additional`, `build-smoke`, or release validation).
-- Local dev gate: prefer `pnpm check` for the normal edit loop. It keeps the repo-architecture policy guards out of the default local loop.
+- Local dev gate: prefer `pnpm check` for the normal edit loop. It runs typecheck and lint first, then parallelizes independent policy guards. It keeps the repo-architecture policy guards out of the default local loop.
 - Timed local gate: use `pnpm check:timed` to see per-stage cost. Add `:architecture` only when investigating the CI architecture gate locally.
 - CI architecture gate: `check-additional` enforces architecture and boundary policy guards that are intentionally kept out of the default local loop.
 - Formatting gate: the pre-commit hook runs targeted formatting on staged source files before `pnpm check`. If you want a repo-wide formatting-only preflight locally, run `pnpm format:check` explicitly.
