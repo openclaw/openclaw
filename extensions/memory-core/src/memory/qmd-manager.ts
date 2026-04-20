@@ -314,6 +314,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private queuedForcedRuns = 0;
   private dirty = false;
   private closed = false;
+  private readonly closeSignal: Promise<void>;
+  private resolveCloseSignal!: () => void;
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
@@ -357,6 +359,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
     };
+    this.closeSignal = new Promise<void>((resolve) => {
+      this.resolveCloseSignal = resolve;
+    });
     this.sessionExporter = this.qmd.sessions.enabled
       ? {
           dir: this.qmd.sessions.exportDir ?? path.join(this.qmdDir, "sessions"),
@@ -1318,6 +1323,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     this.closed = true;
+    this.resolveCloseSignal();
     if (this.updateTimer) {
       clearInterval(this.updateTimer);
       this.updateTimer = null;
@@ -1608,14 +1614,25 @@ export class QmdMemoryManager implements MemorySearchManager {
       () => current,
     );
     queue.tails.set(key, next);
-    await previous.catch(() => undefined);
     try {
+      const waitResult = await Promise.race([
+        previous.then(
+          () => "ready" as const,
+          () => "ready" as const,
+        ),
+        this.closeSignal.then(() => "closed" as const),
+      ]);
+      if (waitResult === "closed") {
+        return undefined as T;
+      }
       return await task();
     } finally {
       releaseCurrent();
-      if (queue.tails.get(key) === next) {
-        queue.tails.delete(key);
-      }
+      void next.finally(() => {
+        if (queue.tails.get(key) === next) {
+          queue.tails.delete(key);
+        }
+      });
     }
   }
 

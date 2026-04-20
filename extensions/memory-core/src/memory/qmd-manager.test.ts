@@ -3505,10 +3505,10 @@ describe("QmdMemoryManager", () => {
       await Promise.resolve();
 
       const closeSecond = second.manager.close();
-      await Promise.resolve();
+      await expect(closeSecond).resolves.toBeUndefined();
 
       releaseFirst.resolve();
-      await Promise.all([firstSync, secondSync, closeSecond]);
+      await Promise.all([firstSync, secondSync]);
 
       expect(exportSpy).toHaveBeenCalledTimes(1);
       const updateCalls = spawnMock.mock.calls
