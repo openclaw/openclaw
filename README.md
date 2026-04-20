@@ -106,6 +106,10 @@ None - all features are additive.
 .openclaw\workspace\openclaw\src\agents\tools\image-tool.ts
 
 ## Some Screenshots
+
+<img width="1446" height="953" alt="Rocky-Mountaineer-screenshot-small" src="https://github.com/user-attachments/assets/7f49f842-af5b-45fd-8fd3-30e6c79c2bb4" />
+
+<img width="1449" height="956" alt="Rocky-Mountaineer-screenshot" src="https://github.com/user-attachments/assets/f6ab3c5b-5d13-4ac8-81c5-a160cf589c2a" />
   
 <img width="1250" height="894" alt="embeded-video" src="https://github.com/user-attachments/assets/f0eba12d-4406-41a4-b374-6868e681a898" /><br>  
     
