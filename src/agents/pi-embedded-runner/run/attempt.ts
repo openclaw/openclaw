@@ -88,6 +88,7 @@ import {
 } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { wrapStreamFnWithSessionTracing } from "../../observability-session-headers.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
@@ -1226,6 +1227,11 @@ export async function runEmbeddedAttempt(
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
+      });
+      activeSession.agent.streamFn = wrapStreamFnWithSessionTracing({
+        streamFn: activeSession.agent.streamFn,
+        sessionKey: params.sessionKey,
+        diagnostics: params.config?.diagnostics,
       });
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,
