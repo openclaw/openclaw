@@ -25,7 +25,9 @@ export function resolveSessionTracingHeaders(params: {
   const sessionIdHeader = tracing.headers?.sessionId ?? DEFAULT_SESSION_ID_HEADER;
   const sessionNameHeader = tracing.headers?.sessionName ?? DEFAULT_SESSION_NAME_HEADER;
 
-  // x-session-id: unique per top-level request (runId)
+  // x-session-id: unique per top-level request (runId). Falls back to sessionKey
+  // when runId is absent, which may expose internal routing info to external
+  // observability platforms; enable sessionTracing only with trusted providers.
   headers[sessionIdHeader] = params.runId ?? sessionKey;
 
   // x-session-name: the session key for grouping related requests/subagents
