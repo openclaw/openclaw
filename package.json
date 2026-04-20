@@ -1507,14 +1507,12 @@
     "@aws-sdk/client-bedrock-runtime": "3.1032.0",
     "@aws-sdk/credential-provider-node": "3.972.32",
     "@aws/bedrock-token-generator": "^1.1.0",
-    "@buape/carbon": "0.16.0",
     "@clack/prompts": "^1.2.0",
     "@google/genai": "^1.50.1",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.6",
     "@lancedb/lancedb": "^0.27.2",
-    "@larksuiteoapi/node-sdk": "^1.60.0",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mariozechner/pi-agent-core": "0.67.68",
     "@mariozechner/pi-ai": "0.67.68",
@@ -1527,7 +1525,6 @@
     "@sinclair/typebox": "0.34.49",
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.1",
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
@@ -1606,7 +1603,6 @@
     }
   },
   "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "fake-indexeddb": "^6.2.5",
     "music-metadata": "^11.12.3"
