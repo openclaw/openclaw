@@ -38,11 +38,27 @@ completed. Your job is to synthesize — not summarize — what the fleet learne
 
 **Path:** `~/.openclaw/wiki/main/canon/<YYYY-MM-DD>.md`
 
+**Frontmatter is required** — the canon-slice publisher and lint read
+these fields. Emit the block verbatim, filling in the dates. `sourceIds`
+should list the dream-page IDs you consolidated (read them from each
+dream's frontmatter `id:` field).
+
 ```markdown
 ---
+pageType: canon
+id: canon.fleet-daily.<YYYY-MM-DD>
 title: "Canon, <YYYY-MM-DD>"
 kind: canon
 date: <YYYY-MM-DD>
+status: active
+createdAt: <ISO-8601-now>
+updatedAt: <ISO-8601-now>
+sourceIds:
+  - <dream-page-id-1>
+  - <dream-page-id-2>
+tags:
+  - fleet
+  - daily-canon
 ---
 
 ## The thread tonight
