@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Update/CLI: short-circuit `openclaw update` on package installs when the running version already matches the resolved channel target, so idempotent runs no longer invoke the global package manager for a no-op reinstall. Explicit `--tag` still reinstalls. (#69412) [AI-assisted]
 - fix(security): block MINIMAX_API_HOST workspace env injection and remove env-driven URL routing [AI-assisted]. (#67300) Thanks @pgondhi987.
 - Cron/delivery: treat explicit `delivery.mode: "none"` runs as not requested even if the runner reports `delivered: false`, so no-delivery cron jobs no longer persist false delivery failures or errors. (#69285) Thanks @matsuri1987.
 - Plugins/install: repair active and default-enabled bundled plugin runtime dependencies before import in packaged installs, so bundled Discord, WhatsApp, Slack, Telegram, and provider plugins work without putting their dependency trees in core.

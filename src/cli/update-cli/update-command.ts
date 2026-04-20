@@ -1043,6 +1043,46 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
+  // Short-circuit the install when the running version already matches the
+  // resolved target. Without this the command invokes the full package
+  // manager install (npm/pnpm/bun) every time, which can take tens of
+  // seconds even when nothing would change (#69412).
+  if (
+    updateInstallKind === "package" &&
+    !switchToPackage &&
+    !switchToGit &&
+    !explicitTag &&
+    canResolveRegistryVersionForPackageTarget(tag) &&
+    currentVersion !== null &&
+    targetVersion !== null &&
+    compareSemverStrings(currentVersion, targetVersion) === 0
+  ) {
+    if (opts.json) {
+      defaultRuntime.writeJson({
+        status: "skipped",
+        reason: "already-on-target",
+        mode: "package",
+        root,
+        installKind,
+        channel,
+        tag,
+        currentVersion,
+        targetVersion,
+      });
+    } else {
+      defaultRuntime.log(
+        theme.success(`Already on ${currentVersion} (${channel}). Nothing to update.`),
+      );
+      defaultRuntime.log(
+        theme.muted(
+          `Use \`openclaw update --tag <version>\` to reinstall or pin a specific release.`,
+        ),
+      );
+    }
+    defaultRuntime.exit(0);
+    return;
+  }
+
   const showProgress = !opts.json && process.stdout.isTTY;
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating OpenClaw..."));

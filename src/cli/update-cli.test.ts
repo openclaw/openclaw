@@ -720,6 +720,83 @@ describe("update-cli", () => {
     );
   });
 
+  it("skips package install when the running version already matches the target (#69412)", async () => {
+    const tempDir = createCaseDir("openclaw-update-idempotent");
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.4.20");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.20",
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["npm", "i", "-g"]),
+      expect.any(Object),
+    );
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.some((line) => line.includes("Already on 2026.4.20"))).toBe(true);
+  });
+
+  it("emits structured JSON when skipping an already-latest package install (#69412)", async () => {
+    const tempDir = createCaseDir("openclaw-update-idempotent-json");
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.4.20");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.20",
+    });
+
+    await updateCommand({ yes: true, json: true });
+
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["npm", "i", "-g"]),
+      expect.any(Object),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    const payloads = vi.mocked(defaultRuntime.writeJson).mock.calls.map((call) => call[0]);
+    const skipped = payloads.find(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        (entry as { status?: string }).status === "skipped" &&
+        (entry as { reason?: string }).reason === "already-on-target",
+    );
+    expect(skipped).toMatchObject({
+      status: "skipped",
+      reason: "already-on-target",
+      mode: "package",
+      currentVersion: "2026.4.20",
+      targetVersion: "2026.4.20",
+    });
+  });
+
+  it("still installs when --tag is passed even if versions match (#69412)", async () => {
+    const tempDir = createCaseDir("openclaw-update-idempotent-explicit-tag");
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.4.20");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.20",
+    });
+    vi.mocked(fetchNpmTagVersion).mockResolvedValue({
+      version: "2026.4.20",
+      tag: "latest",
+    });
+
+    await updateCommand({ yes: true, tag: "2026.4.20" });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@2026.4.20", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
   it("blocks package updates when the target requires a newer Node runtime", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
