@@ -114,3 +114,12 @@ Notes
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
 - Confirm before sending mail or creating events.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.
+### Tasks
+
+- Tasks list tasklists: `gog tasks lists list --json`
+- Tasks list: `gog tasks list <tasklistId> --json`
+- Tasks add: `gog tasks add <tasklistId> --title "Title" --notes "Description" --due 2026-04-26`
+- Tasks update: `gog tasks update <tasklistId> <taskId> --title "New title" --status completed`
+- Tasks done: `gog tasks done <tasklistId> <taskId>`
+- Tasks undo: `gog tasks undo <tasklistId> <taskId>`
+- Tasks delete: `gog tasks delete <tasklistId> <taskId>`
