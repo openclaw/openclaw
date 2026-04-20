@@ -22,8 +22,9 @@ import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
   resolveAuthHintKind,
+  type PairingHint,
+  resolvePairingHint,
   shouldShowInsecureContextHint,
-  shouldShowPairingHint,
 } from "./overview-hints.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
 
@@ -63,6 +64,33 @@ export type OverviewProps = {
   onRefreshLogs: () => void;
 };
 
+const PAIRING_HINT_COPY: Record<
+  PairingHint["kind"],
+  {
+    title: string;
+    summary: string | null;
+  }
+> = {
+  "pairing-required": {
+    title: "",
+    summary: null,
+  },
+  "scope-upgrade-pending": {
+    title: "Scope upgrade pending approval.",
+    summary:
+      "This device is already paired, but the requested wider scope is waiting for approval.",
+  },
+  "role-upgrade-pending": {
+    title: "Role upgrade pending approval.",
+    summary:
+      "This device is already paired, but the requested role change is waiting for approval.",
+  },
+  "metadata-upgrade-pending": {
+    title: "Device metadata change pending approval.",
+    summary: "This device is already paired, but the metadata change is waiting for approval.",
+  },
+};
+
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
     | {
@@ -79,20 +107,22 @@ export function renderOverview(props: OverviewProps) {
   const isTrustedProxy = authMode === "trusted-proxy";
 
   const pairingHint = (() => {
-    if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
+    const pairingState = resolvePairingHint(props.connected, props.lastError, props.lastErrorCode);
+    if (!pairingState) {
       return null;
     }
+    const copy = PAIRING_HINT_COPY[pairingState.kind];
+    const title = copy.title || t("overview.pairing.hint");
+    const approveCommand = pairingState.requestId
+      ? `openclaw devices approve ${pairingState.requestId}`
+      : "openclaw devices approve --latest";
     return html`
       <div class="muted" style="margin-top: 8px">
-        ${t("overview.pairing.hint")}
+        ${title}
+        ${copy.summary ? html`<div style="margin-top: 6px">${copy.summary}</div>` : nothing}
         <div style="margin-top: 6px">
-          If the device was already paired, this usually means it asked for more access than you
-          previously approved. OpenClaw keeps the old approval and creates a new pending upgrade
-          request instead of widening scopes silently.
-        </div>
-        <div style="margin-top: 6px">
-          <span class="mono">openclaw devices list</span><br />
-          <span class="mono">openclaw devices approve &lt;requestId&gt;</span>
+          <span class="mono">${approveCommand}</span><br />
+          <span class="mono">openclaw devices list</span>
         </div>
         <div style="margin-top: 6px; font-size: 12px;">${t("overview.pairing.mobileHint")}</div>
         <div style="margin-top: 6px">

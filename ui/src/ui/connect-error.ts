@@ -1,6 +1,6 @@
 import {
   ConnectErrorDetailCodes,
-  readPairingConnectErrorDetails,
+  formatConnectPairingRequiredMessage,
 } from "../../../src/gateway/protocol/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "./gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
@@ -31,23 +31,8 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
       return "gateway auth failed";
     case ConnectErrorDetailCodes.AUTH_RATE_LIMITED:
       return "too many failed authentication attempts";
-    case ConnectErrorDetailCodes.PAIRING_REQUIRED: {
-      const pairing = readPairingConnectErrorDetails(error.details);
-      const approvedRoles = pairing?.approvedRoles?.join(", ") || "none";
-      const requestedRole = pairing?.requestedRole || "none";
-      const approvedScopes = pairing?.approvedScopes?.join(", ") || "none";
-      const requestedScopes = pairing?.requestedScopes?.join(", ") || "none";
-      switch (pairing?.reason) {
-        case "scope-upgrade":
-          return `device scope upgrade requires approval (approved: ${approvedScopes}; requested: ${requestedScopes})`;
-        case "role-upgrade":
-          return `device role upgrade requires approval (approved: ${approvedRoles}; requested: ${requestedRole})`;
-        case "metadata-upgrade":
-          return "device reconnect details changed and require approval";
-        default:
-          return "gateway pairing required";
-      }
-    }
+    case ConnectErrorDetailCodes.PAIRING_REQUIRED:
+      return formatConnectPairingRequiredMessage(error.details);
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
       return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:
