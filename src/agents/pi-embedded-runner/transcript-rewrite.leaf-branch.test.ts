@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import {
+  makeAgentAssistantMessage,
+  makeAgentToolResultMessage,
+  makeAgentUserMessage,
+} from "../test-helpers/agent-message-fixtures.js";
 import { rewriteTranscriptEntriesInSessionFile } from "./transcript-rewrite.js";
 
 type RawEntry = Record<string, unknown>;
@@ -309,5 +315,103 @@ describe("rewriteTranscriptEntriesInSessionFile — leaf-branch compaction", () 
       );
     }).length;
     expect(doneACount).toBe(1);
+  });
+
+  // Repo-semantic regression guard: the session DAG is allowed to carry
+  // unsummarized sibling branches from legitimate sm.branch() navigation.
+  // Rewrite-triggered cleanup must only remove entries that the rewrite
+  // itself just abandoned, not entries on parallel branches the user set up.
+  // See src/agents/pi-embedded-runner/session-truncation.test.ts
+  // "preserves unsummarized sibling branches during truncation".
+  test("preserves legitimate sibling branches created before the rewrite", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rewrite-sibling-test-"));
+    try {
+      const sm = SessionManager.create(dir, dir);
+      sm.appendMessage(
+        makeAgentUserMessage({ content: [{ type: "text", text: "hello" }], timestamp: 1 }),
+      );
+      sm.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "hi there" }], timestamp: 2 }),
+      );
+      const branchPoint = sm.getBranch();
+      const branchFromId = branchPoint[branchPoint.length - 1].id;
+      // Main branch: user turn then a tool result we will later truncate
+      sm.appendMessage(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "do task with tool" }],
+          timestamp: 3,
+        }),
+      );
+      const mainToolResultId = sm.appendMessage(
+        makeAgentToolResultMessage({
+          toolCallId: "call_X",
+          toolName: "read",
+          content: [{ type: "text", text: "Y".repeat(200000) }],
+          timestamp: 4,
+        }),
+      );
+      sm.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "main tail" }], timestamp: 5 }),
+      );
+      // Sibling branch: go back to the branch-point and explore an alternate path
+      sm.branch(branchFromId);
+      const siblingUserId = sm.appendMessage(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "alternative question" }],
+          timestamp: 6,
+        }),
+      );
+      const siblingAssistantId = sm.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "alternative answer" }],
+          timestamp: 7,
+        }),
+      );
+      // Return to main branch so the rewrite operates there
+      sm.branch(mainToolResultId);
+      sm.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "post-sibling main continuation" }],
+          timestamp: 8,
+        }),
+      );
+
+      const sessionFile = sm.getSessionFile() as string;
+
+      // Rewrite the main-branch tool result
+      const result = await rewriteTranscriptEntriesInSessionFile({
+        sessionFile,
+        request: {
+          replacements: [
+            {
+              entryId: mainToolResultId,
+              message: makeAgentToolResultMessage({
+                toolCallId: "call_X",
+                toolName: "read",
+                content: [{ type: "text", text: "[truncated main Y output]" }],
+                timestamp: 4,
+              }) as AgentMessage,
+            },
+          ],
+        },
+      });
+      expect(result.changed).toBe(true);
+
+      const smAfter = SessionManager.open(sessionFile);
+      const allEntries = smAfter.getEntries();
+
+      // The sibling branch entries must still be reachable in the full entry list.
+      const siblingUser = allEntries.find((e) => e.id === siblingUserId);
+      const siblingAssistant = allEntries.find((e) => e.id === siblingAssistantId);
+      expect(siblingUser, "legitimate sibling user turn must be preserved").toBeDefined();
+      expect(siblingAssistant, "legitimate sibling assistant turn must be preserved").toBeDefined();
+
+      // And the sibling content must still be in the raw file.
+      const raw = fs.readFileSync(sessionFile, "utf-8");
+      expect(raw).toContain("alternative question");
+      expect(raw).toContain("alternative answer");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

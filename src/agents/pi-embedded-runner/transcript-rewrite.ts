@@ -189,27 +189,43 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   };
 }
 
-type ActiveLeafBranchCompactionResult = {
+type RewriteArtifactCleanupResult = {
   removedEntries: number;
   bytesRemoved: number;
 };
 
 /**
- * After a rewrite, the session file still carries all pre-rewrite entries as
- * abandoned sibling branches of the new leaf (append-only semantics). Because
- * openclaw's transcript reader scans every line in the file, those abandoned
- * entries show up as duplicates in the replay — each successive rewrite piles
- * on another generation. This helper keeps only entries that are reachable
- * from the current leaf via the parentId chain, plus parentId-less roots
- * (session header / model_change), and atomically rewrites the file.
- *
- * Identity is based on the structural parentId chain, not textual content.
+ * Collect the ids of the entries on the currently active branch path. This
+ * is the set of "potentially abandonable" entries — anything not on this path
+ * (legitimate sibling branches from prior `sm.branch()` navigation, etc.) is
+ * never considered for removal.
  */
-function compactSessionFileToActiveLeafBranch(
+function collectActiveBranchEntryIds(sessionManager: SessionManagerLike): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of sessionManager.getBranch()) {
+    if (entry && typeof (entry as { id?: unknown }).id === "string") {
+      ids.add((entry as { id: string }).id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Remove ONLY those entry ids that we can prove were just abandoned by this
+ * rewrite (present in the pre-rewrite active branch, absent from the
+ * post-rewrite active branch). Legitimate sibling branches — alternate paths
+ * the user navigated to via `sm.branch(...)` before this rewrite ran — never
+ * appear in `getBranch()`, so their ids are never part of the abandoned set
+ * and their entries stay in the file.
+ *
+ * Matches the repo-wide invariant documented in session-truncation: rewrite /
+ * maintenance operations must preserve unsummarized sibling branches.
+ */
+function removeSpecificAbandonedEntriesFromSessionFile(
   sessionFile: string,
-  leafId: string | null | undefined,
-): ActiveLeafBranchCompactionResult {
-  if (!leafId) {
+  abandonedEntryIds: ReadonlySet<string>,
+): RewriteArtifactCleanupResult {
+  if (abandonedEntryIds.size === 0) {
     return { removedEntries: 0, bytesRemoved: 0 };
   }
   let content: string;
@@ -219,86 +235,35 @@ function compactSessionFileToActiveLeafBranch(
     return { removedEntries: 0, bytesRemoved: 0 };
   }
   const rawLines = content.split("\n");
-  type ParsedLine = {
-    raw: string;
-    id?: string;
-    parentId?: string | null;
-    type?: string;
-  };
-  const parsed: ParsedLine[] = [];
+  const kept: string[] = [];
+  let removed = 0;
   for (const raw of rawLines) {
     if (!raw.trim()) {
       continue;
     }
+    let shouldDrop = false;
     try {
-      const obj = JSON.parse(raw) as {
-        id?: unknown;
-        parentId?: unknown;
-        type?: unknown;
-      };
-      parsed.push({
-        raw,
-        id: typeof obj.id === "string" ? obj.id : undefined,
-        parentId:
-          typeof obj.parentId === "string"
-            ? obj.parentId
-            : obj.parentId === null
-              ? null
-              : undefined,
-        type: typeof obj.type === "string" ? obj.type : undefined,
-      });
+      const obj = JSON.parse(raw) as { id?: unknown };
+      if (typeof obj.id === "string" && abandonedEntryIds.has(obj.id)) {
+        shouldDrop = true;
+      }
     } catch {
-      // Malformed line: keep it verbatim so we don't lose data.
-      parsed.push({ raw });
+      // Malformed line: never drop — keep verbatim.
+      shouldDrop = false;
     }
-  }
-  if (parsed.length === 0) {
-    return { removedEntries: 0, bytesRemoved: 0 };
-  }
-  const byId = new Map<string, ParsedLine>();
-  for (const line of parsed) {
-    if (line.id) {
-      byId.set(line.id, line);
-    }
-  }
-  // Walk backward from the current leaf to the root; collect all reachable ids.
-  const keepIds = new Set<string>();
-  let cursor = byId.get(leafId);
-  while (cursor) {
-    if (!cursor.id || keepIds.has(cursor.id)) {
-      break;
-    }
-    keepIds.add(cursor.id);
-    cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
-  }
-  if (keepIds.size === 0) {
-    // Leaf not found in file — don't risk truncation.
-    return { removedEntries: 0, bytesRemoved: 0 };
-  }
-  const kept: ParsedLine[] = [];
-  for (const line of parsed) {
-    // Always keep: malformed lines (no parsed id), structural roots (parentId === null).
-    // Keep identified entries only if they're on the active leaf chain.
-    if (!line.id) {
-      kept.push(line);
+    if (shouldDrop) {
+      removed += 1;
       continue;
     }
-    if (line.parentId === null) {
-      kept.push(line);
-      continue;
-    }
-    if (keepIds.has(line.id)) {
-      kept.push(line);
-    }
+    kept.push(raw);
   }
-  const removed = parsed.length - kept.length;
   if (removed === 0) {
     return { removedEntries: 0, bytesRemoved: 0 };
   }
-  const newContent = `${kept.map((l) => l.raw).join("\n")}\n`;
+  const newContent = `${kept.join("\n")}\n`;
   const originalSize = Buffer.byteLength(content, "utf-8");
   const newSize = Buffer.byteLength(newContent, "utf-8");
-  const tmp = `${sessionFile}.leaf-branch-compact.tmp`;
+  const tmp = `${sessionFile}.rewrite-cleanup.tmp`;
   try {
     fs.writeFileSync(tmp, newContent, "utf-8");
     fs.renameSync(tmp, sessionFile);
@@ -309,7 +274,7 @@ function compactSessionFileToActiveLeafBranch(
       // Best-effort cleanup.
     }
     log.warn(
-      `[transcript-rewrite] leaf-branch compaction write failed: ${formatErrorMessage(err)}`,
+      `[transcript-rewrite] abandoned-entry cleanup write failed: ${formatErrorMessage(err)}`,
     );
     return { removedEntries: 0, bytesRemoved: 0 };
   }
@@ -332,20 +297,36 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
       sessionFile: params.sessionFile,
     });
     const sessionManager = SessionManager.open(params.sessionFile);
+    // Snapshot of the active-branch ids BEFORE the rewrite. Sibling branches
+    // that already exist as alternate paths are not on this branch and are
+    // therefore excluded from the abandoned set by construction.
+    const branchIdsBefore = collectActiveBranchEntryIds(sessionManager);
     const result = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
       replacements: params.request.replacements,
     });
     if (result.changed) {
-      const leafId =
-        typeof sessionManager.getLeafId === "function" ? sessionManager.getLeafId() : null;
-      const compactResult = compactSessionFileToActiveLeafBranch(params.sessionFile, leafId);
+      // Entries that were on the active branch before the rewrite but are no
+      // longer part of the post-rewrite active branch have been abandoned by
+      // this specific rewrite and are safe to drop from the file.
+      const branchIdsAfter = collectActiveBranchEntryIds(sessionManager);
+      const abandonedIds = new Set<string>();
+      for (const id of branchIdsBefore) {
+        if (!branchIdsAfter.has(id)) {
+          abandonedIds.add(id);
+        }
+      }
+      const cleanupResult = removeSpecificAbandonedEntriesFromSessionFile(
+        params.sessionFile,
+        abandonedIds,
+      );
       emitSessionTranscriptUpdate(params.sessionFile);
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
           `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
           `bytesFreed=${result.bytesFreed} ` +
-          `leafBranchCompaction=removed:${compactResult.removedEntries}/bytes:${compactResult.bytesRemoved} ` +
+          `abandonedArtifactsRemoved=${cleanupResult.removedEntries}/` +
+          `bytes:${cleanupResult.bytesRemoved} ` +
           `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
       );
     }
