@@ -6,7 +6,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
-export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
+export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.6";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 262144;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 262144;
 const MOONSHOT_DEFAULT_COST = {
@@ -17,6 +17,15 @@ const MOONSHOT_DEFAULT_COST = {
 };
 
 const MOONSHOT_MODEL_CATALOG = [
+  {
+    id: "kimi-k2.6",
+    name: "Kimi K2.6",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: MOONSHOT_DEFAULT_COST,
+    contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  },
   {
     id: "kimi-k2.5",
     name: "Kimi K2.5",
