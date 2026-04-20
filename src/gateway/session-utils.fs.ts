@@ -7,6 +7,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -113,7 +114,7 @@ function resolveSessionMessagesStoreContext(
   }
   const sessionsDir = path.dirname(storePath);
   try {
-    const store = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    const store = loadSessionStore(storePath);
     if (!store || typeof store !== "object" || Array.isArray(store)) {
       return { sessionsDir };
     }
