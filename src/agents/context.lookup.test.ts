@@ -24,6 +24,10 @@ vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
+vi.mock("./models-config.runtime.js", () => ({
+  ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
+}));
+
 vi.mock("./agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
 }));
@@ -223,12 +227,12 @@ describe("lookupContextTokens", () => {
         },
         {
           argv: ["node", "openclaw", "chat"],
-          expectedCalls: 0,
+          expectedCalls: 1,
           stdoutIsTTY: false,
         },
         {
           argv: ["node", "openclaw", "chat"],
-          expectedCalls: 0,
+          expectedCalls: 1,
           stdoutIsTTY: undefined,
         },
         {
@@ -245,7 +249,7 @@ describe("lookupContextTokens", () => {
         },
         {
           argv: ["node", "openclaw", "sessions"],
-          expectedCalls: 0,
+          expectedCalls: 1,
           stdoutIsTTY: true,
         },
         {
@@ -255,7 +259,7 @@ describe("lookupContextTokens", () => {
         },
         {
           argv: ["node", "openclaw", "sessions", "--json"],
-          expectedCalls: 0,
+          expectedCalls: 1,
           stdoutIsTTY: true,
         },
         {
@@ -265,8 +269,13 @@ describe("lookupContextTokens", () => {
         },
         {
           argv: ["node", "openclaw", "sessions", "cleanup", "--dry-run"],
-          expectedCalls: 0,
+          expectedCalls: 1,
           stdoutIsTTY: true,
+        },
+        {
+          argv: ["node", "openclaw", "sessions", "cleanup", "--dry-run"],
+          expectedCalls: 0,
+          stdoutIsTTY: false,
         },
         {
           argv: ["node", "scripts/test-built-plugin-singleton.mjs"],
@@ -275,12 +284,14 @@ describe("lookupContextTokens", () => {
       ]) {
         const loadConfigMock = vi.fn(() => ({ models: {} }));
         const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
+        contextModule.resetContextWindowCacheForTest();
         process.argv = scenario.argv;
         const restoreStdoutIsTTY = Object.prototype.hasOwnProperty.call(scenario, "stdoutIsTTY")
           ? setStdoutIsTTY(scenario.stdoutIsTTY)
           : null;
         try {
           await importFreshContextModule();
+          await flushAsyncWarmup();
         } finally {
           restoreStdoutIsTTY?.();
         }

@@ -140,7 +140,6 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "models",
   "plugins",
   "secrets",
-  "sessions",
   "status",
   "update",
   "webhooks",
@@ -161,11 +160,11 @@ function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boole
   if (!primary || SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary)) {
     return false;
   }
-  // Non-interactive CLI runs should avoid import-time warmup because bundled
-  // model discovery can leave active AWS SDK credential-provider FS/DNS work
-  // alive after the command has already written its output.
   const stdoutIsTTY = Reflect.get(process.stdout, "isTTY") as boolean | undefined;
-  if (stdoutIsTTY !== true) {
+  // Captured sessions commands can finish writing output while bundled model
+  // discovery still has active AWS SDK credential-provider FS/DNS work alive.
+  // Keep TTY sessions warmup so display paths can still benefit from discovery.
+  if (primary === "sessions" && stdoutIsTTY !== true) {
     return false;
   }
   return true;
