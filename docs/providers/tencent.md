@@ -2,17 +2,17 @@
 title: "Tencent Cloud (TokenHub + Token Plan)"
 summary: "Tencent Cloud TokenHub and Token Plan setup (separate keys)"
 read_when:
-  - You want to use Tencent Hy3 preview with OpenClaw
+  - You want to use Tencent Hy models with OpenClaw
   - You need the TokenHub API key or Token Plan (LKEAP) setup
 ---
 
 # Tencent Cloud (TokenHub + Token Plan)
 
-The Tencent Cloud provider gives access to Hy3 preview via two endpoints
+The Tencent Cloud provider gives access to Tencent Hy models via two endpoints
 with separate API keys:
 
-- **TokenHub** (`tencent-tokenhub`) — call Hy3 preview via Tencent TokenHub Gateway
-- **Token Plan** (`tencent-token-plan`) — call Hy3 preview via the LKEAP
+- **TokenHub** (`tencent-tokenhub`) — call Hy via Tencent TokenHub Gateway
+- **Token Plan** (`tencent-token-plan`) — call Hy via the LKEAP
   Token Plan endpoint
 
 Both providers use OpenAI-compatible APIs.
@@ -53,10 +53,10 @@ openclaw onboard --non-interactive \
 
 ## Providers and endpoints
 
-| Provider             | Endpoint                              | Use case                         |
-| -------------------- | ------------------------------------- | -------------------------------- |
-| `tencent-tokenhub`   | `tokenhub.tencentmaas.com/v1`         | Hy3 preview via Tencent TokenHub |
-| `tencent-token-plan` | `api.lkeap.cloud.tencent.com/plan/v3` | Hy3 preview via LKEAP Token Plan |
+| Provider             | Endpoint                              | Use case                |
+| -------------------- | ------------------------------------- | ----------------------- |
+| `tencent-tokenhub`   | `tokenhub.tencentmaas.com/v1`         | Hy via Tencent TokenHub |
+| `tencent-token-plan` | `api.lkeap.cloud.tencent.com/plan/v3` | Hy via LKEAP Token Plan |
 
 Each provider uses its own API key. Setup registers only the selected provider.
 

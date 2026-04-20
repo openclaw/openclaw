@@ -5,7 +5,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 export const TOKENHUB_BASE_URL = "https://tokenhub.tencentmaas.com/v1";
 export const TOKENHUB_PROVIDER_ID = "tencent-tokenhub";
 
-// Hy3 preview pricing ($ per 1M tokens)
+// Hy pricing ($ per 1M tokens)
 const HY_COST = {
   input: 0.23,
   output: 0.59,
