@@ -154,6 +154,38 @@ describe("cron store", () => {
     await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
   });
 
+  it("keeps state separate for custom store paths without a json suffix", async () => {
+    const store = await makeStorePath();
+    const storePath = store.storePath.replace(/\.json$/, "");
+    const statePath = `${storePath}-state.json`;
+    const first = makeStore("job-1", true);
+    const second: CronStoreFile = {
+      ...first,
+      jobs: first.jobs.map((job) => ({
+        ...job,
+        updatedAtMs: job.updatedAtMs + 60_000,
+        state: {
+          ...job.state,
+          nextRunAtMs: job.createdAtMs + 60_000,
+        },
+      })),
+    };
+
+    await saveCronStore(storePath, first);
+    await saveCronStore(storePath, second);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(Array.isArray(config.jobs)).toBe(true);
+    expect(config.jobs[0].id).toBe("job-1");
+    expect(config.jobs[0].state).toEqual({});
+
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+    expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
+
+    const loaded = await loadCronStore(storePath);
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
+  });
+
   it.skipIf(process.platform === "win32")(
     "writes store and backup files with secure permissions",
     async () => {

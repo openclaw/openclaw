@@ -33,7 +33,8 @@ openclaw cron runs --id <job-id>
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Jobs persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.

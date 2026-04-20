@@ -9,7 +9,6 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     deleteAfterRun?: boolean;
     createdAtMs: number;
     updatedAtMs: number;
-    configUpdatedAtMs?: number;
     schedule: TSchedule;
     sessionTarget: TSessionTarget;
     wakeMode: TWakeMode;

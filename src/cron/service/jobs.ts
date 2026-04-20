@@ -589,7 +589,6 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,
-    configUpdatedAtMs: now,
     schedule,
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
