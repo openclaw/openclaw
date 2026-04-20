@@ -70,8 +70,13 @@ export function normalizeReplyPayload(
       text = stripLeadingSilentToken(text, silentToken);
     }
     if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
-      text = stripSilentToken(text, silentToken);
-      if (!hasContent(text)) {
+      const stripped = stripSilentToken(text, silentToken);
+      const hadTrailingToken = stripped.length < text.length;
+      text = stripped;
+      // A trailing NO_REPLY means the model intended to suppress the entire
+      // turn — the preamble is internal reasoning, not user-facing content.
+      // Suppress the full message to prevent CoT/reasoning leaks. (#TBD)
+      if (!hasContent(text) || hadTrailingToken) {
         opts.onSkip?.("silent");
         return null;
       }
