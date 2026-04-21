@@ -157,6 +157,31 @@ describe("parseCliJson", () => {
       },
     });
   });
+
+  it("prefers non-hook session_ids over transient SessionStart hook ids even when the hook appears after init", () => {
+    // Guard against future Claude CLI changes that could interleave hook
+    // records with `init`/`result` (e.g. a post-turn hook). The conversation
+    // session_id from `init` must survive a later hook record with its own
+    // transient session_id, otherwise a subsequent `--resume` would target
+    // the unresumable hook id.
+    const result = parseCliJson(
+      [
+        '{"type":"system","subtype":"init","session_id":"real-session"}',
+        '{"type":"result","result":"hi"}',
+        '{"type":"system","subtype":"hook_started","hook_name":"SessionStart:resume","session_id":"transient-hook-id"}',
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toMatchObject({
+      text: "hi",
+      sessionId: "real-session",
+    });
+  });
 });
 
 describe("parseCliJsonl", () => {
@@ -395,5 +420,48 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+
+  it("carries the real session_id in streamed deltas even when a hook record arrives later", () => {
+    // Same defensive guard as parseCliJsonl: if a Claude CLI update ever
+    // emitted a `hook_started` record after `init`, the streaming parser
+    // must not overwrite the real session_id with the transient hook id.
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    // `stream_event` intentionally omits `session_id` — the delta must inherit
+    // it from the previously-seen `init`, not get clobbered by the interleaved
+    // hook record's transient id.
+    parser.push(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "real-session" }),
+        JSON.stringify({
+          type: "system",
+          subtype: "hook_started",
+          hook_name: "SessionStart:resume",
+          session_id: "transient-hook-id",
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "hi" },
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]).toMatchObject({ sessionId: "real-session" });
   });
 });
