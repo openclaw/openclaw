@@ -8,6 +8,7 @@ import {
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  readCronRunLogEntriesPage,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -234,6 +235,48 @@ describe("cron run log", () => {
         fallbackUsed: false,
         delivered: true,
       });
+    });
+  });
+
+  it("does not include raw delivery targets in run-log search", async () => {
+    await withRunLogDir("openclaw-cron-log-target-query-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          ts: 2,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          summary: "done",
+          delivery: {
+            intended: { channel: "last", to: null, source: "last" },
+            resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+            messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+          },
+        }) + "\n",
+        "utf-8",
+      );
+
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "telegram",
+          })
+        ).entries,
+      ).toHaveLength(1);
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "-100",
+          })
+        ).entries,
+      ).toEqual([]);
     });
   });
 

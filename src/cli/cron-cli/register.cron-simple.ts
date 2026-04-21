@@ -4,6 +4,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
+  coerceCronDeliveryPreviews,
   handleCronCliError,
   printCronJson,
   printCronShow,
@@ -95,7 +96,8 @@ export function registerCronSimpleCommands(cron: Command) {
             printCronJson(job);
             return;
           }
-          await printCronShow(job, defaultRuntime);
+          const deliveryPreviews = coerceCronDeliveryPreviews(res);
+          printCronShow(job, defaultRuntime, { deliveryPreview: deliveryPreviews.get(job.id) });
         } catch (err) {
           handleCronCliError(err);
         }

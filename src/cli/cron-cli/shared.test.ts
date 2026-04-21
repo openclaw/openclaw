@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { getCronChannelOptions, parseCronToolsAllow, printCronList } from "./shared.js";
+import {
+  coerceCronDeliveryPreviews,
+  getCronChannelOptions,
+  parseCronToolsAllow,
+  printCronList,
+} from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -232,5 +237,27 @@ describe("parseCronToolsAllow", () => {
 
   it("returns undefined for empty input", () => {
     expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+  });
+});
+
+describe("coerceCronDeliveryPreviews", () => {
+  it("keeps gateway-provided preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123", detail: "explicit" },
+        },
+      }).get("job1"),
+    ).toEqual({ label: "announce -> telegram:123", detail: "explicit" });
+  });
+
+  it("drops malformed preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123" },
+        },
+      }).size,
+    ).toBe(0);
   });
 });
