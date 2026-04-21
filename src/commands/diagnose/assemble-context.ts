@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readConfigFileSnapshot } from "../../config/io.js";
+import JSON5 from "json5";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -25,14 +25,14 @@ interface AssembleOptions {
 
 const RE_ANSI = /\x1b\[[0-9;]*[mGKHF]/g;
 const RE_IP = /\b(?:\d{1,3}\.){3}\d{1,3}\b/;
-const SECRET_KEYS = new Set([
-  "token",
-  "apikey",
-  "api_key",
-  "secret",
-  "password",
-  "authorization",
-]);
+// Suffix-based matching catches botToken, appToken, webhookSecret, accessToken,
+// apiKey, etc. — not just exact key names.
+const SECRET_SUFFIXES = ["token", "secret", "password", "apikey", "api_key", "authorization"];
+
+function isSecretKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return SECRET_SUFFIXES.some((suffix) => lower === suffix || lower.endsWith(suffix));
+}
 
 function stripAnsi(text: string): string {
   return text.replace(RE_ANSI, "");
@@ -46,7 +46,7 @@ function redactSecrets(obj: unknown, depth = 0): unknown {
   if (typeof obj === "object" && obj !== null) {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      if (SECRET_KEYS.has(key.toLowerCase()) && typeof value === "string" && value.length > 0) {
+      if (isSecretKey(key) && typeof value === "string" && value.length > 0) {
         result[key] = "[REDACTED]";
       } else {
         result[key] = redactSecrets(value, depth + 1);
@@ -77,18 +77,50 @@ interface ParsedLogEntry {
   raw: string;
 }
 
-const RE_LOG_LINE =
+// OpenClaw gateway logs are JSON lines. Each line is a JSON object with:
+//   "0": subsystem info (JSON string like '{"subsystem":"gateway/ws"}')
+//   "1": message text
+//   "_meta": { "logLevelName": "INFO"|"WARN"|"ERROR"|"FATAL", "date": "..." }
+//   "time": local ISO timestamp
+// Fallback regex handles any non-JSON log lines (older versions, plain text).
+const RE_LOG_LINE_FALLBACK =
   /^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:[+-]\d{2}:\d{2}|Z)?)\s+\[(\w+)]\s+\[([^\]]*?)]\s+(.*)/;
 
 function parseLogLine(line: string): ParsedLogEntry | null {
-  const match = RE_LOG_LINE.exec(line.trim());
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  // Try JSON parse first (primary format).
+  if (trimmed.startsWith("{")) {
+    try {
+      const obj = JSON.parse(trimmed);
+      const meta = obj._meta ?? {};
+      const level = meta.logLevelName ?? "";
+      const timestamp = obj.time ?? meta.date ?? "";
+      let subsystem = "";
+      try {
+        const sub = JSON.parse(obj["0"] ?? "{}");
+        subsystem = sub.subsystem ?? "";
+      } catch {
+        subsystem = String(obj["0"] ?? "");
+      }
+      const message = String(obj["1"] ?? "");
+      if (!level && !message) return null;
+      return { timestamp, level, subsystem, message, raw: trimmed };
+    } catch {
+      // Fall through to regex.
+    }
+  }
+
+  // Fallback: plain-text log format.
+  const match = RE_LOG_LINE_FALLBACK.exec(trimmed);
   if (!match) return null;
   return {
     timestamp: match[1],
     level: match[2],
     subsystem: match[3],
     message: match[4],
-    raw: line.trim(),
+    raw: trimmed,
   };
 }
 
@@ -168,7 +200,7 @@ function assembleRedactedConfig(): string {
 
   try {
     const raw = fs.readFileSync(configPath, { encoding: "utf-8" });
-    const parsed = JSON.parse(raw);
+    const parsed = JSON5.parse(raw);
     const redacted = redactSecrets(parsed);
     return (
       "## OpenClaw Configuration (openclaw.json, secrets redacted)\n" +
