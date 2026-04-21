@@ -18,6 +18,8 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionKey?: string;
   lastActiveSessionKey?: string;
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
+  /** True when gatewayUrl was auto-derived from the page (not user-set). */
+  gatewayUrlAutoDerived?: boolean;
 };
 
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -90,23 +92,6 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
 
 function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
-}
-
-/**
- * Detects a stale gatewayUrl from a different reverse-proxy path on the same host.
- * When multiple OpenClaw instances sit behind one nginx (e.g. /a, /b, /c), the
- * legacy localStorage key can carry a gatewayUrl from a sibling path.  If the
- * cached URL shares the same host but differs in pathname, it should not be
- * reused — the browser is now talking to a different backend instance.
- */
-function isStaleGatewayUrl(cachedUrl: string, currentUrl: string): boolean {
-  try {
-    const cached = new URL(cachedUrl);
-    const current = new URL(currentUrl);
-    return cached.host === current.host && cached.pathname !== current.pathname;
-  } catch {
-    return false;
-  }
 }
 
 function normalizeGatewayTokenScope(gatewayUrl: string): string {
@@ -226,8 +211,14 @@ export function loadSettings(): UiSettings {
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
+    // When the persisted URL was auto-derived (not user-set), treat it as a
+    // stale default from another page context rather than a deliberate override.
+    // This fixes nginx reverse-proxy multi-instance setups where /a, /b, /c
+    // each route to a different backend but share one legacy localStorage key.
+    // A missing flag (pre-existing data) is treated as non-auto-derived to
+    // preserve valid manual overrides like wss://host/ws on UI path /openclaw.
     const gatewayUrl =
-      parsedGatewayUrl === pageDerivedUrl || isStaleGatewayUrl(parsedGatewayUrl, pageDerivedUrl)
+      parsedGatewayUrl === pageDerivedUrl || parsed.gatewayUrlAutoDerived === true
         ? defaultUrl
         : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
@@ -325,6 +316,7 @@ function persistSettings(next: UiSettings) {
   );
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
+    gatewayUrlAutoDerived: next.gatewayUrl === deriveDefaultGatewayUrl().pageUrl,
     theme: next.theme,
     themeMode: next.themeMode,
     chatFocusMode: next.chatFocusMode,
