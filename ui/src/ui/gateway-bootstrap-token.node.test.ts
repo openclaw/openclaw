@@ -36,6 +36,16 @@ describe("resolveLoopbackGatewayBootstrapToken", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("does not treat hostnames with a 127. prefix as loopback", () => {
+    expect(
+      resolveLoopbackGatewayBootstrapToken({
+        pageUrl: "http://127.0.0.1:18789/",
+        gatewayUrl: "ws://127.evil.com:18789",
+        bootstrapGatewayToken: "bootstrap-token",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolvePreferredGatewayAccessToken", () => {
