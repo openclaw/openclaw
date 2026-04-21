@@ -15,6 +15,7 @@ import {
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { readClaudeCliCredentialsCached, writeClaudeCliCredentials } from "../cli-credentials.js";
 import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -22,7 +23,7 @@ import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "./store.js";
+import { loadAuthProfileStoreForSecretsRuntime, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export {
@@ -133,6 +134,65 @@ type ResolveApiKeyForProfileParams = {
   profileId: string;
   agentDir?: string;
 };
+
+function hasRefreshedAnthropicCredential(
+  previous: OAuthCredential,
+  next: OAuthCredential,
+): boolean {
+  return (
+    previous.access !== next.access ||
+    previous.refresh !== next.refresh ||
+    previous.expires !== next.expires
+  );
+}
+
+function isClaudeCliCredentialFresher(
+  existing: OAuthCredential,
+  cli: OAuthCredential,
+  now: number = Date.now(),
+): boolean {
+  if (cli.type !== "oauth" || cli.provider !== "anthropic") {
+    return false;
+  }
+  if (!Number.isFinite(cli.expires) || cli.expires <= now) {
+    return false;
+  }
+  if (!Number.isFinite(existing.expires)) {
+    return true;
+  }
+  return cli.expires > existing.expires;
+}
+
+function adoptFresherClaudeCliCredential(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  credential: OAuthCredential;
+  agentDir?: string;
+}): OAuthCredential | null {
+  const cli = readClaudeCliCredentialsCached();
+  if (!cli || cli.type !== "oauth" || cli.provider !== "anthropic") {
+    return null;
+  }
+  if (!isClaudeCliCredentialFresher(params.credential, cli)) {
+    return null;
+  }
+  const adopted: OAuthCredential = {
+    ...params.credential,
+    access: cli.access,
+    refresh: cli.refresh,
+    expires: cli.expires,
+  };
+  params.store.profiles[params.profileId] = adopted;
+  try {
+    saveAuthProfileStore(params.store, params.agentDir);
+  } catch (err) {
+    log.debug("failed to persist adopted claude cli anthropic oauth", {
+      profileId: params.profileId,
+      error: formatErrorMessage(err),
+    });
+  }
+  return adopted;
+}
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
@@ -333,6 +393,26 @@ export async function resolveApiKeyForProfile(
     return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
   }
 
+  // Anthropic recovery (P-20260324 bidirectional CLI sync):
+  // Before attempting OAuth refresh, check if Claude CLI has fresher
+  // credentials in the Keychain/file and adopt them. This is the cheapest
+  // recovery path: zero network calls, no refresh-token consumption.
+  if (cred.provider === "anthropic") {
+    const adopted = adoptFresherClaudeCliCredential({
+      store,
+      profileId,
+      credential: cred,
+      agentDir: params.agentDir,
+    });
+    if (adopted) {
+      return buildApiKeyProfileResult({
+        apiKey: adopted.access,
+        provider: adopted.provider,
+        email: adopted.email ?? cred.email,
+      });
+    }
+  }
+
   try {
     const resolved = await oauthManager.resolveOAuthAccess({
       store,
@@ -343,6 +423,27 @@ export async function resolveApiKeyForProfile(
     });
     if (!resolved) {
       return null;
+    }
+    // Anthropic recovery (P-20260324): after a successful gateway-side
+    // refresh, mirror the new credentials back to the Claude CLI so both
+    // sides stay in lockstep.
+    if (
+      resolved.credential.provider === "anthropic" &&
+      resolved.credential.type === "oauth" &&
+      hasRefreshedAnthropicCredential(cred, resolved.credential)
+    ) {
+      try {
+        writeClaudeCliCredentials({
+          access: resolved.credential.access,
+          refresh: resolved.credential.refresh,
+          expires: resolved.credential.expires,
+        });
+      } catch (err) {
+        log.debug("failed to mirror refreshed anthropic oauth to claude cli", {
+          profileId,
+          error: formatErrorMessage(err),
+        });
+      }
     }
     return buildApiKeyProfileResult({
       apiKey: resolved.apiKey,

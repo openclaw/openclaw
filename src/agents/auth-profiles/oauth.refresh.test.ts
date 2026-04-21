@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   }),
   ensureAuthStoreFile: vi.fn(),
   resolveAuthStorePath: vi.fn(() => "/tmp/auth-profiles.json"),
+  resolveOAuthRefreshLockPath: vi.fn(() => "/tmp/auth-profiles.refresh.lock"),
   ensureAuthProfileStore: vi.fn(),
+  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   saveAuthProfileStore: vi.fn(),
   suggestOAuthProfileIdForLegacyDefault: vi.fn(() => null),
   formatAuthDoctorHint: vi.fn(() => ""),
@@ -40,10 +42,12 @@ vi.mock("../../infra/file-lock.js", () => ({
 vi.mock("./paths.js", () => ({
   ensureAuthStoreFile: mocks.ensureAuthStoreFile,
   resolveAuthStorePath: mocks.resolveAuthStorePath,
+  resolveOAuthRefreshLockPath: mocks.resolveOAuthRefreshLockPath,
 }));
 
 vi.mock("./store.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
   saveAuthProfileStore: mocks.saveAuthProfileStore,
 }));
 
@@ -89,6 +93,10 @@ describe("resolveApiKeyForProfile Anthropic recovery", () => {
     mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
     mocks.writeClaudeCliCredentials.mockReturnValue(true);
     mocks.getOAuthApiKey.mockResolvedValue(null);
+    mocks.loadAuthProfileStoreForSecretsRuntime.mockImplementation(() => ({
+      version: 1,
+      profiles: {},
+    }));
     mocks.loadProviderRuntime.refreshProviderOAuthCredentialWithPlugin.mockResolvedValue(null);
     mocks.loadProviderRuntime.formatProviderAuthProfileApiKeyWithPlugin.mockReturnValue(undefined);
   });
@@ -129,6 +137,7 @@ describe("resolveApiKeyForProfile Anthropic recovery", () => {
     const store = makeExpiredAnthropicStore();
     const refreshedExpires = Date.now() + 2 * 60 * 60 * 1000;
     mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.loadAuthProfileStoreForSecretsRuntime.mockImplementation(() => store);
     mocks.getOAuthApiKey.mockResolvedValue({
       apiKey: "fresh-access",
       newCredentials: {

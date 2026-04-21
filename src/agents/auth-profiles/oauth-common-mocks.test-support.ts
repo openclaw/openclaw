@@ -17,6 +17,8 @@ vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
+  writeClaudeCliCredentials: () => true,
+  writeCodexCliCredentials: () => true,
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({

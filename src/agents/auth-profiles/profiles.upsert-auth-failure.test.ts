@@ -3,12 +3,14 @@ import type { AuthProfileStore } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
+  ensureAuthProfileStoreForLocalUpdate: vi.fn(),
   saveAuthProfileStore: vi.fn(),
   updateAuthProfileStoreWithLock: vi.fn(),
 }));
 
 vi.mock("./store.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreForLocalUpdate: mocks.ensureAuthProfileStoreForLocalUpdate,
   saveAuthProfileStore: mocks.saveAuthProfileStore,
   updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
 }));
@@ -40,7 +42,7 @@ describe("upsertAuthProfile", () => {
 
   it("clears stale auth failure state when fresh credentials are written", () => {
     const store = makeStore();
-    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.ensureAuthProfileStoreForLocalUpdate.mockReturnValue(store);
 
     upsertAuthProfile({
       profileId: "anthropic:default",
