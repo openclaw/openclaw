@@ -26,6 +26,38 @@ function looksLikeEnvelopeHeader(header: string): boolean {
   return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
 }
 
+export function extractEnvelopeSender(text: string): string | null {
+  const match = text.match(ENVELOPE_PREFIX);
+  if (!match) {
+    return null;
+  }
+  const header = match[1] ?? "";
+  if (!looksLikeEnvelopeHeader(header)) {
+    return null;
+  }
+  // Header format: "Channel sender time" - extract sender (second part)
+  const parts = header.split(" ");
+  if (parts.length < 2) {
+    return null;
+  }
+  // Remove channel prefix and combine rest as sender
+  const channel = parts[0];
+  if (!ENVELOPE_CHANNELS.includes(channel as (typeof ENVELOPE_CHANNELS)[number])) {
+    return null;
+  }
+  // Sender is everything after channel up to (but not including) timestamp
+  const senderParts = parts.slice(1);
+  // Remove last part if it looks like a timestamp
+  const lastPart = senderParts[senderParts.length - 1];
+  if (
+    /\d{4}-\d{2}-\nd{2}T|\d{4}-\nd{2}-
+d{2} \d{2}:/.test(lastPart)
+  ) {
+    senderParts.pop();
+  }
+  return senderParts.join(" ") || null;
+}
+
 export function stripEnvelope(text: string): string {
   const match = text.match(ENVELOPE_PREFIX);
   if (!match) {

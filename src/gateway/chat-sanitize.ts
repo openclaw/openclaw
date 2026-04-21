@@ -1,8 +1,5 @@
-import {
-  extractInboundSenderLabel,
-  stripInboundMetadata,
-} from "../auto-reply/reply/strip-inbound-meta.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { extractInboundSenderLabel, stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { extractEnvelopeSender, stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export { stripEnvelope };
@@ -12,7 +9,9 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
     return entry.senderLabel.trim();
   }
   if (typeof entry.content === "string") {
-    return extractInboundSenderLabel(entry.content);
+    return (
+      extractInboundSenderLabel(entry.content) || extractEnvelopeSender(entry.content)
+    );
   }
   if (Array.isArray(entry.content)) {
     for (const item of entry.content) {
@@ -23,14 +22,17 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
       if (typeof text !== "string") {
         continue;
       }
-      const senderLabel = extractInboundSenderLabel(text);
+      const senderLabel =
+        extractInboundSenderLabel(text) || extractEnvelopeSender(text);
       if (senderLabel) {
         return senderLabel;
       }
     }
   }
   if (typeof entry.text === "string") {
-    return extractInboundSenderLabel(entry.text);
+    return (
+      extractInboundSenderLabel(entry.text) || extractEnvelopeSender(entry.text)
+    );
   }
   return null;
 }
