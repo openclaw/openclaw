@@ -350,6 +350,127 @@ struct MacNodeRuntimeTests {
         #expect(response.error?.message == "UNAVAILABLE: screen snapshot failed")
     }
 
+    @Test func `handle invoke screen snapshot reports invalid screen index as INVALID_REQUEST`() async throws {
+        // Out-of-range `screenIndex` is a caller input mistake caught by
+        // `ScreenSnapshotService` before any capture attempt; this test locks
+        // in that it surfaces as INVALID_REQUEST so callers get actionable
+        // feedback instead of the generic capture-failure UNAVAILABLE.
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                _ = maxWidth
+                _ = quality
+                _ = format
+                throw ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(screenIndex ?? -1)
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus { .authorizedAlways }
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let runtime = MacNodeRuntime(makeMainActorServices: { await MainActor.run { FakeMainActorServices() } })
+        let params = MacNodeScreenSnapshotParams(screenIndex: 99)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-bad-index",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                paramsJSON: json))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message == "INVALID_REQUEST: invalid screen index")
+    }
+
+    @Test func `handle invoke screen snapshot reports no displays as INVALID_REQUEST`() async throws {
+        // `ScreenSnapshotService` throws `noDisplays` when no attached display
+        // is visible to ScreenCaptureKit; this is also a request-shape problem
+        // from the caller's perspective (there is nothing to snapshot on this
+        // node), so it should surface as INVALID_REQUEST rather than the
+        // sanitized UNAVAILABLE for true capture/encode internals.
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                _ = screenIndex
+                _ = maxWidth
+                _ = quality
+                _ = format
+                throw ScreenSnapshotService.ScreenSnapshotError.noDisplays
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus { .authorizedAlways }
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let runtime = MacNodeRuntime(makeMainActorServices: { await MainActor.run { FakeMainActorServices() } })
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-no-displays",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message == "INVALID_REQUEST: no displays available")
+    }
+
     @Test func `handle invoke screen snapshot rejects oversized payloads`() async throws {
         let payloadSize = 19_660_800
 

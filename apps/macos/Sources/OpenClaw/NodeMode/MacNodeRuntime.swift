@@ -393,6 +393,28 @@ actor MacNodeRuntime {
                 maxWidth: params.maxWidth,
                 quality: params.quality,
                 format: params.format)
+        } catch let error as ScreenSnapshotService.ScreenSnapshotError {
+            // Parameter-validation errors (bad screenIndex, no displays attached)
+            // are client-caused and should surface as INVALID_REQUEST so callers
+            // can correct their request; true capture/encode internals still
+            // collapse to the sanitized UNAVAILABLE response.
+            switch error {
+            case .invalidScreenIndex:
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: invalid screen index")
+            case .noDisplays:
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: no displays available")
+            case .captureFailed, .encodeFailed:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "UNAVAILABLE: screen snapshot failed")
+            }
         } catch {
             return Self.errorResponse(
                 req,
