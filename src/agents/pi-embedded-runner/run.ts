@@ -739,6 +739,12 @@ export async function runEmbeddedPiAgent(
           });
           return decision;
         };
+        const formatTransitionDecisionReason = (
+          decision: Awaited<ReturnType<typeof resolvePassTransitionDecision>>,
+        ): string => {
+          const reason = normalizeOptionalString(decision.reason);
+          return reason ? ` (reason: ${reason})` : "";
+        };
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         let lastPassCorrelationId = createEmbeddedRunLifecycleCorrelationId();
@@ -770,7 +776,7 @@ export async function runEmbeddedPiAgent(
             });
             if (retryLimitTransitionDecision.next === "halt") {
               throw new Error(
-                `Embedded run lifecycle seam halted retry_limit transition before ${retryLimitDecision.action}.`,
+                `Embedded run lifecycle seam halted retry_limit transition before ${retryLimitDecision.action}.${formatTransitionDecisionReason(retryLimitTransitionDecision)}`,
               );
             }
             return handleRetryLimitExhaustion({
@@ -1584,7 +1590,7 @@ export async function runEmbeddedPiAgent(
             });
             if (promptTransitionDecision.next === "halt") {
               throw new Error(
-                `Embedded run lifecycle seam halted prompt transition before ${promptFailoverDecision.action}.`,
+                `Embedded run lifecycle seam halted prompt transition before ${promptFailoverDecision.action}.${formatTransitionDecisionReason(promptTransitionDecision)}`,
               );
             }
             // Throw FailoverError for prompt-side failover reasons when fallbacks
@@ -1782,7 +1788,7 @@ export async function runEmbeddedPiAgent(
                   : assistantFailoverOutcome.action === "throw"
                     ? "halt"
                     : "noop"
-              }.`,
+              }.${formatTransitionDecisionReason(assistantTransitionDecision)}`,
             );
           }
           if (assistantFailoverOutcome.action === "retry") {
