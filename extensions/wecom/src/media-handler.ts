@@ -84,7 +84,21 @@ export async function downloadAndSaveImages(params: {
           `[wecom] Image downloaded: size=${imageBuffer.length}, contentType=${imageContentType}, filename=${originalFilename ?? "(none)"}`,
         );
       } catch (sdkError) {
-        // If SDK method fails, fall back to the legacy approach (with timeout protection)
+        // If the message is encrypted (per-message aeskey present), bail
+        // out instead of falling back: `fetchRemoteMedia` can't decrypt
+        // the WeCom ciphertext, so saving the raw bytes would produce a
+        // corrupted attachment exactly in the failure mode this fallback
+        // is meant to handle. The outer catch will log and skip this
+        // image.
+        if (imageAesKey) {
+          runtime.error?.(
+            `[wecom] SDK image download failed for encrypted media (aeskey present); ` +
+              `not falling back to raw fetch to avoid persisting ciphertext: ${String(sdkError)}`,
+          );
+          throw sdkError;
+        }
+
+        // Non-encrypted media: fall back to fetchRemoteMedia (with timeout protection)
         runtime.log?.(`[wecom] SDK download failed, fallback: ${String(sdkError)}`);
         const fetched = (await withTimeout(
           core.channel.media.fetchRemoteMedia({ url: imageUrl }),
@@ -166,7 +180,19 @@ export async function downloadAndSaveFiles(params: {
           `[wecom] File downloaded: size=${fileBuffer.length}, contentType=${fileContentType}, filename=${originalFilename ?? "(none)"}`,
         );
       } catch (sdkError) {
-        // If SDK method fails, fall back to fetchRemoteMedia (with timeout protection)
+        // Same guard as in downloadAndSaveImages: if the message is
+        // encrypted (per-message aeskey present), don't fall back to the
+        // plain fetch path — it can't decrypt WeCom ciphertext and would
+        // persist corrupted bytes. The outer catch will log and skip.
+        if (fileAesKey) {
+          runtime.error?.(
+            `[wecom] SDK file download failed for encrypted media (aeskey present); ` +
+              `not falling back to raw fetch to avoid persisting ciphertext: ${String(sdkError)}`,
+          );
+          throw sdkError;
+        }
+
+        // Non-encrypted media: fall back to fetchRemoteMedia (with timeout protection)
         runtime.log?.(`[wecom] SDK file download failed, fallback: ${String(sdkError)}`);
         const fetched = (await withTimeout(
           core.channel.media.fetchRemoteMedia({ url: fileUrl }),

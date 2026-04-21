@@ -1021,27 +1021,40 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
     // Listen for regular messages
     wsClient.on("message", async (frame: WsFrame) => {
       try {
-        const entry = await prepareWeComMessage({
-          frame,
-          account,
-          config,
-          runtime,
-          wsClient,
-        });
-        if (!entry) {
+        // Extract chat key synchronously from the raw frame so queue
+        // admission happens in receive-order — not after async parsing /
+        // policy checks / media downloads. Otherwise a lightweight later
+        // message for the same chat could finish `prepareWeComMessage`
+        // first and be enqueued ahead of an earlier media-heavy message,
+        // causing out-of-order turn processing.
+        const body = frame.body as MessageBody;
+        const chatId = body?.chatid || body?.from?.userid;
+        if (!chatId) {
+          runtime.log?.(`[${account.accountId}] Skipping message without chatId`);
           return;
         }
 
-        // Per-chat serialization: messages within the same (accountId, chatId)
-        // run serially so turn state isn't interleaved across concurrent
-        // messages. Different chats remain independent and are processed in
-        // parallel. The listener returns immediately after enqueueing; task
-        // errors are caught inside the task so the queue keeps draining.
+        // Per-chat serialization: messages within the same
+        // (accountId, chatId) run serially so turn state isn't interleaved
+        // across concurrent messages. Different chats remain independent
+        // and run in parallel. The listener returns immediately after
+        // enqueueing; task errors are caught inside the task so the queue
+        // keeps draining.
         const { status } = enqueueWeComChatTask({
-          accountId: entry.account.accountId,
-          chatId: entry.chatId,
+          accountId: account.accountId,
+          chatId,
           task: async () => {
             try {
+              const entry = await prepareWeComMessage({
+                frame,
+                account,
+                config,
+                runtime,
+                wsClient,
+              });
+              if (!entry) {
+                return;
+              }
               await processWeComMessageNow(entry);
             } catch (err) {
               runtime.error?.(`[${account.accountId}] Failed to process message: ${String(err)}`);
@@ -1051,7 +1064,7 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
 
         if (status === "queued") {
           runtime.log?.(
-            `[wecom] Chat task queued for chat=${entry.chatId} (previous task still running)`,
+            `[wecom] Chat task queued for chat=${chatId} (previous task still running)`,
           );
         }
       } catch (err) {
