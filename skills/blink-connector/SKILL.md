@@ -812,15 +812,20 @@ blink connector exec loom videos/VIDEO_ID GET
 
 ### Etsy
 
+Etsy's API does **not** accept `me` as a user_id placeholder — pass the numeric `user_id` / `shop_id` returned by `/users/me`. If `/users/me` returns `"Could not find a shop for User with user_id = ..."`, the account has no Etsy shop and shop-scoped endpoints will always fail until the user creates one on etsy.com.
+
 ```bash
-# Get user info
+# Get user info (returns user_id + shop_id for shop owners)
 blink connector exec etsy application/users/me GET
 
-# List shops
-blink connector exec etsy application/users/me/shops GET
+# Get shop info (use shop_id from /users/me)
+blink connector exec etsy application/shops/SHOP_ID GET
 
 # List shop listings
-blink connector exec etsy application/shops/SHOP_ID/listings GET '{"limit":"25"}'
+blink connector exec etsy application/shops/SHOP_ID/listings/active GET '{"limit":"25"}'
+
+# Search shops by name (no auth needed on top of the linked account)
+blink connector exec etsy application/shops GET '{"shop_name":"example","limit":"5"}'
 ```
 
 ### Composio Connectors
