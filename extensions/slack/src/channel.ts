@@ -28,7 +28,10 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -202,11 +205,31 @@ function buildSlackBaseSessionKey(params: {
   return buildOutboundBaseSessionKey({ ...params, channel: "slack" });
 }
 
+function parseSlackThreadSessionKey(sessionKey?: string | null): {
+  baseSessionKey?: string;
+  threadId?: string;
+} {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return {};
+  }
+  const marker = ":thread:";
+  const index = raw.toLowerCase().lastIndexOf(marker);
+  if (index === -1) {
+    return {};
+  }
+  return {
+    baseSessionKey: raw.slice(0, index),
+    threadId: normalizeOutboundThreadId(raw.slice(index + marker.length)),
+  };
+}
+
 async function resolveSlackOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   agentId: string;
   accountId?: string | null;
   target: string;
+  currentSessionKey?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
 }) {
@@ -239,7 +262,15 @@ async function resolveSlackOutboundSessionRoute(params: {
     accountId: params.accountId,
     peer,
   });
-  const threadId = normalizeOutboundThreadId(params.threadId ?? params.replyToId);
+  const currentSessionThread = parseSlackThreadSessionKey(params.currentSessionKey);
+  const recoveredThreadId =
+    normalizeOptionalLowercaseString(currentSessionThread.baseSessionKey) ===
+    normalizeOptionalLowercaseString(baseSessionKey)
+      ? currentSessionThread.threadId
+      : undefined;
+  const threadId = normalizeOutboundThreadId(
+    params.replyToId ?? params.threadId ?? recoveredThreadId,
+  );
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId,

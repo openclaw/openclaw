@@ -728,6 +728,211 @@ describe("gateway send mirroring", () => {
     });
   });
 
+  it("uses the derived thread session and derived thread delivery when route refines the provided base session", async () => {
+    mockDeliverySuccess("m-derived-thread");
+    const derivedThreadRoute = {
+      sessionKey: "agent:main:slack:channel:resolved:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:resolved",
+      peer: { kind: "channel" as const, id: "resolved" },
+      chatType: "channel" as const,
+      from: "slack:channel:resolved",
+      to: "channel:resolved",
+      threadId: "1710000000.9999",
+    };
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(derivedThreadRoute);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:resolved",
+      idempotencyKey: "idem-derived-thread",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining(derivedThreadRoute),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "main",
+          key: derivedThreadRoute.sessionKey,
+        }),
+        threadId: derivedThreadRoute.threadId,
+        mirror: expect.objectContaining({
+          sessionKey: derivedThreadRoute.sessionKey,
+          agentId: "main",
+        }),
+      }),
+    );
+  });
+
+  it("uses the derived thread session and derived thread delivery when no sessionKey is provided", async () => {
+    mockDeliverySuccess("m-derived-thread-no-session");
+    const derivedThreadRoute = {
+      sessionKey: "agent:main:slack:channel:resolved:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:resolved",
+      peer: { kind: "channel" as const, id: "resolved" },
+      chatType: "channel" as const,
+      from: "slack:channel:resolved",
+      to: "channel:resolved",
+      threadId: "1710000000.9999",
+    };
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(derivedThreadRoute);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      idempotencyKey: "idem-derived-thread-no-session",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining(derivedThreadRoute),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "main",
+          key: derivedThreadRoute.sessionKey,
+        }),
+        threadId: derivedThreadRoute.threadId,
+        mirror: expect.objectContaining({
+          sessionKey: derivedThreadRoute.sessionKey,
+          agentId: "main",
+        }),
+      }),
+    );
+  });
+
+  it("keeps the provided thread session but still delivers to the derived thread", async () => {
+    mockDeliverySuccess("m-thread-session");
+    const derivedThreadRoute = {
+      sessionKey: "agent:main:slack:channel:resolved:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:resolved",
+      peer: { kind: "channel" as const, id: "resolved" },
+      chatType: "channel" as const,
+      from: "slack:channel:resolved",
+      to: "channel:resolved",
+      threadId: "1710000000.9999",
+    };
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(derivedThreadRoute);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      sessionKey: derivedThreadRoute.sessionKey,
+      idempotencyKey: "idem-thread-session",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining(derivedThreadRoute),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "main",
+          key: derivedThreadRoute.sessionKey,
+        }),
+        threadId: derivedThreadRoute.threadId,
+        mirror: expect.objectContaining({
+          sessionKey: derivedThreadRoute.sessionKey,
+          agentId: "main",
+        }),
+      }),
+    );
+  });
+
+  it("keeps an unrelated provided session key and does not inherit the derived thread id", async () => {
+    mockDeliverySuccess("m-unrelated-session");
+    const providedSessionKey = "agent:main:matrix:channel:!dm:example.org";
+    const derivedThreadRoute = {
+      sessionKey: "agent:main:slack:channel:resolved:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:resolved",
+      peer: { kind: "channel" as const, id: "resolved" },
+      chatType: "channel" as const,
+      from: "slack:channel:resolved",
+      to: "channel:resolved",
+      threadId: "1710000000.9999",
+    };
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(derivedThreadRoute);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      sessionKey: providedSessionKey,
+      idempotencyKey: "idem-unrelated-session",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining(derivedThreadRoute),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "main",
+          key: providedSessionKey,
+        }),
+        threadId: null,
+        mirror: expect.objectContaining({
+          sessionKey: providedSessionKey,
+          agentId: "main",
+        }),
+      }),
+    );
+  });
+
+  it("prefers an explicit request threadId over any derived thread id", async () => {
+    mockDeliverySuccess("m-explicit-thread");
+    const derivedThreadRoute = {
+      sessionKey: "agent:main:slack:channel:resolved:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:resolved",
+      peer: { kind: "channel" as const, id: "resolved" },
+      chatType: "channel" as const,
+      from: "slack:channel:resolved",
+      to: "channel:resolved",
+      threadId: "1710000000.9999",
+    };
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(derivedThreadRoute);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      threadId: "1711111111.111111",
+      idempotencyKey: "idem-explicit-thread",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining(derivedThreadRoute),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "main",
+          key: derivedThreadRoute.sessionKey,
+        }),
+        threadId: "1711111111.111111",
+        mirror: expect.objectContaining({
+          sessionKey: derivedThreadRoute.sessionKey,
+          agentId: "main",
+        }),
+      }),
+    );
+  });
+
   it("falls back to the provided sessionKey when outbound route lookup returns null", async () => {
     mockDeliverySuccess("m-session-fallback");
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);

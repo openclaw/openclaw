@@ -260,6 +260,77 @@ function createGatewayInflightUnavailableFailure(params: {
   };
 }
 
+type GatewayDerivedRoute = {
+  sessionKey: string;
+  baseSessionKey: string;
+  threadId?: string | number;
+};
+
+function classifyDerivedThreadRelationship(params: {
+  providedSessionKey?: string;
+  derivedRoute?: GatewayDerivedRoute | null;
+}): "none" | "base_refinement" | "same_thread" {
+  const providedSessionKey = normalizeOptionalLowercaseString(params.providedSessionKey);
+  const derivedThreadId = normalizeOptionalString(params.derivedRoute?.threadId);
+  if (!providedSessionKey || !params.derivedRoute || !derivedThreadId) {
+    return "none";
+  }
+  const derivedSessionKey = normalizeOptionalLowercaseString(params.derivedRoute.sessionKey);
+  const derivedBaseSessionKey = normalizeOptionalLowercaseString(
+    params.derivedRoute.baseSessionKey,
+  );
+  if (derivedSessionKey && providedSessionKey === derivedSessionKey) {
+    return "same_thread";
+  }
+  if (
+    derivedBaseSessionKey &&
+    providedSessionKey === derivedBaseSessionKey &&
+    providedSessionKey !== derivedSessionKey
+  ) {
+    return "base_refinement";
+  }
+  return "none";
+}
+
+function resolveGatewayTranscriptSessionKey(params: {
+  providedSessionKey?: string;
+  derivedRoute?: GatewayDerivedRoute | null;
+}): string | undefined {
+  const providedSessionKey = normalizeOptionalLowercaseString(params.providedSessionKey);
+  const derivedSessionKey = normalizeOptionalLowercaseString(params.derivedRoute?.sessionKey);
+  if (!providedSessionKey) {
+    return derivedSessionKey;
+  }
+  return classifyDerivedThreadRelationship(params) === "base_refinement"
+    ? (derivedSessionKey ?? providedSessionKey)
+    : providedSessionKey;
+}
+
+function resolveGatewayDeliveryThreadId(params: {
+  explicitThreadId?: string;
+  providedSessionKey?: string;
+  derivedRoute?: GatewayDerivedRoute | null;
+}): string | null {
+  const explicitThreadId = normalizeOptionalString(params.explicitThreadId);
+  if (explicitThreadId) {
+    return explicitThreadId;
+  }
+  const derivedThreadId = normalizeOptionalString(params.derivedRoute?.threadId);
+  if (!derivedThreadId) {
+    return null;
+  }
+  if (!normalizeOptionalLowercaseString(params.providedSessionKey)) {
+    return derivedThreadId;
+  }
+  const relationship = classifyDerivedThreadRelationship({
+    providedSessionKey: params.providedSessionKey,
+    derivedRoute: params.derivedRoute,
+  });
+  return relationship === "base_refinement" || relationship === "same_thread"
+    ? derivedThreadId
+    : null;
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
   "message.action": async ({ params, respond, context, client }) => {
     const p = params;
@@ -486,24 +557,23 @@ export const sendHandlers: GatewayRequestHandlers = {
           resolvedTarget: idLikeTarget,
           threadId,
         });
-        const outboundRoute = derivedRoute
-          ? providedSessionKey
-            ? {
-                ...derivedRoute,
-                sessionKey: providedSessionKey,
-                baseSessionKey: providedSessionKey,
-              }
-            : derivedRoute
-          : null;
-        if (outboundRoute) {
+        if (derivedRoute) {
           await ensureOutboundSessionEntry({
             cfg,
             channel,
             accountId,
-            route: outboundRoute,
+            route: derivedRoute,
           });
         }
-        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+        const outboundSessionKey = resolveGatewayTranscriptSessionKey({
+          providedSessionKey,
+          derivedRoute,
+        });
+        const deliveryThreadId = resolveGatewayDeliveryThreadId({
+          explicitThreadId: threadId,
+          providedSessionKey,
+          derivedRoute,
+        });
         const outboundSession = buildOutboundSessionContext({
           cfg,
           agentId: effectiveAgentId,
@@ -517,7 +587,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           payloads: outboundPayloads,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
-          threadId: threadId ?? null,
+          threadId: deliveryThreadId,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: outboundSessionKey

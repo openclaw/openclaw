@@ -91,6 +91,14 @@ function requireSlackListPeers() {
   return listPeers;
 }
 
+function requireSlackResolveOutboundSessionRoute() {
+  const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+  if (!resolveRoute) {
+    throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+  }
+  return resolveRoute;
+}
+
 describe("slackPlugin actions", () => {
   it("prefers session lookup for announce target routing", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
@@ -390,6 +398,45 @@ describe("slackPlugin outbound", () => {
   it("advertises the 8000-character Slack default chunk limit", () => {
     expect(slackOutbound.textChunkLimit).toBe(8000);
     expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);
+  });
+
+  it("recovers thread route from currentSessionKey when no explicit thread target is provided", async () => {
+    const resolveRoute = requireSlackResolveOutboundSessionRoute();
+
+    const route = await resolveRoute({
+      cfg,
+      agentId: "main",
+      target: "channel:c123",
+      currentSessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
+      baseSessionKey: "agent:main:slack:channel:c123",
+      peer: { kind: "channel", id: "c123" },
+      chatType: "channel",
+      from: "slack:channel:c123",
+      to: "channel:c123",
+      threadId: "1712345678.123456",
+    });
+  });
+
+  it("prefers replyToId over threadId for outbound route derivation", async () => {
+    const resolveRoute = requireSlackResolveOutboundSessionRoute();
+
+    const route = await resolveRoute({
+      cfg,
+      agentId: "main",
+      target: "channel:c123",
+      replyToId: "1712000000.000001",
+      threadId: "1712345678.123456",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:channel:c123:thread:1712000000.000001",
+      baseSessionKey: "agent:main:slack:channel:c123",
+      threadId: "1712000000.000001",
+    });
   });
 
   it("uses threadId as threadTs fallback for sendText", async () => {
