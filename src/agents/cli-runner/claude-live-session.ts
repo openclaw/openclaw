@@ -744,7 +744,11 @@ function closeOldestIdleSession(): boolean {
 }
 
 function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext): void {
-  if (liveSessions.has(key) || liveSessions.size < CLAUDE_LIVE_MAX_SESSIONS) {
+  if (
+    liveSessions.has(key) ||
+    liveSessionCreates.has(key) ||
+    liveSessions.size + liveSessionCreates.size < CLAUDE_LIVE_MAX_SESSIONS
+  ) {
     return;
   }
   if (closeOldestIdleSession()) {

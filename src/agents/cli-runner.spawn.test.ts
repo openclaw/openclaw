@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
@@ -17,12 +18,16 @@ import {
 import {
   buildClaudeLiveArgs,
   resetClaudeLiveSessionsForTest,
+  runClaudeLiveSessionTurn,
 } from "./cli-runner/claude-live-session.js";
 import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+
+type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
+type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 
 beforeEach(() => {
   resetAgentEventsForTest();
@@ -36,6 +41,8 @@ function buildPreparedCliRunContext(params: {
   model: string;
   runId: string;
   prompt?: string;
+  sessionId?: string;
+  sessionKey?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
@@ -73,7 +80,8 @@ function buildPreparedCliRunContext(params: {
   const backend = { ...baseBackend, ...params.backend };
   return {
     params: {
-      sessionId: "s1",
+      sessionId: params.sessionId ?? "s1",
+      sessionKey: params.sessionKey,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir,
       config: params.config,
@@ -872,6 +880,87 @@ describe("runCliAgent spawn path", () => {
       expect.objectContaining({ text: "two" }),
     ]);
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
+  it("counts pending Claude live session creates against the session cap", async () => {
+    let releaseSpawn: (() => void) | undefined;
+    const spawnReady = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      const spawnIndex = supervisorSpawnMock.mock.calls.length;
+      await spawnReady;
+      const stdin = {
+        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+          input.onStdout?.(
+            [
+              JSON.stringify({
+                type: "system",
+                subtype: "init",
+                session_id: `live-cap-${spawnIndex}`,
+              }),
+              JSON.stringify({
+                type: "result",
+                session_id: `live-cap-${spawnIndex}`,
+                result: `ok-${spawnIndex}`,
+              }),
+            ].join("\n") + "\n",
+          );
+          cb?.();
+        }),
+        end: vi.fn(),
+      };
+      return {
+        runId: `live-run-${spawnIndex}`,
+        pid: 2300 + spawnIndex,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const backend = {
+      liveSession: "claude-stdio" as const,
+    };
+    const runs = Array.from({ length: 17 }, (_, index) =>
+      (() => {
+        const context = buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: `run-live-cap-${index}`,
+          prompt: `prompt ${index}`,
+          sessionId: `session-${index}`,
+          backend,
+        });
+        return runClaudeLiveSessionTurn({
+          context,
+          args: context.preparedBackend.backend.args ?? [],
+          env: {},
+          prompt: `prompt ${index}`,
+          noOutputTimeoutMs: 1_000,
+          getProcessSupervisor: () => ({
+            spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+              supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+            cancel: vi.fn(),
+            cancelScope: vi.fn(),
+            reconcileOrphans: vi.fn(),
+            getRecord: vi.fn(),
+          }),
+          onAssistantDelta: () => {},
+          cleanup: async () => {},
+        });
+      })(),
+    );
+
+    await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(16));
+    const rejectedRun = runs[16];
+    expect(rejectedRun).toBeDefined();
+    await expect(rejectedRun).rejects.toThrow("Too many Claude CLI live sessions are active.");
+    releaseSpawn?.();
+    await expect(Promise.all(runs.slice(0, 16))).resolves.toHaveLength(16);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(16);
   });
 
   it("preserves Claude resume args when building live session argv", () => {
