@@ -66,6 +66,7 @@ export async function runModelAwareAgent(
     abortSignal: params.abortSignal,
     trigger: params.trigger,
     messageChannel,
+    currentChannelId: params.currentChannelId,
     onAssistantTurn: (text) => {
       const visibleUpdate = visibleTextAccumulator.consume(text);
       if (!visibleUpdate) {

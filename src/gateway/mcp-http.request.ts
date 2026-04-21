@@ -10,6 +10,10 @@ export type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
   accountId: string | undefined;
+  /** Run ID for the current CLI agent run (used to correlate MCP sends back to the CLI runner). */
+  runId: string | undefined;
+  /** Origin channel ID of the session (e.g. Feishu chat_id). Used to detect self-replies. */
+  currentChannelId: string | undefined;
 };
 
 function resolveScopedSessionKey(
@@ -96,5 +100,7 @@ export function resolveMcpRequestContext(
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: getHeader(req, "x-openclaw-account-id")?.trim() || undefined,
+    runId: getHeader(req, "x-openclaw-run-id")?.trim() || undefined,
+    currentChannelId: getHeader(req, "x-openclaw-current-channel")?.trim() || undefined,
   };
 }

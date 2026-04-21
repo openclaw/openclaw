@@ -142,6 +142,8 @@ export type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
+  | "currentChannelId"
+  | "onReplyToCurrentChannel"
 >;
 
 export type ToolHandlerState = Pick<

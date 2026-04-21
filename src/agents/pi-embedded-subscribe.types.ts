@@ -39,6 +39,17 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
   internalEvents?: AgentInternalEvent[];
+  /**
+   * The channel id of the session origin (e.g. Feishu group chat id).
+   * Used to detect when a messaging tool send targets the current conversation.
+   */
+  currentChannelId?: string;
+  /**
+   * Called when a messaging tool successfully sends a message to the current
+   * session's channel.  Mirrors the onYield pattern — callers should abort the
+   * run to prevent the model from continuing after having already replied.
+   */
+  onReplyToCurrentChannel?: () => void;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

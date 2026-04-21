@@ -923,6 +923,13 @@ export async function runEmbeddedAttempt(
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
+      // Mirrors the sessions_yield abort pattern: when the model sends a message
+      // to the current session's channel via the messaging tool, abort the turn so
+      // the model does not continue after having already replied.
+      const onReplyToCurrentChannel = () => {
+        runAbortController.abort("agent_replied");
+        abortSessionForYield?.();
+      };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
@@ -1388,6 +1395,8 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           internalEvents: params.internalEvents,
+          currentChannelId: params.currentChannelId,
+          onReplyToCurrentChannel,
         }),
       );
 

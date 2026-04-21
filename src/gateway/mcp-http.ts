@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import { loadConfig } from "../config/config.js";
 import { logDebug, logWarn } from "../logger.js";
+import { recordCliRunSend } from "./cli-run-sends.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
@@ -44,6 +45,23 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           accountId: requestContext.accountId,
         });
 
+        // Build a callback to detect when the model sends a message to its
+        // own session channel, so the CLI runner can suppress output.text.
+        const { runId, currentChannelId } = requestContext;
+        const onMessageSend =
+          runId && currentChannelId
+            ? (rawTarget: string) => {
+                // Strip common channel-type prefixes before comparing so that
+                // "chat:oc_xxx" and "oc_xxx" both match the bare chat_id.
+                const stripped = rawTarget
+                  .replace(/^(?:chat:|group:|channel:|user:|dm:|open_id:)/i, "")
+                  .trim();
+                if (stripped === currentChannelId || rawTarget.trim() === currentChannelId) {
+                  recordCliRunSend(runId, currentChannelId);
+                }
+              }
+            : undefined;
+
         const messages = Array.isArray(parsed) ? parsed : [parsed];
         const responses: object[] = [];
         for (const message of messages) {
@@ -51,6 +69,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             message,
             tools: scopedTools.tools,
             toolSchema: scopedTools.toolSchema,
+            onMessageSend,
           });
           if (response !== null) {
             responses.push(response);

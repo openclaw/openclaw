@@ -40,6 +40,12 @@ export type RunCliAgentParams = {
   agentAccountId?: string;
   /** Resolved message channel (e.g. "feishu") for context-aware streaming. */
   messageChannel?: string;
+  /**
+   * Origin channel ID of the session (e.g. Feishu group chat_id).
+   * When the model sends a message to this channel via the MCP message tool,
+   * output.text is suppressed to prevent double-posting.
+   */
+  currentChannelId?: string;
   /** Skills snapshot for the current workspace/agent context. */
   skillsSnapshot?: SkillSnapshot;
   /** Disable built-in/MCP tools for this run. */

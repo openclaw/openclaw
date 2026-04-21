@@ -1,6 +1,7 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { drainCliRunSends } from "../gateway/cli-run-sends.js";
 import { executeWithOverflowProtection } from "./cli-runner/execute.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import type { RunCliAgentParams } from "./cli-runner/types.js";
@@ -8,6 +9,19 @@ import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { applySkillEnvOverridesFromSnapshot } from "./skills.js";
+
+/**
+ * Returns true if the model sent a message to the current session's channel
+ * via the MCP message tool during this run, meaning output.text should be
+ * suppressed to avoid double-posting.
+ */
+function didSendToCurrentChannelViaCliRun(params: RunCliAgentParams): boolean {
+  if (!params.currentChannelId) {
+    return false;
+  }
+  const sends = drainCliRunSends(params.runId);
+  return sends.includes(params.currentChannelId);
+}
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
   const context = await prepareCliRunContext(params);
@@ -31,7 +45,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         result.output.sessionId ??
         context.reusableCliSession.sessionId;
       const text = result.output.text?.trim();
-      const payloads = text ? [{ text }] : undefined;
+      // Suppress output.text when the model already sent a message to the
+      // current session's channel via the MCP message tool — prevents the
+      // double-message problem where both the tool send and output.text reach
+      // the channel.
+      const payloads = text && !didSendToCurrentChannelViaCliRun(params) ? [{ text }] : undefined;
 
       return {
         payloads,
@@ -94,7 +112,8 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
           const effectiveCliSessionId =
             result.cliSessionBinding?.sessionId ?? result.output.sessionId;
           const text = result.output.text?.trim();
-          const payloads = text ? [{ text }] : undefined;
+          const payloads =
+            text && !didSendToCurrentChannelViaCliRun(params) ? [{ text }] : undefined;
 
           return {
             payloads,

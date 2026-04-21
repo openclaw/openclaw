@@ -815,6 +815,15 @@ export async function handleToolExecutionEnd(
     if (!isToolError) {
       ctx.state.messagingToolSentTargets.push(pendingTarget);
       ctx.trimMessagingToolSent();
+      // Abort the turn when the model replies to the current session's channel —
+      // mirrors the sessions_yield / onYield abort pattern to prevent the model
+      // from continuing after it has already replied via the messaging tool.
+      if (ctx.params.onReplyToCurrentChannel && ctx.params.currentChannelId) {
+        const sentTo = pendingTarget.to ?? "";
+        if (sentTo && sentTo === ctx.params.currentChannelId) {
+          ctx.params.onReplyToCurrentChannel();
+        }
+      }
     }
   }
   const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];

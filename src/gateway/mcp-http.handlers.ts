@@ -34,6 +34,12 @@ export async function handleMcpJsonRpc(params: {
   message: JsonRpcRequest;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
+  /**
+   * Called after a successful `message` tool send/thread-reply with the raw
+   * target string from the tool arguments.  Used by the MCP loopback HTTP
+   * server to detect when a CLI agent replies to its own session channel.
+   */
+  onMessageSend?: (rawTarget: string) => void;
 }): Promise<object | null> {
   const { id, method, params: methodParams } = params.message;
 
@@ -71,6 +77,23 @@ export async function handleMcpJsonRpc(params: {
       try {
         // oxlint-disable-next-line typescript/no-explicit-any
         const result = await (tool as any).execute(toolCallId, toolArgs);
+        // Notify caller when the message tool performs a send/thread-reply so
+        // the CLI runner can detect self-replies and suppress output.text.
+        if (params.onMessageSend && toolName === "message") {
+          const action = typeof toolArgs.action === "string" ? toolArgs.action.trim() : "";
+          if (action === "send" || action === "thread-reply") {
+            const rawTarget = (
+              typeof toolArgs.target === "string"
+                ? toolArgs.target
+                : typeof toolArgs.to === "string"
+                  ? toolArgs.to
+                  : ""
+            ).trim();
+            if (rawTarget) {
+              params.onMessageSend(rawTarget);
+            }
+          }
+        }
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
           isError: false,
