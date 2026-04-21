@@ -1455,24 +1455,29 @@ async function deliverOutboundPayloadsCore(
       payloadSummary = buildPayloadSummary(effectivePayload);
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
 
-      // Append dropped-media user notice to text before sending.
+      // Build dropped-media user notice.
       // Note: this runs after normalizePayloadsForChannelDelivery, so the notice
       // bypasses channel-specific text normalization. This is acceptable because
       // the notice is a short generated string with displayNames already sanitized
       // by sanitizeMediaDisplayName (no raw user paths or data: payloads).
+      let droppedMediaNotice: string | undefined;
       if (payloadSummary.droppedMedia?.length) {
-        const notice = formatDroppedMediaNotice(payloadSummary.droppedMedia);
-        if (notice) {
-          const separator = payloadSummary.text.trim() ? "\n\n" : "";
-          effectivePayload = {
-            ...effectivePayload,
-            text: (effectivePayload.text ?? "") + separator + notice,
-          };
-          payloadSummary = {
-            ...payloadSummary,
-            text: payloadSummary.text + separator + notice,
-          };
-        }
+        droppedMediaNotice = formatDroppedMediaNotice(payloadSummary.droppedMedia);
+      }
+      // When there are surviving media items, the notice is sent as a separate
+      // text message after the media to avoid oversizing media captions (many
+      // channels enforce strict caption length limits).
+      if (droppedMediaNotice && payloadSummary.mediaUrls.length === 0) {
+        const separator = payloadSummary.text.trim() ? "\n\n" : "";
+        effectivePayload = {
+          ...effectivePayload,
+          text: (effectivePayload.text ?? "") + separator + droppedMediaNotice,
+        };
+        payloadSummary = {
+          ...payloadSummary,
+          text: payloadSummary.text + separator + droppedMediaNotice,
+        };
+        droppedMediaNotice = undefined;
       }
 
       params.onPayload?.(payloadSummary);
@@ -1627,6 +1632,11 @@ async function deliverOutboundPayloadsCore(
         results.push(delivery);
         firstMessageId ??= delivery.messageId;
         lastMessageId = delivery.messageId;
+      }
+      // Send dropped-media notice as a separate text message after media
+      // to avoid oversizing captions on channels with strict limits.
+      if (droppedMediaNotice) {
+        await sendTextChunks(droppedMediaNotice, sendOverrides);
       }
       await maybePinDeliveredMessage({
         handler,
