@@ -466,6 +466,39 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTop).toBe(container.scrollHeight);
   });
 
+  it("falls back to the document scroller when the chat thread cannot actually scroll", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+      overflowY: "hidden",
+    });
+    const originalScrollingElement = document.scrollingElement;
+    const scrollingElement = {
+      scrollHeight: 2500,
+      scrollTop: 123,
+      clientHeight: 500,
+    } as unknown as HTMLElement;
+    Object.defineProperty(document, "scrollingElement", {
+      configurable: true,
+      value: scrollingElement,
+    });
+    host.chatUserNearBottom = true;
+
+    try {
+      scheduleChatScroll(host);
+      await host.updateComplete;
+
+      expect(container.scrollTop).toBe(1600);
+      expect(scrollingElement.scrollTop).toBe(scrollingElement.scrollHeight);
+    } finally {
+      Object.defineProperty(document, "scrollingElement", {
+        configurable: true,
+        value: originalScrollingElement,
+      });
+    }
+  });
+
   it("does NOT scroll when user is scrolled up and no force", async () => {
     const { host, container } = createScrollHost({
       scrollHeight: 2000,

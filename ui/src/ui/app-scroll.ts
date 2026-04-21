@@ -49,6 +49,15 @@ function canConsumeVerticalWheelDelta(node: HTMLElement, deltaY: number) {
   return node.scrollTop + node.clientHeight < node.scrollHeight - 1;
 }
 
+function canActuallyScrollVertically(node: HTMLElement) {
+  const overflowY = getComputedStyle(node).overflowY;
+  const hasVerticalScrollRange = node.scrollHeight - node.clientHeight > 1;
+  return (
+    (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+    hasVerticalScrollRange
+  );
+}
+
 function hasNestedScrollableAncestor(
   target: EventTarget | null,
   container: HTMLElement,
@@ -68,15 +77,12 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
   cancelPendingChatScroll(host);
   const pickScrollTarget = () => {
     const container = host.querySelector(".chat-thread") as HTMLElement | null;
-    if (container) {
-      const overflowY = getComputedStyle(container).overflowY;
-      const canScroll =
-        overflowY === "auto" ||
-        overflowY === "scroll" ||
-        container.scrollHeight - container.clientHeight > 1;
-      if (canScroll) {
-        return container;
-      }
+    if (
+      container &&
+      (canActuallyScrollVertically(container) ||
+        container.scrollHeight - container.clientHeight <= 1)
+    ) {
+      return container;
     }
     return (document.scrollingElement ?? document.documentElement) as HTMLElement | null;
   };
@@ -216,7 +222,7 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
     host.chatUserNearBottom = true;
     host.chatFollowLocked = false;
     host.chatSmoothInterrupted = false;
-  } else if (!host.chatFollowLocked && nearBottom) {
+  } else if (!host.chatFollowLocked && nearBottom && !host.chatSmoothInterrupted) {
     // Fallback for hosts that start out-of-sync before the scroll-state invariant settles.
     host.chatUserNearBottom = true;
     host.chatSmoothInterrupted = false;
