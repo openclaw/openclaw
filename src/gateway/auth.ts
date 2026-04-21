@@ -533,7 +533,8 @@ async function authorizeGatewayConnectCore(
   if (auth.mode === "password") {
     return authorizePasswordAuth({
       authPassword: auth.password,
-      connectPassword: connectAuth?.password,
+      // Rabbit's clawdbot-gateway QR schema carries the shared secret in `token`.
+      connectPassword: connectAuth?.password ?? connectAuth?.token,
       limiter,
       ip,
       rateLimitScope,
