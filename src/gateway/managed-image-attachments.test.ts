@@ -555,6 +555,27 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(blocks[0]).toMatchObject({ type: "image" });
   });
 
+  it("rejects relative local image paths that resolve outside allowed roots", async () => {
+    const allowedWorkspaceDir = path.join(stateDir, "workspace");
+    const outsidePath = path.join(stateDir, "outside.png");
+    await fs.mkdir(allowedWorkspaceDir, { recursive: true });
+    await fs.writeFile(outsidePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(allowedWorkspaceDir);
+    try {
+      await expect(
+        createManagedOutgoingImageBlocks({
+          sessionKey: "agent:main:main",
+          mediaUrls: ["../outside.png"],
+          stateDir,
+          localRoots: [allowedWorkspaceDir],
+        }),
+      ).rejects.toThrow(/could not be prepared/i);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   it("drops downloaded non-image sources without leaving orphaned originals", async () => {
     const server = http.createServer((_req, res) => {
       res.statusCode = 200;

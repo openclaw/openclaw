@@ -89,7 +89,7 @@ export function resolveLocalMediaPath(source: string): string | undefined {
   if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
     return path.resolve(trimmed);
   }
-  return undefined;
+  return path.resolve(trimmed);
 }
 
 export function appendLocalMediaParentRoots(
