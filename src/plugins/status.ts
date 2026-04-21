@@ -26,7 +26,7 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
-import type { PluginHookName } from "./types.js";
+import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
@@ -134,6 +134,7 @@ type PluginReportParams = {
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
 };
 
 function buildPluginReport(
@@ -143,6 +144,7 @@ function buildPluginReport(
   const baseContext = resolvePluginRuntimeLoadContext({
     config: params?.config ?? loadConfig(),
     env: params?.env,
+    logger: params?.logger,
     workspaceDir: params?.workspaceDir,
   });
   const workspaceDir = baseContext.workspaceDir ?? resolveDefaultAgentWorkspaceDir();
@@ -230,18 +232,21 @@ export function buildPluginInspectReport(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
   const rawConfig = params.config ?? loadConfig();
   const config = resolvePluginRuntimeLoadContext({
     config: rawConfig,
     env: params.env,
+    logger: params.logger,
     workspaceDir: params.workspaceDir,
   }).config;
   const report =
     params.report ??
     buildPluginDiagnosticsReport({
       config: rawConfig,
+      logger: params.logger,
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
@@ -355,6 +360,7 @@ export function buildAllPluginInspectReports(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
   const rawConfig = params?.config ?? loadConfig();
@@ -362,6 +368,7 @@ export function buildAllPluginInspectReports(params?: {
     params?.report ??
     buildPluginDiagnosticsReport({
       config: rawConfig,
+      logger: params?.logger,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
     });
@@ -371,6 +378,7 @@ export function buildAllPluginInspectReports(params?: {
       buildPluginInspectReport({
         id: plugin.id,
         config: rawConfig,
+        logger: params?.logger,
         report,
       }),
     )
@@ -381,6 +389,7 @@ export function buildPluginCompatibilityWarnings(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): string[] {
   return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
@@ -390,6 +399,7 @@ export function buildPluginCompatibilityNotices(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
