@@ -6,10 +6,9 @@
  */
 
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import type { GatewayAccount } from "../types.js";
-import { MAX_UPLOAD_SIZE, formatFileSize, getImageMimeType } from "../utils/file-utils.js";
+import { MediaFileType, type GatewayAccount } from "../types.js";
+import { formatFileSize, getImageMimeType, getMaxUploadSize } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import {
   parseQQBotPayload,
@@ -21,6 +20,7 @@ import {
 import { normalizePath, resolveQQBotPayloadLocalFilePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
+import { openLocalFile } from "./media-source.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -273,23 +273,43 @@ function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): strin
   }
 }
 
-async function readStructuredPayloadLocalFile(filePath: string): Promise<Buffer> {
-  const openFlags =
-    fs.constants.O_RDONLY | ("O_NOFOLLOW" in fs.constants ? fs.constants.O_NOFOLLOW : 0);
-  const handle = await fs.promises.open(filePath, openFlags);
+/**
+ * Read a local file into memory for image base64 inlining.
+ *
+ * Non-image media (video / file) should pass `source: { localPath }` to
+ * `sender.sendMedia` directly — the sender pipeline handles chunked
+ * routing once this function validates the per-type ceiling.
+ */
+async function readLocalFileForInlineBase64(
+  filePath: string,
+  fileType: MediaFileType,
+): Promise<Buffer> {
+  const opened = await openLocalFile(filePath, { maxSize: getMaxUploadSize(fileType) });
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error("Path is not a regular file");
-    }
-    if (stat.size > MAX_UPLOAD_SIZE) {
-      throw new Error(
-        `File is too large (${formatFileSize(stat.size)}); QQ Bot API limit is ${formatFileSize(MAX_UPLOAD_SIZE)}`,
-      );
-    }
-    return handle.readFile();
+    return await opened.handle.readFile();
   } finally {
-    await handle.close();
+    await opened.close();
+  }
+}
+
+/**
+ * Enforce the per-{@link MediaFileType} upload ceiling before handing a
+ * local path to `sender.sendMedia`. The sender's internal `normalizeSource`
+ * uses an unlimited cap so it can accept whatever size the policy layer
+ * (outbound / reply-dispatcher) approves; the policy gate lives here.
+ *
+ * Returns the validated byte size. Throws via {@link openLocalFile} with a
+ * human-readable "File is too large" message when exceeding the ceiling.
+ */
+async function assertLocalFileWithinTypeLimit(
+  filePath: string,
+  fileType: MediaFileType,
+): Promise<number> {
+  const opened = await openLocalFile(filePath, { maxSize: getMaxUploadSize(fileType) });
+  try {
+    return opened.size;
+  } finally {
+    await opened.close();
   }
 }
 
@@ -314,7 +334,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
 
   if (payload.source === "file") {
     try {
-      const fileBuffer = await readStructuredPayloadLocalFile(imageUrl);
+      const fileBuffer = await readLocalFileForInlineBase64(imageUrl, MediaFileType.IMAGE);
       const base64Data = fileBuffer.toString("base64");
       const mimeType = getImageMimeType(imageUrl);
       if (!mimeType) {
@@ -489,15 +509,17 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
             msgId: target.messageId,
           });
         } else {
-          const fileBuffer = await readStructuredPayloadLocalFile(videoPath);
+          const size = await assertLocalFileWithinTypeLimit(videoPath, MediaFileType.VIDEO);
           log?.debug?.(
-            `Read local video (${formatFileSize(fileBuffer.length)}): ${describeMediaTargetForLog(videoPath, false)}`,
+            `Video local (${formatFileSize(size)}): ${describeMediaTargetForLog(videoPath, false)}`,
           );
+          // Hand the local path straight to the sender — `dispatchUpload`
+          // routes one-shot vs chunked based on size.
           await senderSendMedia({
             target: deliveryTarget,
             creds,
             kind: "video",
-            source: { buffer: fileBuffer },
+            source: { localPath: videoPath },
             msgId: target.messageId,
             localPathForMeta: videoPath,
           });
@@ -552,12 +574,17 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
             fileName,
           });
         } else {
-          const fileBuffer = await readStructuredPayloadLocalFile(filePath);
+          const size = await assertLocalFileWithinTypeLimit(filePath, MediaFileType.FILE);
+          log?.debug?.(
+            `File local (${formatFileSize(size)}): ${describeMediaTargetForLog(filePath, false)}`,
+          );
+          // Hand the local path straight to the sender — `dispatchUpload`
+          // routes one-shot vs chunked based on size.
           await senderSendMedia({
             target: deliveryTarget,
             creds,
             kind: "file",
-            source: { buffer: fileBuffer, fileName },
+            source: { localPath: filePath },
             msgId: target.messageId,
             fileName,
             localPathForMeta: filePath,

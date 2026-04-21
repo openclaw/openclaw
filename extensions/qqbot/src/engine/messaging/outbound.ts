@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { UPLOAD_PREPARE_FALLBACK_CODE } from "../api/retry.js";
+import { MediaFileType } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -67,7 +69,9 @@ import {
   downloadFile,
   fileExistsAsync,
   formatFileSize,
+  getFileTypeName,
   getImageMimeType,
+  getMaxUploadSize,
   readFileAsync,
 } from "../utils/file-utils.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
@@ -93,6 +97,7 @@ import {
   sendMedia as senderSendMedia,
   initApiConfig,
   accountToCreds,
+  UploadDailyLimitExceededError,
   type DeliveryTarget,
 } from "./sender.js";
 import { parseTarget as coreParseTarget } from "./target-parser.js";
@@ -143,12 +148,97 @@ export interface MediaOutboundContext extends OutboundContext {
   mimeType?: string;
 }
 
+/**
+ * Stable error codes for outbound media send results.
+ *
+ * Unlike the free-form `error` string (which is a diagnostic aid, not a
+ * contract), these codes are the programmatic signal that upper layers
+ * use to decide how to react — e.g. whether to surface the original
+ * `error` to the user verbatim or to fall back to a generic message.
+ */
+export const OUTBOUND_ERROR_CODES = {
+  /** File exceeds the per-type upload ceiling (see `MEDIA_FILE_TYPE_INFO`). */
+  FILE_TOO_LARGE: "file_too_large",
+  /** Hit the per-day cumulative upload quota (QQ biz code 40093002). */
+  UPLOAD_DAILY_LIMIT_EXCEEDED: "upload_daily_limit_exceeded",
+} as const;
+
+export type OutboundErrorCode = (typeof OUTBOUND_ERROR_CODES)[keyof typeof OUTBOUND_ERROR_CODES];
+
+/** Default user-facing message when the underlying `error` should not leak. */
+export const DEFAULT_MEDIA_SEND_ERROR = "发送失败，请稍后重试。";
+
 export interface OutboundResult {
   channel: string;
   messageId?: string;
   timestamp?: string | number;
   error?: string;
+  /**
+   * Stable error code that callers can key on without depending on the
+   * `error` text. Absent for success or uncategorized failures.
+   */
+  errorCode?: OutboundErrorCode;
+  /** QQ Open Platform business error code (e.g. `upload_prepare` 40093002). */
+  qqBizCode?: number;
   refIdx?: string;
+}
+
+/**
+ * Convert a media send result into a user-facing message.
+ *
+ * Only errors that were explicitly categorized as safe to display verbatim
+ * (via `errorCode` / `qqBizCode`) are forwarded; everything else collapses
+ * to {@link DEFAULT_MEDIA_SEND_ERROR} so raw server errors / stack traces
+ * never surface to end users.
+ */
+export function resolveUserFacingMediaError(
+  result: Pick<OutboundResult, "error" | "errorCode" | "qqBizCode">,
+): string {
+  if (!result.error) {
+    return DEFAULT_MEDIA_SEND_ERROR;
+  }
+  if (result.qqBizCode === UPLOAD_PREPARE_FALLBACK_CODE) {
+    return result.error;
+  }
+  switch (result.errorCode) {
+    case OUTBOUND_ERROR_CODES.FILE_TOO_LARGE:
+    case OUTBOUND_ERROR_CODES.UPLOAD_DAILY_LIMIT_EXCEEDED:
+      return result.error;
+    default:
+      return DEFAULT_MEDIA_SEND_ERROR;
+  }
+}
+
+/**
+ * Shape a {@link UploadDailyLimitExceededError} into an {@link OutboundResult}
+ * with the canonical user-facing text.
+ */
+function buildDailyLimitExceededResult(err: UploadDailyLimitExceededError): OutboundResult {
+  const dir = path.dirname(err.filePath);
+  const name = path.basename(err.filePath);
+  const size = formatFileSize(err.fileSize);
+  return {
+    channel: "qqbot",
+    error: `QQBot每天发送文件有累计2G的限制，如果着急的话，可以直接来我的主机copy下载，文件目录\`${dir}/${name}\`（${size}）`,
+    errorCode: OUTBOUND_ERROR_CODES.UPLOAD_DAILY_LIMIT_EXCEEDED,
+    qqBizCode: UPLOAD_PREPARE_FALLBACK_CODE,
+  };
+}
+
+/**
+ * Shape a "file exceeds per-type ceiling" result with the canonical
+ * user-facing text and the {@link OUTBOUND_ERROR_CODES.FILE_TOO_LARGE}
+ * error code.
+ */
+function buildFileTooLargeResult(fileType: MediaFileType, fileSize: number): OutboundResult {
+  const typeName = getFileTypeName(fileType);
+  const limit = getMaxUploadSize(fileType);
+  const limitMB = Math.round(limit / (1024 * 1024));
+  return {
+    channel: "qqbot",
+    error: `${typeName}过大（${formatFileSize(fileSize)}），超过了${limitMB}M，暂时不能通过QQ直接发给你。`,
+    errorCode: OUTBOUND_ERROR_CODES.FILE_TOO_LARGE,
+  };
 }
 
 /** Parse a qqbot target into a structured delivery target. */
@@ -419,9 +509,9 @@ async function sendPhotoFromLocal(
   if (!(await fileExistsAsync(mediaPath))) {
     return { channel: "qqbot", error: "Image not found" };
   }
-  const sizeCheck = checkFileSize(mediaPath);
+  const sizeCheck = checkFileSize(mediaPath, getMaxUploadSize(MediaFileType.IMAGE));
   if (!sizeCheck.ok) {
-    return { channel: "qqbot", error: sizeCheck.error! };
+    return buildFileTooLargeResult(MediaFileType.IMAGE, sizeCheck.size);
   }
   const mimeType = getImageMimeType(mediaPath);
   if (!mimeType) {
@@ -448,6 +538,10 @@ async function sendPhotoFromLocal(
     debugLog(`sendPhoto: channel does not support local images`);
     return { channel: "qqbot", error: "Channel does not support local/Base64 images" };
   } catch (err) {
+    if (err instanceof UploadDailyLimitExceededError) {
+      debugError(`sendPhoto (local): daily upload quota exceeded`);
+      return buildDailyLimitExceededResult(err);
+    }
     const msg = formatErrorMessage(err);
     debugError(`sendPhoto (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
@@ -523,6 +617,9 @@ async function sendVoiceFromLocal(
   if (fileSize === 0) {
     return { channel: "qqbot", error: "Voice generate failed" };
   }
+  if (fileSize > getMaxUploadSize(MediaFileType.VOICE)) {
+    return buildFileTooLargeResult(MediaFileType.VOICE, fileSize);
+  }
 
   // Re-check containment after the file appears to prevent symlink-race escapes.
   const safeMediaPath = resolveQQBotPayloadLocalFilePath(mediaPath);
@@ -573,6 +670,10 @@ async function sendVoiceFromLocal(
     debugLog(`sendVoice: voice not supported in channel`);
     return { channel: "qqbot", error: "Voice not supported in channel" };
   } catch (err) {
+    if (err instanceof UploadDailyLimitExceededError) {
+      debugError(`sendVoice (local): daily upload quota exceeded`);
+      return buildDailyLimitExceededResult(err);
+    }
     const msg = formatErrorMessage(err);
     debugError(`sendVoice (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
@@ -646,9 +747,9 @@ async function sendVideoFromLocal(
   if (!(await fileExistsAsync(mediaPath))) {
     return { channel: "qqbot", error: "Video not found" };
   }
-  const sizeCheck = checkFileSize(mediaPath);
+  const sizeCheck = checkFileSize(mediaPath, getMaxUploadSize(MediaFileType.VIDEO));
   if (!sizeCheck.ok) {
-    return { channel: "qqbot", error: sizeCheck.error! };
+    return buildFileTooLargeResult(MediaFileType.VIDEO, sizeCheck.size);
   }
   debugLog(`sendVideoMsg: local video (${formatFileSize(sizeCheck.size)})`);
 
@@ -669,6 +770,10 @@ async function sendVideoFromLocal(
     debugLog(`sendVideoMsg: video not supported in channel`);
     return { channel: "qqbot", error: "Video not supported in channel" };
   } catch (err) {
+    if (err instanceof UploadDailyLimitExceededError) {
+      debugError(`sendVideoMsg (local): daily upload quota exceeded`);
+      return buildDailyLimitExceededResult(err);
+    }
     const msg = formatErrorMessage(err);
     debugError(`sendVideoMsg (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
@@ -752,9 +857,9 @@ async function sendDocumentFromLocal(
   if (!(await fileExistsAsync(mediaPath))) {
     return { channel: "qqbot", error: "File not found" };
   }
-  const sizeCheck = checkFileSize(mediaPath);
+  const sizeCheck = checkFileSize(mediaPath, getMaxUploadSize(MediaFileType.FILE));
   if (!sizeCheck.ok) {
-    return { channel: "qqbot", error: sizeCheck.error! };
+    return buildFileTooLargeResult(MediaFileType.FILE, sizeCheck.size);
   }
   if (sizeCheck.size === 0) {
     return { channel: "qqbot", error: `File is empty: ${mediaPath}` };
@@ -779,6 +884,10 @@ async function sendDocumentFromLocal(
     debugLog(`sendDocument: file not supported in channel`);
     return { channel: "qqbot", error: "File not supported in channel" };
   } catch (err) {
+    if (err instanceof UploadDailyLimitExceededError) {
+      debugError(`sendDocument (local): daily upload quota exceeded`);
+      return buildDailyLimitExceededResult(err);
+    }
     const msg = formatErrorMessage(err);
     debugError(`sendDocument (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };

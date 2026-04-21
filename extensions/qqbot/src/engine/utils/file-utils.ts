@@ -3,14 +3,43 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
+import { MediaFileType } from "../types.js";
 import { formatErrorMessage } from "./format.js";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-normalize.js";
 
-/** Maximum file size accepted by the QQ Bot API. */
+/** Maximum file size accepted by the QQ Bot one-shot upload API (base64 direct). */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
 
-/** Threshold used to treat an upload as a large file. */
+/** Absolute upper bound enforced on the chunked upload path (matches server policy). */
+export const CHUNKED_UPLOAD_MAX_SIZE = 100 * 1024 * 1024;
+
+/** Threshold used to treat an upload as a large file (dispatch to chunked path). */
 export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
+
+/**
+ * Per-{@link MediaFileType} upload metadata: the QQ Open Platform size
+ * ceiling and the Chinese display name used in user-facing error messages.
+ *
+ * Keyed by the enum value so call sites read as
+ * `MEDIA_FILE_TYPE_INFO[MediaFileType.IMAGE].maxSize`, and adding a new
+ * type forces both fields to be supplied in a single place.
+ */
+export const MEDIA_FILE_TYPE_INFO: Record<MediaFileType, { maxSize: number; name: string }> = {
+  [MediaFileType.IMAGE]: { maxSize: 30 * 1024 * 1024, name: "图片" },
+  [MediaFileType.VIDEO]: { maxSize: 100 * 1024 * 1024, name: "视频" },
+  [MediaFileType.VOICE]: { maxSize: 20 * 1024 * 1024, name: "语音" },
+  [MediaFileType.FILE]: { maxSize: 100 * 1024 * 1024, name: "文件" },
+};
+
+/** Return the Chinese display name for a media file type code. Defaults to "文件". */
+export function getFileTypeName(fileType: number): string {
+  return MEDIA_FILE_TYPE_INFO[fileType as MediaFileType]?.name ?? "文件";
+}
+
+/** Return the upload ceiling for a given media file type. Defaults to 100MB. */
+export function getMaxUploadSize(fileType: number): number {
+  return MEDIA_FILE_TYPE_INFO[fileType as MediaFileType]?.maxSize ?? CHUNKED_UPLOAD_MAX_SIZE;
+}
 
 const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   // QQ rich media

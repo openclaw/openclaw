@@ -106,14 +106,20 @@ export interface OpenedLocalFile {
  * 2. `fstat` on the opened descriptor — NOT `fs.stat` on the path —
  *    so the size check applies to the exact byte stream we will read.
  * 3. Rejects non-regular files (sockets / devices / directories).
- * 4. Enforces {@link MAX_UPLOAD_SIZE} (20MB) at open time, so oversized
- *    files fail fast without allocating a full buffer.
+ * 4. Enforces a caller-specified `maxSize` (default {@link MAX_UPLOAD_SIZE})
+ *    at open time, so oversized files fail fast without allocating a
+ *    full buffer. Chunked upload callers should pass a larger ceiling
+ *    (e.g. `CHUNKED_UPLOAD_MAX_SIZE` from `utils/file-utils.js`).
  *
  * The caller receives the open handle plus validated size and is expected
  * to either {@link OpenedLocalFile.handle.readFile} (one-shot path) or
- * stream via `fs.createReadStream` (future chunked path).
+ * stream via `fs.createReadStream` (chunked path).
  */
-export async function openLocalFile(filePath: string): Promise<OpenedLocalFile> {
+export async function openLocalFile(
+  filePath: string,
+  opts: { maxSize?: number } = {},
+): Promise<OpenedLocalFile> {
+  const maxSize = opts.maxSize ?? MAX_UPLOAD_SIZE;
   const openFlags =
     fs.constants.O_RDONLY | ("O_NOFOLLOW" in fs.constants ? fs.constants.O_NOFOLLOW : 0);
   const handle = await fs.promises.open(filePath, openFlags);
@@ -122,9 +128,9 @@ export async function openLocalFile(filePath: string): Promise<OpenedLocalFile> 
     if (!stat.isFile()) {
       throw new Error("Path is not a regular file");
     }
-    if (stat.size > MAX_UPLOAD_SIZE) {
+    if (stat.size > maxSize) {
       throw new Error(
-        `File is too large (${formatFileSize(stat.size)}); QQ Bot API limit is ${formatFileSize(MAX_UPLOAD_SIZE)}`,
+        `File is too large (${formatFileSize(stat.size)}); QQ Bot API limit is ${formatFileSize(maxSize)}`,
       );
     }
     return {
@@ -150,14 +156,24 @@ export async function openLocalFile(filePath: string): Promise<OpenedLocalFile> 
  * - `localPath` branches open the file with {@link openLocalFile} solely to
  *   validate size / regular-file / O_NOFOLLOW invariants. The handle is
  *   closed immediately — actual reading is deferred to the uploader so
- *   that future chunked paths can stream without double-reading.
- * - `buffer` branches enforce {@link MAX_UPLOAD_SIZE} inline.
+ *   the chunked path can stream without double-reading.
+ * - `buffer` branches enforce the same ceiling inline.
+ *
+ * `maxSize` defaults to {@link MAX_UPLOAD_SIZE} (20MB, one-shot upload limit).
+ * Callers that dispatch to the chunked uploader should pass a larger ceiling
+ * (e.g. `CHUNKED_UPLOAD_MAX_SIZE`, or a value derived from
+ * `getMaxUploadSize(fileType)`).
  *
  * NOTE: Root-whitelist validation (i.e. "this path must live under the
  * allowed QQ Bot media directory") is a caller concern. This function
  * assumes the path has already passed such checks.
  */
-export async function normalizeSource(raw: RawMediaSource): Promise<MediaSource> {
+export async function normalizeSource(
+  raw: RawMediaSource,
+  opts: { maxSize?: number } = {},
+): Promise<MediaSource> {
+  const maxSize = opts.maxSize ?? MAX_UPLOAD_SIZE;
+
   if ("url" in raw) {
     const parsed = tryParseDataUrl(raw.url);
     if (parsed) {
@@ -171,7 +187,7 @@ export async function normalizeSource(raw: RawMediaSource): Promise<MediaSource>
   }
 
   if ("localPath" in raw) {
-    const opened = await openLocalFile(raw.localPath);
+    const opened = await openLocalFile(raw.localPath, { maxSize });
     try {
       return {
         kind: "localPath",
@@ -185,9 +201,9 @@ export async function normalizeSource(raw: RawMediaSource): Promise<MediaSource>
   }
 
   // buffer branch
-  if (raw.buffer.length > MAX_UPLOAD_SIZE) {
+  if (raw.buffer.length > maxSize) {
     throw new Error(
-      `Buffer is too large (${formatFileSize(raw.buffer.length)}); QQ Bot API limit is ${formatFileSize(MAX_UPLOAD_SIZE)}`,
+      `Buffer is too large (${formatFileSize(raw.buffer.length)}); QQ Bot API limit is ${formatFileSize(maxSize)}`,
     );
   }
   return {

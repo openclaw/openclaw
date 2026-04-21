@@ -26,6 +26,7 @@
 
 import os from "node:os";
 import { ApiClient } from "../api/api-client.js";
+import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
 import { MediaApi as MediaApiClass } from "../api/media.js";
 import type { Credentials } from "../api/messages.js";
 import { MessageApi as MessageApiClass } from "../api/messages.js";
@@ -38,7 +39,9 @@ import {
   type EngineLogger,
   type MessageResponse,
   type OutboundMeta,
+  type UploadMediaResponse,
 } from "../types.js";
+import { LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
@@ -50,6 +53,7 @@ import { normalizeSource, type MediaSource, type RawMediaSource } from "./media-
 export { ApiError } from "../types.js";
 export type { OutboundMeta, MessageResponse, UploadMediaResponse } from "../types.js";
 export { MediaFileType } from "../types.js";
+export { UploadDailyLimitExceededError } from "../api/media-chunked.js";
 
 // ============ Plugin User-Agent ============
 
@@ -94,6 +98,7 @@ interface AccountContext {
   client: ApiClient;
   tokenMgr: TokenManager;
   mediaApi: MediaApiClass;
+  chunkedMediaApi: ChunkedMediaApiClass;
   messageApi: MessageApiClass;
   markdownSupport: boolean;
 }
@@ -118,22 +123,31 @@ const _fallbackLogger: EngineLogger = {
 function buildAccountContext(logger: EngineLogger, markdownSupport: boolean): AccountContext {
   const client = new ApiClient({ logger, userAgent: buildUserAgent });
   const tokenMgr = new TokenManager({ logger, userAgent: buildUserAgent });
+  // The one-shot and chunked uploaders share the same cache adapter so repeat
+  // sends of identical bytes hit the same `file_info` regardless of which
+  // path the first send used.
+  const sharedUploadCache = {
+    computeHash: computeFileHash,
+    get: (hash: string, scope: string, targetId: string, fileType: number) =>
+      getCachedFileInfo(hash, scope as ChatScope, targetId, fileType),
+    set: (
+      hash: string,
+      scope: string,
+      targetId: string,
+      fileType: number,
+      fileInfo: string,
+      fileUuid: string,
+      ttl: number,
+    ) => setCachedFileInfo(hash, scope as ChatScope, targetId, fileType, fileInfo, fileUuid, ttl),
+  };
   const mediaApi = new MediaApiClass(client, tokenMgr, {
     logger,
-    uploadCache: {
-      computeHash: computeFileHash,
-      get: (hash: string, scope: string, targetId: string, fileType: number) =>
-        getCachedFileInfo(hash, scope as ChatScope, targetId, fileType),
-      set: (
-        hash: string,
-        scope: string,
-        targetId: string,
-        fileType: number,
-        fileInfo: string,
-        fileUuid: string,
-        ttl: number,
-      ) => setCachedFileInfo(hash, scope as ChatScope, targetId, fileType, fileInfo, fileUuid, ttl),
-    },
+    uploadCache: sharedUploadCache,
+    sanitizeFileName,
+  });
+  const chunkedMediaApi = new ChunkedMediaApiClass(client, tokenMgr, {
+    logger,
+    uploadCache: sharedUploadCache,
     sanitizeFileName,
   });
   const messageApi = new MessageApiClass(client, tokenMgr, {
@@ -141,7 +155,7 @@ function buildAccountContext(logger: EngineLogger, markdownSupport: boolean): Ac
     logger,
   });
 
-  return { logger, client, tokenMgr, mediaApi, messageApi, markdownSupport };
+  return { logger, client, tokenMgr, mediaApi, chunkedMediaApi, messageApi, markdownSupport };
 }
 
 /**
@@ -212,6 +226,11 @@ export function getMessageApi(appId: string): MessageApiClass {
 /** Get the MediaApi instance for the given appId. */
 export function getMediaApi(appId: string): MediaApiClass {
   return resolveAccount(appId).mediaApi;
+}
+
+/** Get the ChunkedMediaApi instance for the given appId. */
+export function getChunkedMediaApi(appId: string): ChunkedMediaApiClass {
+  return resolveAccount(appId).chunkedMediaApi;
 }
 
 /** Get the TokenManager instance for the given appId. */
@@ -628,8 +647,10 @@ function buildOutboundMeta(opts: SendMediaOptions, source: MediaSource): Outboun
  * Core dispatch for rich media. Not exported — callers must go through
  * {@link sendMedia}.
  *
- * The body is deliberately linear so that a future chunked-upload branch
- * can be inserted at a single point (see `uploadOnceByMediaSource`).
+ * Upload dispatch lives in {@link dispatchUpload}: sources smaller than
+ * {@link LARGE_FILE_THRESHOLD} (or not supporting chunked transport, i.e.
+ * url/base64) go to {@link MediaApi.uploadMedia}; larger `localPath` /
+ * `buffer` sources go to {@link ChunkedMediaApi.uploadChunked}.
  */
 async function sendMediaInternal(
   ctx: AccountContext,
@@ -641,9 +662,16 @@ async function sendMediaInternal(
     clientSecret: opts.creds.clientSecret,
   };
 
-  const source = await normalizeSource(opts.source);
+  // The outbound layer enforces per-file-type ceilings; normalizeSource's
+  // default is the smaller one-shot limit. We pass the chunked limit here
+  // to let the dispatcher decide per source.size whether to route to the
+  // chunked uploader. Upstream (outbound/sendPhoto etc.) remains the
+  // authoritative size-by-file-type gate.
+  const source = await normalizeSource(opts.source, {
+    maxSize: Number.MAX_SAFE_INTEGER,
+  });
 
-  const uploadResult = await uploadOnceByMediaSource(
+  const uploadResult = await dispatchUpload(
     ctx,
     scope,
     opts.target.id,
@@ -673,14 +701,18 @@ async function sendMediaInternal(
 }
 
 /**
- * Upload a {@link MediaSource} via the one-shot endpoint.
+ * Upload a {@link MediaSource} via the one-shot or chunked path, chosen by
+ * size + kind.
  *
- * TODO(chunked-upload): This is the single dispatch point where a future
- * chunked uploader plugs in. When `source.kind === 'localPath' || 'buffer'`
- * and `size > LARGE_FILE_THRESHOLD`, branch to
- * `media-chunked.ts#uploadChunked` — everything else stays unchanged.
+ * Routing rules (kept here as the single source of truth so callers need
+ * not know which endpoint was used):
+ *
+ * - `url` / `base64`: always one-shot — the server accepts these directly
+ *   and the chunked endpoint has no representation for them.
+ * - `localPath` / `buffer` with `size >= LARGE_FILE_THRESHOLD`: chunked.
+ * - Everything else: one-shot.
  */
-async function uploadOnceByMediaSource(
+async function dispatchUpload(
   ctx: AccountContext,
   scope: ChatScope,
   targetId: string,
@@ -688,7 +720,7 @@ async function uploadOnceByMediaSource(
   source: MediaSource,
   creds: Credentials,
   fileName?: string,
-) {
+): Promise<UploadMediaResponse> {
   switch (source.kind) {
     case "url":
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
@@ -701,11 +733,31 @@ async function uploadOnceByMediaSource(
         fileName,
       });
     case "localPath":
+      if (source.size >= LARGE_FILE_THRESHOLD) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source,
+          creds,
+          fileName,
+        });
+      }
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
         localPath: source.path,
         fileName,
       });
     case "buffer":
+      if (source.buffer.length >= LARGE_FILE_THRESHOLD) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source,
+          creds,
+          fileName: fileName ?? source.fileName,
+        });
+      }
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
         buffer: source.buffer,
         fileName: fileName ?? source.fileName,
@@ -713,7 +765,7 @@ async function uploadOnceByMediaSource(
     default: {
       const _exhaustive: never = source;
       throw new Error(
-        `uploadOnceByMediaSource: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
+        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
       );
     }
   }
