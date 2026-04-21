@@ -210,7 +210,10 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
           : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
         ...(trimToUndefined(talkProviderConfig.outputFormat) == null
           ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
+          : {
+              outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+              outputFormatConfigured: true,
+            }),
         ...(trimToUndefined(talkProviderConfig.pitch) == null
           ? {}
           : { pitch: trimToUndefined(talkProviderConfig.pitch) }),
