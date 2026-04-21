@@ -423,15 +423,18 @@ export async function finalizeSetupWizard(
 
     if (hatchChoice === "tui") {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
-      await launchTuiCli({
-        url: links.wsUrl,
-        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
-        // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
-        deliver: false,
-        message: hasBootstrap ? "Wake up, my friend!" : undefined,
-      });
-      restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
+      try {
+        await launchTuiCli({
+          url: links.wsUrl,
+          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+          password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+          // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
+          deliver: false,
+          message: hasBootstrap ? "Wake up, my friend!" : undefined,
+        });
+      } finally {
+        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
+      }
       launchedTui = true;
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();

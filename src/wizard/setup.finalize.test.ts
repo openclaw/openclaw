@@ -5,6 +5,7 @@ import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
+const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
@@ -134,7 +135,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 }));
 
 vi.mock("../terminal/restore.js", () => ({
-  restoreTerminalState: vi.fn(),
+  restoreTerminalState,
 }));
 
 vi.mock("../tui/tui-launch.js", () => ({
@@ -237,6 +238,7 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     launchTuiCli.mockClear();
+    restoreTerminalState.mockClear();
     probeGatewayReachable.mockClear();
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
@@ -343,6 +345,50 @@ describe("finalizeSetupWizard", () => {
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
+  });
+
+  it("restores terminal state after failed TUI hatch", async () => {
+    launchTuiCli.mockRejectedValueOnce(new Error("TUI exited with code 1"));
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({ select: select as never });
+
+    await expect(
+      finalizeSetupWizard({
+        flow: "advanced",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {},
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: "test-token",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      }),
+    ).rejects.toThrow("TUI exited with code 1");
+
+    expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
+      resumeStdinIfPaused: true,
+    });
+    expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui", {
+      resumeStdinIfPaused: true,
+    });
   });
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {

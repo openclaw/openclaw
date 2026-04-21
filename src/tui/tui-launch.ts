@@ -10,13 +10,42 @@ function appendOption(args: string[], flag: string, value: string | number | und
   args.push(flag, String(value));
 }
 
+function filterTuiExecArgv(execArgv: readonly string[]): string[] {
+  const filtered: string[] = [];
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const arg = execArgv[index] ?? "";
+    if (
+      arg === "--inspect" ||
+      arg.startsWith("--inspect=") ||
+      arg === "--inspect-brk" ||
+      arg.startsWith("--inspect-brk=") ||
+      arg === "--inspect-wait" ||
+      arg.startsWith("--inspect-wait=")
+    ) {
+      continue;
+    }
+    if (arg === "--inspect-port") {
+      const next = execArgv[index + 1];
+      if (typeof next === "string" && !next.startsWith("-")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--inspect-port=")) {
+      continue;
+    }
+    filtered.push(arg);
+  }
+  return filtered;
+}
+
 function buildTuiCliArgs(opts: TuiOptions): string[] {
   const entry = process.argv[1]?.trim();
   if (!entry) {
     throw new Error("unable to relaunch TUI: current CLI entry path is unavailable");
   }
 
-  const args = [...process.execArgv, entry, "tui"];
+  const args = [...filterTuiExecArgv(process.execArgv), entry, "tui"];
   appendOption(args, "--url", opts.url);
   appendOption(args, "--token", opts.token);
   appendOption(args, "--password", opts.password);
