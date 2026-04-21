@@ -324,16 +324,21 @@ Key toggles:
   to their own vaults. Example: `{workspaceDir}/wiki`. Templates are only
   expanded for the tool surfaces (`wiki_status`, `wiki_lint`, `wiki_apply`,
   `wiki_search`, `wiki_get`); the `openclaw wiki` CLI and non-agent gateway
-  methods use the literal configured path. Tokens whose value is absent from
-  the invocation context (for example a plugin tool server that resolves
-  tools with only `{ config }`) are preserved literally in the path — so
-  `{workspaceDir}/wiki` stays `{workspaceDir}/wiki` and downstream filesystem
-  operations fail visibly, rather than silently collapsing to the filesystem
-  root, the process CWD, or another tenant's vault. Make sure the tokens you
-  use are always populated by the invocation contexts you care about. When
-  `vault.path` is templated, the memory-prompt supplement and
-  memory-corpus supplement (which feed `memory_search`/`memory_get` the wiki
-  corpus) are not registered — their SDK contracts do not thread the
+  methods use the literal configured path. If any placeholder cannot be
+  resolved at tool invocation time — either because the invocation context
+  did not populate a known token (e.g. a plugin tool server that calls with
+  only `{ config }`) or because the template contains an unknown placeholder
+  like `{tenant}` (typo) — expansion throws at tool invocation time. This is
+  intentionally fail-closed: returning an unresolved path would let
+  `fs.mkdir(path, { recursive: true })` silently create a literal
+  `{workspaceDir}` directory under `process.cwd()` and downstream writes
+  would succeed against a shared CWD-backed vault, mixing data across
+  sessions or tenants. Make sure every token your template uses is
+  guaranteed by the invocation contexts you care about, and prefer a
+  literal path if you need the template to work outside the wiki tool
+  surfaces. When `vault.path` is templated, the memory-prompt supplement
+  and memory-corpus supplement (which feed `memory_search`/`memory_get` the
+  wiki corpus) are not registered — their SDK contracts do not thread the
   per-invocation context needed to resolve the template, and registering
   them with the unexpanded literal path would leave `memory_*` reading from
   a different vault than `wiki_search`/`wiki_get` resolve to in the same

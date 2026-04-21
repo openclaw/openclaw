@@ -112,37 +112,44 @@ describe("vault path templating", () => {
     expect(resolved.vault.renderMode).toBe(base.vault.renderMode);
   });
 
-  it("preserves unresolved tokens literally so compound templates do not silently collapse", () => {
+  it("throws when a compound template leaves a known token unresolved", () => {
+    // Returning `/tmp/abc/{sessionKey}/wiki` would not prevent downstream
+    // write flows: `fs.mkdir(path, { recursive: true })` in writeWikiPage
+    // happily creates a literal `{sessionKey}` subdirectory under the
+    // partially-resolved parent and mixes data across sessions. Throwing at
+    // expansion time fails the tool invocation before any filesystem side
+    // effect.
     const base = resolveMemoryWikiConfig(
       { vault: { path: "/tmp/{agentId}/{sessionKey}/wiki" } },
       { homedir: "/Users/tester" },
     );
-    const resolved = resolveMemoryWikiConfigForCtx(base, { agentId: "abc" });
-    // `{sessionKey}` stays as a literal path segment rather than collapsing
-    // into `/tmp/abc/wiki`, so downstream filesystem ops fail visibly instead
-    // of silently reading/writing another tenant's vault.
-    expect(resolved.vault.path).toBe("/tmp/abc/{sessionKey}/wiki");
+    expect(() => resolveMemoryWikiConfigForCtx(base, { agentId: "abc" })).toThrow(
+      /unresolved placeholder\(s\) \{sessionKey\}/,
+    );
   });
 
-  it("preserves an entirely unresolved template rather than collapsing to filesystem root or CWD", () => {
+  it("throws on an entirely unresolved template rather than returning a CWD-relative path", () => {
+    // Without the throw, `{workspaceDir}/wiki` invoked with an empty context
+    // is returned as-is and `fs.mkdir(..., { recursive: true })` creates a
+    // `./{workspaceDir}/wiki` tree under process.cwd(). Tool callers then
+    // write into a shared CWD-backed vault.
     const base = resolveMemoryWikiConfig(
       { vault: { path: "{workspaceDir}/wiki" } },
       { homedir: "/Users/tester" },
     );
-    const resolved = resolveMemoryWikiConfigForCtx(base, {});
-    // Without this guard `{workspaceDir}/wiki` would expand to `/wiki` (root)
-    // or `./wiki` (process CWD) when a tool server invokes with a bare
-    // context — a data-integrity / cross-tenant failure mode.
-    expect(resolved.vault.path).toBe("{workspaceDir}/wiki");
+    expect(() => resolveMemoryWikiConfigForCtx(base, {})).toThrow(
+      /unresolved placeholder\(s\) \{workspaceDir\}/,
+    );
   });
 
-  it("skips path normalization when tokens stay unresolved so `..` cannot collapse the placeholder away", () => {
-    // `path.normalize("{workspaceDir}/../wiki")` returns `"wiki"` (CWD-relative)
-    // because `path.normalize` eats the `..` against the literal `{workspaceDir}`
-    // segment. Normalizing unresolved templates would silently redirect
-    // vault reads/writes to `process.cwd()/wiki` — re-introducing the exact
-    // failure mode the literal-preservation guard exists to prevent.
-    expect(expandVaultPathTemplate("{workspaceDir}/../wiki", {})).toBe("{workspaceDir}/../wiki");
+  it("throws on unresolved tokens even when `..` is present so `path.normalize` cannot eat the placeholder", () => {
+    // `path.normalize("{workspaceDir}/../wiki")` returns `"wiki"`. Throwing
+    // before normalization guarantees the misconfiguration surfaces instead
+    // of silently collapsing to a CWD-relative path that downstream writes
+    // would succeed against.
+    expect(() => expandVaultPathTemplate("{workspaceDir}/../wiki", {})).toThrow(
+      /unresolved placeholder\(s\) \{workspaceDir\}/,
+    );
 
     // Once the token is resolved, normalization is safe and collapses `..`
     // against real segments as usual.
@@ -153,19 +160,26 @@ describe("vault path templating", () => {
     ).toBe("/tmp/wiki");
   });
 
-  it("skips path normalization when unknown placeholders (typos) remain so `..` cannot eat them", () => {
-    // A typo like `{tenant}` is not a known token, so the replace step leaves
-    // it in place. If the normalization gate only looked at known tokens the
-    // path would still normalize and `path.normalize` would collapse
-    // `{tenant}/..`, silently rewriting `/tmp/workspace/{tenant}/../wiki` to
-    // `/tmp/workspace/wiki` — a tenant-boundary breach driven by a config
-    // typo. The broader `{word}` gate blocks normalization so the filesystem
-    // surfaces ENOENT on the literal placeholder directory instead.
-    expect(
+  it("throws when unknown placeholders (typos) remain after expansion of known tokens", () => {
+    // A typo like `{tenant}` is not a known token, so the replace step
+    // leaves it in place. Normalizing `/tmp/workspace/{tenant}/../wiki`
+    // collapses to `/tmp/workspace/wiki` and silently breaches tenant
+    // isolation. Throwing surfaces the config error at tool-invocation time.
+    expect(() =>
       expandVaultPathTemplate("{workspaceDir}/{tenant}/../wiki", {
         workspaceDir: "/tmp/workspace",
       }),
-    ).toBe("/tmp/workspace/{tenant}/../wiki");
+    ).toThrow(/unresolved placeholder\(s\) \{tenant\}/);
+  });
+
+  it("lists all unresolved placeholders in the error message, deduplicated and sorted", () => {
+    // Multiple missing tokens should be reported together so the operator
+    // can fix the config in one pass instead of re-running the tool four
+    // times. The list is deduplicated (`{sessionKey}` appearing twice shows
+    // up once) and sorted for stable error messages.
+    expect(() =>
+      expandVaultPathTemplate("{workspaceDir}/{sessionKey}/{agentId}/{sessionKey}/wiki", {}),
+    ).toThrow(/\{agentId\}, \{sessionKey\}, \{workspaceDir\}/);
   });
 });
 

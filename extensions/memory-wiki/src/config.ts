@@ -236,23 +236,21 @@ export function containsVaultPathTemplate(candidatePath: string): boolean {
 
 /**
  * Expand `{workspaceDir}`, `{agentDir}`, `{agentId}`, `{sessionKey}` placeholders
- * in a vault path using the supplied tool invocation context. Tokens whose
- * context value is absent (or empty) are preserved literally in the output
- * (e.g. `{workspaceDir}/wiki` stays `{workspaceDir}/wiki`) so downstream
- * filesystem operations fail visibly instead of silently collapsing the path
- * into a different tenant's vault, the process CWD, or the filesystem root —
- * for example when a plugin tool server resolves tools with a context that
- * does not populate workspace/agent/session fields.
+ * in a vault path using the supplied tool invocation context. Throws if the
+ * expanded path still contains any `{...}` placeholder — either because a
+ * known token's context value was absent (e.g. `{workspaceDir}` invoked from
+ * a plugin tool server that only passes `{ config }`) or because the template
+ * referenced an unknown token (e.g. a typo like `{tenant}`). Returning the
+ * unresolved path string is not fail-closed: `fs.mkdir(path, { recursive: true })`
+ * happily creates a directory named literally `{workspaceDir}` under
+ * `process.cwd()` and subsequent writes succeed against a CWD-backed vault,
+ * which can mix data across sessions or tenants. Throwing at this layer
+ * surfaces the misconfiguration at tool invocation time — before any
+ * filesystem side effect runs — instead of waiting for a read ENOENT that
+ * never fires on the recursive-create write path.
  *
- * Normalization is only applied when every placeholder was resolved. Running
- * `path.normalize` over a path that still contains `{...}` segments would
- * collapse traversal that references those segments —
- * `path.normalize("{workspaceDir}/../wiki")` returns `"wiki"`, a CWD-relative
- * path — re-introducing the exact silent-redirect failure mode the literal
- * preservation guards against. The gate uses a broader `\{word\}` match
- * (not just the four known tokens), so typos like `{tenant}` also block
- * normalization and fail loudly at the filesystem layer instead of silently
- * redirecting to a neighbouring tenant.
+ * Successful expansions are normalized so path-traversal segments (e.g.
+ * `..`) collapse against resolved segments as usual.
  */
 export function expandVaultPathTemplate(
   templatePath: string,
@@ -268,8 +266,12 @@ export function expandVaultPathTemplate(
       return value != null && value !== "" ? value : match;
     },
   );
-  if (VAULT_PATH_ANY_PLACEHOLDER.test(expanded)) {
-    return expanded;
+  const unresolved = expanded.match(new RegExp(VAULT_PATH_ANY_PLACEHOLDER, "g"));
+  if (unresolved) {
+    const uniquePlaceholders = [...new Set(unresolved)].toSorted();
+    throw new Error(
+      `memory-wiki vault.path has unresolved placeholder(s) ${uniquePlaceholders.join(", ")} in "${templatePath}" — invocation context did not provide the required value(s). Supply a literal path or invoke from a context that populates the referenced tokens.`,
+    );
   }
   return path.normalize(expanded);
 }
