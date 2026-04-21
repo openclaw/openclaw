@@ -41,6 +41,7 @@ const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   "google-gemini-cli": "google",
   kimi: "moonshotai",
@@ -123,6 +124,25 @@ function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
   };
 }
 
+async function readPricingJsonObject(
+  response: Response,
+  source: string,
+): Promise<Record<string, unknown>> {
+  const contentLength = parseNumberString(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
+    throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
+    throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
+  }
+  const payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${source} pricing response is not a JSON object`);
+  }
+  return payload as Record<string, unknown>;
+}
+
 // ---------------------------------------------------------------------------
 // LiteLLM tiered-pricing parsing
 // ---------------------------------------------------------------------------
@@ -162,6 +182,14 @@ function parseLiteLLMTieredPricing(tiers: unknown): CachedPricingTier[] | undefi
     // Allow open-ended ranges: [128000], [128000, -1], [128000, null]
     const rawEnd = range.length >= 2 ? parseNumberString(range[1]) : null;
     const end = rawEnd === null || rawEnd <= start ? Infinity : rawEnd;
+    if (
+      !Number.isFinite(inputPerToken) ||
+      !Number.isFinite(outputPerToken) ||
+      inputPerToken < 0 ||
+      outputPerToken < 0
+    ) {
+      continue;
+    }
     result.push({
       input: toPricePerMillion(inputPerToken),
       output: toPricePerMillion(outputPerToken),
@@ -170,7 +198,7 @@ function parseLiteLLMTieredPricing(tiers: unknown): CachedPricingTier[] | undefi
       range: [start, end],
     });
   }
-  return result.length > 0 ? result : undefined;
+  return result.length > 0 ? result.toSorted((a, b) => a.range[0] - b.range[0]) : undefined;
 }
 
 function parseLiteLLMPricing(entry: LiteLLMModelEntry): CachedModelPricing | null {
@@ -202,7 +230,7 @@ async function fetchLiteLLMPricingCatalog(fetchImpl: typeof fetch): Promise<Lite
   if (!response.ok) {
     throw new Error(`LiteLLM pricing fetch failed: HTTP ${response.status}`);
   }
-  const payload = (await response.json()) as Record<string, unknown>;
+  const payload = await readPricingJsonObject(response, "LiteLLM");
   const catalog: LiteLLMPricingCatalog = new Map();
   for (const [key, value] of Object.entries(payload)) {
     if (!value || typeof value !== "object") {
@@ -435,7 +463,7 @@ async function fetchOpenRouterPricingCatalog(
   if (!response.ok) {
     throw new Error(`OpenRouter /models failed: HTTP ${response.status}`);
   }
-  const payload = (await response.json()) as { data?: unknown };
+  const payload = await readPricingJsonObject(response, "OpenRouter");
   const entries = Array.isArray(payload.data) ? payload.data : [];
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {

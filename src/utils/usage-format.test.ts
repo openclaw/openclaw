@@ -440,6 +440,36 @@ describe("usage-format", () => {
     expect(total).toBeCloseTo(0.117, 4);
   });
 
+  it("uses declared tier ranges instead of sequential widths", () => {
+    const tiers: PricingTier[] = [
+      { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, range: [100, 200] },
+      { input: 2, output: 20, cacheRead: 0, cacheWrite: 0, range: [0, 100] },
+    ];
+    const cost = { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
+
+    const total = estimateUsageCost({
+      usage: { input: 150, output: 60 },
+      cost,
+    });
+
+    expect(total).toBeCloseTo(0.00125, 8);
+  });
+
+  it("bills malformed tier gaps at a fallback tier instead of dropping them", () => {
+    const tiers: PricingTier[] = [
+      { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, range: [0, 50] },
+      { input: 3, output: 30, cacheRead: 0, cacheWrite: 0, range: [100, 150] },
+    ];
+    const cost = { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
+
+    const total = estimateUsageCost({
+      usage: { input: 150, output: 60 },
+      cost,
+    });
+
+    expect(total).toBeCloseTo(0.00175, 8);
+  });
+
   it("normalizes open-ended range from models.json ([start] and [start, -1])", async () => {
     await fs.writeFile(
       path.join(agentDir, "models.json"),

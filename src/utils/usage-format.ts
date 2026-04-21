@@ -25,6 +25,14 @@ export type PricingTier = {
   range: [number, number];
 };
 
+type RawPricingTier = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  range: [number, number] | [number];
+};
+
 export type ModelCostConfig = {
   input: number;
   output: number;
@@ -126,9 +134,7 @@ function shouldUseNormalizedCostLookup(params: { provider?: string; model?: stri
  * Supports open-ended ranges such as `[128000]` or `[128000, -1]`,
  * which are converted to `[128000, Infinity]`.
  */
-function normalizeTieredPricing(
-  raw: Array<{ input: number; output: number; cacheRead: number; cacheWrite: number; range: [number, number] | [number] }> | undefined,
-): PricingTier[] | undefined {
+function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[] | undefined {
   if (!raw || raw.length === 0) {
     return undefined;
   }
@@ -145,6 +151,14 @@ function normalizeTieredPricing(
     const rawEnd = range.length >= 2 ? range[1] : null;
     const end =
       typeof rawEnd === "number" && Number.isFinite(rawEnd) && rawEnd > start ? rawEnd : Infinity;
+    if (
+      !Number.isFinite(tier.input) ||
+      !Number.isFinite(tier.output) ||
+      !Number.isFinite(tier.cacheRead) ||
+      !Number.isFinite(tier.cacheWrite)
+    ) {
+      continue;
+    }
     result.push({
       input: tier.input,
       output: tier.output,
@@ -153,7 +167,7 @@ function normalizeTieredPricing(
       range: [start, end],
     });
   }
-  return result.length > 0 ? result : undefined;
+  return result.length > 0 ? result.toSorted((a, b) => a.range[0] - b.range[0]) : undefined;
 }
 
 function buildProviderCostIndex(
@@ -324,10 +338,11 @@ function computeTieredCost(
   cacheWrite: number,
 ): number {
   const totalInputTokens = input;
+  const sortedTiers = tiers.toSorted((a, b) => a.range[0] - b.range[0]);
   if (totalInputTokens <= 0) {
     // If there are no input tokens the tier proportion is undefined;
     // fall back to the first tier for any residual output/cache usage.
-    const tier = tiers[0];
+    const tier = sortedTiers[0];
     if (!tier) {
       return 0;
     }
@@ -335,34 +350,45 @@ function computeTieredCost(
   }
 
   let total = 0;
-  let inputRemaining = totalInputTokens;
+  let billedInput = 0;
+  let coveredUntil = 0;
+  let lastTier: PricingTier | undefined;
 
-  for (const tier of tiers) {
+  for (const tier of sortedTiers) {
     const [start, end] = tier.range;
-    const tierWidth = end - start;
-    if (tierWidth <= 0 || inputRemaining <= 0) {
+    const tierStart = Math.max(0, start, coveredUntil);
+    const tierEnd = Math.min(totalInputTokens, end);
+    const inputInTier = Math.max(0, tierEnd - tierStart);
+    if (end > coveredUntil) {
+      coveredUntil = end;
+    }
+    if (inputInTier <= 0) {
       continue;
     }
-    const inputInTier = Math.min(inputRemaining, tierWidth);
     const fraction = inputInTier / totalInputTokens;
     total +=
       inputInTier * tier.input +
       output * fraction * tier.output +
       cacheRead * fraction * tier.cacheRead +
       cacheWrite * fraction * tier.cacheWrite;
-    inputRemaining -= inputInTier;
+    billedInput += inputInTier;
+    lastTier = tier;
   }
 
-  // If input tokens exceed the maximum defined range, bill the overflow
-  // at the last tier's rates (i.e. the highest tier acts as a catch-all).
-  if (inputRemaining > 0) {
-    const lastTier = tiers[tiers.length - 1];
-    const fraction = inputRemaining / totalInputTokens;
+  // Bill any uncovered gaps or overflow at the highest matched tier's rate.
+  // This keeps malformed remote/user tier ranges from underestimating cost.
+  const unbilledInput = totalInputTokens - billedInput;
+  if (unbilledInput > 0) {
+    const fallbackTier = lastTier ?? sortedTiers[sortedTiers.length - 1];
+    if (!fallbackTier) {
+      return total;
+    }
+    const fraction = unbilledInput / totalInputTokens;
     total +=
-      inputRemaining * lastTier.input +
-      output * fraction * lastTier.output +
-      cacheRead * fraction * lastTier.cacheRead +
-      cacheWrite * fraction * lastTier.cacheWrite;
+      unbilledInput * fallbackTier.input +
+      output * fraction * fallbackTier.output +
+      cacheRead * fraction * fallbackTier.cacheRead +
+      cacheWrite * fraction * fallbackTier.cacheWrite;
   }
 
   return total;

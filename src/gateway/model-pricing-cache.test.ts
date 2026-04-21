@@ -503,4 +503,54 @@ describe("model-pricing-cache", () => {
       cacheWrite: 0,
     });
   });
+
+  it("treats oversized LiteLLM catalog responses as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "moonshot/kimi-k2.6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "moonshotai/kimi-k2.6",
+                pricing: {
+                  prompt: "0.00000095",
+                  completion: "0.000004",
+                  input_cache_read: "0.00000016",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": "6000000",
+        },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(getCachedGatewayModelPricing({ provider: "moonshot", model: "kimi-k2.6" })).toEqual({
+      input: 0.95,
+      output: 4,
+      cacheRead: 0.16,
+      cacheWrite: 0,
+    });
+  });
 });

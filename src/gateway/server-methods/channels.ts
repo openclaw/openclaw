@@ -16,6 +16,7 @@ import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   ErrorCodes,
   errorShape,
@@ -40,6 +41,17 @@ type ChannelStartPayload = {
   accountId: string;
   started: boolean;
 };
+
+const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
+const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
+
+function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: unknown }): number {
+  const fallback = params.probe ? CHANNEL_STATUS_MAX_TIMEOUT_MS : 10_000;
+  if (typeof params.timeoutMsRaw !== "number" || !Number.isFinite(params.timeoutMsRaw)) {
+    return fallback;
+  }
+  return Math.min(Math.max(1000, params.timeoutMsRaw), CHANNEL_STATUS_MAX_TIMEOUT_MS);
+}
 
 function resolveRuntimeAccountSnapshot(params: {
   runtime: ChannelRuntimeSnapshot;
@@ -141,7 +153,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     const probe = (params as { probe?: boolean }).probe === true;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
-    const timeoutMs = typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
+    const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
     const cfg = applyPluginAutoEnable({
       config: loadConfig(),
       env: process.env,
@@ -255,16 +267,18 @@ export const channelsHandlers: GatewayRequestHandlers = {
         accountIds,
       });
       const resolvedAccounts: Record<string, unknown> = {};
-      const results = await Promise.allSettled(
-        accountIds.map((accountId) =>
-          buildAccountSnapshot(channelId, plugin, accountId, defaultAccountId),
+      const { results } = await runTasksWithConcurrency({
+        tasks: accountIds.map(
+          (accountId) => async () =>
+            await buildAccountSnapshot(channelId, plugin, accountId, defaultAccountId),
         ),
-      );
+        limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
+      });
       const accounts: ChannelAccountSnapshot[] = [];
       for (const result of results) {
-        if (result.status === "fulfilled") {
-          resolvedAccounts[result.value.accountId] = result.value.account;
-          accounts.push(result.value.snapshot);
+        if (result) {
+          resolvedAccounts[result.accountId] = result.account;
+          accounts.push(result.snapshot);
         }
       }
       const defaultAccount =
@@ -287,8 +301,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const channelsMap = payload.channels as Record<string, unknown>;
     const accountsMap = payload.channelAccounts as Record<string, unknown>;
     const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
-    const channelResults = await Promise.allSettled(
-      plugins.map(async (plugin) => {
+    const { results: channelResults } = await runTasksWithConcurrency({
+      tasks: plugins.map((plugin) => async () => {
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
           await buildChannelAccounts(plugin.id);
         const fallbackAccount =
@@ -309,12 +323,13 @@ export const channelsHandlers: GatewayRequestHandlers = {
             };
         return { pluginId: plugin.id, summary, accounts, defaultAccountId };
       }),
-    );
+      limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : plugins.length || 1,
+    });
     for (const result of channelResults) {
-      if (result.status === "fulfilled") {
-        channelsMap[result.value.pluginId] = result.value.summary;
-        accountsMap[result.value.pluginId] = result.value.accounts;
-        defaultAccountIdMap[result.value.pluginId] = result.value.defaultAccountId;
+      if (result) {
+        channelsMap[result.pluginId] = result.summary;
+        accountsMap[result.pluginId] = result.accounts;
+        defaultAccountIdMap[result.pluginId] = result.defaultAccountId;
       }
     }
 
