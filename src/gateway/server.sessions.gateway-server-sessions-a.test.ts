@@ -590,6 +590,9 @@ describe("gateway server sessions", () => {
 
   test("sessions.create can start the first agent turn from an initial task", async () => {
     await createSessionStoreDir();
+    // Register "ops" so the deleted-agent guard added in #65986 does not
+    // reject the auto-started chat.send triggered by `task:`.
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     const { ws } = await openClient();
 
     const created = await rpcReq<{
@@ -2930,10 +2933,25 @@ describe("gateway server sessions", () => {
       reason: "new",
     });
     expect(reset.ok).toBe(true);
-    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    const event = (
+    const resetHookEvents = (
       sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
+    )
+      .map((call) => call[0])
+      .filter(
+        (
+          event,
+        ): event is {
+          type: string;
+          action: string;
+          context?: { previousSessionEntry?: unknown };
+        } =>
+          Boolean(event) &&
+          typeof event === "object" &&
+          (event as { type?: unknown }).type === "command" &&
+          (event as { action?: unknown }).action === "new",
+      );
+    expect(resetHookEvents).toHaveLength(1);
+    const event = resetHookEvents[0];
     if (!event) {
       throw new Error("expected session hook event");
     }

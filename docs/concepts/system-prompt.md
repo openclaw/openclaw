@@ -118,9 +118,9 @@ unexpectedly high context usage and more frequent compaction.
 > as a one-shot startup-context block for that first turn.
 
 Large files are truncated with a marker. The max per-file size is controlled by
-`agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap
+`agents.defaults.bootstrapMaxChars` (default: 12000). Total injected bootstrap
 content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
-(default: 150000). Missing files inject a short missing-file marker. When truncation
+(default: 60000). Missing files inject a short missing-file marker. When truncation
 occurs, OpenClaw can inject a warning block in Project Context; control this with
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
 default: `once`).
@@ -176,6 +176,19 @@ and the effective agent skill allowlist when `agents.defaults.skills` or
 ```
 
 This keeps the base prompt small while still enabling targeted skill usage.
+
+The skills list budget is owned by the skills subsystem:
+
+- Global default: `skills.limits.maxSkillsPromptChars`
+- Per-agent override: `agents.list[].skillsLimits.maxSkillsPromptChars`
+
+Generic bounded runtime excerpts use a different surface:
+
+- `agents.defaults.contextLimits.*`
+- `agents.list[].contextLimits.*`
+
+That split keeps skills sizing separate from runtime read/injection sizing such
+as `memory_get`, live tool results, and post-compaction AGENTS.md refreshes.
 
 ## Documentation
 

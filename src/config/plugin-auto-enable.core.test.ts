@@ -9,7 +9,7 @@ import {
   makeRegistry,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
-import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
+import { validateConfigObject } from "./validation.js";
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
@@ -217,6 +217,57 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
   });
 
+  it("auto-enables an opt-in plugin when an embedded agent harness runtime is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            embeddedHarness: {
+              runtime: "codex",
+              fallback: "none",
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([
+        {
+          id: "codex",
+          channels: [],
+          activation: {
+            onAgentHarnesses: ["codex"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.changes).toContain(
+      "codex agent harness runtime configured, enabled automatically.",
+    );
+  });
+
+  it("auto-enables an opt-in plugin when an agent harness runtime is forced by env", () => {
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: makeIsolatedEnv({ OPENCLAW_AGENT_RUNTIME: "codex" }),
+      manifestRegistry: makeRegistry([
+        {
+          id: "codex",
+          channels: [],
+          activation: {
+            onAgentHarnesses: ["codex"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.changes).toContain(
+      "codex agent harness runtime configured, enabled automatically.",
+    );
+  });
+
   it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -279,7 +330,7 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
+    expect(validateConfigObject(result.config).ok).toBe(true);
   });
 
   it("appends built-in WhatsApp to restrictive plugins.allow during auto-enable", () => {
@@ -299,7 +350,7 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
-    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
+    expect(validateConfigObject(result.config).ok).toBe(true);
   });
 
   it("preserves configured plugin entries in restrictive plugins.allow", () => {

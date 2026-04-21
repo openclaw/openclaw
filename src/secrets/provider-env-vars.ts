@@ -2,8 +2,11 @@ import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  isWorkspacePluginAllowedByConfig,
+  normalizePluginConfigId,
+} from "../plugins/plugin-config-trust.js";
 import { hasKind } from "../plugins/slots.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -25,59 +28,17 @@ export type ProviderEnvVarLookupParams = {
   includeUntrustedWorkspacePlugins?: boolean;
 };
 
-type PluginEntriesConfig = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>;
-
-function normalizePluginConfigId(id: unknown): string {
-  return normalizeOptionalLowercaseString(id) ?? "";
-}
-
-function hasPluginId(list: unknown, pluginId: string): boolean {
-  return Array.isArray(list) && list.some((entry) => normalizePluginConfigId(entry) === pluginId);
-}
-
-function findPluginEntry(
-  entries: PluginEntriesConfig | undefined,
-  pluginId: string,
-): { enabled?: boolean } | undefined {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(entries)) {
-    if (normalizePluginConfigId(key) !== pluginId) {
-      continue;
-    }
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { enabled?: boolean })
-      : {};
-  }
-  return undefined;
-}
-
 function isWorkspacePluginTrustedForProviderEnvVars(
   plugin: PluginManifestRecord,
   config: OpenClawConfig | undefined,
 ): boolean {
-  const pluginsConfig = config?.plugins;
-  if (pluginsConfig?.enabled === false) {
-    return false;
-  }
-
-  const pluginId = normalizePluginConfigId(plugin.id);
-  if (!pluginId || hasPluginId(pluginsConfig?.deny, pluginId)) {
-    return false;
-  }
-
-  const entry = findPluginEntry(pluginsConfig?.entries, pluginId);
-  if (entry?.enabled === false) {
-    return false;
-  }
-  if (entry?.enabled === true || hasPluginId(pluginsConfig?.allow, pluginId)) {
-    return true;
-  }
-  return (
-    hasKind(plugin.kind, "context-engine") &&
-    normalizePluginConfigId(pluginsConfig?.slots?.contextEngine) === pluginId
-  );
+  return isWorkspacePluginAllowedByConfig({
+    config,
+    isImplicitlyAllowed: (pluginId) =>
+      hasKind(plugin.kind, "context-engine") &&
+      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+    plugin,
+  });
 }
 
 function shouldUsePluginProviderEnvVars(
@@ -163,6 +124,51 @@ export function resolveProviderEnvVars(
   };
 }
 
+const lazyRecordCacheResetters = new Set<() => void>();
+
+function createLazyReadonlyRecord(
+  resolve: () => Record<string, readonly string[]>,
+): Record<string, readonly string[]> {
+  let cached: Record<string, readonly string[]> | undefined;
+  lazyRecordCacheResetters.add(() => {
+    cached = undefined;
+  });
+  const getResolved = (): Record<string, readonly string[]> => {
+    cached ??= resolve();
+    return cached;
+  };
+
+  return new Proxy({} as Record<string, readonly string[]>, {
+    get(_target, prop) {
+      if (typeof prop !== "string") {
+        return undefined;
+      }
+      return getResolved()[prop];
+    },
+    has(_target, prop) {
+      return typeof prop === "string" && Object.hasOwn(getResolved(), prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(getResolved());
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      if (typeof prop !== "string") {
+        return undefined;
+      }
+      const value = getResolved()[prop];
+      if (value === undefined) {
+        return undefined;
+      }
+      return {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: false,
+      };
+    },
+  });
+}
+
 /**
  * Provider auth env candidates used by generic auth resolution.
  *
@@ -170,9 +176,9 @@ export function resolveProviderEnvVars(
  * `resolveEnvApiKey()`. Bundled providers source this from plugin manifest
  * metadata so auth probes do not need to load plugin runtime.
  */
-export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]> = {
-  ...resolveProviderAuthEnvVarCandidates(),
-};
+export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
+  resolveProviderAuthEnvVarCandidates(),
+);
 
 /**
  * Provider env vars used for setup/default secret refs and broad secret
@@ -183,8 +189,14 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]>
  * is only for true core/non-plugin providers and a few setup-specific ordering
  * overrides where generic onboarding wants a different preferred env var.
  */
-export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
-  ...resolveProviderEnvVars(),
+export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
+
+export const __testing = {
+  resetProviderEnvVarCachesForTests(): void {
+    for (const reset of lazyRecordCacheResetters) {
+      reset();
+    }
+  },
 };
 
 export function getProviderEnvVars(

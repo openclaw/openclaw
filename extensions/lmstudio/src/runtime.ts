@@ -60,6 +60,16 @@ function sanitizeStringHeaders(headers: unknown): Record<string, string> | undef
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(
+  source: string | undefined,
+  hasAuthorizationHeader: boolean,
+): boolean {
+  if (!hasAuthorizationHeader || !source) {
+    return false;
+  }
+  return /^profile:|^(?:shell )?env(?::|$)/.test(source);
+}
+
 export async function resolveLmstudioConfiguredApiKey(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -230,7 +240,14 @@ export async function resolveLmstudioRuntimeApiKey(params: {
   if (!resolvedApiKey || resolvedApiKey.length === 0) {
     return await resolveConfiguredApiKeyOrThrow();
   }
-  if (isNonSecretApiKeyMarker(resolvedApiKey) && resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER) {
+  if (shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(resolved.source, hasAuthorizationHeader)) {
+    return await resolveConfiguredApiKeyOrThrow();
+  }
+  if (
+    isNonSecretApiKeyMarker(resolvedApiKey) &&
+    resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER &&
+    resolvedApiKey !== LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
+  ) {
     return await resolveConfiguredApiKeyOrThrow();
   }
   return resolvedApiKey;

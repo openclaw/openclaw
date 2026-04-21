@@ -10,14 +10,14 @@ const taskRuntimeInternalMocks = vi.hoisted(() => ({
 }));
 
 const taskExecutorMocks = vi.hoisted(() => ({
-  createRunningTaskRun: vi.fn(),
-  completeTaskRunByRunId: vi.fn(),
-  failTaskRunByRunId: vi.fn(),
   recordTaskRunProgressByRunId: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+  completeTaskRunByRunId: vi.fn(),
+  createRunningTaskRun: vi.fn(),
 }));
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
+vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -70,17 +70,19 @@ function mockSavedVideoResult(fileName = "out.mp4") {
   return generateSpy;
 }
 
+function resetVideoGenerateMocks() {
+  vi.restoreAllMocks();
+  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskExecutorMocks.createRunningTaskRun.mockReset();
+  taskExecutorMocks.completeTaskRunByRunId.mockReset();
+  taskExecutorMocks.failTaskRunByRunId.mockReset();
+  taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+}
+
 describe("createVideoGenerateTool", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-    taskExecutorMocks.createRunningTaskRun.mockReset();
-    taskExecutorMocks.completeTaskRunByRunId.mockReset();
-    taskExecutorMocks.failTaskRunByRunId.mockReset();
-    taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-  });
+  beforeEach(resetVideoGenerateMocks);
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -134,7 +136,7 @@ describe("createVideoGenerateTool", () => {
       ],
       metadata: { taskId: "task-1" },
     });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/tmp/generated-lobster.mp4",
       id: "generated-lobster.mp4",
       size: 11,
@@ -145,6 +147,7 @@ describe("createVideoGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
+            mediaMaxMb: 8,
             videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
           },
         },
@@ -158,6 +161,13 @@ describe("createVideoGenerateTool", () => {
     const result = await tool.execute("call-1", { prompt: "friendly lobster surfing" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
+    expect(saveSpy).toHaveBeenCalledWith(
+      Buffer.from("video-bytes"),
+      "video/mp4",
+      "tool-video-generation",
+      8 * 1024 * 1024,
+      "lobster.mp4",
+    );
     expect(text).toContain("Generated 1 video with qwen/wan2.6-t2v.");
     expect(text).toContain("MEDIA:/tmp/generated-lobster.mp4");
     expect(result.details).toMatchObject({

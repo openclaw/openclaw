@@ -87,6 +87,39 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
   });
 }
 
+function createDiscordAcpCoordinator(cfg: OpenClawConfig) {
+  return createAcpDispatchDeliveryCoordinator({
+    cfg,
+    ctx: buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+    }),
+    dispatcher: createDispatcher(),
+    inboundAudio: false,
+    shouldRouteToOriginating: true,
+    originatingChannel: "discord",
+    originatingTo: "channel:thread-1",
+  });
+}
+
+async function expectDiscordBlockRoutesToAccount(
+  cfg: OpenClawConfig,
+  accountId: string | undefined,
+): Promise<void> {
+  const coordinator = createDiscordAcpCoordinator(cfg);
+
+  await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+  expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
+    expect.objectContaining({
+      channel: "discord",
+      to: "channel:thread-1",
+      accountId,
+    }),
+  );
+}
+
 describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
     deliveryMocks.routeReply.mockClear();
@@ -312,6 +345,33 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("does not fire onReplyStart when user delivery is suppressed", async () => {
+    const onReplyStart = vi.fn(async () => {});
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      suppressUserDelivery: true,
+      shouldRouteToOriginating: false,
+      onReplyStart,
+    });
+
+    // Directly invoking the lifecycle (e.g. from dispatch-acp.ts before the
+    // first deliver call) must not fire the typing indicator when delivery is
+    // suppressed by sendPolicy: "deny".
+    await coordinator.startReplyLifecycle();
+    const delivered = await coordinator.deliver("final", { text: "hello" });
+
+    expect(delivered).toBe(false);
+    expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
   it("keeps parent-owned background ACP child delivery silent while preserving accumulated output", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
@@ -342,61 +402,20 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   });
 
   it("routes ACP replies through the configured default account when AccountId is omitted", async () => {
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig({
+    await expectDiscordBlockRoutesToAccount(
+      createAcpTestConfig({
         channels: {
           discord: {
             defaultAccount: "work",
           },
         },
       }),
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher: createDispatcher(),
-      inboundAudio: false,
-      shouldRouteToOriginating: true,
-      originatingChannel: "discord",
-      originatingTo: "channel:thread-1",
-    });
-
-    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-    expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:thread-1",
-        accountId: "work",
-      }),
+      "work",
     );
   });
 
   it("routes ACP replies when cfg.channels is missing", async () => {
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: {} as OpenClawConfig,
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher: createDispatcher(),
-      inboundAudio: false,
-      shouldRouteToOriginating: true,
-      originatingChannel: "discord",
-      originatingTo: "channel:thread-1",
-    });
-
-    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-    expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:thread-1",
-        accountId: undefined,
-      }),
-    );
+    await expectDiscordBlockRoutesToAccount({} as OpenClawConfig, undefined);
   });
 
   it("treats routed discord block text as visible", async () => {

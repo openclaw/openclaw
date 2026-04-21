@@ -5,12 +5,16 @@ import bundledConfig from "./vitest/vitest.bundled.config.ts";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
 import baseConfig, { rootVitestProjects } from "./vitest/vitest.config.ts";
-import { createContractsVitestConfig } from "./vitest/vitest.contracts.config.ts";
+import {
+  createContractsVitestConfig,
+  pluginContractPatterns,
+} from "./vitest/vitest.contracts-shared.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
+import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 describe("projects vitest config", () => {
@@ -30,14 +34,27 @@ describe("projects vitest config", () => {
     expect(createCommandsVitestConfig().test.pool).toBe("threads");
     expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
     expect(createUnitFastVitestConfig().test.pool).toBe("threads");
-    expect(createContractsVitestConfig().test.pool).toBe("forks");
+    expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("forks");
   });
 
-  it("keeps the contracts lane on the non-isolated fork runner by default", () => {
-    const config = createContractsVitestConfig();
+  it("keeps contract shards on the non-isolated fork runner by default", () => {
+    const config = createContractsVitestConfig(pluginContractPatterns);
     expect(config.test.pool).toBe("forks");
     expect(config.test.isolate).toBe(false);
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+  });
+
+  it("narrows the contracts lane to targeted contract files", () => {
+    const config = createContractsVitestConfig(pluginContractPatterns, {}, [
+      "node",
+      "vitest",
+      "run",
+      "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
+    ]);
+
+    expect(config.test.include).toEqual([
+      "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
+    ]);
   });
 
   it("keeps the root ui lane aligned with the isolated jsdom setup", () => {
@@ -49,6 +66,15 @@ describe("projects vitest config", () => {
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
+  });
+
+  it("keeps the unit-ui shard aligned with the isolated jsdom setup", () => {
+    expect(unitUiConfig.test?.environment).toBe("jsdom");
+    expect(unitUiConfig.test?.isolate).toBe(true);
+    expect(unitUiConfig.test?.runner).toBeUndefined();
+    const setupFiles = normalizeConfigPaths(unitUiConfig.test?.setupFiles);
+    expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
+    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
   });
 
   it("keeps the unit lane on the non-isolated runner by default", () => {

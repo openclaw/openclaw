@@ -16,8 +16,12 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
-  let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-    timer = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  timer = setTimeout(() => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     resolve(onTimeout());
   }, timeoutMs);
   timer.unref?.();
@@ -58,6 +62,15 @@ export async function runGatewayClosePrelude(params: {
   params.stopChannelHealthMonitor?.();
   params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
+}
+
+function isServerNotRunningError(err: unknown): boolean {
+  return Boolean(
+    err &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ERR_SERVER_NOT_RUNNING",
+  );
 }
 
 export function createGatewayCloseHandler(params: {
@@ -236,7 +249,13 @@ export function createGatewayCloseHandler(params: {
           httpServer.closeIdleConnections();
         }
         const closePromise = new Promise<void>((resolve, reject) =>
-          httpServer.close((err) => (err ? reject(err) : resolve())),
+          httpServer.close((err) => {
+            if (!err || isServerNotRunningError(err)) {
+              resolve();
+              return;
+            }
+            reject(err);
+          }),
         );
         const httpGraceTimeout = createTimeoutRace(HTTP_CLOSE_GRACE_MS, () => false as const);
         const closedWithinGrace = await Promise.race([

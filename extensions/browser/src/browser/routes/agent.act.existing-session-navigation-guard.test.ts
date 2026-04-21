@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createExistingSessionAgentSharedModule } from "./existing-session.test-support.js";
+import {
+  createExistingSessionAgentSharedModule,
+  existingSessionRouteState,
+} from "./existing-session.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const chromeMcpMocks = vi.hoisted(() => ({
@@ -14,7 +17,9 @@ const chromeMcpMocks = vi.hoisted(() => ({
 
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  assertBrowserNavigationResultAllowed: vi.fn(
+    async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
+  ),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
@@ -37,6 +42,7 @@ vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 const DEFAULT_SSRF_POLICY = { allowPrivateNetwork: false } as const;
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
+const routeState = existingSessionRouteState;
 
 function getActPostHandler(
   ssrfPolicy: { allowPrivateNetwork: false } | null = DEFAULT_SSRF_POLICY,
@@ -65,6 +71,13 @@ describe("existing-session interaction navigation guard", () => {
       fn.mockClear();
     }
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue("https://example.com");
+    routeState.profileCtx.listTabs.mockReset();
+    routeState.profileCtx.listTabs.mockResolvedValue([
+      {
+        targetId: "7",
+        url: "https://example.com",
+      },
+    ]);
   });
 
   afterEach(() => {
@@ -84,6 +97,10 @@ describe("existing-session interaction navigation guard", () => {
   }
 
   async function expectActionToReject(body: Record<string, unknown>) {
+    await expectActionToThrow(body, "Unable to verify stable post-interaction navigation");
+  }
+
+  async function expectActionToThrow(body: Record<string, unknown>, message: string) {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
     const pending = handler?.({ params: {}, query: {}, body }, response.res) ?? Promise.resolve();
@@ -93,7 +110,7 @@ describe("existing-session interaction navigation guard", () => {
       await pending;
     })();
 
-    await expect(completion).rejects.toThrow("Unable to verify stable post-interaction navigation");
+    await expect(completion).rejects.toThrow(message);
   }
 
   function expectNavigationProbeUrls(urls: string[]) {
@@ -142,6 +159,68 @@ describe("existing-session interaction navigation guard", () => {
       "http://169.254.169.254/latest/meta-data/",
       "http://169.254.169.254/latest/meta-data/",
     ]);
+  });
+
+  it("checks URLs for tabs opened during the interaction window", async () => {
+    routeState.profileCtx.listTabs
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+        {
+          targetId: "9",
+          url: "http://169.254.169.254/latest/meta-data/",
+        },
+      ]);
+
+    const response = await runAction({ kind: "click", ref: "btn-1" });
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
+    expectNavigationProbeUrls([
+      "https://example.com",
+      "https://example.com",
+      "https://example.com",
+      "http://169.254.169.254/latest/meta-data/",
+    ]);
+  });
+
+  it("fails closed when a newly opened tab URL is blocked", async () => {
+    routeState.profileCtx.listTabs
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          targetId: "7",
+          url: "https://example.com",
+        },
+        {
+          targetId: "9",
+          url: "http://169.254.169.254/latest/meta-data/",
+        },
+      ]);
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async (opts?: { url: string }) => {
+        const url = opts?.url ?? "";
+        if (url.includes("169.254.169.254")) {
+          throw new Error("blocked new tab");
+        }
+      },
+    );
+
+    await expectActionToThrow({ kind: "click", ref: "btn-1" }, "blocked new tab");
+    expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
   });
 
   it("fails closed when location probes never return a usable url", async () => {
@@ -243,6 +322,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledOnce();
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+    expect(routeState.profileCtx.listTabs).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
@@ -251,18 +331,7 @@ describe("existing-session interaction navigation guard", () => {
       throw new Error("stale element");
     });
 
-    const handler = getActPostHandler();
-    const response = createBrowserRouteResponse();
-    const pending =
-      handler?.({ params: {}, query: {}, body: { kind: "click", ref: "btn-1" } }, response.res) ??
-      Promise.resolve();
-    void pending.catch(() => {});
-    const completion = (async () => {
-      await vi.runAllTimersAsync();
-      await pending;
-    })();
-
-    await expect(completion).rejects.toThrow("stale element");
+    await expectActionToThrow({ kind: "click", ref: "btn-1" }, "stale element");
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalled();
   });

@@ -49,7 +49,7 @@ export type HeartbeatSenderContext = {
 
 export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
-import { resolveSessionDeliveryTarget } from "./targets-session.js";
+import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
@@ -220,12 +220,25 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
+  const inheritedHeartbeatThreadId = shouldReuseHeartbeatRouteThreadId({
+    cfg,
+    target,
+    heartbeat,
+    turnSource: params.turnSource,
+    entry,
+    resolvedTarget,
+  })
+    ? resolvedTarget.lastThreadId
+    : undefined;
+
   return {
     channel: resolvedTarget.channel,
     to: resolved.to,
     reason,
     accountId: effectiveAccountId,
-    threadId: resolvedTarget.threadId,
+    // Heartbeats normally avoid inheriting session reply-thread IDs, but some
+    // plugins encode thread/topic ids as part of the destination identity.
+    threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };
@@ -283,6 +296,31 @@ function resolveHeartbeatDeliveryChatType(params: {
     channel: params.channel,
     to: params.to,
   });
+}
+
+function shouldReuseHeartbeatRouteThreadId(params: {
+  cfg: OpenClawConfig;
+  target: HeartbeatTarget;
+  heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
+  entry?: SessionEntry;
+  resolvedTarget: SessionDeliveryTarget;
+}): boolean {
+  const channel = params.resolvedTarget.channel;
+  const messaging =
+    channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
+  return (
+    messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
+    params.resolvedTarget.threadId == null &&
+    params.target === "last" &&
+    !params.heartbeat?.to &&
+    params.turnSource?.threadId == null &&
+    params.resolvedTarget.channel === params.resolvedTarget.lastChannel &&
+    Boolean(params.resolvedTarget.to) &&
+    Boolean(params.resolvedTarget.lastTo) &&
+    params.resolvedTarget.to === params.resolvedTarget.lastTo &&
+    normalizeChatType(params.entry?.chatType) === "group"
+  );
 }
 
 function resolveHeartbeatSenderId(params: {
