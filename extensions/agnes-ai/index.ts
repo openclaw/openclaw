@@ -18,20 +18,14 @@ export default definePluginEntry({
           providerId: "agnes-ai",
           methodId: "api-key",
           label: "Agnes AI API key",
+          hint: "API key from Agnes AI dashboard",
+          optionKey: "agnesAiApiKey",
+          flagName: "--agnes-ai-api-key",
           envVar: "AGNES_API_KEY",
+          promptMessage: "Enter your Agnes AI API key",
           defaultModel: "agnes-ai/agnes-1.5-pro"
         })
-      ],
-
-      catalog: {
-        models: [
-          {
-            id: "agnes-ai/agnes-1.5-pro",
-            name: "Agnes 1.5 Pro",
-            type: "text"
-          }
-        ]
-      }
+      ]
     });
   }
 });
