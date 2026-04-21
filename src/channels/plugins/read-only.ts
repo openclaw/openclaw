@@ -21,7 +21,7 @@ type ReadOnlyChannelPluginOptions = {
   cache?: boolean;
 };
 
-export type ReadOnlyChannelPluginResolution = {
+type ReadOnlyChannelPluginResolution = {
   plugins: ChannelPlugin[];
   configuredChannelIds: string[];
   missingConfiguredChannelIds: string[];

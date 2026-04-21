@@ -103,7 +103,7 @@ function listEnvConfiguredManifestChannelIds(params: {
   return [...channelIds].toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listConfiguredChannelIdsForPluginScope(params: {
+function listConfiguredChannelIdsForPluginScope(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
@@ -266,7 +266,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function resolveScopedChannelPluginIds(params: {
+function resolveScopedChannelPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   channelIds: readonly string[];
