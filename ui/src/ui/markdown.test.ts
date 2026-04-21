@@ -317,6 +317,11 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toContain("data-code=");
     });
 
+    it("preserves raw code in data-code without HTML escaping", () => {
+      const html = toSanitizedMarkdownHtml("```\nconst x = 1 < 2 && 2 > 1;\n```");
+      expect(html).toContain('data-code="const x = 1 < 2 && 2 > 1;"');
+    });
+
     it("collapses JSON code blocks", () => {
       const html = toSanitizedMarkdownHtml('```json\n{"key": "value"}\n```');
       expect(html).toContain("<details");

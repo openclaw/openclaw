@@ -391,4 +391,12 @@ describe("handleModelsCommand", () => {
 
     expect(result?.reply?.text).toContain("localai");
   });
+
+  it("bypasses model catalog cache to avoid stale picker data (#69750)", async () => {
+    const result = await handleModelsCommand(buildModelsParams("/models", cfg, "telegram"), true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ useCache: false }),
+    );
+  });
 });

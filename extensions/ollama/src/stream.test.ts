@@ -14,7 +14,7 @@ function makeOllamaResponse(params: {
   content?: string;
   thinking?: string;
   reasoning?: string;
-  tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
+  tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> | string } }>;
 }) {
   return {
     model: "qwen3.5",
@@ -93,7 +93,7 @@ describe("buildAssistantMessage", () => {
         {
           function: {
             name: "read",
-            arguments: '{"path": "/tmp/hello.txt"}' as unknown as Record<string, unknown>,
+            arguments: '{"path": "/tmp/hello.txt"}',
           },
         },
       ],

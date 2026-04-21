@@ -336,7 +336,7 @@ interface OllamaTool {
 interface OllamaToolCall {
   function: {
     name: string;
-    arguments: Record<string, unknown>;
+    arguments: Record<string, unknown> | string;
   };
 }
 
