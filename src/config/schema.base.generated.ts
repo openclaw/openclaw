@@ -1117,7 +1117,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             items: {
               type: "string",
             },
-            title: "ACP Fallbacks",
+            title: "ACP Fallback Backends",
             description:
               "Ordered list of fallback ACP backend ids tried when the primary backend fails with UNAVAILABLE (for example: rate-limit / quota exhausted). Each entry must match a registered ACP runtime plugin backend.",
           },
@@ -25216,7 +25216,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced"],
     },
     "acp.fallbacks": {
-      label: "ACP Fallbacks",
+      label: "ACP Fallback Backends",
       help: "Ordered list of fallback ACP backend ids tried when the primary backend fails with UNAVAILABLE (for example: rate-limit / quota exhausted). Each entry must match a registered ACP runtime plugin backend.",
       tags: ["advanced"],
     },
