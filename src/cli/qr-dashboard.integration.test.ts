@@ -152,7 +152,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");
     expect(joined).toContain(
-      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token",
+      "Local loopback Control UI will auto-connect using bootstrap auth; token is not added to the URL.",
     );
     expect(joined).not.toContain("Token auto-auth unavailable");
     expect(runtimeErrors).toEqual([]);
