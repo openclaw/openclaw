@@ -487,20 +487,23 @@ describe("openai plugin", () => {
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<gpt_tool_discipline>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<parallel_tool_calling>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completeness_contract>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<verification_loop>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<execution_policy>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<tool_discipline>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<output_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completion_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "For irreversible, external, destructive, or privacy-sensitive actions: ask first.",
+    );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
       "Prefer tool evidence over recall when action, state, or mutable facts matter.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "If more tool work would likely change the answer, do it before final.",
-    );
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Final only when each item is handled or marked [blocked] with the missing input.",
+      "If more tool work would likely change the answer, do it before replying.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Return requested sections/order only.");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "Treat the task as incomplete until every requested item is handled",
+    );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("/approve");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");
   });

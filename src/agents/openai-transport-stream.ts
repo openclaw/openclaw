@@ -814,16 +814,12 @@ export function buildOpenAIResponsesParams(
     } else if (model.provider !== "github-copilot") {
       const reasoningEffort = resolveOpenAIReasoningEffortForModel({
         model,
-        effort: "high",
+        effort: "none",
       });
       if (reasoningEffort) {
         params.reasoning = {
           effort: reasoningEffort,
-          ...(reasoningEffort === "none" ? {} : { summary: "auto" }),
         };
-        if (reasoningEffort !== "none") {
-          params.include = ["reasoning.encrypted_content"];
-        }
       }
     }
   }

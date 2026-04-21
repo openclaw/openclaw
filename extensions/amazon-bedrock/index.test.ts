@@ -107,6 +107,12 @@ describe("amazon-bedrock provider plugin", () => {
         modelId: "amazon.nova-micro-v1:0",
       } as never),
     ).toBeUndefined();
+    expect(
+      provider.supportsAdaptiveThinking?.({
+        provider: "amazon-bedrock",
+        modelId: "us.anthropic.claude-opus-4-6-v1",
+      } as never),
+    ).toBe(true);
   });
 
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
