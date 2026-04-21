@@ -189,6 +189,7 @@ Docs: https://docs.openclaw.ai
 - Slack: fix outbound replies failing with "unresolved SecretRef" for accounts configured via `file` or `exec` secret sources; the send path now tolerates the runtime snapshot retaining an unresolved channel SecretRef when a boot-resolved token override is already available. (#68954) Thanks @openperf.
 - Control UI/device pairing: explain scope and role approval upgrades during reconnects, and show requested versus approved access in the Control UI and `openclaw devices` so broader reconnects no longer look like lost pairings. (#69221) Thanks @obviyus.
 - Gateway/Control UI: surface pending scope, role, and device-metadata pairing approvals in auth errors and Control UI hints so broader reconnects no longer look like random auth breakage. (#69226) Thanks @obviyus.
+- fix(config): accept truncateAfterCompaction (#68395). Thanks @MonkeyLeeT
 
 ## 2026.4.19-beta.2
 
