@@ -67,6 +67,7 @@ Minimal config:
       token: "synology-outgoing-token",
       incomingUrl: "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=...",
       webhookPath: "/webhook/synology",
+      mediaUrlHostnameAllowlist: ["cdn.example.com"],
       dmPolicy: "allowlist",
       allowedUserIds: ["123456"],
       rateLimitPerMinute: 30,
@@ -84,6 +85,7 @@ For the default account, you can use env vars:
 - `SYNOLOGY_CHAT_INCOMING_URL`
 - `SYNOLOGY_NAS_HOST`
 - `SYNOLOGY_ALLOWED_USER_IDS` (comma-separated)
+- `SYNOLOGY_MEDIA_URL_HOSTNAME_ALLOWLIST` (comma-separated trusted media hostnames)
 - `SYNOLOGY_RATE_LIMIT`
 - `OPENCLAW_BOT_NAME`
 
@@ -114,10 +116,29 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --te
 
 Media sends are supported by URL-based file delivery.
 
+For security, Synology Chat hostname-based media URLs now require explicit trust
+configuration. Set `channels.synology-chat.mediaUrlHostnameAllowlist` or
+`SYNOLOGY_MEDIA_URL_HOSTNAME_ALLOWLIST` to the exact hostnames you want the NAS
+to fetch from. Public IP literal media URLs are still allowed if they pass the
+SSRF guard, but arbitrary hostname URLs are rejected by default.
+
+Example:
+
+```json5
+{
+  channels: {
+    "synology-chat": {
+      incomingUrl: "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=...",
+      mediaUrlHostnameAllowlist: ["cdn.example.com", "media.example.net"],
+    },
+  },
+}
+```
+
 ## Multi-account
 
 Multiple Synology Chat accounts are supported under `channels.synology-chat.accounts`.
-Each account can override token, incoming URL, webhook path, DM policy, and limits.
+Each account can override token, incoming URL, webhook path, media hostname allowlist, DM policy, and limits.
 Direct-message sessions are isolated per account and user, so the same numeric `user_id`
 on two different Synology accounts does not share transcript state.
 Give each enabled account a distinct `webhookPath`. OpenClaw now rejects duplicate exact paths
@@ -140,6 +161,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
           token: "token-b",
           incomingUrl: "https://nas-b.example.com/...token=...",
           webhookPath: "/webhook/synology-alerts",
+          mediaUrlHostnameAllowlist: ["alerts-cdn.example.com"],
           dmPolicy: "allowlist",
           allowedUserIds: ["987654"],
         },
@@ -156,6 +178,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 - Inbound webhook requests are token-verified and rate-limited per sender.
 - Invalid token checks use constant-time secret comparison and fail closed.
 - Prefer `dmPolicy: "allowlist"` for production.
+- Keep `mediaUrlHostnameAllowlist` narrow and operator-controlled. Hostname-based media URLs are rejected unless explicitly trusted.
 - Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
 - Keep `dangerouslyAllowInheritedWebhookPath` off unless you explicitly accept shared-path routing risk in a multi-account setup.
 
@@ -175,6 +198,10 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
   - `dmPolicy="allowlist"` is enabled but no users are configured
 - `User not authorized`:
   - the sender's numeric `user_id` is not in `allowedUserIds`
+- `Synology Chat file_url hostname URLs require mediaUrlHostnameAllowlist...`:
+  - the media URL uses a hostname and that hostname is not explicitly trusted
+  - add the hostname to `channels.synology-chat.mediaUrlHostnameAllowlist`
+  - or set `SYNOLOGY_MEDIA_URL_HOSTNAME_ALLOWLIST` for the default account
 
 ## Related
 
