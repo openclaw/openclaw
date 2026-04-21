@@ -188,7 +188,10 @@ function assertMainSessionAgentId(
   }
 }
 
-function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+function assertDeliverySupport(
+  job: Pick<CronJob, "sessionTarget" | "delivery">,
+  configuredChannels?: readonly string[],
+) {
   // No delivery object or mode is "none" -- nothing to validate.
   if (!job.delivery || job.delivery.mode === "none") {
     return;
@@ -208,6 +211,13 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.sessionTarget.startsWith("session:");
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  }
+  // Surface ambiguous channel selection at add/edit time instead of at run time.
+  // With a single configured channel, the runtime safely defaults to it.
+  if (configuredChannels && !job.delivery.channel && configuredChannels.length >= 2) {
+    throw new Error(
+      `delivery.channel is required when multiple channels are configured. Active channels: ${configuredChannels.join(", ")}. Set --channel explicitly.`,
+    );
   }
 }
 
@@ -548,7 +558,11 @@ export function nextWakeAtMs(state: CronServiceState) {
   }, first);
 }
 
-export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
+export function createJob(
+  state: CronServiceState,
+  input: CronJobCreate,
+  opts?: { configuredChannels?: readonly string[] },
+): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
   const schedule =
@@ -601,7 +615,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   };
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
-  assertDeliverySupport(job);
+  assertDeliverySupport(job, opts?.configuredChannels);
   assertFailureDestinationSupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
@@ -610,7 +624,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
-  opts?: { defaultAgentId?: string },
+  opts?: { defaultAgentId?: string; configuredChannels?: readonly string[] },
 ) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -680,7 +694,10 @@ export function applyJobPatch(
   }
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
-  assertDeliverySupport(job);
+  // Only validate channel ambiguity when the patch touches delivery. Otherwise
+  // legacy jobs with pre-existing ambiguous delivery couldn't be renamed,
+  // disabled, or rescheduled once a second channel is configured.
+  assertDeliverySupport(job, patch.delivery ? opts?.configuredChannels : undefined);
   assertFailureDestinationSupport(job);
 }
 

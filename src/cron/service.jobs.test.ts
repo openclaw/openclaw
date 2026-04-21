@@ -417,6 +417,83 @@ describe("applyJobPatch", () => {
 
     expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
   });
+
+  describe("channel ambiguity with configuredChannels", () => {
+    const expectedError =
+      "delivery.channel is required when multiple channels are configured. Active channels: telegram, signal. Set --channel explicitly.";
+
+    it("rejects a delivery patch that omits channel when 2+ channels are configured", () => {
+      const job = createIsolatedAgentTurnJob("job-ambiguous-patch", {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      });
+
+      expect(() =>
+        applyJobPatch(
+          job,
+          { delivery: { mode: "announce", channel: "", to: "999" } },
+          { configuredChannels: ["telegram", "signal"] },
+        ),
+      ).toThrow(expectedError);
+    });
+
+    it("allows a delivery patch that sets channel explicitly", () => {
+      const job = createIsolatedAgentTurnJob("job-explicit-channel", {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      });
+
+      expect(() =>
+        applyJobPatch(
+          job,
+          { delivery: { mode: "announce", channel: "signal", to: "+15551234567" } },
+          { configuredChannels: ["telegram", "signal"] },
+        ),
+      ).not.toThrow();
+    });
+
+    it("allows non-delivery updates on a legacy ambiguous job", () => {
+      // Regression: a legacy job with pre-existing ambiguous announce delivery
+      // must still be renameable / disableable / reschedulable once multiple
+      // channels are configured, since its delivery was not part of the patch.
+      const job = createIsolatedAgentTurnJob("job-legacy-ambiguous", {
+        mode: "announce",
+        to: "123",
+      });
+
+      expect(() =>
+        applyJobPatch(job, { enabled: false }, { configuredChannels: ["telegram", "signal"] }),
+      ).not.toThrow();
+      expect(() =>
+        applyJobPatch(job, { name: "renamed" }, { configuredChannels: ["telegram", "signal"] }),
+      ).not.toThrow();
+      expect(() =>
+        applyJobPatch(
+          job,
+          { schedule: { kind: "every", everyMs: 120_000 } },
+          { configuredChannels: ["telegram", "signal"] },
+        ),
+      ).not.toThrow();
+    });
+
+    it("skips the check when only one channel is configured", () => {
+      const job = createIsolatedAgentTurnJob("job-single-channel", {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      });
+
+      expect(() =>
+        applyJobPatch(
+          job,
+          { delivery: { mode: "announce", channel: "", to: "999" } },
+          { configuredChannels: ["telegram"] },
+        ),
+      ).not.toThrow();
+    });
+  });
 });
 
 function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
@@ -506,6 +583,27 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
         },
       }),
     ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+
+  it("rejects isolated announce delivery without channel when 2+ channels are configured", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(
+        state,
+        {
+          name: "ambiguous-announce",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "do it" },
+          delivery: { mode: "announce", to: "123" },
+        },
+        { configuredChannels: ["telegram", "signal"] },
+      ),
+    ).toThrow(
+      "delivery.channel is required when multiple channels are configured. Active channels: telegram, signal. Set --channel explicitly.",
+    );
   });
 });
 

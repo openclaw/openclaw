@@ -246,11 +246,15 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
-export async function add(state: CronServiceState, input: CronJobCreate) {
+export async function add(
+  state: CronServiceState,
+  input: CronJobCreate,
+  opts?: { configuredChannels?: readonly string[] },
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const job = createJob(state, input);
+    const job = createJob(state, input, { configuredChannels: opts?.configuredChannels });
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
@@ -280,13 +284,21 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   });
 }
 
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
+export async function update(
+  state: CronServiceState,
+  id: string,
+  patch: CronJobPatch,
+  opts?: { configuredChannels?: readonly string[] },
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
-    applyJobPatch(job, patch, { defaultAgentId: state.deps.defaultAgentId });
+    applyJobPatch(job, patch, {
+      defaultAgentId: state.deps.defaultAgentId,
+      configuredChannels: opts?.configuredChannels,
+    });
     if (job.schedule.kind === "every") {
       const anchor = job.schedule.anchorMs;
       if (typeof anchor !== "number" || !Number.isFinite(anchor)) {

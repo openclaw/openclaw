@@ -42,12 +42,12 @@ export class CronService implements CronServiceContract {
     return await ops.listPage(this.state, opts);
   }
 
-  async add(input: CronJobCreate) {
-    return await ops.add(this.state, input);
+  async add(input: CronJobCreate, opts?: { configuredChannels?: readonly string[] }) {
+    return await ops.add(this.state, input, opts);
   }
 
-  async update(id: string, patch: CronJobPatch) {
-    return await ops.update(this.state, id, patch);
+  async update(id: string, patch: CronJobPatch, opts?: { configuredChannels?: readonly string[] }) {
+    return await ops.update(this.state, id, patch, opts);
   }
 
   async remove(id: string) {

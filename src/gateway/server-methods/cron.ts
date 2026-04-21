@@ -97,6 +97,7 @@ function assertValidCronUpdateDelivery(params: {
   defaultAgentId?: string;
   currentJob: CronJob | undefined;
   patch: CronJobPatch;
+  configuredChannels: readonly string[];
 }) {
   if (!params.currentJob || !("delivery" in params.patch)) {
     return;
@@ -105,6 +106,7 @@ function assertValidCronUpdateDelivery(params: {
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
     defaultAgentId: params.defaultAgentId,
+    configuredChannels: params.configuredChannels,
   });
   assertValidCronAnnounceDelivery({
     cfg: params.cfg,
@@ -219,6 +221,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const jobCreate = normalized as unknown as CronJobCreate;
     const cfg = loadConfig();
+    const configuredChannels = listConfiguredAnnounceChannelIds(cfg);
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -241,7 +244,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
+    const job = await context.cron.add(jobCreate, { configuredChannels });
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
@@ -291,6 +294,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const patch = p.patch as unknown as CronJobPatch;
     const cfg = loadConfig();
+    const configuredChannels = listConfiguredAnnounceChannelIds(cfg);
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
@@ -308,6 +312,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob: context.cron.getJob(jobId),
         patch,
+        configuredChannels,
       });
     } catch (err) {
       respond(
@@ -320,7 +325,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.update(jobId, patch);
+    const job = await context.cron.update(jobId, patch, { configuredChannels });
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },

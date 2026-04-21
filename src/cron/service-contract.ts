@@ -25,8 +25,15 @@ export interface CronServiceContract {
   status(): Promise<CronStatusSummary>;
   list(opts?: { includeDisabled?: boolean }): Promise<CronListResult>;
   listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
-  add(input: CronAddInput): Promise<CronAddResult>;
-  update(id: string, patch: CronUpdateInput): Promise<CronUpdateResult>;
+  add(
+    input: CronAddInput,
+    opts?: { configuredChannels?: readonly string[] },
+  ): Promise<CronAddResult>;
+  update(
+    id: string,
+    patch: CronUpdateInput,
+    opts?: { configuredChannels?: readonly string[] },
+  ): Promise<CronUpdateResult>;
   remove(id: string): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
