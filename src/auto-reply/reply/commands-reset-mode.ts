@@ -13,11 +13,12 @@ export function parseSoftResetCommand(commandBodyNormalized: string): SoftResetP
     return { matched: false };
   }
   const restLower = normalizeLowercaseStringOrEmpty(rest);
+  const softMatch = restLower.match(/^soft(?:\s|$)/);
+  if (!softMatch) {
+    return { matched: false };
+  }
   if (restLower === "soft") {
     return { matched: true, tail: "" };
   }
-  if (restLower.startsWith("soft ")) {
-    return { matched: true, tail: rest.slice("soft".length).trimStart() };
-  }
-  return { matched: false };
+  return { matched: true, tail: rest.slice(softMatch[0].length).trimStart() };
 }
