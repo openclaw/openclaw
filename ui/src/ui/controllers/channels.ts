@@ -7,36 +7,121 @@ import {
 
 export type { ChannelsState };
 
+type ChannelsRequestStrength = {
+  probe: boolean;
+  includeAccounts: boolean;
+};
+
+type ChannelsPrivateState = ChannelsState & {
+  __channelsRequestSeq?: number;
+  __channelsInFlight?: (ChannelsRequestStrength & { seq: number }) | null;
+  __channelsPending?: ChannelsRequestStrength | null;
+};
+
+function normalizeChannelsRequestStrength(params: {
+  probe: boolean;
+  includeAccounts?: boolean;
+}): ChannelsRequestStrength {
+  return {
+    probe: params.probe,
+    includeAccounts: params.includeAccounts !== false,
+  };
+}
+
+function mergeChannelsRequestStrength(
+  current: ChannelsRequestStrength | null | undefined,
+  next: ChannelsRequestStrength,
+): ChannelsRequestStrength {
+  if (!current) {
+    return next;
+  }
+  return {
+    probe: current.probe || next.probe,
+    includeAccounts: current.includeAccounts || next.includeAccounts,
+  };
+}
+
+function isStrongerChannelsRequest(
+  candidate: ChannelsRequestStrength | null | undefined,
+  current: ChannelsRequestStrength | null | undefined,
+): boolean {
+  if (!candidate) {
+    return false;
+  }
+  if (!current) {
+    return true;
+  }
+  return (
+    (candidate.includeAccounts && !current.includeAccounts) || (candidate.probe && !current.probe)
+  );
+}
+
 export async function loadChannels(
   state: ChannelsState,
   probe: boolean,
   opts?: { includeAccounts?: boolean },
 ) {
+  const privateState = state as ChannelsPrivateState;
+  const request = normalizeChannelsRequestStrength({
+    probe,
+    includeAccounts: opts?.includeAccounts,
+  });
   if (!state.client || !state.connected) {
     return;
   }
   if (state.channelsLoading) {
+    if (isStrongerChannelsRequest(request, privateState.__channelsInFlight)) {
+      privateState.__channelsPending = mergeChannelsRequestStrength(
+        privateState.__channelsPending,
+        request,
+      );
+    }
     return;
   }
+  const seq = (privateState.__channelsRequestSeq ?? 0) + 1;
+  privateState.__channelsRequestSeq = seq;
+  privateState.__channelsInFlight = { ...request, seq };
   state.channelsLoading = true;
   state.channelsError = null;
   try {
     const res = await state.client.request<ChannelsStatusSnapshot | null>("channels.status", {
-      probe,
-      includeAccounts: opts?.includeAccounts,
+      probe: request.probe,
+      includeAccounts: request.includeAccounts,
       timeoutMs: 8000,
     });
-    state.channelsSnapshot = res;
-    state.channelsLastSuccess = Date.now();
+    const pendingStronger = isStrongerChannelsRequest(privateState.__channelsPending, request);
+    if (privateState.__channelsRequestSeq === seq && !pendingStronger) {
+      state.channelsSnapshot = res;
+      state.channelsLastSuccess = Date.now();
+    }
   } catch (err) {
-    if (isMissingOperatorReadScopeError(err)) {
-      state.channelsSnapshot = null;
-      state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
-    } else {
-      state.channelsError = String(err);
+    const pendingStronger = isStrongerChannelsRequest(privateState.__channelsPending, request);
+    if (privateState.__channelsRequestSeq === seq && !pendingStronger) {
+      if (isMissingOperatorReadScopeError(err)) {
+        state.channelsSnapshot = null;
+        state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
+      } else {
+        state.channelsError = String(err);
+      }
     }
   } finally {
-    state.channelsLoading = false;
+    if (privateState.__channelsInFlight?.seq === seq) {
+      privateState.__channelsInFlight = null;
+      state.channelsLoading = false;
+    }
+    const pending = privateState.__channelsPending;
+    if (
+      pending &&
+      privateState.__channelsRequestSeq === seq &&
+      !privateState.__channelsInFlight &&
+      state.connected &&
+      state.client
+    ) {
+      privateState.__channelsPending = null;
+      void loadChannels(state, pending.probe, {
+        includeAccounts: pending.includeAccounts,
+      });
+    }
   }
 }
 
