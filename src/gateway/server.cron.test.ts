@@ -1131,6 +1131,54 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("accepts normalized announce delivery account ids", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-normalized-account-id-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        feishu: {
+          defaultAccount: "Work Bot",
+          accounts: {
+            default: {
+              appId: "feishu-default-app-id",
+            },
+          },
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "normalized account id",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "feishu",
+          accountId: "work-bot",
+          to: "ou_feishu_direct_123",
+        },
+      });
+
+      expect(addRes.ok).toBe(true);
+      expectCronJobIdFromResponse(addRes);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("writes cron run history and auto-runs due jobs", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-log-",

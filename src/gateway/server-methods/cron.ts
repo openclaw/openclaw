@@ -14,6 +14,7 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -102,7 +103,13 @@ function assertConfiguredAnnounceAccount(params: {
   const configuredAccountIds = [
     ...new Set(accountIds.length > 0 ? [defaultAccountId, ...accountIds] : [defaultAccountId]),
   ];
-  if (configuredAccountIds.includes(accountId)) {
+  const normalizedRequestedAccountId = normalizeAccountId(accountId);
+  if (
+    configuredAccountIds.some(
+      (configuredAccountId) =>
+        normalizeAccountId(configuredAccountId) === normalizedRequestedAccountId,
+    )
+  ) {
     return;
   }
   throw new Error(
