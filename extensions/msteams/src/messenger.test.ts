@@ -201,11 +201,6 @@ describe("msteams messenger", () => {
       serviceUrl: "https://service.example.com",
     };
 
-    async function sendAndCaptureRevokeFallbackReference(params: {
-      conversation: StoredConversationReference["conversation"];
-      activityId?: string;
-      threadId?: string;
-    }) {
     it("preserves tenant and conversation type when building proactive references", () => {
       expect(buildConversationReference(baseRef)).toEqual({
         activityId: "activity123",
