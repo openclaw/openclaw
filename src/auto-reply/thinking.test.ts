@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
+  resolveProviderAdaptiveThinking: vi.fn(),
   resolveProviderBinaryThinking: vi.fn(),
   resolveProviderDefaultThinkingLevel: vi.fn(),
   resolveProviderXHighThinking: vi.fn(),
@@ -15,6 +16,7 @@ let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinki
 async function loadFreshThinkingModuleForTest() {
   vi.resetModules();
   vi.doMock("../plugins/provider-thinking.js", () => ({
+    resolveProviderAdaptiveThinking: providerRuntimeMocks.resolveProviderAdaptiveThinking,
     resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
     resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
     resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
@@ -23,6 +25,8 @@ async function loadFreshThinkingModuleForTest() {
 }
 
 beforeEach(async () => {
+  providerRuntimeMocks.resolveProviderAdaptiveThinking.mockReset();
+  providerRuntimeMocks.resolveProviderAdaptiveThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
@@ -113,8 +117,23 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
   });
 
-  it("always includes adaptive", () => {
-    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
+  it("uses provider runtime hooks for adaptive support", () => {
+    providerRuntimeMocks.resolveProviderAdaptiveThinking.mockReturnValue(true);
+
+    expect(listThinkingLevels("demo", "demo-model")).toContain("adaptive");
+  });
+
+  it("does not include adaptive without provider support", () => {
+    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("adaptive");
+    expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("adaptive");
+  });
+
+  it("includes adaptive for provider-advertised models", () => {
+    providerRuntimeMocks.resolveProviderAdaptiveThinking.mockImplementation(
+      ({ provider, context }) =>
+        provider === "anthropic" && context.modelId === "claude-opus-4-6" ? true : undefined,
+    );
+
     expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
   });
 });
