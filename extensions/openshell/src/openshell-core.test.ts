@@ -277,6 +277,36 @@ describe("openshell fs bridges", () => {
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
   });
 
+  it("rejects writes whose final target is a symlink inside the local mount root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const linkedTarget = path.join(workspaceDir, "existing.txt");
+    await fs.writeFile(linkedTarget, "keep", "utf8");
+    await fs.symlink("existing.txt", path.join(workspaceDir, "link.txt"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.writeFile({
+        filePath: "link.txt",
+        data: "owned",
+        mkdir: true,
+      }),
+    ).rejects.toThrow();
+    await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("existing.txt");
+    await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe("keep");
+    expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
+  });
+
   it("maps agent mount paths when the sandbox workspace is read-only", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const agentWorkspaceDir = await makeTempDir("openclaw-openshell-agent-");

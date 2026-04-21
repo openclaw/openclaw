@@ -70,6 +70,12 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "write files");
+    await assertLocalPathSafety({
+      target,
+      root: target.mountHostRoot,
+      allowMissingLeaf: true,
+      allowFinalSymlinkForUnlink: false,
+    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
