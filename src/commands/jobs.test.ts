@@ -5,6 +5,7 @@ import {
   resetDurableJobRegistryForTests,
   updateDurableJobRecordByIdExpectedRevision,
 } from "../tasks/runtime-internal.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { jobsListCommand, jobsShowCommand } from "./jobs.js";
 
 function createRuntime() {
@@ -114,6 +115,93 @@ describe("jobs commands", () => {
     expect(
       output.some((line) => line.startsWith("- 1970-01-01T00:00:00.200Z planned -> running")),
     ).toBe(true);
+  });
+
+  it("returns persisted jobs and transition history after reload", async () => {
+    await withTempDir({ prefix: "openclaw-jobs-command-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetDurableJobRegistryForTests();
+
+      const created = createDurableJobRecord({
+        jobId: "job-reload",
+        title: "Reload durable job",
+        goal: "Prove CLI inspection survives registry reload",
+        ownerSessionKey: "agent:main:main",
+        status: "running",
+        stopCondition: { kind: "manual" },
+        notifyPolicy: { kind: "state_changes", onWaiting: true },
+        currentStep: "inspect_registry",
+        summary: "Initial run in progress",
+        nextWakeAt: 500,
+        backing: { taskFlowId: "flow-reload" },
+        source: { kind: "chat_commitment", messageText: "I'll keep checking this." },
+        requesterOrigin: { channel: "slack", to: "user:U123" },
+        createdBy: "tests",
+        createdAt: 400,
+        updatedAt: 400,
+      });
+      const updated = updateDurableJobRecordByIdExpectedRevision({
+        jobId: created.jobId,
+        expectedRevision: created.audit.revision,
+        patch: {
+          status: "waiting",
+          currentStep: "await_next_wake",
+          summary: "Waiting after reload proof setup",
+          nextWakeAt: 900,
+        },
+        updatedAt: 700,
+      });
+      if (!updated.applied) {
+        throw new Error("expected durable job update to apply");
+      }
+      recordDurableJobTransition({
+        jobId: created.jobId,
+        from: "running",
+        to: "waiting",
+        actor: "assistant",
+        reason: "Waiting for the next sweep",
+        at: 701,
+        disposition: { kind: "notify_and_schedule", notify: true, nextWakeAt: 900 },
+        revision: updated.job.audit.revision,
+      });
+
+      resetDurableJobRegistryForTests({ persist: false });
+
+      const listRuntime = createRuntime();
+      await jobsListCommand({ json: true, owner: "agent:main:main" }, listRuntime as never);
+      expect(JSON.parse(listRuntime.log.mock.calls[0][0])).toEqual(
+        expect.objectContaining({
+          count: 1,
+          owner: "agent:main:main",
+          jobs: [
+            expect.objectContaining({
+              jobId: "job-reload",
+              status: "waiting",
+              currentStep: "await_next_wake",
+              nextWakeAt: 900,
+              backing: expect.objectContaining({ taskFlowId: "flow-reload" }),
+            }),
+          ],
+        }),
+      );
+
+      const showRuntime = createRuntime();
+      await jobsShowCommand({ jobId: "job-reload", json: true }, showRuntime as never);
+      expect(JSON.parse(showRuntime.log.mock.calls[0][0])).toEqual(
+        expect.objectContaining({
+          jobId: "job-reload",
+          status: "waiting",
+          history: [
+            expect.objectContaining({
+              from: "running",
+              to: "waiting",
+              reason: "Waiting for the next sweep",
+              revision: 1,
+            }),
+          ],
+        }),
+      );
+    });
   });
 
   it("returns a clear not-found error for unknown jobs", async () => {
