@@ -178,34 +178,6 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  if (options?.dryRun) {
-    const { getLoadedChannelPluginForRead } = await loadDeliveryTargetRuntime();
-    const defaultTo = getLoadedChannelPluginForRead(channel)?.config.resolveDefaultTo?.({
-      cfg,
-      accountId,
-    });
-    const previewTo = toCandidate ?? defaultTo;
-    if (!previewTo) {
-      return {
-        ok: false,
-        channel,
-        to: undefined,
-        accountId,
-        threadId,
-        mode,
-        error: new Error("Target is required for delivery preview."),
-      };
-    }
-    return {
-      ok: true,
-      channel,
-      to: previewTo,
-      accountId,
-      threadId,
-      mode,
-    };
-  }
-
   let effectiveAllowFrom: string[] | undefined;
   if (mode === "implicit") {
     const {
@@ -262,6 +234,16 @@ export async function resolveDeliveryTarget(
       threadId,
       mode,
       error: docked.error,
+    };
+  }
+  if (options?.dryRun) {
+    return {
+      ok: true,
+      channel,
+      to: docked.to,
+      accountId,
+      threadId,
+      mode,
     };
   }
   const idLikeTarget = await maybeResolveIdLikeTarget({
