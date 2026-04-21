@@ -11,6 +11,8 @@ import { DURABLE_JOB_STATUSES } from "./durable-job-registry.types.js";
 import type {
   DurableJobBacking,
   DurableJobCreateInput,
+  DurableJobDispositionNotification,
+  DurableJobDispositionWake,
   DurableJobJsonObject,
   DurableJobNotifyPolicy,
   DurableJobRecord,
@@ -18,6 +20,7 @@ import type {
   DurableJobStatus,
   DurableJobStopCondition,
   DurableJobTransitionDisposition,
+  DurableJobTransitionDispositionInput,
   DurableJobTransitionInput,
   DurableJobTransitionRecord,
   DurableJobUpdateInput,
@@ -202,41 +205,102 @@ function normalizeSource(source?: DurableJobSource): DurableJobSource | undefine
   };
 }
 
+function normalizeDispositionNotification(
+  notification?: DurableJobDispositionNotification | null,
+): DurableJobDispositionNotification | undefined {
+  if (!notification) {
+    return undefined;
+  }
+  return {
+    status: assertDispositionNotificationStatus(notification.status),
+    ...(normalizeOptionalString(notification.detail)
+      ? { detail: normalizeOptionalString(notification.detail)! }
+      : {}),
+  };
+}
+
+function normalizeDispositionWake(
+  wake?: DurableJobDispositionWake | null,
+): DurableJobDispositionWake | undefined {
+  if (!wake) {
+    return undefined;
+  }
+  return {
+    status: assertDispositionWakeStatus(wake.status),
+    ...(normalizeOptionalTimestamp(wake.nextWakeAt) != null
+      ? { nextWakeAt: normalizeOptionalTimestamp(wake.nextWakeAt)! }
+      : {}),
+    ...(normalizeOptionalString(wake.detail)
+      ? { detail: normalizeOptionalString(wake.detail)! }
+      : {}),
+  };
+}
+
+function inferDurableJobTransitionDispositionKind(params: {
+  notification?: DurableJobDispositionNotification;
+  wake?: DurableJobDispositionWake;
+}): string | undefined {
+  const { notification, wake } = params;
+  if (notification && wake) {
+    switch (wake.status) {
+      case "scheduled":
+        return "notify_and_schedule";
+      case "cleared":
+        return "notify_and_clear_wake";
+      case "unchanged":
+        return "notify_and_keep_wake";
+    }
+  }
+  if (notification) {
+    return "notify_only";
+  }
+  if (wake) {
+    switch (wake.status) {
+      case "scheduled":
+        return "schedule_only";
+      case "cleared":
+        return "clear_wake_only";
+      case "unchanged":
+        return "wake_unchanged";
+    }
+  }
+  return undefined;
+}
+
+export function createDurableJobTransitionDisposition(
+  params: DurableJobTransitionDispositionInput,
+): DurableJobTransitionDisposition | undefined {
+  const notification = normalizeDispositionNotification(params.notification);
+  const wake = normalizeDispositionWake(params.wake);
+  const kind =
+    normalizeOptionalString(params.kind) ??
+    inferDurableJobTransitionDispositionKind({ notification, wake });
+  if (!kind) {
+    return undefined;
+  }
+  return {
+    kind,
+    ...(notification ? { notification } : {}),
+    ...(wake ? { wake } : {}),
+  };
+}
+
 function normalizeDisposition(
   disposition?: DurableJobTransitionDisposition,
 ): DurableJobTransitionDisposition | undefined {
   if (!disposition) {
     return undefined;
   }
-  const notification = disposition.notification
-    ? {
-        status: assertDispositionNotificationStatus(disposition.notification.status),
-        ...(normalizeOptionalString(disposition.notification.detail)
-          ? { detail: normalizeOptionalString(disposition.notification.detail)! }
-          : {}),
-      }
-    : undefined;
-  const wake = disposition.wake
-    ? {
-        status: assertDispositionWakeStatus(disposition.wake.status),
-        ...(normalizeOptionalTimestamp(disposition.wake.nextWakeAt) != null
-          ? { nextWakeAt: normalizeOptionalTimestamp(disposition.wake.nextWakeAt)! }
-          : {}),
-        ...(normalizeOptionalString(disposition.wake.detail)
-          ? { detail: normalizeOptionalString(disposition.wake.detail)! }
-          : {}),
-      }
-    : undefined;
-  return {
+  return createDurableJobTransitionDisposition({
     ...cloneJsonObject(disposition),
     kind: assertNonEmptyString(disposition.kind, "Durable job disposition.kind"),
-    ...(notification ? { notification } : {}),
-    ...(wake ? { wake } : {}),
-  };
+    notification: disposition.notification,
+    wake: disposition.wake,
+  });
 }
 
 function assertDispositionNotificationStatus(
-  value: DurableJobTransitionDisposition["notification"] extends { status: infer T } ? T : never,
+  value: DurableJobDispositionNotification["status"],
 ): "sent" | "skipped" | "failed" {
   if (value === "sent" || value === "skipped" || value === "failed") {
     return value;
@@ -245,7 +309,7 @@ function assertDispositionNotificationStatus(
 }
 
 function assertDispositionWakeStatus(
-  value: DurableJobTransitionDisposition["wake"] extends { status: infer T } ? T : never,
+  value: DurableJobDispositionWake["status"],
 ): "scheduled" | "cleared" | "unchanged" {
   if (value === "scheduled" || value === "cleared" || value === "unchanged") {
     return value;

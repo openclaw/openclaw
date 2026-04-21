@@ -6,6 +6,7 @@ import {
 } from "../../tasks/durable-job-owner-access.js";
 import {
   createDurableJobRecord,
+  createDurableJobTransitionDisposition,
   isDurableJobTransitionDispositionRequired,
   recordDurableJobTransition,
   updateDurableJobRecordByIdExpectedRevision,
@@ -110,7 +111,20 @@ function createBoundDurableJobsRuntime(params: {
         }),
       );
     },
-    transition: ({ jobId, expectedRevision, from, to, reason, actor, at, disposition, patch }) => {
+    transition: ({
+      jobId,
+      expectedRevision,
+      from,
+      to,
+      reason,
+      actor,
+      at,
+      disposition,
+      dispositionKind,
+      notification,
+      wake,
+      patch,
+    }) => {
       const current = getDurableJobByIdForOwner({
         jobId,
         callerOwnerKey: ownerKey,
@@ -125,7 +139,14 @@ function createBoundDurableJobsRuntime(params: {
           current,
         };
       }
-      if (isDurableJobTransitionDispositionRequired(to) && !disposition) {
+      const effectiveDisposition =
+        disposition ??
+        createDurableJobTransitionDisposition({
+          kind: dispositionKind,
+          notification,
+          wake,
+        });
+      if (isDurableJobTransitionDispositionRequired(to) && !effectiveDisposition) {
         return {
           applied: false,
           reason: "disposition_required",
@@ -156,7 +177,7 @@ function createBoundDurableJobsRuntime(params: {
         reason,
         actor,
         at: updatedAt,
-        disposition,
+        disposition: effectiveDisposition,
         revision: updated.job.audit.revision,
       });
       return {

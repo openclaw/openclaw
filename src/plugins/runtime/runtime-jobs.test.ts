@@ -298,6 +298,49 @@ describe("runtime jobs", () => {
     });
   });
 
+  it("derives a canonical disposition from notification and wake inputs", () => {
+    const runtime = createRuntimeJobs();
+    const jobs = runtime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const created = jobs.create({
+      title: "Derived disposition",
+      goal: "Allow callers to pass notification and wake results directly",
+      status: "running",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+    });
+
+    const transitioned = jobs.transition({
+      jobId: created.jobId,
+      expectedRevision: created.audit.revision,
+      from: "running",
+      to: "waiting",
+      reason: "Waiting for the next wake",
+      notification: { status: "sent" },
+      wake: { status: "scheduled", nextWakeAt: 450 },
+      patch: {
+        currentStep: "await_next_wake",
+        nextWakeAt: 450,
+      },
+      at: 300,
+    });
+
+    expect(transitioned).toEqual(
+      expect.objectContaining({
+        applied: true,
+        transition: expect.objectContaining({
+          disposition: {
+            kind: "notify_and_schedule",
+            notification: { status: "sent" },
+            wake: { status: "scheduled", nextWakeAt: 450 },
+          },
+        }),
+      }),
+    );
+  });
+
   it("rejects invalid owner binding and tool contexts without session keys", () => {
     const runtime = createRuntimeJobs();
     const jobs = runtime.bindSession({

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createDurableJobRecord,
+  createDurableJobTransitionDisposition,
   getDurableJobById,
   listDurableJobTransitions,
   recordDurableJobTransition,
@@ -275,6 +276,30 @@ describe("durable-job-registry store runtime", () => {
       expect(statSync(registryDir).mode & 0o777).toBe(0o700);
       expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
     });
+  });
+
+  it("builds canonical dispositions from notification and wake results", () => {
+    expect(
+      createDurableJobTransitionDisposition({
+        notification: { status: "sent" },
+        wake: { status: "scheduled", nextWakeAt: 333 },
+      }),
+    ).toEqual({
+      kind: "notify_and_schedule",
+      notification: { status: "sent" },
+      wake: { status: "scheduled", nextWakeAt: 333 },
+    });
+
+    expect(
+      createDurableJobTransitionDisposition({
+        wake: { status: "cleared", detail: "No retry needed" },
+      }),
+    ).toEqual({
+      kind: "clear_wake_only",
+      wake: { status: "cleared", detail: "No retry needed" },
+    });
+
+    expect(createDurableJobTransitionDisposition({})).toBeUndefined();
   });
 
   it("requires an explicit disposition for important transitions", () => {

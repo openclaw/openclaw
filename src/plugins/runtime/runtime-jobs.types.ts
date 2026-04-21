@@ -1,5 +1,7 @@
 import type {
   DurableJobCreateInput,
+  DurableJobDispositionNotification,
+  DurableJobDispositionWake,
   DurableJobNotifyPolicy,
   DurableJobRecord,
   DurableJobSource,
@@ -14,6 +16,8 @@ import type { OpenClawPluginToolContext } from "../tool-types.js";
 export type {
   DurableJobBacking,
   DurableJobCreateInput,
+  DurableJobDispositionNotification,
+  DurableJobDispositionWake,
   DurableJobNotifyPolicy,
   DurableJobRecord,
   DurableJobSource,
@@ -54,6 +58,9 @@ export type DurableJobRuntimeTransitionParams = {
   actor?: string | null;
   at?: number;
   disposition?: DurableJobTransitionDisposition;
+  dispositionKind?: string;
+  notification?: DurableJobDispositionNotification | null;
+  wake?: DurableJobDispositionWake | null;
   patch?: Omit<DurableJobUpdateInput, "status">;
 };
 

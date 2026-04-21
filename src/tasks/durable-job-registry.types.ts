@@ -32,17 +32,27 @@ export type DurableJobSource = DurableJobJsonObject & {
   messageText?: string;
 };
 
+export type DurableJobDispositionNotification = {
+  status: "sent" | "skipped" | "failed";
+  detail?: string;
+};
+
+export type DurableJobDispositionWake = {
+  status: "scheduled" | "cleared" | "unchanged";
+  nextWakeAt?: number;
+  detail?: string;
+};
+
 export type DurableJobTransitionDisposition = DurableJobJsonObject & {
   kind: string;
-  notification?: {
-    status: "sent" | "skipped" | "failed";
-    detail?: string;
-  };
-  wake?: {
-    status: "scheduled" | "cleared" | "unchanged";
-    nextWakeAt?: number;
-    detail?: string;
-  };
+  notification?: DurableJobDispositionNotification;
+  wake?: DurableJobDispositionWake;
+};
+
+export type DurableJobTransitionDispositionInput = {
+  kind?: string;
+  notification?: DurableJobDispositionNotification | null;
+  wake?: DurableJobDispositionWake | null;
 };
 
 export type DurableJobBacking = {
