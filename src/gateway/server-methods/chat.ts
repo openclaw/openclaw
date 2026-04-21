@@ -1454,10 +1454,12 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
     }
-    const mediaUrls = [
-      ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-      ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-    ];
+    const mediaUrls = Array.from(
+      new Set([
+        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+        ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+      ]),
+    );
     const imageBlocks = await createManagedOutgoingImageBlocks({
       sessionKey: params.sessionKey,
       mediaUrls,

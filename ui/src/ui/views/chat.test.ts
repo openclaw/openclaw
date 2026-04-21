@@ -2000,6 +2000,46 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not fire onMediaLoad when managed preview resolution fails", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const onMediaLoad = vi.fn();
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL) => Promise<Response>>()
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          onRequestUpdate: () => undefined,
+          onMediaLoad,
+          messages: [
+            {
+              id: "assistant-managed-preview-miss",
+              role: "assistant",
+              content: [{ type: "image", url: "api/chat/media/outgoing/missing/full" }],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+    expect(onMediaLoad).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("revokes stale managed preview blob urls when images leave the chat", () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const createObjectURL = vi

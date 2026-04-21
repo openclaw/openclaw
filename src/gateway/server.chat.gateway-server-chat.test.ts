@@ -721,6 +721,97 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history deduplicates assistant image sources across mediaUrl and mediaUrls", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      const dataUrl = `data:image/png;base64,${pngB64}`;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: {
+                text?: string;
+                mediaUrl?: string;
+                mediaUrls?: string[];
+              }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          mediaUrl: dataUrl,
+          mediaUrls: [dataUrl],
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      try {
+        const finalPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === "idem-managed-image-dedupe",
+          8000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me one image",
+          idempotencyKey: "idem-managed-image-dedupe",
+        });
+
+        expect(res.ok).toBe(true);
+        await finalPromise;
+
+        let assistantMessage: Record<string, unknown> | undefined;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+            sessionKey: "main",
+          });
+          expect(historyRes.ok).toBe(true);
+          const messages = historyRes.payload?.messages ?? [];
+          assistantMessage = messages.find(
+            (message): message is Record<string, unknown> =>
+              typeof message === "object" &&
+              message !== null &&
+              (message as { role?: unknown }).role === "assistant",
+          );
+          if (assistantMessage) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        expect(assistantMessage).toBeTruthy();
+        const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
+        expect(assistantContent).toHaveLength(1);
+        expect(assistantContent).toEqual([
+          expect.objectContaining({
+            type: "image",
+            url: expect.stringContaining("/api/chat/media/outgoing/"),
+          }),
+        ]);
+      } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+    });
+  });
+
   test("chat.history rewrites assistant image data URLs into managed image blocks", async () => {
     await withMainSessionStore(async (dir) => {
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;

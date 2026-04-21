@@ -1343,12 +1343,9 @@ function renderMessageImages(
                 ? renderImageFrameContent(img, previewSrc)
                 : previewSrc
                   ? until(
-                      previewSrc.then((resolvedPreviewSrc) => {
-                        if (!resolvedPreviewSrc) {
-                          opts.onMediaLoad?.();
-                        }
-                        return renderImageFrameContent(img, resolvedPreviewSrc);
-                      }),
+                      previewSrc.then((resolvedPreviewSrc) =>
+                        renderImageFrameContent(img, resolvedPreviewSrc),
+                      ),
                       nothing,
                     )
                   : renderImageFrameContent(img, null)}
