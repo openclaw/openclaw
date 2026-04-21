@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
+const listPotentialConfiguredChannelPresenceSignals = vi.hoisted(() => vi.fn());
 const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
 const hasMeaningfulChannelConfig = vi.hoisted(() =>
   vi.fn((value: unknown) => {
@@ -17,6 +18,7 @@ const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
+  listPotentialConfiguredChannelPresenceSignals,
   hasPotentialConfiguredChannels,
   hasMeaningfulChannelConfig,
 }));
@@ -34,6 +36,7 @@ import {
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
+  resolveConfiguredChannelPresencePolicy,
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
@@ -329,6 +332,14 @@ describe("resolveGatewayStartupPluginIds", () => {
       }
       return ["demo-channel"];
     });
+    listPotentialConfiguredChannelPresenceSignals
+      .mockReset()
+      .mockImplementation((config: OpenClawConfig) => {
+        return listPotentialConfiguredChannelIds(config).map((channelId: string) => ({
+          channelId,
+          source: "config",
+        }));
+      });
     hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
       if (Object.prototype.hasOwnProperty.call(config, "channels")) {
         return Object.keys(config.channels ?? {}).length > 0;
@@ -502,6 +513,14 @@ describe("resolveConfiguredChannelPluginIds", () => {
       }
       return [];
     });
+    listPotentialConfiguredChannelPresenceSignals
+      .mockReset()
+      .mockImplementation((config: OpenClawConfig) => {
+        return listPotentialConfiguredChannelIds(config).map((channelId: string) => ({
+          channelId,
+          source: "config",
+        }));
+      });
     hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
       if (Object.prototype.hasOwnProperty.call(config, "channels")) {
         return Object.keys(config.channels ?? {}).length > 0;
@@ -664,6 +683,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
 describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue([]);
+    listPotentialConfiguredChannelPresenceSignals.mockReset().mockReturnValue([]);
     hasPotentialConfiguredChannels.mockReset().mockReturnValue(false);
     hasMeaningfulChannelConfig.mockClear();
     loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
@@ -671,6 +691,9 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
 
   it("filters bundled ambient channel triggers through effective activation", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
 
     expect(
       listConfiguredChannelIdsForReadOnlyScope({
@@ -703,8 +726,41 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toBe(false);
   });
 
+  it("returns reason-rich policy entries for blocked ambient channel triggers", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          plugins: {
+            allow: ["memory-core"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([
+      {
+        channelId: "demo-channel",
+        sources: ["env"],
+        effective: false,
+        pluginIds: [],
+        blockedReasons: ["not-in-allowlist"],
+      },
+    ]);
+  });
+
   it("keeps explicitly enabled bundled ambient channel triggers", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
 
     expect(
       listConfiguredChannelIdsForReadOnlyScope({
@@ -726,8 +782,51 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["demo-channel"]);
   });
 
+  it("treats enabled-only channel config as explicit read-only intent", () => {
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          channels: {
+            "demo-channel": {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([
+      {
+        channelId: "demo-channel",
+        sources: ["explicit-config"],
+        effective: true,
+        pluginIds: ["demo-channel"],
+        blockedReasons: [],
+      },
+    ]);
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          channels: {
+            "demo-channel": {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual(["demo-channel"]);
+  });
+
   it("keeps explicitly configured bundled channels discovered from potential ids", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "config" },
+    ]);
 
     expect(
       listConfiguredChannelIdsForReadOnlyScope({
@@ -747,6 +846,9 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
 
   it("blocks explicitly configured bundled channels when plugins are disabled or denied", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "config" },
+    ]);
 
     expect(
       listConfiguredChannelIdsForReadOnlyScope({
@@ -805,6 +907,10 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
 
   it("uses effective read-only channel policy for announce channels", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel", "demo-other-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+      { channelId: "demo-other-channel", source: "config" },
+    ]);
 
     expect(
       listConfiguredAnnounceChannelIdsForConfig({
@@ -948,6 +1054,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
 
   it("uses manifest env vars for read-only channel presence checks", () => {
     listPotentialConfiguredChannelIds.mockReturnValue([]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([]);
     hasPotentialConfiguredChannels.mockReturnValue(false);
 
     expect(
