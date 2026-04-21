@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Onboard/wizard: simplify the security disclaimer copy (drop the yellow banner and warning icon in favor of plain-prose paragraphs), and flip remaining onboarding pickers with long dynamic option lists to searchable autocompletes (search provider, plugin configure, model provider filter).
+- Ollama/onboard: populate the cloud-only model list from `ollama.com/api/tags` so `openclaw onboard` reflects the live cloud catalog instead of a static three-model seed; cap the discovered list at 500 and fall back to the previous hardcoded suggestions when ollama.com is unreachable or returns no models. (#68463) Thanks @BruceMacD.
+
 ## 2026.4.20
 
 ### Changes
@@ -23,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sessions/reset: add `/reset soft [message]` for an in-place reset that keeps the current transcript/session while clearing reused CLI backend bindings and reloading startup/bootstrap context. (#68635) Thanks @Takhoffman.
 - Exec/YOLO: stop rejecting gateway-host exec in `security=full` plus `ask=off` mode via the Python/Node script preflight hardening path, so promptless YOLO exec once again runs direct interpreter stdin and heredoc forms such as `node <<'NODE' ... NODE`.
 - OpenAI Codex: normalize legacy `openai-completions` transport overrides on default OpenAI/Codex and GitHub Copilot-compatible hosts back to the native Codex Responses transport while leaving custom proxies untouched. (#45304, #42194) Thanks @dyss1992 and @DeadlySilent.
 - Anthropic/plugins: scope Anthropic `api: "anthropic-messages"` defaulting to Anthropic-owned providers, so `openai-codex` and other providers without an explicit `api` no longer get rewritten to the wrong transport. Fixes #64534.

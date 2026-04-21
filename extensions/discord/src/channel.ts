@@ -70,7 +70,7 @@ import { discordSetupAdapter } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
-import { DiscordUiContainer } from "./ui.js";
+import { normalizeDiscordAccentColor, resolveDiscordAccentColor } from "./ui-colors.js";
 
 type DiscordSendFn = typeof import("./send.js").sendMessageDiscord;
 type DiscordCarbonModule = typeof import("@buape/carbon");
@@ -251,7 +251,7 @@ function buildDiscordCrossContextComponents(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const { Separator, TextDisplay } = loadDiscordCarbonModule();
+  const { Container, Separator, TextDisplay } = loadDiscordCarbonModule();
   const trimmed = params.message.trim();
   const components: Array<DiscordTextDisplay | DiscordSeparator> = [];
   if (trimmed) {
@@ -259,7 +259,15 @@ function buildDiscordCrossContextComponents(params: {
     components.push(new Separator({ divider: true, spacing: "small" }));
   }
   components.push(new TextDisplay(`*From ${params.originLabel}*`));
-  return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
+  const configuredAccent = resolveDiscordAccentColor({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return [
+    new Container(components, {
+      accentColor: normalizeDiscordAccentColor(configuredAccent) ?? configuredAccent,
+    }),
+  ];
 }
 
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
