@@ -41,9 +41,11 @@ async function normalizeReplyPayloadMedia(params: {
   try {
     const normalized = await params.normalizeMediaPaths(params.payload);
     return copyReplyPayloadMetadata(params.payload, normalized);
-  } catch (err) {
-    log.warn(`reply payload media normalization failed: ${String(err)}`);
+  } catch {
     const originalMediaUrls = resolveSendableOutboundReplyParts(params.payload).mediaUrls;
+    log.warn(`reply payload media normalization failed`, {
+      mediaCount: originalMediaUrls.length,
+    });
     const droppedMedia: DroppedMediaItem[] = originalMediaUrls.map((media) => ({
       displayName: sanitizeMediaDisplayName(media),
       code: "normalization-failed" as const,

@@ -217,7 +217,7 @@ export function createReplyMediaPathNormalizer(params: {
       try {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
-        log.warn(`dropping blocked reply media: ${String(err)}`, {
+        log.warn(`dropping blocked reply media: ${resolveDroppedMediaCode(err)}`, {
           media: sanitizeMediaDisplayName(media),
         });
         dropped.push({
