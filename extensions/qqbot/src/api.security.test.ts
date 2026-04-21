@@ -81,4 +81,21 @@ describe("qqbot direct upload SSRF guard", () => {
     });
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
+
+  it("allows QQ-approved HTTPS direct-upload URLs for group uploads", async () => {
+    const result = await uploadGroupMedia(
+      "access-token",
+      "group-1",
+      MediaFileType.FILE,
+      "https://cdn.qpic.cn/payload.txt",
+    );
+
+    expect(result).toEqual({ file_uuid: "uuid", file_info: "info", ttl: 3600 });
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("cdn.qpic.cn", {
+      policy: expect.objectContaining({
+        hostnameAllowlist: expect.arrayContaining(["*.qpic.cn"]),
+      }),
+    });
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+  });
 });
