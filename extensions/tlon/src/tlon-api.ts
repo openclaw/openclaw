@@ -226,16 +226,30 @@ async function getMemexUploadUrl(params: {
   }
 
   const endpoint = `${MEMEX_BASE_URL}/v1/${params.config.shipName}/upload`;
-  const response = await fetch(endpoint, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      token: resolvedToken,
-      contentLength: params.contentLength,
-      contentType: params.contentType,
-      fileName: params.fileName,
-    }),
-  });
+  let release: (() => Promise<void>) | undefined;
+  let response: Response;
+  try {
+    const guarded = await fetchWithSsrFGuard({
+      url: endpoint,
+      init: {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: resolvedToken,
+          contentLength: params.contentLength,
+          contentType: params.contentType,
+          fileName: params.fileName,
+        }),
+      },
+      auditContext: "tlon-memex-upload-url",
+      capture: false,
+      maxRedirects: 0,
+    });
+    release = guarded.release;
+    response = guarded.response;
+  } finally {
+    await release?.();
+  }
 
   if (!response.ok) {
     throw new Error(`Memex upload request failed: ${response.status}`);
@@ -252,6 +266,9 @@ async function getMemexUploadUrl(params: {
 export async function uploadFile(params: UploadFileParams): Promise<UploadResult> {
   const config = requireClientConfig();
   const cookie = await getAuthCookie(config);
+  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+    config.dangerouslyAllowPrivateNetwork,
+  );
 
   const [storageConfig, credentials] = await Promise.all([
     getStorageConfiguration(config, cookie),
@@ -355,6 +372,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       auditContext: "tlon-custom-s3-upload",
       capture: false,
       maxRedirects: 0,
+      policy: privateNetworkPolicy,
     });
     release = guarded.release;
     if (!guarded.response.ok) {
