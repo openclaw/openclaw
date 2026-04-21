@@ -111,6 +111,7 @@ export async function resolveSlackThreadContextData(params: {
         files: starter.files,
         token: params.ctx.botToken,
         maxBytes: params.ctx.mediaMaxBytes,
+        client: params.ctx.app.client,
       });
       if (threadStarterMedia) {
         const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");

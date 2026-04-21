@@ -218,6 +218,7 @@ export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
   maxBytes: number;
+  client?: SlackWebClient;
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
   const limitedFiles =
@@ -227,7 +228,20 @@ export async function resolveSlackMedia(params: {
     limitedFiles,
     MAX_SLACK_MEDIA_CONCURRENCY,
     async (file) => {
-      const url = file.url_private_download ?? file.url_private;
+      let url = file.url_private_download ?? file.url_private;
+      // DM file events may omit download URLs. Fall back to files.info API
+      // to fetch a fresh url_private_download when a client is available.
+      if (!url && file.id && params.client) {
+        try {
+          const info = await params.client.files.info({ file: file.id });
+          const fresh = info.file as
+            | { url_private_download?: string; url_private?: string }
+            | undefined;
+          url = fresh?.url_private_download ?? fresh?.url_private;
+        } catch {
+          // files.info failed — skip this file
+        }
+      }
       if (!url) {
         return null;
       }
@@ -288,6 +302,7 @@ export async function resolveSlackAttachmentContent(params: {
   attachments?: SlackAttachment[];
   token: string;
   maxBytes: number;
+  client?: SlackWebClient;
 }): Promise<{ text: string; media: SlackMediaResult[] } | null> {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
@@ -348,6 +363,7 @@ export async function resolveSlackAttachmentContent(params: {
         files: att.files,
         token: params.token,
         maxBytes: params.maxBytes,
+        client: params.client,
       });
       if (fileMedia) {
         allMedia.push(...fileMedia);
