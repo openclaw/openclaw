@@ -87,6 +87,28 @@ describe("bundled plugin postinstall", () => {
     });
   }
 
+  async function writeDiscordDaveyOptionalDependencyFixture(
+    extensionsDir: string,
+    packageRoot: string,
+  ) {
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        "@snazzah/davey": "0.1.11",
+      },
+    });
+    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
+      JSON.stringify({
+        optionalDependencies: {
+          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
+        },
+      }),
+    );
+  }
+
   it("clears global npm config before nested installs", () => {
     expect(
       createNestedNpmInstallEnv({
@@ -100,7 +122,7 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
-  it("installs bundled plugin deps outside of source checkouts", async () => {
+  it("does not install bundled plugin deps outside of source checkouts by default", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
@@ -119,7 +141,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {
@@ -431,6 +453,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_global: "true",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
@@ -475,26 +498,11 @@ describe("bundled plugin postinstall", () => {
   it("reinstalls bundled runtime deps when optional native children are missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "discord", {
-      dependencies: {
-        "@snazzah/davey": "0.1.11",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
-      JSON.stringify({
-        optionalDependencies: {
-          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
-        },
-      }),
-    );
+    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
-      env: { HOME: "/tmp/home" },
+      env: { HOME: "/tmp/home", OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1" },
       extensionsDir,
       packageRoot,
       arch: "arm64",
@@ -510,22 +518,7 @@ describe("bundled plugin postinstall", () => {
   it("does not reinstall when only another platform optional native child is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "discord", {
-      dependencies: {
-        "@snazzah/davey": "0.1.11",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
-      JSON.stringify({
-        optionalDependencies: {
-          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
-        },
-      }),
-    );
+    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
     const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
@@ -614,6 +607,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_global: "true",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
@@ -653,6 +647,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         HOME: "/tmp/home",
       },
       extensionsDir,
@@ -677,6 +672,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",

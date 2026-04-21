@@ -207,7 +207,7 @@ describe("executeSlashCommand /kill", () => {
               spawnedBy: "agent:main:subagent:mine",
             }),
             row("agent:main:subagent:other-root", {
-              spawnedBy: "agent:main:discord:dm:alice",
+              spawnedBy: "agent:main:quietchat:dm:alice",
             }),
           ],
         };
@@ -520,7 +520,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current thinking level: low.\nOptions: off, minimal, low, medium, high, adaptive.",
+      "Current thinking level: low.\nOptions: off, minimal, low, medium, high.",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});

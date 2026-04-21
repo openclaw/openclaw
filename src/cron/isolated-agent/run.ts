@@ -39,6 +39,7 @@ import {
   resolveCronStyleNow,
   resolveDefaultAgentId,
   resolveHookExternalContentSource,
+  resolveSupportedThinkingLevel,
   resolveSessionTranscriptPath,
   resolveThinkingDefault,
   setSessionRuntimeModel,
@@ -142,7 +143,8 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  if (!deliveryPlan.requested) {
+  const hasMessageTargetContext = deliveryPlan.mode !== "webhook" && deliveryPlan.to !== undefined;
+  if (!deliveryPlan.requested && !hasMessageTargetContext) {
     const resolvedDelivery = {
       ok: false as const,
       channel: undefined,
@@ -387,6 +389,19 @@ async function prepareCronRunContext(params: {
     );
     thinkLevel = "high";
   }
+  if (thinkLevel === "max") {
+    const fallbackThinkLevel = resolveSupportedThinkingLevel({
+      provider,
+      model,
+      level: thinkLevel,
+    });
+    if (fallbackThinkLevel !== thinkLevel) {
+      logWarn(
+        `[cron:${input.job.id}] Thinking level "max" is not supported for ${provider}/${model}; downgrading to "${fallbackThinkLevel}".`,
+      );
+      thinkLevel = fallbackThinkLevel;
+    }
+  }
 
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: cfgWithAgentDefaults,
@@ -595,10 +610,11 @@ async function finalizeCronRun(params: {
     }
     prepared.cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
     prepared.cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+    // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
+    // cumulative run usage, so assign directly instead of accumulating).
+    // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
     if (runEstimatedCostUsd !== undefined) {
-      prepared.cronSession.sessionEntry.estimatedCostUsd =
-        (resolveNonNegativeNumber(prepared.cronSession.sessionEntry.estimatedCostUsd) ?? 0) +
-        runEstimatedCostUsd;
+      prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
     }
     telemetry = {
       model: modelUsed,
@@ -666,7 +682,6 @@ async function finalizeCronRun(params: {
     job: prepared.input.job,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
-    runSessionId: prepared.runSessionId,
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,
@@ -747,7 +762,9 @@ export async function runCronIsolatedAgentTurn(params: {
       lane: params.lane,
       resolvedDelivery: {
         channel: prepared.context.resolvedDelivery.channel,
+        to: prepared.context.resolvedDelivery.to,
         accountId: prepared.context.resolvedDelivery.accountId,
+        threadId: prepared.context.resolvedDelivery.threadId,
       },
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,

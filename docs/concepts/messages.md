@@ -153,6 +153,20 @@ Outbound message formatting is centralized in `messages`:
 
 Details: [Configuration](/gateway/configuration-reference#messages) and channel docs.
 
+## Silent replies
+
+The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+OpenClaw resolves that behavior by conversation type:
+
+- Direct conversations disallow silence by default and rewrite a bare silent
+  reply to a short visible fallback.
+- Groups/channels allow silence by default.
+- Internal orchestration allows silence by default.
+
+Defaults live under `agents.defaults.silentReply` and
+`agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and
+`surfaces.<id>.silentReplyRewrite` can override them per surface.
+
 ## Related
 
 - [Streaming](/concepts/streaming) — real-time message delivery
