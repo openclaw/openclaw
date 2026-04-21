@@ -10,6 +10,10 @@ export type OutboundMediaLoadOptions = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
+  /** Preserve WebP format instead of converting to JPEG. */
+  preserveWebp?: boolean;
+  /** Preserve AVIF format instead of converting to JPEG. */
+  preserveAvif?: boolean;
 };
 
 /** Load outbound media from a remote URL or approved local path using the shared web-media policy. */
@@ -17,9 +21,8 @@ export async function loadOutboundMediaFromUrl(
   mediaUrl: string,
   options: OutboundMediaLoadOptions = {},
 ) {
-  return await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({
+  return await loadWebMedia(mediaUrl, {
+    ...buildOutboundMediaLoadOptions({
       maxBytes: options.maxBytes,
       mediaAccess: options.mediaAccess,
       mediaLocalRoots: options.mediaLocalRoots,
@@ -29,5 +32,7 @@ export async function loadOutboundMediaFromUrl(
       requestInit: options.requestInit,
       trustExplicitProxyDns: options.trustExplicitProxyDns,
     }),
-  );
+    preserveWebp: options.preserveWebp,
+    preserveAvif: options.preserveAvif,
+  });
 }

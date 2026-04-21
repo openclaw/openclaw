@@ -53,6 +53,7 @@ import {
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { toDiscordFileBlob } from "../send.shared.js";
 import {
   normalizeDiscordAllowList,
   resolveDiscordAllowListMatch,
@@ -1366,11 +1367,14 @@ async function deliverDiscordInteractionReply(params: {
     const media = await Promise.all(
       reply.mediaUrls.map(async (url) => {
         const loaded = await loadWebMedia(url, {
+          maxBytes: (discordConfig?.mediaMaxMb ?? 8) * 1024 * 1024,
           localRoots: params.mediaLocalRoots,
+          preserveWebp: true,
+          preserveAvif: true,
         });
         return {
           name: loaded.fileName ?? "upload",
-          data: loaded.buffer,
+          data: toDiscordFileBlob(loaded.buffer, loaded.contentType),
         };
       }),
     );
