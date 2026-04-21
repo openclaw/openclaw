@@ -44,12 +44,42 @@ importers:
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.16.0
         version: 0.16.0(zod@4.3.6)
+      '@aws-sdk/client-bedrock':
+        specifier: 3.1032.0
+        version: 3.1032.0
+      '@aws-sdk/client-bedrock-runtime':
+        specifier: 3.1032.0
+        version: 3.1032.0
+      '@aws-sdk/credential-provider-node':
+        specifier: 3.972.32
+        version: 3.972.32
+      '@aws/bedrock-token-generator':
+        specifier: ^1.1.0
+        version: 1.1.0
+      '@buape/carbon':
+        specifier: 0.16.0
+        version: 0.16.0(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.0.8)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
+      '@google/genai':
+        specifier: ^1.50.1
+        version: 1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+      '@grammyjs/runner':
+        specifier: ^2.0.3
+        version: 2.0.3(grammy@1.42.0)
+      '@grammyjs/transformer-throttler':
+        specifier: ^1.2.1
+        version: 1.2.1(grammy@1.42.0)
       '@homebridge/ciao':
         specifier: ^1.3.6
         version: 1.3.6
+      '@lancedb/lancedb':
+        specifier: ^0.27.2
+        version: 0.27.2(apache-arrow@18.1.0)
+      '@larksuiteoapi/node-sdk':
+        specifier: ^1.60.0
+        version: 1.60.0
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
@@ -65,6 +95,12 @@ importers:
       '@mariozechner/pi-tui':
         specifier: 0.67.68
         version: 0.67.68
+      '@matrix-org/matrix-sdk-crypto-nodejs':
+        specifier: ^0.4.0
+        version: 0.4.0
+      '@matrix-org/matrix-sdk-crypto-wasm':
+        specifier: 18.1.0
+        version: 18.1.0
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -74,9 +110,21 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
+      '@pierre/diffs':
+        specifier: 1.1.15
+        version: 1.1.15(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+      '@slack/bolt':
+        specifier: ^4.7.0
+        version: 4.7.0(@types/express@5.0.6)
+      '@slack/web-api':
+        specifier: ^7.15.1
+        version: 7.15.1
+      '@whiskeysockets/baileys':
+        specifier: 7.0.0-rc.9
+        version: 7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -95,18 +143,30 @@ importers:
       croner:
         specifier: ^10.0.1
         version: 10.0.1
+      discord-api-types:
+        specifier: ^0.38.47
+        version: 0.38.47
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
       file-type:
         specifier: 22.0.1
         version: 22.0.1
       gaxios:
         specifier: 7.1.4
         version: 7.1.4
+      google-auth-library:
+        specifier: ^10.6.2
+        version: 10.6.2
+      grammy:
+        specifier: ^1.42.0
+        version: 1.42.0
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
@@ -128,18 +188,36 @@ importers:
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
+      matrix-js-sdk:
+        specifier: 41.3.0
+        version: 41.3.0
+      mpg123-decoder:
+        specifier: ^1.0.3
+        version: 1.0.3
+      music-metadata:
+        specifier: ^11.12.3
+        version: 11.12.3
       node-llama-cpp:
         specifier: 3.18.1
         version: 3.18.1(typescript@6.0.3)
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.3(typescript@6.0.3)
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
+      opusscript:
+        specifier: ^0.0.8
+        version: 0.0.8
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
       pdfjs-dist:
         specifier: ^5.6.205
         version: 5.6.205
+      playwright-core:
+        specifier: 1.59.1
+        version: 1.59.1
       proxy-agent:
         specifier: ^8.0.1
         version: 8.0.1
@@ -149,6 +227,9 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+      silk-wasm:
+        specifier: ^3.7.1
+        version: 3.7.1
       sqlite-vec:
         specifier: 0.1.9
         version: 0.1.9
@@ -8778,6 +8859,26 @@ snapshots:
       - opusscript
       - utf-8-validate
 
+  '@buape/carbon@0.16.0(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.0.8)':
+    dependencies:
+      '@types/node': 25.6.0
+      discord-api-types: 0.38.45
+    optionalDependencies:
+      '@cloudflare/workers-types': 4.20260405.1
+      '@discordjs/voice': 0.19.2(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.0.8)
+      '@types/bun': 1.3.11
+      '@types/ws': 8.18.1
+      ws: 8.20.0
+    transitivePeerDependencies:
+      - '@discordjs/opus'
+      - '@emnapi/core'
+      - '@emnapi/runtime'
+      - bufferutil
+      - ffmpeg-static
+      - node-opus
+      - opusscript
+      - utf-8-validate
+
   '@cacheable/memory@2.0.8':
     dependencies:
       '@cacheable/utils': 2.4.1
@@ -8945,6 +9046,25 @@ snapshots:
       - node-opus
       - opusscript
       - utf-8-validate
+
+  '@discordjs/voice@0.19.2(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.0.8)':
+    dependencies:
+      '@snazzah/davey': 0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
+      '@types/ws': 8.18.1
+      discord-api-types: 0.38.47
+      prism-media: 1.3.5(@discordjs/opus@0.10.0)(opusscript@0.0.8)
+      tslib: 2.8.1
+      ws: 8.20.0
+    transitivePeerDependencies:
+      - '@discordjs/opus'
+      - '@emnapi/core'
+      - '@emnapi/runtime'
+      - bufferutil
+      - ffmpeg-static
+      - node-opus
+      - opusscript
+      - utf-8-validate
+    optional: true
 
   '@emnapi/core@1.9.2':
     dependencies:
@@ -11025,6 +11145,14 @@ snapshots:
       - '@emnapi/runtime'
     optional: true
 
+  '@snazzah/davey-wasm32-wasi@0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)':
+    dependencies:
+      '@napi-rs/wasm-runtime': 1.1.4(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
+    transitivePeerDependencies:
+      - '@emnapi/core'
+      - '@emnapi/runtime'
+    optional: true
+
   '@snazzah/davey-win32-arm64-msvc@0.1.11':
     optional: true
 
@@ -11053,6 +11181,27 @@ snapshots:
     transitivePeerDependencies:
       - '@emnapi/core'
       - '@emnapi/runtime'
+
+  '@snazzah/davey@0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)':
+    optionalDependencies:
+      '@snazzah/davey-android-arm-eabi': 0.1.11
+      '@snazzah/davey-android-arm64': 0.1.11
+      '@snazzah/davey-darwin-arm64': 0.1.11
+      '@snazzah/davey-darwin-x64': 0.1.11
+      '@snazzah/davey-freebsd-x64': 0.1.11
+      '@snazzah/davey-linux-arm-gnueabihf': 0.1.11
+      '@snazzah/davey-linux-arm64-gnu': 0.1.11
+      '@snazzah/davey-linux-arm64-musl': 0.1.11
+      '@snazzah/davey-linux-x64-gnu': 0.1.11
+      '@snazzah/davey-linux-x64-musl': 0.1.11
+      '@snazzah/davey-wasm32-wasi': 0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
+      '@snazzah/davey-win32-arm64-msvc': 0.1.11
+      '@snazzah/davey-win32-ia32-msvc': 0.1.11
+      '@snazzah/davey-win32-x64-msvc': 0.1.11
+    transitivePeerDependencies:
+      - '@emnapi/core'
+      - '@emnapi/runtime'
+    optional: true
 
   '@standard-schema/spec@1.1.0': {}
 
