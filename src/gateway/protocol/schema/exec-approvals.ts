@@ -8,6 +8,9 @@ export const ExecApprovalsAllowlistEntrySchema = Type.Object(
     lastUsedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastUsedCommand: Type.Optional(Type.String()),
     lastResolvedPath: Type.Optional(Type.String()),
+    // Written by Telegram "Allow always" approval handler — retained on disk
+    // and accepted here so the gateway schema mirrors what is actually stored.
+    source: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
