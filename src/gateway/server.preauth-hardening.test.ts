@@ -1,5 +1,6 @@
+import { EventEmitter } from "node:events";
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
   onDiagnosticEvent,
@@ -126,6 +127,52 @@ describe("gateway pre-auth hardening", () => {
         httpServer.close((err) => (err ? reject(err) : resolve())),
       );
     }
+  });
+
+  it("logs websocket upgrade failures before destroying the socket", async () => {
+    const httpServer = new EventEmitter() as unknown as ReturnType<typeof createGatewayHttpServer>;
+    const release = vi.fn();
+    const warn = vi.fn();
+    const socket = Object.assign(new EventEmitter(), {
+      write: vi.fn(),
+      destroy: vi.fn(),
+      once: EventEmitter.prototype.once,
+      off: EventEmitter.prototype.off,
+    });
+    const req = {
+      url: "/",
+      headers: {},
+      socket: { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" },
+    } as unknown as http.IncomingMessage;
+    const wss = {
+      listenerCount: vi.fn(() => 1),
+      handleUpgrade: vi.fn(() => {
+        throw new Error("boom");
+      }),
+      emit: vi.fn(),
+    } as unknown as WebSocketServer;
+
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      canvasHost: null,
+      clients: new Set<GatewayWsClient>(),
+      preauthConnectionBudget: {
+        acquire: () => true,
+        release,
+      } as never,
+      resolvedAuth: { mode: "none", allowTailscale: false },
+      log: { warn },
+    });
+
+    httpServer.emit("upgrade", req, socket, Buffer.alloc(0));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      "ws upgrade error from 127.0.0.1: gateway websocket upgrade failed",
+    );
+    expect(socket.destroy).toHaveBeenCalledOnce();
   });
 
   it("closes idle unauthenticated sockets after the handshake timeout", async () => {

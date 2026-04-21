@@ -1150,6 +1150,7 @@ export function attachGatewayUpgradeHandler(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  log?: { warn: (msg: string) => void };
 }) {
   const {
     httpServer,
@@ -1261,7 +1262,10 @@ export function attachGatewayUpgradeHandler(opts: {
         releaseUpgradeBudget();
         throw new Error("gateway websocket upgrade failed");
       }
-    })().catch(() => {
+    })().catch((error) => {
+      const remoteAddress = req.socket.remoteAddress ?? "unknown";
+      const message = error instanceof Error ? error.message : String(error);
+      opts.log?.warn(`ws upgrade error from ${remoteAddress}: ${message}`);
       socket.destroy();
     });
   });
