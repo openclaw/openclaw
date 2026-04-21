@@ -1,6 +1,7 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import type { UrlRoutingConfig } from "../web-fetch/url-routing.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
@@ -534,6 +535,27 @@ export type ToolsConfig = {
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
+      /**
+       * URL routing rules evaluated before each web_fetch call.
+       * Rules are checked in order; the first match wins.
+       *
+       * - action "redirect": blocks the fetch and tells the agent to use redirectTo instead
+       * - action "warn": allows the fetch but prepends a warning to the tool result
+       * - action "block": blocks the fetch with no redirect suggestion
+       *
+       * @example
+       * ```json
+       * "urlRouting": [
+       *   {
+       *     "match": "x\\.com|twitter\\.com",
+       *     "action": "redirect",
+       *     "redirectTo": "skill:xread",
+       *     "reason": "X.com blocks unauthenticated fetch. Use the xread skill instead."
+       *   }
+       * ]
+       * ```
+       */
+      urlRouting?: UrlRoutingConfig;
       /** Web fetch fallback provider id. */
       provider?: string;
       /** Max characters to return from fetched content. */

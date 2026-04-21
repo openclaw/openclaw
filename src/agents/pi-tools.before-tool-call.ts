@@ -1,4 +1,4 @@
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { ToolLoopDetectionConfig, UrlRoutingConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -6,6 +6,7 @@ import { copyPluginToolMeta } from "../plugins/tools.js";
 import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
+import { evaluateUrlRouting, resolveUrlRoutingRules } from "../web-fetch/url-routing.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -18,6 +19,8 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  /** URL routing rules for web_fetch. Evaluated before the fetch is executed. */
+  urlRouting?: UrlRoutingConfig;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -183,6 +186,18 @@ export async function runBeforeToolCallHook(args: {
     }
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+  }
+
+  // URL routing: check before_tool_call for web_fetch with a url param
+  if (toolName === "web_fetch" && isPlainObject(params) && typeof params.url === "string") {
+    const routingRules = resolveUrlRoutingRules(
+      args.ctx?.urlRouting !== undefined ? { urlRouting: args.ctx.urlRouting } : undefined,
+    );
+    const routingResult = evaluateUrlRouting(params.url, routingRules);
+    if (routingResult.matched && routingResult.blockReason) {
+      log.verbose(`URL routing blocked web_fetch: ${params.url} — ${routingResult.blockReason}`);
+      return { blocked: true, reason: routingResult.blockReason };
+    }
   }
 
   const hookRunner = getGlobalHookRunner();
