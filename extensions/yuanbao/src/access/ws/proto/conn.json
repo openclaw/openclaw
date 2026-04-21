@@ -6,9 +6,6 @@
         "yuanbao": {
           "nested": {
             "conn_common": {
-              "options": {
-                "go_package": "git.woa.com/ifBookProtocol/hunyuanbot/yuanbao_conn/conn_common"
-              },
               "nested": {
                 "RetCode": {
                   "values": {
