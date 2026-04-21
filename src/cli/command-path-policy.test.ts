@@ -5,8 +5,8 @@ describe("command-path-policy", () => {
   it("resolves status policy with shared startup semantics", () => {
     expect(resolveCliCommandPathPolicy(["status"])).toEqual({
       bypassConfigGuard: false,
-      routeConfigGuard: "when-suppressed",
-      loadPlugins: "text-only",
+      routeConfigGuard: "always",
+      loadPlugins: "never",
       hideBanner: false,
       ensureCliPath: false,
     });

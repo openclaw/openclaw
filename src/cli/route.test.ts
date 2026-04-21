@@ -55,7 +55,7 @@ describe("tryRouteCli", () => {
     originalForceStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
     findRoutedCommandMock.mockReturnValue({
-      loadPlugins: (argv: string[]) => !argv.includes("--json"),
+      loadPlugins: false,
       run: runRouteMock,
     });
   });
@@ -86,11 +86,8 @@ describe("tryRouteCli", () => {
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
-      commandPath: ["status"],
-    });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("routes logs to stderr during plugin loading in --json mode and restores after", async () => {
@@ -137,11 +134,8 @@ describe("tryRouteCli", () => {
     );
 
     expect(findRoutedCommandMock).toHaveBeenCalledWith(["status"]);
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
-      commandPath: ["status"],
-    });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("respects OPENCLAW_HIDE_BANNER for routed commands", async () => {

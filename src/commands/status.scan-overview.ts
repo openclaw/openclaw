@@ -22,6 +22,7 @@ let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime
 let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
 let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+let configMaterializeModulePromise: Promise<typeof import("../config/materialize.js")> | undefined;
 let commandConfigResolutionModulePromise:
   | Promise<typeof import("../cli/command-config-resolution.js")>
   | undefined;
@@ -62,6 +63,11 @@ function loadStatusSummaryModule() {
 function loadConfigModule() {
   configModulePromise ??= import("../config/config.js");
   return configModulePromise;
+}
+
+function loadConfigMaterializeModule() {
+  configMaterializeModulePromise ??= import("../config/materialize.js");
+  return configMaterializeModulePromise;
 }
 
 function loadCommandConfigResolutionModule() {
@@ -161,17 +167,29 @@ export async function collectStatusScanOverview(params: {
   } = await loadStatusScanCommandConfig({
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readBestEffortConfig: async () => (await loadConfigModule()).readBestEffortConfig(),
-    resolveConfig: async (loadedConfig) =>
+    readBestEffortConfig: async () =>
       await (
-        await loadCommandConfigResolutionModule()
-      ).resolveCommandConfigWithSecrets({
-        config: loadedConfig,
-        commandName: params.commandName,
-        targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(),
-        mode: "read_only_status",
-        ...(params.runtime ? { runtime: params.runtime } : {}),
+        await loadConfigModule()
+      ).readSourceConfigBestEffort({
+        skipLegacyPluginRules: true,
+        skipRuntimeLegacyMigrations: true,
       }),
+    resolveConfig: async (loadedConfig) =>
+      await (async () => {
+        const [{ resolveCommandConfigWithSecrets }, { materializeRuntimeConfig }] =
+          await Promise.all([loadCommandConfigResolutionModule(), loadConfigMaterializeModule()]);
+        const resolved = await resolveCommandConfigWithSecrets({
+          config: loadedConfig,
+          commandName: params.commandName,
+          targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(),
+          mode: "read_only_status",
+          ...(params.runtime ? { runtime: params.runtime } : {}),
+        });
+        return {
+          resolvedConfig: materializeRuntimeConfig(resolved.resolvedConfig, "snapshot"),
+          diagnostics: resolved.diagnostics,
+        };
+      })(),
   });
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
@@ -238,16 +256,21 @@ export async function collectStatusScanOverview(params: {
           useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
         });
         params.progress?.tick();
-        const { collectChannelStatusIssues, buildChannelsTable } =
-          await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
+        const {
+          collectChannelStatusIssues,
+          buildChannelsTable,
+          buildChannelsTableFromGatewayStatus,
+        } = await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
         const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
         if (params.labels?.summarizingChannels) {
           params.progress?.setLabel(params.labels.summarizingChannels);
         }
-        const channels = await buildChannelsTable(cfg, {
-          showSecrets: params.showSecrets,
-          sourceConfig,
-        });
+        const channels = channelsStatus
+          ? buildChannelsTableFromGatewayStatus(channelsStatus)
+          : await buildChannelsTable(cfg, {
+              showSecrets: params.showSecrets,
+              sourceConfig,
+            });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };
       })()
@@ -287,6 +310,7 @@ export async function resolveStatusSummaryFromOverview(params: {
     getStatusSummary({
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
+      includeChannelSummary: false,
     }),
   );
 }

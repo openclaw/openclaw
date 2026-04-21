@@ -105,11 +105,12 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
+    includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
   } = {},
 ): Promise<StatusSummary> {
-  const { includeSensitive = true } = options;
+  const { includeSensitive = true, includeChannelSummary = true } = options;
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
@@ -117,7 +118,7 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
-  const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
+  const needsChannelPlugins = includeChannelSummary && hasPotentialConfiguredChannels(cfg);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
         resolveLinkChannelContext(cfg),

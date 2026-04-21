@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
-import { runExec } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { buildTailscaleHttpsUrl, resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
@@ -89,21 +89,29 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
     hasConfiguredChannels: params.hasConfiguredChannels,
     all: params.opts.all,
   });
+  const includeLiveUpdateChecks = params.opts.all === true;
   const updateTimeoutMs = params.opts.all ? 6500 : 2500;
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
       : params
           .getTailnetHostname((cmd, args) =>
-            runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+            runCommandWithTimeout([cmd, ...args], {
+              timeoutMs: 1200,
+            }).then((result) => ({
+              stdout:
+                result.stdout.length > 200_000 ? result.stdout.slice(0, 200_000) : result.stdout,
+              stderr:
+                result.stderr.length > 200_000 ? result.stderr.slice(0, 200_000) : result.stderr,
+            })),
           )
           .catch(() => null);
   const updatePromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartUpdateResult())
     : params.getUpdateCheckResult({
         timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
+        fetchGit: includeLiveUpdateChecks,
+        includeRegistry: includeLiveUpdateChecks,
       });
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)

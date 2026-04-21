@@ -247,11 +247,10 @@ function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
   expectAutoEnabledStatusLoad({
     rawConfig,
   });
-  expectPluginLoaderCall({
+  expectMetadataSnapshotLoaderCall({
     config: autoEnabledConfig,
     activationSourceConfig: rawConfig,
-    autoEnabledReasons,
-    loadModules: true,
+    loadModules: false,
   });
 }
 

@@ -34,7 +34,7 @@ describe("command-startup-policy", () => {
         commandPath: ["status"],
         suppressDoctorStdout: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("matches plugin preload policy", () => {
@@ -43,7 +43,7 @@ describe("command-startup-policy", () => {
         commandPath: ["status"],
         jsonOutputMode: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
         commandPath: ["status"],
@@ -106,6 +106,19 @@ describe("command-startup-policy", () => {
       }),
     ).toEqual({
       suppressDoctorStdout: true,
+      hideBanner: false,
+      skipConfigGuard: true,
+      loadPlugins: false,
+    });
+
+    expect(
+      resolveCliStartupPolicy({
+        commandPath: ["status"],
+        jsonOutputMode: false,
+        routeMode: true,
+      }),
+    ).toEqual({
+      suppressDoctorStdout: false,
       hideBanner: false,
       skipConfigGuard: true,
       loadPlugins: false,

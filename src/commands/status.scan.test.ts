@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -160,6 +161,19 @@ describe("scanStatus", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
+  it("keeps plain status update checks on the local fast path", async () => {
+    configureScanStatus();
+    mocks.resolveConfigPath.mockReturnValue(join(process.cwd(), "package.json"));
+
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith({
+      timeoutMs: 2500,
+      fetchGit: false,
+      includeRegistry: false,
+    });
+  });
+
   it("skips memory backend inspection for default memory-core with no existing store", async () => {
     configureScanStatus();
 
@@ -186,7 +200,7 @@ describe("scanStatus", () => {
     });
   });
 
-  it("preloads configured channel plugins for status --json when channel config exists", async () => {
+  it("keeps status --json on the no-preload channel fast path when channel config exists", async () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -204,14 +218,7 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: true }, {} as never);
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "configured-channels",
-        config: expect.objectContaining({ marker: "resolved-preload" }),
-        activationSourceConfig: expect.objectContaining({ marker: "source-preload" }),
-      }),
-    );
-    // Verify plugin logs were routed to stderr during loading and restored after
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({ detailLevel: "presence" }),
@@ -221,7 +228,7 @@ describe("scanStatus", () => {
     );
   });
 
-  it("preloads configured channel plugins for status --json when channel auth is env-only", async () => {
+  it("keeps status --json on the no-preload path when channel auth is env-only", async () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -239,12 +246,18 @@ describe("scanStatus", () => {
       await scanStatus({ json: true }, {} as never);
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "configured-channels",
-        config: expect.objectContaining({ marker: "resolved-env-only" }),
-        activationSourceConfig: expect.objectContaining({ marker: "source-env-only" }),
-      }),
-    );
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+  });
+
+  it("restores live update checks for status --json --all", async () => {
+    configureScanStatus();
+
+    await scanStatus({ json: true, all: true }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith({
+      timeoutMs: 6500,
+      fetchGit: true,
+      includeRegistry: true,
+    });
   });
 });

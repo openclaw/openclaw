@@ -59,7 +59,9 @@ export async function scanStatus(
       });
 
       progress.setLabel("Checking plugins…");
-      const pluginCompatibility = buildPluginCompatibilityNotices({ config: overview.cfg });
+      const pluginCompatibility = opts.all
+        ? buildPluginCompatibilityNotices({ config: overview.cfg })
+        : [];
       progress.tick();
 
       progress.setLabel("Checking memory and sessions…");

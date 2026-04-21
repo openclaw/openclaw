@@ -6,11 +6,13 @@ const mocks = vi.hoisted(() => ({
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
   readBestEffortConfig: vi.fn(),
+  readSourceConfigBestEffort: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
   callGateway: vi.fn(),
   collectChannelStatusIssues: vi.fn(),
   buildChannelsTable: vi.fn(),
+  buildChannelsTableFromGatewayStatus: vi.fn(),
 }));
 
 vi.mock("../channels/config-presence.js", () => ({
@@ -27,6 +29,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   readBestEffortConfig: mocks.readBestEffortConfig,
+  readSourceConfigBestEffort: mocks.readSourceConfigBestEffort,
 }));
 
 vi.mock("../infra/os-summary.js", () => ({
@@ -45,6 +48,7 @@ vi.mock("./status.scan.runtime.js", () => ({
   statusScanRuntime: {
     collectChannelStatusIssues: mocks.collectChannelStatusIssues,
     buildChannelsTable: mocks.buildChannelsTable,
+    buildChannelsTableFromGatewayStatus: mocks.buildChannelsTableFromGatewayStatus,
   },
 }));
 
@@ -55,6 +59,7 @@ describe("collectStatusScanOverview", () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
     mocks.readBestEffortConfig.mockResolvedValue({ session: {} });
+    mocks.readSourceConfigBestEffort.mockResolvedValue({ session: {} });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { session: {} },
       diagnostics: ["secret warning"],
@@ -93,6 +98,7 @@ describe("collectStatusScanOverview", () => {
     mocks.callGateway.mockResolvedValue({ channelAccounts: {} });
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
     mocks.buildChannelsTable.mockResolvedValue({ rows: [], details: [] });
+    mocks.buildChannelsTableFromGatewayStatus.mockReturnValue({ rows: [], details: [] });
   });
 
   it("uses gateway fallback overrides for channels.status when requested", async () => {
@@ -110,11 +116,9 @@ describe("collectStatusScanOverview", () => {
         token: "tok",
       }),
     );
-    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(mocks.buildChannelsTableFromGatewayStatus).toHaveBeenCalledWith(
       expect.objectContaining({
-        showSecrets: false,
-        sourceConfig: { session: {} },
+        channelAccounts: {},
       }),
     );
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
@@ -154,6 +158,13 @@ describe("collectStatusScanOverview", () => {
     });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        showSecrets: true,
+        sourceConfig: { session: {} },
+      }),
+    );
     expect(result.channelsStatus).toBeNull();
     expect(result.channelIssues).toEqual([]);
   });

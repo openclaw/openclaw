@@ -72,6 +72,20 @@ function expectMemoryAutoEnableApplied(rawConfig: unknown, autoEnabledConfig: un
   expectMemoryRuntimeLoaded(rawConfig, autoEnabledConfig);
 }
 
+function expectScopedMemoryRuntimeLoaded(
+  rawConfig: unknown,
+  autoEnabledConfig: unknown,
+  onlyPluginIds: string[],
+) {
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: autoEnabledConfig,
+      activationSourceConfig: rawConfig,
+      onlyPluginIds,
+    }),
+  );
+}
+
 function setAutoEnabledMemoryRuntime() {
   const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
   const runtime = createMemoryRuntimeFixture();
@@ -157,6 +171,53 @@ describe("memory runtime auto-enable loading", () => {
     },
   ] as const)("$name", async ({ run, expectedResult }) => {
     await expectAutoEnabledMemoryRuntimeCase({ run, expectedResult });
+  });
+
+  it("loads only the active memory plugin before considering a full registry load", async () => {
+    const { rawConfig, autoEnabledConfig, runtime } = setAutoEnabledMemoryRuntime();
+
+    await getActiveMemorySearchManager({
+      cfg: rawConfig as never,
+      agentId: "main",
+      purpose: "status",
+    });
+
+    expectScopedMemoryRuntimeLoaded(rawConfig, autoEnabledConfig, ["memory-core"]);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+    expect(runtime.getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: rawConfig,
+      agentId: "main",
+      purpose: "status",
+    });
+  });
+
+  it("falls back to the full plugin registry when the scoped load does not register memory", async () => {
+    const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
+    const runtime = createMemoryRuntimeFixture();
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+    getMemoryRuntimeMock
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue(runtime);
+
+    await getActiveMemorySearchManager({
+      cfg: rawConfig as never,
+      agentId: "main",
+      purpose: "status",
+    });
+
+    expectScopedMemoryRuntimeLoaded(rawConfig, autoEnabledConfig, ["memory-core"]);
+    expectMemoryRuntimeLoaded(rawConfig, autoEnabledConfig);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(2);
+    expect(runtime.getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: rawConfig,
+      agentId: "main",
+      purpose: "status",
+    });
   });
 
   it.each([

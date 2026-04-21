@@ -54,6 +54,33 @@ describe("status.command-sections", () => {
     expect(lines.at(-1)).toBe("muted(Deep probe: cmd:openclaw security audit --deep)");
   });
 
+  it("surfaces info-only security audit reports when fast status defers the full audit", () => {
+    const lines = buildStatusSecurityAuditLines({
+      securityAudit: {
+        summary: { critical: 0, warn: 0, info: 1 },
+        findings: [
+          {
+            severity: "info",
+            title: "Fast status skipped the full security audit",
+            detail: "The audit exceeded the fast-status budget.",
+            remediation: 'Run "openclaw security audit" for the full report.',
+          },
+        ],
+      },
+      theme: {
+        error: (value) => `error(${value})`,
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+      },
+      shortenText: (value) => value,
+      formatCliCommand: (value) => `cmd:${value}`,
+    });
+
+    expect(lines[1]).toBe("  muted(INFO) Fast status skipped the full security audit");
+    expect(lines[2]).toBe("    The audit exceeded the fast-status budget.");
+    expect(lines[3]).toBe('    muted(Fix: Run "openclaw security audit" for the full report.)');
+  });
+
   it("builds verbose sessions rows and empty fallback rows", () => {
     const verboseRows = buildStatusSessionsRows({
       recent: [

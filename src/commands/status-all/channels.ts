@@ -6,8 +6,7 @@ import {
   formatChannelAllowFrom,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
-import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
+import { listStatusChannelPlugins } from "../../channels/plugins/status-read.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
@@ -30,7 +29,131 @@ export type ChannelRow = {
   detail: string;
 };
 
-type ChannelAccountRow = ChannelAccountTokenSummaryRow & {
+function resolveGatewayChannelIds(payload: Record<string, unknown>): string[] {
+  const channelOrder = Array.isArray(payload.channelOrder)
+    ? payload.channelOrder.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : [];
+  if (channelOrder.length > 0) {
+    return channelOrder;
+  }
+  const channelAccounts = asRecord(payload.channelAccounts);
+  const channelSummaries = asRecord(payload.channels);
+  return [...new Set([...Object.keys(channelAccounts), ...Object.keys(channelSummaries)])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
+function hasGatewayUnavailableCredential(accounts: Array<Record<string, unknown>>): boolean {
+  return accounts.some((account) => hasConfiguredUnavailableCredentialStatus(account));
+}
+
+function buildGatewayChannelRow(params: {
+  id: string;
+  label: string;
+  accounts: Array<Record<string, unknown>>;
+  summary: Record<string, unknown> | null;
+}): ChannelRow {
+  const enabledAccounts = params.accounts.filter((account) => account.enabled === true);
+  const anyConfigured =
+    params.accounts.some((account) => account.configured === true) ||
+    params.summary?.configured === true;
+  const linked = typeof params.summary?.linked === "boolean" ? params.summary.linked : null;
+  const firstError = enabledAccounts.find(
+    (account) => typeof account.lastError === "string" && account.lastError.trim(),
+  )?.lastError as string | undefined;
+
+  if (enabledAccounts.length === 0) {
+    return {
+      id: params.id as ChannelId,
+      label: params.label,
+      enabled: false,
+      state: "off",
+      detail: anyConfigured ? "disabled" : "not configured",
+    };
+  }
+
+  if (firstError) {
+    return {
+      id: params.id as ChannelId,
+      label: params.label,
+      enabled: true,
+      state: "warn",
+      detail: firstError.trim(),
+    };
+  }
+
+  if (linked === true) {
+    return {
+      id: params.id as ChannelId,
+      label: params.label,
+      enabled: true,
+      state: "ok",
+      detail: "linked",
+    };
+  }
+
+  if (linked === false) {
+    return {
+      id: params.id as ChannelId,
+      label: params.label,
+      enabled: true,
+      state: "warn",
+      detail: "not linked",
+    };
+  }
+
+  if (hasGatewayUnavailableCredential(enabledAccounts)) {
+    return {
+      id: params.id as ChannelId,
+      label: params.label,
+      enabled: true,
+      state: "warn",
+      detail: "secret unavailable in this command path",
+    };
+  }
+
+  return {
+    id: params.id as ChannelId,
+    label: params.label,
+    enabled: true,
+    state: anyConfigured ? "ok" : "setup",
+    detail: anyConfigured ? "configured" : "setup required",
+  };
+}
+
+export function buildChannelsTableFromGatewayStatus(payload: Record<string, unknown>): {
+  rows: ChannelRow[];
+  details: Array<{
+    title: string;
+    columns: string[];
+    rows: Array<Record<string, string>>;
+  }>;
+} {
+  const channelLabels = asRecord(payload.channelLabels);
+  const channelAccounts = asRecord(payload.channelAccounts);
+  const channelSummaries = asRecord(payload.channels);
+  const rows = resolveGatewayChannelIds(payload).map((id) => {
+    const accounts = Array.isArray(channelAccounts[id])
+      ? (channelAccounts[id] as Array<Record<string, unknown>>)
+      : [];
+    const summary = asRecord(channelSummaries[id]);
+    const label =
+      typeof channelLabels[id] === "string" && channelLabels[id].trim()
+        ? channelLabels[id].trim()
+        : id;
+    return buildGatewayChannelRow({
+      id,
+      label,
+      accounts,
+      summary,
+    });
+  });
+  return { rows, details: [] };
+}
+
+type ChannelAccountRow = {
   accountId: string;
   configured: boolean;
 };
@@ -204,8 +327,13 @@ export async function buildChannelsTable(
     columns: string[];
     rows: Array<Record<string, string>>;
   }> = [];
+  const sourceConfig = opts?.sourceConfig ?? cfg;
+  const plugins = listStatusChannelPlugins({
+    cfg,
+    sourceConfig,
+  });
 
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -215,7 +343,6 @@ export async function buildChannelsTable(
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
 
     const accounts: ChannelAccountRow[] = [];
-    const sourceConfig = opts?.sourceConfig ?? cfg;
     for (const accountId of resolvedAccountIds) {
       accounts.push(
         await resolveChannelAccountRow({

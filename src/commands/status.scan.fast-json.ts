@@ -1,5 +1,4 @@
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
@@ -35,14 +34,6 @@ export async function scanStatusJsonWithPolicy(
     resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
     includeChannelsData: false,
   });
-  if (overview.hasConfiguredChannels) {
-    await ensureCliPluginRegistryLoaded({
-      scope: "configured-channels",
-      routeLogsToStderr: true,
-      config: overview.cfg,
-      activationSourceConfig: overview.sourceConfig,
-    });
-  }
 
   return await executeStatusScanFromOverview({
     overview,

@@ -96,6 +96,27 @@ export function resolvePairingRecoveryContext(params: {
   };
 }
 
+function buildStatusSecurityAuditDeferredReport() {
+  return {
+    ts: Date.now(),
+    summary: {
+      critical: 0,
+      warn: 0,
+      info: 1,
+    },
+    findings: [
+      {
+        checkId: "status-audit-deferred",
+        severity: "info" as const,
+        title: "Fast status skipped the full security audit",
+        detail: "Fast status mode skips the full security audit to keep the command responsive.",
+        remediation:
+          'Run "openclaw security audit" or "openclaw status --all" for the full report.',
+      },
+    ],
+  };
+}
+
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -158,21 +179,14 @@ export async function statusCommand(
     pluginCompatibility,
   } = scan;
 
-  const {
-    securityAudit,
-    usage,
-    health,
-    lastHeartbeat,
-    gatewayService: daemon,
-    nodeService: nodeDaemon,
-  } = await resolveStatusRuntimeSnapshot({
+  const runtimeSnapshot = await resolveStatusRuntimeSnapshot({
     config: scan.cfg,
     sourceConfig: scan.sourceConfig,
     timeoutMs: opts.timeoutMs,
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
-    includeSecurityAudit: true,
+    includeSecurityAudit: opts.all === true,
     resolveSecurityAudit: async (input) =>
       await withProgress(
         {
@@ -201,6 +215,15 @@ export async function statusCommand(
         async () => await resolveStatusGatewayHealth(input),
       ),
   });
+  const securityAudit =
+    opts.all === true ? runtimeSnapshot.securityAudit : buildStatusSecurityAuditDeferredReport();
+  const {
+    usage,
+    health,
+    lastHeartbeat,
+    gatewayService: daemon,
+    nodeService: nodeDaemon,
+  } = runtimeSnapshot;
 
   const rich = true;
   const {

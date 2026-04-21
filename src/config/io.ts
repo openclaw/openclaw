@@ -986,14 +986,27 @@ function resolveConfigForRead(
 function resolveLegacyConfigForRead(
   resolvedConfigRaw: unknown,
   sourceRaw: unknown,
+  options?: {
+    skipLegacyPluginRules?: boolean;
+    skipRuntimeLegacyMigrations?: boolean;
+  },
 ): LegacyMigrationResolution {
-  const pluginIds = collectRelevantDoctorPluginIds(resolvedConfigRaw);
-  const sourceLegacyIssues = findLegacyConfigIssues(
-    resolvedConfigRaw,
-    sourceRaw,
-    listPluginDoctorLegacyConfigRules({ pluginIds }),
-  );
+  const sourceLegacyIssues = options?.skipLegacyPluginRules
+    ? []
+    : findLegacyConfigIssues(
+        resolvedConfigRaw,
+        sourceRaw,
+        listPluginDoctorLegacyConfigRules({
+          pluginIds: collectRelevantDoctorPluginIds(resolvedConfigRaw),
+        }),
+      );
   if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
+    return {
+      effectiveConfigRaw: resolvedConfigRaw,
+      sourceLegacyIssues,
+    };
+  }
+  if (options?.skipRuntimeLegacyMigrations) {
     return {
       effectiveConfigRaw: resolvedConfigRaw,
       sourceLegacyIssues,
@@ -1453,7 +1466,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     );
   }
 
-  async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
+  async function readSourceConfigBestEffort(options?: {
+    skipLegacyPluginRules?: boolean;
+    skipRuntimeLegacyMigrations?: boolean;
+  }): Promise<OpenClawConfig> {
     maybeLoadDotEnvForConfig(deps.env);
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
@@ -1485,6 +1501,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const legacyResolution = resolveLegacyConfigForRead(
         readResolution.resolvedConfigRaw,
         recovered.parsed,
+        options,
       );
       return coerceConfig(legacyResolution.effectiveConfigRaw);
     } catch {
@@ -1871,8 +1888,11 @@ export async function readBestEffortConfig(): Promise<OpenClawConfig> {
   return await createConfigIO().readBestEffortConfig();
 }
 
-export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
-  return await createConfigIO().readSourceConfigBestEffort();
+export async function readSourceConfigBestEffort(options?: {
+  skipLegacyPluginRules?: boolean;
+  skipRuntimeLegacyMigrations?: boolean;
+}): Promise<OpenClawConfig> {
+  return await createConfigIO().readSourceConfigBestEffort(options);
 }
 
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {

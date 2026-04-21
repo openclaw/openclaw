@@ -115,6 +115,48 @@ function buildCompatibilityNoticesForInspect(
   return warnings;
 }
 
+function buildCompatibilityNoticesFromReport(
+  report: PluginStatusReport,
+): PluginCompatibilityNotice[] {
+  const typedHookCounts = new Map<string, number>();
+  const customHookCounts = new Map<string, number>();
+  const toolCounts = new Map<string, number>();
+  const legacyBeforeAgentStartPlugins = new Set<string>();
+
+  for (const entry of report.typedHooks) {
+    typedHookCounts.set(entry.pluginId, (typedHookCounts.get(entry.pluginId) ?? 0) + 1);
+    if (entry.hookName === "before_agent_start") {
+      legacyBeforeAgentStartPlugins.add(entry.pluginId);
+    }
+  }
+  for (const entry of report.hooks) {
+    customHookCounts.set(entry.pluginId, (customHookCounts.get(entry.pluginId) ?? 0) + 1);
+  }
+  for (const entry of report.tools) {
+    toolCounts.set(entry.pluginId, (toolCounts.get(entry.pluginId) ?? 0) + 1);
+  }
+
+  return report.plugins.flatMap((plugin) => {
+    const shape = deriveInspectShape({
+      capabilityCount: buildCapabilityEntries(plugin).length,
+      typedHookCount: typedHookCounts.get(plugin.id) ?? 0,
+      customHookCount: customHookCounts.get(plugin.id) ?? 0,
+      toolCount: toolCounts.get(plugin.id) ?? 0,
+      commandCount: plugin.commands.length,
+      cliCount: plugin.cliCommands.length,
+      serviceCount: plugin.services.length,
+      gatewayMethodCount: plugin.gatewayMethods.length,
+      httpRouteCount: plugin.httpRoutes,
+    });
+
+    return buildCompatibilityNoticesForInspect({
+      plugin,
+      shape,
+      usesLegacyBeforeAgentStart: legacyBeforeAgentStartPlugins.has(plugin.id),
+    });
+  });
+}
+
 function resolveReportedPluginVersion(
   plugin: PluginRegistry["plugins"][number],
   env: NodeJS.ProcessEnv | undefined,
@@ -392,7 +434,14 @@ export function buildPluginCompatibilityNotices(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
-  return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+  const report =
+    params?.report ??
+    buildPluginSnapshotReport({
+      config: params?.config,
+      workspaceDir: params?.workspaceDir,
+      env: params?.env,
+    });
+  return buildCompatibilityNoticesFromReport(report);
 }
 
 export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {

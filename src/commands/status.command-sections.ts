@@ -211,8 +211,17 @@ export function buildStatusSecurityAuditLines(params: {
   const importantFindings = params.securityAudit.findings.filter(
     (f) => f.severity === "critical" || f.severity === "warn",
   );
+  const infoFinding = params.securityAudit.findings.find((f) => f.severity === "info");
   if (importantFindings.length === 0) {
-    lines.push(params.theme.muted("No critical or warn findings detected."));
+    if (infoFinding) {
+      lines.push(`  ${params.theme.muted("INFO")} ${infoFinding.title}`);
+      lines.push(`    ${params.shortenText(infoFinding.detail.replaceAll("\n", " "), 160)}`);
+      if (infoFinding.remediation?.trim()) {
+        lines.push(`    ${params.theme.muted(`Fix: ${infoFinding.remediation.trim()}`)}`);
+      }
+    } else {
+      lines.push(params.theme.muted("No critical or warn findings detected."));
+    }
   } else {
     const severityLabel = (sev: "critical" | "warn" | "info") =>
       sev === "critical"

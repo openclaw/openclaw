@@ -9,6 +9,7 @@ export type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
   hasPotentialConfiguredChannels: UnknownMock;
   readBestEffortConfig: UnknownMock;
+  readSourceConfigBestEffort: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
   getAgentLocalStatuses: UnknownMock;
@@ -27,6 +28,7 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
     hasPotentialConfiguredChannels: vi.fn(),
     readBestEffortConfig: vi.fn(),
+    readSourceConfigBestEffort: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getUpdateCheckResult: vi.fn(),
     getAgentLocalStatuses: vi.fn(),
@@ -181,9 +183,11 @@ export async function loadStatusScanModuleForTest(
 
   vi.doMock("../config/io.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
+    readSourceConfigBestEffort: mocks.readSourceConfigBestEffort,
   }));
   vi.doMock("../config/config.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
+    readSourceConfigBestEffort: mocks.readSourceConfigBestEffort,
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
     getStatusCommandSecretTargetIds,
@@ -376,6 +380,7 @@ export function applyStatusScanDefaults(
 
   mocks.hasPotentialConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
   mocks.readBestEffortConfig.mockResolvedValue(sourceConfig);
+  mocks.readSourceConfigBestEffort.mockResolvedValue(sourceConfig);
   mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
     resolvedConfig,
     diagnostics: [],
