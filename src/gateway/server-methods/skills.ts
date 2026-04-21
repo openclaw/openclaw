@@ -13,8 +13,7 @@ import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadConfig, mutateConfigFile } from "../../config/config.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -303,44 +302,45 @@ export const skillsHandlers: GatewayRequestHandlers = {
       apiKey?: string;
       env?: Record<string, string>;
     };
-    const cfg = loadConfig();
-    const skills = cfg.skills ? { ...cfg.skills } : {};
-    const entries = skills.entries ? { ...skills.entries } : {};
-    const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
-    if (typeof p.enabled === "boolean") {
-      current.enabled = p.enabled;
-    }
-    if (typeof p.apiKey === "string") {
-      const trimmed = normalizeSecretInput(p.apiKey);
-      if (trimmed) {
-        current.apiKey = trimmed;
-      } else {
-        delete current.apiKey;
-      }
-    }
-    if (p.env && typeof p.env === "object") {
-      const nextEnv = current.env ? { ...current.env } : {};
-      for (const [key, value] of Object.entries(p.env)) {
-        const trimmedKey = key.trim();
-        if (!trimmedKey) {
-          continue;
+    const mutation = await mutateConfigFile({
+      base: "source",
+      mutate: (draft) => {
+        const skills = draft.skills ? { ...draft.skills } : {};
+        const entries = skills.entries ? { ...skills.entries } : {};
+        const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
+        if (typeof p.enabled === "boolean") {
+          current.enabled = p.enabled;
         }
-        const trimmedVal = value.trim();
-        if (!trimmedVal) {
-          delete nextEnv[trimmedKey];
-        } else {
-          nextEnv[trimmedKey] = trimmedVal;
+        if (typeof p.apiKey === "string") {
+          const trimmed = normalizeSecretInput(p.apiKey);
+          if (trimmed) {
+            current.apiKey = trimmed;
+          } else {
+            delete current.apiKey;
+          }
         }
-      }
-      current.env = nextEnv;
-    }
-    entries[p.skillKey] = current;
-    skills.entries = entries;
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      skills,
-    };
-    await writeConfigFile(nextConfig);
-    respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+        if (p.env && typeof p.env === "object") {
+          const nextEnv = current.env ? { ...current.env } : {};
+          for (const [key, value] of Object.entries(p.env)) {
+            const trimmedKey = key.trim();
+            if (!trimmedKey) {
+              continue;
+            }
+            const trimmedVal = value.trim();
+            if (!trimmedVal) {
+              delete nextEnv[trimmedKey];
+            } else {
+              nextEnv[trimmedKey] = trimmedVal;
+            }
+          }
+          current.env = nextEnv;
+        }
+        entries[p.skillKey] = current;
+        skills.entries = entries;
+        draft.skills = skills;
+        return current;
+      },
+    });
+    respond(true, { ok: true, skillKey: p.skillKey, config: mutation.result }, undefined);
   },
 };
