@@ -92,6 +92,23 @@ function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
 }
 
+/**
+ * Detects a stale gatewayUrl from a different reverse-proxy path on the same host.
+ * When multiple OpenClaw instances sit behind one nginx (e.g. /a, /b, /c), the
+ * legacy localStorage key can carry a gatewayUrl from a sibling path.  If the
+ * cached URL shares the same host but differs in pathname, it should not be
+ * reused — the browser is now talking to a different backend instance.
+ */
+function isStaleGatewayUrl(cachedUrl: string, currentUrl: string): boolean {
+  try {
+    const cached = new URL(cachedUrl);
+    const current = new URL(currentUrl);
+    return cached.host === current.host && cached.pathname !== current.pathname;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeGatewayTokenScope(gatewayUrl: string): string {
   const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
   if (!trimmed) {
@@ -209,7 +226,10 @@ export function loadSettings(): UiSettings {
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
-    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
+    const gatewayUrl =
+      parsedGatewayUrl === pageDerivedUrl || isStaleGatewayUrl(parsedGatewayUrl, pageDerivedUrl)
+        ? defaultUrl
+        : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const { theme, mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,
