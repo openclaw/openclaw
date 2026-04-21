@@ -591,6 +591,29 @@ describe("memory-core dreaming phases", () => {
     ]);
   });
 
+  it("keeps uppercase-extension daily notes reachable after historical imports", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const uppercasePath = path.join(workspaceDir, "memory", "2026-04-05.MD");
+    await fs.writeFile(uppercasePath, "# 2026-04-05\n\n- Durable note.\n", "utf-8");
+
+    await seedHistoricalDailyMemorySignals({
+      workspaceDir,
+      filePaths: [uppercasePath],
+      limit: 20,
+      nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+    });
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+
+    expect(after).toEqual([expect.objectContaining({ path: "memory/2026-04-05.MD" })]);
+  });
+
   it("skips session-summary bookkeeping files during historical daily imports", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const canonicalPath = path.join(workspaceDir, "memory", "2026-04-05.md");

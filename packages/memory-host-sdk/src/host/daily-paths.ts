@@ -2,9 +2,11 @@ import path from "node:path";
 
 export const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-([a-z0-9][a-z0-9._-]*))?\.md$/i;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
-const SHORT_TERM_TOP_LEVEL_MEMORY_FILE_RE = /^(?:memory\/)?\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/;
+const SHORT_TERM_TOP_LEVEL_MEMORY_FILE_RE = /^(?:memory\/)?\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i;
+const SHORT_TERM_LEGACY_ABSOLUTE_MEMORY_FILE_RE =
+  /(?:^|\/)memory\/\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i;
 const SHORT_TERM_SESSION_CORPUS_RE =
-  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
+  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/i;
 
 export type ParsedDailyMemoryFileName = {
   day: string;
@@ -66,7 +68,16 @@ export function isSupportedShortTermMemoryPath(filePath: string): boolean {
   if (SHORT_TERM_SESSION_CORPUS_RE.test(normalizedPath)) {
     return true;
   }
-  return SHORT_TERM_TOP_LEVEL_MEMORY_FILE_RE.test(normalizedPath);
+  if (SHORT_TERM_TOP_LEVEL_MEMORY_FILE_RE.test(normalizedPath)) {
+    return true;
+  }
+  // Older short-term stores could persist absolute workspace paths for direct
+  // `memory/YYYY-MM-DD*.md` files. Keep those entries visible until a later
+  // rewrite normalizes them back to relative paths.
+  return (
+    path.isAbsolute(normalizedPath) &&
+    SHORT_TERM_LEGACY_ABSOLUTE_MEMORY_FILE_RE.test(normalizedPath)
+  );
 }
 
 function resolveComparableDailyVariantDir(filePath: string): string | null {

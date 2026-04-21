@@ -24,6 +24,14 @@ afterEach(async () => {
   await Promise.all(tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("listDailyMemoryFiles", () => {
   it("lists canonical and dated-slug files with stable ordering", async () => {
     const memoryDir = await makeMemoryDir();
@@ -450,6 +458,68 @@ describe("listRecentDailyMemoryFiles", () => {
       fileName: "2026-04-25-session-reset.md",
       sessionSummary: true,
     });
+  });
+
+  it("re-reads the current index before refreshing target days under the sidecar lock", async () => {
+    const memoryDir = await makeMemoryDir();
+    const fileName = "2026-04-25-session-reset.md";
+    const filePath = path.join(memoryDir, fileName);
+    await fs.writeFile(filePath, "bookkeeping note\n", "utf-8");
+    await rememberRecentDailyMemoryFile({
+      memoryDir,
+      fileName,
+      mtimeMs: 100,
+      sessionSummary: true,
+    });
+    await fs.utimes(
+      filePath,
+      new Date("2026-04-25T12:00:00.000Z"),
+      new Date("2026-04-25T12:00:00.000Z"),
+    );
+
+    const readdirGate = createDeferred();
+    const originalReaddir = fs.readdir.bind(fs);
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (
+      ...args: Parameters<typeof fs.readdir>
+    ) => {
+      const [target] = args;
+      if (String(target) === memoryDir) {
+        await readdirGate.promise;
+      }
+      return await originalReaddir(...args);
+    }) as typeof fs.readdir);
+
+    try {
+      const pending = listRecentDailyMemoryFiles({
+        memoryDir,
+        days: ["2026-04-25"],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await rememberRecentDailyMemoryFile({
+        memoryDir,
+        fileName: "2026-04-26-reset.md",
+        mtimeMs: 200,
+        sessionSummary: true,
+      });
+      readdirGate.resolve();
+
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({
+          fileName,
+        }),
+      ]);
+      await expect(
+        readRememberedDailyMemoryFile({
+          memoryDir,
+          fileName: "2026-04-26-reset.md",
+        }),
+      ).resolves.toMatchObject({
+        fileName: "2026-04-26-reset.md",
+        sessionSummary: true,
+      });
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("clears remembered session-summary provenance when a full rescan finds no daily files", async () => {

@@ -78,6 +78,7 @@ describe("short-term promotion", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03-session-reset.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03-session-reset.md")).toBe(true);
+    expect(isShortTermMemoryPath("/tmp/workspace/memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
@@ -90,6 +91,7 @@ describe("short-term promotion", () => {
     expect(isShortTermMemoryPath("memory/dreaming/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("../../vault/memory/dreaming/deep/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("/tmp/workspace/memory/daily/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("notes/daily/2026-04-03.md")).toBe(false);
   });
 
@@ -225,6 +227,99 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
       });
       expect(ranked.map((entry) => entry.path)).toEqual(["memory/2026-04-03.md"]);
+    });
+  });
+
+  it("does not merge durable recalls into stale bookkeeping entries that share the same claim hash", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Always use Happy Together calendar.";
+      const claimHash = __testing.buildClaimHash(snippet);
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-session-reset.md"),
+        [
+          "# Session: 2026-04-03 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          `assistant: ${snippet}`,
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet,
+                recallCount: 3,
+                dailyCount: 2,
+                groundedCount: 0,
+                totalScore: 2.4,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+                claimHash,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "durable recall",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      expect(entries).toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03.md",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.8,
+          maxScore: 0.8,
+        }),
+      ]);
+      expect(entries[0]?.queryHashes).not.toContain("summary-q");
     });
   });
 
@@ -681,6 +776,104 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not merge grounded seeds into stale bookkeeping entries that share the same claim hash", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
+      const claimHash = __testing.buildClaimHash(snippet);
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-session-reset.md"),
+        [
+          "# Session: 2026-04-03 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          `assistant: ${snippet}`,
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet,
+                recallCount: 4,
+                dailyCount: 2,
+                groundedCount: 0,
+                totalScore: 3.2,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+                claimHash,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        recordGroundedShortTermCandidates({
+          workspaceDir,
+          query: "__dreaming_grounded_backfill__",
+          items: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              snippet,
+              score: 0.82,
+              query: "__dreaming_grounded_backfill__:candidate",
+              signalCount: 1,
+              dayBucket: "2026-04-03",
+            },
+          ],
+          dedupeByQueryPerDay: true,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toBe(1);
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      expect(entries).toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03.md",
+          recallCount: 0,
+          dailyCount: 0,
+          groundedCount: 1,
+          totalScore: 0.82,
+          maxScore: 0.82,
+        }),
+      ]);
+      expect(entries[0]?.queryHashes).not.toContain("summary-q");
+    });
+  });
+
   it("deduplicates grounded same-day variants before ranking promotions", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
@@ -912,6 +1105,49 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps the best score when a lower-scored same-day variant arrives first", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "calendar recall",
+        results: [
+          {
+            path: "memory/2026-04-03-reset-summary.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.88,
+            snippet,
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        recallCount: 1,
+        totalScore: 0.9,
+        maxScore: 0.9,
+      });
+    });
+  });
+
   it("does not merge independent same-day dated-slug notes that share a sentence", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = "Shared reminder across separate same-day notes.";
@@ -1060,6 +1296,59 @@ describe("short-term promotion", () => {
     });
 
     expect(matchedKey).toBe("first");
+  });
+
+  it("ignores legacy absolute-path same-day variants that resolve outside the current workspace", () => {
+    const claimHash = __testing.buildClaimHash("same snippet");
+    const matchedKey = __testing.findExistingDailyVariantEntryKey({
+      entries: {
+        foreign: {
+          key: "foreign",
+          path: "/tmp/other-workspace/memory/2026-04-03.md",
+          startLine: 3,
+          endLine: 3,
+          source: "memory",
+          snippet: "same snippet",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.9,
+          maxScore: 0.9,
+          firstRecalledAt: "2026-04-03T10:00:00.000Z",
+          lastRecalledAt: "2026-04-03T10:00:00.000Z",
+          queryHashes: ["a"],
+          recallDays: ["2026-04-03"],
+          conceptTags: [],
+          claimHash,
+        },
+        local: {
+          key: "local",
+          path: "/tmp/current-workspace/memory/2026-04-03.md",
+          startLine: 4,
+          endLine: 4,
+          source: "memory",
+          snippet: "same snippet",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.95,
+          maxScore: 0.95,
+          firstRecalledAt: "2026-04-03T10:01:00.000Z",
+          lastRecalledAt: "2026-04-03T10:01:00.000Z",
+          queryHashes: ["b"],
+          recallDays: ["2026-04-03"],
+          conceptTags: [],
+          claimHash,
+        },
+      },
+      workspaceDir: "/tmp/current-workspace",
+      claimHash,
+      candidatePath: "memory/2026-04-03-reset.md",
+      candidateStartLine: 4,
+      candidateEndLine: 4,
+    });
+
+    expect(matchedKey).toBe("local");
   });
 
   it("ignores identical same-day snippets across different memory subdirectories", async () => {
@@ -2235,6 +2524,77 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps legacy absolute-path durable recalls visible before any rewrite normalizes them", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const absolutePath = path.join(workspaceDir, "memory", "2026-04-03.md");
+      const snippet = "Legacy absolute path note.";
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            sessionSummaryPurgedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              legacy: {
+                key: "legacy",
+                path: absolutePath,
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet,
+                recallCount: 1,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 0.9,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-03T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: absolutePath,
+          snippet,
+          recallCount: 1,
+        }),
+      ]);
+
+      await expect(
+        rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: absolutePath,
+          snippet,
+        }),
+      ]);
+    });
+  });
+
   it("rehydrates missing same-day source paths from surviving sibling daily variants", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await fs.writeFile(
@@ -2367,6 +2727,64 @@ describe("short-term promotion", () => {
             {
               key: "outside-candidate",
               path: path.join(outsideDir, "2026-04-01-missing.md"),
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Outside durable snippet.",
+              recallCount: 3,
+              dailyCount: 0,
+              groundedCount: 0,
+              signalCount: 3,
+              avgScore: 0.9,
+              maxScore: 0.9,
+              uniqueQueries: 2,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "2026-04-01T00:00:00.000Z",
+              ageDays: 0,
+              score: 0.9,
+              recallDays: ["2026-04-01"],
+              conceptTags: [],
+              components: {
+                frequency: 1,
+                relevance: 1,
+                diversity: 1,
+                recency: 1,
+                consolidation: 1,
+                conceptual: 1,
+              },
+            },
+          ],
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+        });
+
+        expect(applied.applied).toBe(0);
+        await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("does not rehydrate promotions from same-day symlinked variants that resolve outside the workspace", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const outsideDir = await fs.mkdtemp(path.join(fixtureRoot, "outside-symlink-"));
+      const outsideCanonicalPath = path.join(outsideDir, "secret.txt");
+      const symlinkPath = path.join(workspaceDir, "memory", "2026-04-01.md");
+      await fs.writeFile(outsideCanonicalPath, "Outside durable snippet.\n", "utf-8");
+      await fs.symlink(outsideCanonicalPath, symlinkPath);
+
+      try {
+        const applied = await applyShortTermPromotions({
+          workspaceDir,
+          candidates: [
+            {
+              key: "symlinked-candidate",
+              path: "memory/2026-04-01-missing.md",
               startLine: 1,
               endLine: 1,
               source: "memory",
@@ -3121,7 +3539,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("purges remembered session-summary entries even when a sibling note shares the same snippet", async () => {
+  it("does not let remembered session-summary provenance purge sibling-backed durable recalls", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
         "Context",
@@ -3171,7 +3589,12 @@ describe("short-term promotion", () => {
           workspaceDir,
           nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "We should follow up with the vendor tomorrow.",
+        }),
+      ]);
     });
   });
 

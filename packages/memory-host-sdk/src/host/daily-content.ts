@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readRememberedDailyMemoryFile } from "./daily-files.js";
+import { listRecentDailyMemoryFiles, readRememberedDailyMemoryFile } from "./daily-files.js";
 import { parseDailyMemoryFileName, parseDailyMemoryPathInfo } from "./daily-paths.js";
 export {
   isSessionSummaryDailyMemory,
@@ -422,6 +422,46 @@ function resolveRememberedSummaryFileNameForProbePaths(
   return null;
 }
 
+async function refreshRememberedSummaryEntryForMissingProbe(params: {
+  workspaceDir: string;
+  fileName: string;
+}): Promise<Awaited<ReturnType<typeof readRememberedDailyMemoryFile>>> {
+  const memoryDir = path.join(params.workspaceDir, "memory");
+  const rememberedEntry = await readRememberedDailyMemoryFile({
+    memoryDir,
+    fileName: params.fileName,
+  });
+  if (rememberedEntry?.sessionSummary !== true) {
+    return rememberedEntry;
+  }
+  const parsed = parseDailyMemoryFileName(params.fileName);
+  if (parsed) {
+    try {
+      const scannedEntries = await listRecentDailyMemoryFiles({
+        memoryDir,
+        days: [parsed.day],
+        persistIndex: false,
+      });
+      if (scannedEntries.length === 0) {
+        return rememberedEntry;
+      }
+      await listRecentDailyMemoryFiles({
+        memoryDir,
+        days: [parsed.day],
+      });
+    } catch (error) {
+      if (!isBenignSessionSummaryDailyMemoryProbeError(error)) {
+        throw error;
+      }
+      return rememberedEntry;
+    }
+  }
+  return await readRememberedDailyMemoryFile({
+    memoryDir,
+    fileName: params.fileName,
+  });
+}
+
 export async function isSessionSummaryDailyMemoryPath(params: {
   workspaceDir: string;
   filePath: string;
@@ -517,8 +557,8 @@ export async function isSessionSummaryDailyMemoryPath(params: {
     ? resolveRememberedSummaryFileNameForProbePaths(probePaths)
     : null;
   const rememberedEntry = rememberedSessionSummaryFileName
-    ? await readRememberedDailyMemoryFile({
-        memoryDir: path.join(params.workspaceDir, "memory"),
+    ? await refreshRememberedSummaryEntryForMissingProbe({
+        workspaceDir: params.workspaceDir,
         fileName: rememberedSessionSummaryFileName,
       })
     : null;

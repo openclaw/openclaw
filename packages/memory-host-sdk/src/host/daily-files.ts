@@ -290,6 +290,42 @@ async function persistDailyMemoryRecentIndex(
   });
 }
 
+function mergeDailyMemoryRecentIndexEntries(params: {
+  currentEntries: DailyMemoryFileEntry[];
+  nextEntries: DailyMemoryFileEntry[];
+  replaceDays?: ReadonlySet<string>;
+}): DailyMemoryFileEntry[] {
+  const byFileName = new Map<string, DailyMemoryFileEntry>();
+  for (const entry of params.currentEntries) {
+    if (params.replaceDays?.has(entry.day)) {
+      continue;
+    }
+    byFileName.set(entry.fileName, entry);
+  }
+  for (const entry of params.nextEntries) {
+    byFileName.set(entry.fileName, entry);
+  }
+  return [...byFileName.values()];
+}
+
+async function persistMergedDailyMemoryRecentIndex(params: {
+  memoryDir: string;
+  nextEntries: DailyMemoryFileEntry[];
+  replaceDays?: ReadonlySet<string>;
+}): Promise<void> {
+  await withDailyMemoryRecentIndexLock(params.memoryDir, async () => {
+    const current = await readDailyMemoryRecentIndex(params.memoryDir);
+    await persistDailyMemoryRecentIndex(
+      params.memoryDir,
+      mergeDailyMemoryRecentIndexEntries({
+        currentEntries: current.entries,
+        nextEntries: params.nextEntries,
+        replaceDays: params.replaceDays,
+      }),
+    );
+  });
+}
+
 export async function listDailyMemoryFiles(
   memoryDir: string,
   options?: { tolerateDirectoryErrors?: boolean },
@@ -348,11 +384,9 @@ export async function rememberRecentDailyMemoryFile(params: {
   }
 
   try {
-    await withDailyMemoryRecentIndexLock(params.memoryDir, async () => {
-      const current = await readDailyMemoryRecentIndex(params.memoryDir);
-      const byFileName = new Map(current.entries.map((entry) => [entry.fileName, entry] as const));
-      byFileName.set(nextEntry.fileName, nextEntry);
-      await persistDailyMemoryRecentIndex(params.memoryDir, [...byFileName.values()]);
+    await persistMergedDailyMemoryRecentIndex({
+      memoryDir: params.memoryDir,
+      nextEntries: [nextEntry],
     });
   } catch (error) {
     if (isBenignDailyMemoryDirError(error) || isBenignDailyMemoryFileError(error)) {
@@ -489,13 +523,11 @@ export async function listRecentDailyMemoryFiles(params: {
   }
 
   if (persistIndex && shouldRefreshIndex) {
-    const preservedEntries = indexed.entries.filter((entry) => !targetDaySet.has(entry.day));
     try {
-      await withDailyMemoryRecentIndexLock(params.memoryDir, async () => {
-        await persistDailyMemoryRecentIndex(params.memoryDir, [
-          ...preservedEntries,
-          ...recentEntries,
-        ]);
+      await persistMergedDailyMemoryRecentIndex({
+        memoryDir: params.memoryDir,
+        nextEntries: recentEntries,
+        replaceDays: targetDaySet,
       });
     } catch (error) {
       if (!isBenignDailyMemoryDirError(error) && !isBenignDailyMemoryFileError(error)) {

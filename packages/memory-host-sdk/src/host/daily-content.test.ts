@@ -12,7 +12,7 @@ import {
   SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
   type SessionSummaryDailyMemoryDependency,
 } from "./daily-content.js";
-import { rememberRecentDailyMemoryFile } from "./daily-files.js";
+import { readRememberedDailyMemoryFile, rememberRecentDailyMemoryFile } from "./daily-files.js";
 
 const tmpDirs: string[] = [];
 
@@ -479,7 +479,7 @@ describe("daily-content", () => {
     ).resolves.toBe(false);
   });
 
-  it("prefers remembered bookkeeping provenance over same-day sibling matches", async () => {
+  it("does not let stale remembered bookkeeping provenance override live same-day siblings", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-daily-content-remembered-sibling-"),
     );
@@ -505,7 +505,7 @@ describe("daily-content", () => {
         snippet: "We should follow up with the vendor tomorrow.",
         startLine: 11,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("does not let bookkeeping siblings force deleted-summary fallback matching", async () => {
@@ -562,6 +562,36 @@ describe("daily-content", () => {
         startLine: 11,
       }),
     ).resolves.toBe(true);
+  });
+
+  it("refreshes stale remembered bookkeeping provenance before trusting missing-file fallback", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-refresh-"));
+    tmpDirs.push(root);
+    const memoryDir = path.join(root, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await rememberRecentDailyMemoryFile({
+      memoryDir,
+      fileName: "2026-04-19-vendor-pitch.md",
+      sessionSummary: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await fs.writeFile(path.join(memoryDir, "2026-04-19.md"), "durable note\n", "utf-8");
+
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "memory/2026-04-19-vendor-pitch.md",
+        cache: new Map(),
+        snippet: "ordinary durable note",
+        startLine: 11,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      readRememberedDailyMemoryFile({
+        memoryDir,
+        fileName: "2026-04-19-vendor-pitch.md",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("applies remembered session-summary provenance to basename and absolute-path aliases", async () => {

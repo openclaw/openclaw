@@ -470,8 +470,34 @@ function isMergeableSameDayDailyVariantPair(leftPath: string, rightPath: string)
   return left.canonical || right.canonical;
 }
 
+function resolveWorkspaceRelativeLegacyMergePath(
+  workspaceDir: string | undefined,
+  filePath: string,
+): string | null {
+  const normalizedPath = normalizeMemoryPath(filePath);
+  if (!path.isAbsolute(normalizedPath)) {
+    return normalizedPath;
+  }
+  if (!workspaceDir) {
+    return null;
+  }
+  const normalizedWorkspaceDir = normalizeMemoryPath(path.resolve(workspaceDir));
+  if (
+    normalizedPath !== normalizedWorkspaceDir &&
+    !normalizedPath.startsWith(`${normalizedWorkspaceDir}/`)
+  ) {
+    return null;
+  }
+  const relativePath = normalizeMemoryPath(path.relative(normalizedWorkspaceDir, normalizedPath));
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return null;
+  }
+  return relativePath;
+}
+
 function findExistingDailyVariantEntryKey(params: {
   entries: Record<string, ShortTermRecallEntry>;
+  workspaceDir?: string;
   claimHash?: string;
   candidatePath?: string;
   candidateStartLine?: number;
@@ -499,7 +525,13 @@ function findExistingDailyVariantEntryKey(params: {
     if (!entry || entry.source !== "memory" || entry.claimHash !== params.claimHash) {
       continue;
     }
-    const normalizedEntryPath = normalizeMemoryPath(entry.path);
+    const normalizedEntryPath = resolveWorkspaceRelativeLegacyMergePath(
+      params.workspaceDir,
+      entry.path,
+    );
+    if (!normalizedEntryPath) {
+      continue;
+    }
     if (extractDailyMemoryDayFromPath(normalizedEntryPath) !== candidateDay) {
       continue;
     }
@@ -1384,8 +1416,9 @@ export async function recordShortTermRecalls(params: {
   const todayBucket =
     normalizeIsoDay(params.dayBucket ?? "") ?? formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
-    const store = await readStore(workspaceDir, nowIso);
+    const { store } = await readStoreResult(workspaceDir, nowIso);
     const seenMergedKeys = new Set<string>();
+    const mergedSignalScoreByKey = new Map<string, number>();
 
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
@@ -1408,6 +1441,7 @@ export async function recordShortTermRecalls(params: {
           ? directGroundedKey
           : (findExistingDailyVariantEntryKey({
               entries: store.entries,
+              workspaceDir,
               claimHash,
               candidatePath: normalizedPath,
               candidateStartLine: result.startLine,
@@ -1428,11 +1462,24 @@ export async function recordShortTermRecalls(params: {
       const score = clampScore(result.score);
       const recallDaysBase = existing?.recallDays ?? [];
       const queryHashesBase = existing?.queryHashes ?? [];
-      const dedupeSignal =
-        duplicateSignalInCall ||
-        (Boolean(params.dedupeByQueryPerDay) &&
-          queryHashesBase.includes(queryHash) &&
-          recallDaysBase.includes(todayBucket));
+      const priorMergedSignalScore = mergedSignalScoreByKey.get(key) ?? 0;
+      const alreadyCountedToday =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        recallDaysBase.includes(todayBucket);
+      const dedupeSignal = duplicateSignalInCall || alreadyCountedToday;
+      let signalScoreDelta = 0;
+      if (duplicateSignalInCall) {
+        if (priorMergedSignalScore > 0 && score > priorMergedSignalScore) {
+          mergedSignalScoreByKey.set(key, score);
+          signalScoreDelta = score - priorMergedSignalScore;
+        }
+      } else if (!alreadyCountedToday) {
+        mergedSignalScoreByKey.set(key, score);
+        signalScoreDelta = score;
+      } else {
+        mergedSignalScoreByKey.set(key, 0);
+      }
       const recallCount =
         signalType === "recall"
           ? Math.max(0, Math.floor(existing?.recallCount ?? 0) + (dedupeSignal ? 0 : 1))
@@ -1441,8 +1488,8 @@ export async function recordShortTermRecalls(params: {
         signalType === "daily"
           ? Math.max(0, Math.floor(existing?.dailyCount ?? 0) + (dedupeSignal ? 0 : 1))
           : Math.max(0, Math.floor(existing?.dailyCount ?? 0));
-      const totalScore = Math.max(0, (existing?.totalScore ?? 0) + (dedupeSignal ? 0 : score));
-      const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
+      const totalScore = Math.max(0, (existing?.totalScore ?? 0) + signalScoreDelta);
+      const maxScore = Math.max(existing?.maxScore ?? 0, mergedSignalScoreByKey.get(key) ?? 0);
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
@@ -1548,7 +1595,7 @@ export async function recordGroundedShortTermCandidates(params: {
   const nowIso = new Date(nowMs).toISOString();
   const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
   return await withShortTermLock(workspaceDir, async () => {
-    const store = await readStore(workspaceDir, nowIso);
+    const { store } = await readStoreResult(workspaceDir, nowIso);
     const stagedKeys = new Set<string>();
 
     for (const item of relevant) {
@@ -1571,6 +1618,7 @@ export async function recordGroundedShortTermCandidates(params: {
           ? requestedKey
           : (findExistingDailyVariantEntryKey({
               entries: store.entries,
+              workspaceDir,
               claimHash,
               candidatePath: item.path,
               candidateStartLine: item.startLine,
@@ -2089,31 +2137,40 @@ async function rehydratePromotionCandidate(
     }
   }
   for (const sourcePath of sourcePaths) {
-    let rawSource: string;
     try {
-      rawSource = await fs.readFile(sourcePath.absolutePath, "utf-8");
+      const workspaceRoot = await fs.realpath(workspaceDir);
+      const sourceRealPath = await fs.realpath(sourcePath.absolutePath);
+      const relativeRealPath = normalizeMemoryPath(path.relative(workspaceRoot, sourceRealPath));
+      if (
+        !relativeRealPath ||
+        relativeRealPath.startsWith("..") ||
+        path.isAbsolute(relativeRealPath)
+      ) {
+        continue;
+      }
+      const rawSource = await fs.readFile(sourceRealPath, "utf-8");
+      if (isSessionSummaryDailyMemory(rawSource)) {
+        continue;
+      }
+
+      const lines = rawSource.split(/\r?\n/);
+      const relocated = relocateCandidateRange(lines, candidate);
+      if (!relocated) {
+        continue;
+      }
+      return {
+        ...candidate,
+        path: sourcePath.relativePath,
+        startLine: relocated.startLine,
+        endLine: relocated.endLine,
+        snippet: relocated.snippet,
+      };
     } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      if (isBenignSourcePathProbeError(err)) {
         continue;
       }
       throw err;
     }
-    if (isSessionSummaryDailyMemory(rawSource)) {
-      continue;
-    }
-
-    const lines = rawSource.split(/\r?\n/);
-    const relocated = relocateCandidateRange(lines, candidate);
-    if (!relocated) {
-      continue;
-    }
-    return {
-      ...candidate,
-      path: sourcePath.relativePath,
-      startLine: relocated.startLine,
-      endLine: relocated.endLine,
-      snippet: relocated.snippet,
-    };
   }
   return null;
 }

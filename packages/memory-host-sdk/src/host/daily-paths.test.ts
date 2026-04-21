@@ -59,12 +59,19 @@ describe("daily-paths", () => {
 
   it("matches the runtime-supported short-term memory path shapes", () => {
     expect(isSupportedShortTermMemoryPath("memory/2026-04-19.md")).toBe(true);
+    expect(isSupportedShortTermMemoryPath("memory/2026-04-19.MD")).toBe(true);
     expect(isSupportedShortTermMemoryPath("2026-04-19-session-reset.md")).toBe(true);
+    expect(isSupportedShortTermMemoryPath("2026-04-19-session-reset.MD")).toBe(true);
+    expect(isSupportedShortTermMemoryPath("/tmp/workspace/memory/2026-04-19.md")).toBe(true);
     expect(isSupportedShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-19.md")).toBe(
+      true,
+    );
+    expect(isSupportedShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-19.TXT")).toBe(
       true,
     );
     expect(isSupportedShortTermMemoryPath("memory/archive/2026-04-19.md")).toBe(false);
     expect(isSupportedShortTermMemoryPath("docs/memory/2026-04-19.md")).toBe(false);
+    expect(isSupportedShortTermMemoryPath("/tmp/workspace/memory/daily/2026-04-19.md")).toBe(false);
     expect(isSupportedShortTermMemoryPath("memory/dreaming/2026-04-19.md")).toBe(false);
   });
 });
