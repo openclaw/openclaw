@@ -14,6 +14,7 @@ import type {
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
+import { resolveMatrixAccountAllowlistConfig } from "../account-config.js";
 import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
@@ -36,10 +37,14 @@ import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import {
+  resolveMatrixMonitorLiveUserAllowlist,
+  type MatrixResolvedAllowlistEntry,
+} from "./config.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
-import { resolveMentions } from "./mentions.js";
+import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker } from "./room-history.js";
@@ -151,7 +156,9 @@ export type MatrixMonitorHandlerParams = {
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
+  allowFromResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
   groupAllowFrom?: string[];
+  groupAllowFromResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: ReadonlySet<string>;
@@ -186,6 +193,7 @@ export type MatrixMonitorHandlerParams = {
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;
+  resolveLiveUserAllowlist?: typeof resolveMatrixMonitorLiveUserAllowlist;
 };
 
 function resolveMatrixMentionPrecheckText(params: {
@@ -354,8 +362,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     runtime,
     logger,
     logVerboseMessage,
-    allowFrom,
-    groupAllowFrom = [],
+    allowFromResolvedEntries = [],
+    groupAllowFromResolvedEntries = [],
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds = new Set<string>(),
@@ -379,6 +387,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getRoomInfo,
     getMemberDisplayName,
     needsRoomAliasesForConfig,
+    resolveLiveUserAllowlist = resolveMatrixMonitorLiveUserAllowlist,
   } = params;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
@@ -389,6 +398,31 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     value: string[];
     expiresAtMs: number;
   } | null = null;
+  type LiveAllowlistCacheEntry = { signature: string; entries: string[] };
+  let liveDmAllowlistCache: LiveAllowlistCacheEntry | null = null;
+  let liveGroupAllowlistCache: LiveAllowlistCacheEntry | null = null;
+  const resolveCachedLiveAllowlist = async (params: {
+    cfg: CoreConfig;
+    entries?: ReadonlyArray<string | number>;
+    startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
+    cache: LiveAllowlistCacheEntry | null;
+    updateCache: (next: LiveAllowlistCacheEntry) => void;
+  }): Promise<string[]> => {
+    const signature = JSON.stringify((params.entries ?? []).map((entry) => String(entry).trim()));
+    if (params.cache?.signature === signature) {
+      return params.cache.entries;
+    }
+    const entries = await resolveLiveUserAllowlist({
+      cfg: params.cfg,
+      accountId,
+      entries: params.entries,
+      startupResolvedEntries: params.startupResolvedEntries,
+      runtime,
+    });
+    const next = { signature, entries };
+    params.updateCache(next);
+    return entries;
+  };
   const pairingReplySentAtMsBySender = new Map<string, number>();
   const resolveThreadContext = createMatrixThreadContextResolver({
     client,
@@ -638,10 +672,33 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         };
         const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
+        const liveCfg = core.config.loadConfig() as CoreConfig;
+        const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
+          cfg: liveCfg,
+          accountId,
+        });
+        const liveDmAllowFrom = await resolveCachedLiveAllowlist({
+          cfg: liveCfg,
+          entries: liveAccountAllowlists.dmAllowFrom,
+          startupResolvedEntries: allowFromResolvedEntries,
+          cache: liveDmAllowlistCache,
+          updateCache: (next) => {
+            liveDmAllowlistCache = next;
+          },
+        });
+        const liveGroupAllowFrom = await resolveCachedLiveAllowlist({
+          cfg: liveCfg,
+          entries: liveAccountAllowlists.groupAllowFrom,
+          startupResolvedEntries: groupAllowFromResolvedEntries,
+          cache: liveGroupAllowlistCache,
+          updateCache: (next) => {
+            liveGroupAllowlistCache = next;
+          },
+        });
         const accessState = resolveMatrixMonitorAccessState({
-          allowFrom,
+          allowFrom: liveDmAllowFrom,
           storeAllowFrom,
-          groupAllowFrom,
+          groupAllowFrom: liveGroupAllowFrom,
           roomUsers,
           senderId,
           isRoom,
@@ -863,8 +920,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           surface: "matrix",
         });
         const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+        // Keep mention stripping on the command-only path so history and agent
+        // prompt text continue to see the original Matrix message.
+        const commandCheckText = stripMatrixMentionPrefix({
+          text: mentionPrecheckText,
+          userId: selfUserId,
+          displayName: selfDisplayName,
+          mentionRegexes: agentMentionRegexes,
+        });
         const hasControlCommandInMessage = core.channel.text.hasControlCommand(
-          mentionPrecheckText,
+          commandCheckText,
           cfg,
         );
         const commandGate = resolveControlCommandGate({
@@ -996,6 +1061,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await commitInboundEventIfClaimed();
           return undefined;
         }
+        const commandBodyText = hasControlCommandInMessage ? commandCheckText : bodyText;
         const senderName = await getSenderName();
         if (_configuredBinding) {
           const { ensureConfiguredAcpBindingReady } = await loadAcpBindingRuntime();
@@ -1043,6 +1109,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           inboundHistory,
           senderName,
           bodyText,
+          commandBodyText,
           media,
           locationPayload,
           messageId: _messageId,
@@ -1096,6 +1163,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         inboundHistory,
         senderName,
         bodyText,
+        commandBodyText,
         media,
         locationPayload,
         messageId: _messageId,
@@ -1214,7 +1282,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
         RawBody: bodyText,
-        CommandBody: bodyText,
+        CommandBody: commandBodyText,
+        BodyForAgent: bodyText,
+        BodyForCommands: commandBodyText,
         InboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,

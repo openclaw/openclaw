@@ -10,9 +10,11 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
+  CronDeliveryTrace,
   CronJob,
   CronMessageChannel,
   CronRunOutcome,
@@ -130,16 +132,12 @@ export function normalizeCronRunErrorText(err: unknown): string {
   return String(err);
 }
 
-function createCronTaskRunId(jobId: string, startedAt: number): string {
-  return `cron:${jobId}:${startedAt}`;
-}
-
 function tryCreateCronTaskRun(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
 }): string | undefined {
-  const runId = createCronTaskRunId(params.job.id, params.startedAt);
+  const runId = createCronExecutionId(params.job.id, params.startedAt);
   try {
     createRunningTaskRun({
       runtime: "cron",
@@ -256,14 +254,20 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
   };
 }
 
-function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {
+function resolveDeliveryState(params: { job: CronJob; delivered?: boolean }): {
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+} {
+  if (!resolveCronDeliveryPlan(params.job).requested) {
+    return { status: "not-requested" };
+  }
   if (params.delivered === true) {
-    return "delivered";
+    return { delivered: true, status: "delivered" };
   }
   if (params.delivered === false) {
-    return "not-delivered";
+    return { delivered: false, status: "not-delivered" };
   }
-  return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
+  return { status: "unknown" };
 }
 
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
@@ -419,11 +423,11 @@ export function applyJobResult(
     result.status === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
       : undefined;
-  job.state.lastDelivered = result.delivered;
-  const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
-  job.state.lastDeliveryStatus = deliveryStatus;
+  const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
+  job.state.lastDelivered = deliveryState.delivered;
+  job.state.lastDeliveryStatus = deliveryState.status;
   job.state.lastDeliveryError =
-    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+    deliveryState.status === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -1131,7 +1135,12 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    }
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
@@ -1175,7 +1184,12 @@ async function executeMainSessionCronJob(
   abortSignal: AbortSignal | undefined,
   waitWithAbort: (ms: number) => Promise<void>,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    }
 > {
   const text = resolveJobPayloadTextForMain(job);
   if (!text) {
@@ -1223,6 +1237,7 @@ async function executeMainSessionCronJob(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
+          heartbeat: { target: "last" },
         });
         return { status: "ok", summary: text };
       }
@@ -1237,6 +1252,7 @@ async function executeMainSessionCronJob(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
+          heartbeat: { target: "last" },
         });
         return { status: "ok", summary: text };
       }
@@ -1259,6 +1275,7 @@ async function executeMainSessionCronJob(
     reason: `cron:${job.id}`,
     agentId: job.agentId,
     sessionKey: targetMainSessionKey,
+    heartbeat: { target: "last" },
   });
   return { status: "ok", summary: text };
 }
@@ -1269,7 +1286,12 @@ async function executeDetachedCronJob(
   abortSignal: AbortSignal | undefined,
   resolveAbortError: () => { status: "error"; error: string },
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    }
 > {
   if (job.payload.kind !== "agentTurn") {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
@@ -1294,6 +1316,7 @@ async function executeDetachedCronJob(
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
+    delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,
@@ -1324,6 +1347,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    delivery?: CronDeliveryTrace;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -1356,6 +1380,7 @@ function emitJobFinished(
   result: {
     status: CronRunStatus;
     delivered?: boolean;
+    delivery?: CronDeliveryTrace;
   } & CronRunOutcome &
     CronRunTelemetry,
   runAtMs: number,
@@ -1369,6 +1394,7 @@ function emitJobFinished(
     delivered: result.delivered,
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,
+    delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
     runAtMs,

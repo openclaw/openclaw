@@ -96,7 +96,13 @@ export function resolveMcpTransportConfig(
   rawServer: unknown,
 ): ResolvedMcpTransportConfig | null {
   const requestedTransport = getRequestedTransport(rawServer);
-  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer);
+  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
+    onDroppedEnv: (key) => {
+      logWarn(
+        `bundle-mcp: server "${serverName}": env "${key}" is blocked for stdio startup safety and was ignored.`,
+      );
+    },
+  });
   if (stdioLaunch.ok) {
     return {
       kind: "stdio",
