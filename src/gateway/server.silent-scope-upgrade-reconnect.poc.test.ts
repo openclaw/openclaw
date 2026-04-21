@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import * as devicePairingModule from "../infra/device-pairing.js";
-import { getPairedDevice } from "../infra/device-pairing.js";
+import { getPairedDevice, LOCAL_SILENT_OPERATOR_SCOPES } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   issueOperatorToken,
@@ -132,32 +132,44 @@ async function openPairingWatcherSession(port: number): Promise<WebSocket> {
 }
 
 describe("gateway silent scope-upgrade reconnect", () => {
-  test("does not silently self-approve admin scopes for first-time shared-auth pairing", async () => {
+  test("first local shared-auth pairing keeps the session alive but bounds the issued device token", async () => {
     const started = await startServerWithClient("secret");
-    const loaded = loadDeviceIdentity("silent-first-pairing-admin-scope");
-    let firstPairingAttemptWs: WebSocket | undefined;
+    const loaded = loadDeviceIdentity("silent-local-first-pair-bounded");
+    let ws: WebSocket | undefined;
 
     try {
-      firstPairingAttemptWs = await openTrackedWs(started.port);
-      const firstAttempt = await connectReq(firstPairingAttemptWs, {
+      ws = await openTrackedWs(started.port);
+      const res = await connectReq(ws, {
         token: "secret",
         deviceIdentityPath: loaded.identityPath,
-        scopes: ["operator.admin"],
       });
-      expect(firstAttempt.ok).toBe(false);
-      expect(firstAttempt.error?.message).toBe("pairing required: device is not approved yet");
+      expect(res.ok).toBe(true);
 
-      const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toHaveLength(1);
-      expect(pending.pending[0]?.deviceId).toBe(loaded.identity.deviceId);
-      expect(pending.pending[0]?.publicKey).toBe(loaded.publicKey);
-      expect(pending.pending[0]?.scopes).toEqual(["operator.admin"]);
-      expect(pending.pending[0]?.silent).toBe(true);
+      const payload = res.payload as
+        | {
+            type?: string;
+            auth?: { deviceToken?: string; scopes?: string[] };
+            snapshot?: {
+              configPath?: string;
+              stateDir?: string;
+              authMode?: string;
+            };
+          }
+        | undefined;
+      expect(payload?.type).toBe("hello-ok");
+      expect(payload?.auth?.scopes).toEqual([...LOCAL_SILENT_OPERATOR_SCOPES]);
+      expect(typeof payload?.auth?.deviceToken).toBe("string");
+      expect(typeof payload?.snapshot?.configPath).toBe("string");
+      expect((payload?.snapshot?.configPath ?? "").length).toBeGreaterThan(0);
+      expect(typeof payload?.snapshot?.stateDir).toBe("string");
+      expect((payload?.snapshot?.stateDir ?? "").length).toBeGreaterThan(0);
+      expect(payload?.snapshot?.authMode).toBe("token");
 
       const paired = await getPairedDevice(loaded.identity.deviceId);
-      expect(paired).toBeNull();
+      expect(paired?.approvedScopes).toEqual([...LOCAL_SILENT_OPERATOR_SCOPES]);
+      expect(paired?.tokens?.operator?.scopes).toEqual([...LOCAL_SILENT_OPERATOR_SCOPES]);
     } finally {
-      firstPairingAttemptWs?.close();
+      ws?.close();
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
@@ -276,25 +288,17 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const loaded = loadDeviceIdentity("silent-reconnect-race");
     let ws: WebSocket | undefined;
 
-    const approveOriginal = devicePairingModule.approveDevicePairing;
+    const approveOriginal = devicePairingModule.approveSilentLocalOperatorDevicePairing;
     let simulatedRace = false;
-    const forwardApprove = async (requestId: string, optionsOrBaseDir?: unknown) => {
-      if (optionsOrBaseDir && typeof optionsOrBaseDir === "object") {
-        return await approveOriginal(
-          requestId,
-          optionsOrBaseDir as { callerScopes?: readonly string[] },
-        );
-      }
-      return await approveOriginal(requestId);
-    };
+    const forwardApprove = async (requestId: string) => await approveOriginal(requestId);
     const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
-      .mockImplementation(async (requestId: string, optionsOrBaseDir?: unknown) => {
+      .spyOn(devicePairingModule, "approveSilentLocalOperatorDevicePairing")
+      .mockImplementation(async (requestId: string) => {
         if (simulatedRace) {
-          return await forwardApprove(requestId, optionsOrBaseDir);
+          return await forwardApprove(requestId);
         }
         simulatedRace = true;
-        await forwardApprove(requestId, optionsOrBaseDir);
+        await forwardApprove(requestId);
         return null;
       });
 
@@ -303,7 +307,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
       const res = await connectReq(ws, {
         token: "secret",
         deviceIdentityPath: loaded.identityPath,
-        scopes: [],
       });
       expect(res.ok).toBe(true);
 
@@ -325,7 +328,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     let ws: WebSocket | undefined;
 
     const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
+      .spyOn(devicePairingModule, "approveSilentLocalOperatorDevicePairing")
       .mockImplementation(async (requestId: string) => {
         await devicePairingModule.rejectDevicePairing(requestId);
         return null;
@@ -337,9 +340,8 @@ describe("gateway silent scope-upgrade reconnect", () => {
         started.ws,
         (obj) => obj.type === "event" && obj.event === "device.pair.requested",
         300,
-      )
-        .then((event) => ({ ok: true as const, event }))
-        .catch((error: unknown) => ({ ok: false as const, error }));
+      );
+      const requestedEventTimeout = expect(requestedEvent).rejects.toThrow("timeout");
 
       ws = await openTrackedWs(started.port);
       const res = await connectReq(ws, {
@@ -352,13 +354,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
       ).toBeUndefined();
-      const requested = await requestedEvent;
-      expect(requested.ok).toBe(false);
-      if (requested.ok) {
-        throw new Error("expected pairing request watcher to time out");
-      }
-      expect(requested.error).toBeInstanceOf(Error);
-      expect((requested.error as Error).message).toContain("timeout");
+      await requestedEventTimeout;
 
       const pending = await devicePairingModule.listDevicePairing();
       expect(pending.pending).toEqual([]);
@@ -378,7 +374,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     let replacementRequestId = "";
 
     const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
+      .spyOn(devicePairingModule, "approveSilentLocalOperatorDevicePairing")
       .mockImplementation(async (_requestId: string) => {
         const replacement = await devicePairingModule.requestDevicePairing({
           deviceId: loaded.identity.deviceId,
