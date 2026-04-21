@@ -532,8 +532,9 @@ Notes:
 - Existing-session dialog hooks do not support timeout overrides.
 - Some features still require the managed browser path, including batch
   actions, PDF export, download interception, and `responsebody`.
-- Existing-session is host-local. If Chrome lives on a different machine or a
-  different network namespace, use remote CDP or a node host instead.
+- Existing-session can attach on the selected host or through a connected
+  browser node. If Chrome lives elsewhere and no browser node is connected, use
+  remote CDP or a node host instead.
 
 ## Isolation guarantees
 
