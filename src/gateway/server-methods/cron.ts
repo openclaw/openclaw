@@ -12,6 +12,7 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   ErrorCodes,
@@ -71,25 +72,37 @@ function assertConfiguredAnnounceAccount(params: {
   accountId?: string;
   field: "delivery.accountId" | "delivery.failureDestination.accountId";
 }) {
-  if (!params.accountId || !params.channel || params.channel === "last") {
+  if (!params.accountId || params.channel === "last") {
     return;
   }
-  const normalizedChannel = normalizeMessageChannel(params.channel);
-  if (!normalizedChannel) {
-    return;
+  let effectiveChannel: string | undefined;
+  if (params.channel) {
+    effectiveChannel = normalizeMessageChannel(params.channel);
+    if (!effectiveChannel) {
+      return;
+    }
+  } else {
+    const configured = listConfiguredAnnounceChannelIds(params.cfg);
+    if (configured.length !== 1) {
+      return;
+    }
+    effectiveChannel = configured[0];
   }
-  const channelCfg = params.cfg.channels?.[normalizedChannel] as
+  const channelCfg = params.cfg.channels?.[effectiveChannel] as
     | { accounts?: Record<string, unknown> }
     | undefined;
   const accounts = channelCfg?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return;
   }
-  const configuredAccountIds = Object.keys(accounts).toSorted();
-  if (configuredAccountIds.length === 0 || configuredAccountIds.includes(params.accountId)) {
+  const configuredAccountIds = Object.keys(accounts);
+  if (
+    configuredAccountIds.length === 0 ||
+    resolveAccountEntry(accounts, params.accountId) !== undefined
+  ) {
     return;
   }
-  throw new Error(`${params.field} must be one of: ${configuredAccountIds.join(", ")}`);
+  throw new Error(`${params.field} must be one of: ${configuredAccountIds.toSorted().join(", ")}`);
 }
 
 function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
