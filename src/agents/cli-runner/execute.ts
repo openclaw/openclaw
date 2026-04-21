@@ -17,6 +17,7 @@ import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { applySkillEnvOverridesFromSnapshot } from "../skills.js";
+import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   buildCliSupervisorScopeKey,
@@ -235,6 +236,7 @@ export async function executePreparedCliRun(
     backendId: context.backendResolved.id,
     skillsSnapshot: params.skillsSnapshot,
   });
+  let claudeSkillsPluginCleanupOwned = false;
   const args = buildCliArgs({
     backend,
     baseArgs:
@@ -353,6 +355,47 @@ export async function executePreparedCliRun(
               })
             : null;
         const supervisor = executeDeps.getProcessSupervisor();
+        if (shouldUseClaudeLiveSession(context)) {
+          if (!streamingParser) {
+            throw new Error("Claude live session requires JSONL streaming parser");
+          }
+          claudeSkillsPluginCleanupOwned = true;
+          const liveResult = await runClaudeLiveSessionTurn({
+            context,
+            args,
+            env,
+            prompt,
+            noOutputTimeoutMs,
+            getProcessSupervisor: executeDeps.getProcessSupervisor,
+            onAssistantDelta: ({ text, delta }) => {
+              emitAgentEvent({
+                runId: params.runId,
+                stream: "assistant",
+                data: {
+                  text: applyPluginTextReplacements(
+                    text,
+                    context.backendResolved.textTransforms?.output,
+                  ),
+                  delta: applyPluginTextReplacements(
+                    delta,
+                    context.backendResolved.textTransforms?.output,
+                  ),
+                },
+              });
+            },
+            cleanup: claudeSkillsPlugin.cleanup,
+          });
+          const rawText = liveResult.output.text;
+          return {
+            ...liveResult.output,
+            rawText,
+            finalPromptText: prompt,
+            text: applyPluginTextReplacements(
+              rawText,
+              context.backendResolved.textTransforms?.output,
+            ),
+          };
+        }
         const scopeKey = buildCliSupervisorScopeKey({
           backend,
           backendId: context.backendResolved.id,
@@ -495,7 +538,9 @@ export async function executePreparedCliRun(
       }
     });
   } finally {
-    await claudeSkillsPlugin.cleanup();
+    if (!claudeSkillsPluginCleanupOwned) {
+      await claudeSkillsPlugin.cleanup();
+    }
     if (systemPromptFile) {
       await systemPromptFile.cleanup();
     }
