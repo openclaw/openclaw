@@ -3,6 +3,7 @@ import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/r
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isReasoningReplyPayload,
+  normalizeOutboundReplyMediaDirectives,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -63,7 +64,8 @@ export async function deliverWebReply(params: {
       providerAccepted: sendResults.some((result) => result.providerAccepted),
     };
   };
-  if (isReasoningReplyPayload(replyResult)) {
+  const normalizedReplyResult = normalizeOutboundReplyMediaDirectives(replyResult);
+  if (isReasoningReplyPayload(normalizedReplyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${msg.from}`);
     return finishDelivery();
   }
@@ -71,7 +73,7 @@ export async function deliverWebReply(params: {
   const chunkMode = params.chunkMode ?? "length";
   const normalizedReply =
     params.normalizedReplyResult ??
-    normalizeWhatsAppOutboundPayload(replyResult, {
+    normalizeWhatsAppOutboundPayload(normalizedReplyResult, {
       normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
     });
   const convertedText = markdownToWhatsApp(
@@ -129,7 +131,7 @@ export async function deliverWebReply(params: {
       connectionId: connectionId ?? null,
       to: msg.from,
       from: msg.to,
-      text: elide(replyResult.text, 240),
+      text: elide(normalizedReply.text ?? normalizedReplyResult.text, 240),
       mediaUrl: null,
       mediaSizeBytes: null,
       mediaKind: null,

@@ -1060,6 +1060,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("React first, then reply, when both are warranted");
   });
 
+  it("includes channel-specific reaction policy guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reactionGuidance: {
+        level: "extensive",
+        channel: "WhatsApp",
+        extraGuidance: ["Allowed WhatsApp reaction emojis: 👨🏻‍💻 💯."],
+      },
+    });
+
+    expect(prompt).toContain("Allowed WhatsApp reaction emojis: 👨🏻‍💻 💯.");
+  });
+
   it("keeps stable project context before volatile channel guidance for prefix-cache reuse", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

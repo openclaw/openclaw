@@ -6,6 +6,10 @@ import {
   type OpenClawConfig,
   resolveWhatsAppReactionLevel,
 } from "./channel-actions.runtime.js";
+import {
+  resolveWhatsAppAllowedReactions,
+  resolveWhatsAppWorkIntakeReaction,
+} from "./reaction-policy.js";
 
 function areWhatsAppAgentReactionsEnabled(params: { cfg: OpenClawConfig; accountId?: string }) {
   if (!params.cfg.channels?.whatsapp) {
@@ -56,6 +60,35 @@ export function resolveWhatsAppAgentReactionGuidance(params: {
     return undefined;
   }
   return resolved.agentReactionGuidance;
+}
+
+export function resolveWhatsAppAgentReactionExtraGuidance(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): string[] {
+  if (!params.cfg.channels?.whatsapp) {
+    return [];
+  }
+  const guidance: string[] = [];
+  const allowedReactions = resolveWhatsAppAllowedReactions({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (allowedReactions.length > 0) {
+    guidance.push(
+      `Allowed WhatsApp reaction emojis: ${allowedReactions.join(" ")}. Do not use substitutions or generic defaults outside this set.`,
+    );
+  }
+  const workIntakeReaction = resolveWhatsAppWorkIntakeReaction({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (workIntakeReaction) {
+    guidance.push(
+      `For clear work intake that will require tools, source changes, document work, backend work, or waiting on the WhatsApp frontend, the default acknowledgment reaction is ${workIntakeReaction.emoji}.`,
+    );
+  }
+  return guidance;
 }
 
 export function describeWhatsAppMessageActions(params: {

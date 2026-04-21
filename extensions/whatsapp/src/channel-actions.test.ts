@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   describeWhatsAppMessageActions,
+  resolveWhatsAppAgentReactionExtraGuidance,
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -90,6 +91,28 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
 
     expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBe("minimal");
+  });
+
+  it("adds configured emoji policy to reaction extra guidance", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "extensive",
+          allowFrom: ["*"],
+          allowedReactions: ["👨🏻‍💻", "💯"],
+          workIntakeReaction: {
+            emoji: "👨🏻‍💻",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const level = resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" });
+    const guidance = resolveWhatsAppAgentReactionExtraGuidance({ cfg, accountId: "default" });
+
+    expect(level).toBe("extensive");
+    expect(guidance.join("\n")).toContain("Allowed WhatsApp reaction emojis: 👨🏻‍💻 💯");
+    expect(guidance.join("\n")).toContain("default acknowledgment reaction is 👨🏻‍💻");
   });
 
   it("omits reaction guidance when WhatsApp reactions are disabled", () => {

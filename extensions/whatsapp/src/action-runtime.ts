@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAuthorizedWhatsAppOutboundTarget } from "./action-runtime-target-auth.js";
 import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
+import { assertWhatsAppReactionAllowed } from "./reaction-policy.js";
 import { sendReactionWhatsApp } from "./send.js";
 
 export const whatsAppActionRuntime = {
@@ -59,6 +60,13 @@ export async function handleWhatsAppAction(
     });
 
     const resolvedEmoji = remove ? "" : emoji;
+    if (!remove && !isEmpty) {
+      assertWhatsAppReactionAllowed({
+        cfg,
+        accountId: resolved.accountId,
+        emoji,
+      });
+    }
     await whatsAppActionRuntime.sendReactionWhatsApp(resolved.to, messageId, resolvedEmoji, {
       verbose: false,
       fromMe,

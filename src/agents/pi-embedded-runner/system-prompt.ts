@@ -28,6 +28,7 @@ export function buildEmbeddedSystemPrompt(params: {
   reactionGuidance?: {
     level: "minimal" | "extensive";
     channel: string;
+    extraGuidance?: string[];
   };
   workspaceNotes?: string[];
   /** Controls which hardcoded sections to include. Defaults to "full". */

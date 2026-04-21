@@ -52,6 +52,25 @@ export type WhatsAppAckReactionConfig = {
   group?: "always" | "mentions" | "never";
 };
 
+export type WhatsAppWorkIntakeReactionConfig = {
+  /** Emoji to use when a message clearly asks the agent to start real work. Empty = disabled. */
+  emoji?: string;
+  /** Send work-intake reactions in direct chats. Default: true. */
+  direct?: boolean;
+  /**
+   * Send work-intake reactions in group chats:
+   * - "always": react to detected work-intake messages in groups
+   * - "mentions": react when mentioned or group-activated
+   * - "never": never react in groups
+   * Default: "mentions"
+   */
+  group?: "always" | "mentions" | "never";
+  /** Per chat/sender cooldown in milliseconds. Default: 120000. */
+  cooldownMs?: number;
+  /** Case-insensitive keyword hints that mark a message as work intake. */
+  keywords?: string[];
+};
+
 type WhatsAppSharedConfig = {
   /** Whether the WhatsApp channel is enabled. */
   enabled?: boolean;
@@ -95,6 +114,10 @@ type WhatsAppSharedConfig = {
   direct?: Record<string, WhatsAppDirectConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
+  /** Optional allowlist for agent-sent WhatsApp reaction emojis. Empty = unrestricted. */
+  allowedReactions?: string[];
+  /** Deterministic reaction for clear work intake before the agent starts slower work. */
+  workIntakeReaction?: WhatsAppWorkIntakeReactionConfig;
   /**
    * Controls agent reaction behavior:
    * - "off": No reactions

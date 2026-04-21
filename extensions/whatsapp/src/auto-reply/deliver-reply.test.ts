@@ -834,6 +834,43 @@ describe("deliverWebReply", () => {
     expect(hoisted.maybeShoarchiveOutboundPdf).not.toHaveBeenCalled();
   });
 
+  it("parses MEDIA directives in raw reply text before choosing text-only delivery", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("docx"),
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      kind: "document",
+      fileName: "tulsi-villa-bp-reply.docx",
+    });
+
+    await deliverWebReply({
+      replyResult: {
+        text: "sending the latest BP reply draft\nMEDIA:/tmp/tulsi-villa-bp-reply.docx",
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith("/tmp/tulsi-villa-bp-reply.docx", {
+      maxBytes: 1024 * 1024,
+      localRoots: undefined,
+    });
+    expect(msg.reply).not.toHaveBeenCalled();
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(Buffer),
+        fileName: "tulsi-villa-bp-reply.docx",
+        caption: "sending the latest BP reply draft",
+      }),
+    );
+    expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
+  });
+
   it("shoarchives outbound pdf documents after sending", async () => {
     const msg = makeMsg();
     (

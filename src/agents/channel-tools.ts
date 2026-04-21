@@ -162,7 +162,7 @@ export function resolveChannelReactionGuidance(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
-}): { level: "minimal" | "extensive"; channel: string } | undefined {
+}): { level: "minimal" | "extensive"; channel: string; extraGuidance?: string[] } | undefined {
   const channelId = normalizeAnyChannelId(params.channel);
   if (!channelId) {
     return undefined;
@@ -179,6 +179,7 @@ export function resolveChannelReactionGuidance(params: {
   return {
     level: resolved.level,
     channel: resolved.channelLabel?.trim() || channelId,
+    extraGuidance: resolved.extraGuidance?.map((entry) => entry.trim()).filter(Boolean),
   };
 }
 

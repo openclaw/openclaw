@@ -646,7 +646,9 @@ export type ChannelAgentPromptAdapter = {
   reactionGuidance?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
+  }) =>
+    | { level: "minimal" | "extensive"; channelLabel?: string; extraGuidance?: string[] }
+    | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
