@@ -20,3 +20,33 @@ export type ProviderThinkingPolicyContext = {
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
   reasoning?: boolean;
 };
+
+export type ProviderThinkingLevelId =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
+
+export type ProviderThinkingLevel = {
+  id: ProviderThinkingLevelId;
+  /**
+   * Optional display label. Use this when the stored value differs from the
+   * provider-facing UX, for example binary providers storing `low` but showing
+   * `on`.
+   */
+  label?: string;
+  /**
+   * Relative strength used when downgrading a stored level that the selected
+   * model no longer supports.
+   */
+  rank?: number;
+};
+
+export type ProviderThinkingProfile = {
+  levels: ProviderThinkingLevel[] | ReadonlyArray<ProviderThinkingLevel>;
+  defaultLevel?: ProviderThinkingLevelId | null;
+};

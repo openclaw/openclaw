@@ -392,6 +392,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
+    awaitSidecars?: boolean;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -482,6 +483,19 @@ export async function startGatewayPostAttachRuntime(
     .catch((err) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
+
+  if (params.awaitSidecars === true) {
+    const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
+      stopGatewayUpdateCheckPromise,
+      tailscaleCleanupPromise,
+      sidecarsPromise,
+    ]);
+    return {
+      stopGatewayUpdateCheck,
+      tailscaleCleanup,
+      pluginServices: sidecarsResult.pluginServices,
+    };
+  }
 
   const [stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
     stopGatewayUpdateCheckPromise,

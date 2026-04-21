@@ -4,11 +4,10 @@ import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
-  formatXHighModelHint,
+  formatThinkingLevels,
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   resolvePreferredOpenClawTmpDir,
-  resolveSupportedThinkingLevel,
-  supportsXHighThinking,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 
@@ -145,15 +144,17 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         );
       }
       let resolvedThinkLevel = thinkLevel;
-      if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
-      }
-      if (thinkLevel === "max") {
-        resolvedThinkLevel = resolveSupportedThinkingLevel({
+      if (
+        thinkLevel &&
+        !isThinkingLevelSupported({
           provider,
           model,
           level: thinkLevel,
-        });
+        })
+      ) {
+        throw new Error(
+          `Thinking level "${thinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        );
       }
 
       const timeoutMs =
