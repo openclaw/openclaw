@@ -13,6 +13,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { hasLegacyPiAgentAuthSource } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -243,6 +244,7 @@ export async function resolveProviderAuths(params: {
     agentDir: params.agentDir,
   };
   const hasAuthProfileStoreSource = hasAnyAuthProfileStoreSource(params.agentDir);
+  const hasSharedPluginCredentialSource = hasLegacyPiAgentAuthSource(stateBase.env);
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
@@ -260,8 +262,10 @@ export async function resolveProviderAuths(params: {
       ...stateBase,
       allowAuthProfileStore,
     };
+    const hasPluginCredentialSource =
+      hasDirectCredentialSource || hasAuthProfileStoreSource || hasSharedPluginCredentialSource;
 
-    if (!params.skipPluginAuthWithoutCredentialSource || allowAuthProfileStore) {
+    if (!params.skipPluginAuthWithoutCredentialSource || hasPluginCredentialSource) {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({
         state,
         provider,

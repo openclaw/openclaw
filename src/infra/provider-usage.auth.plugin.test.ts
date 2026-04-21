@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
@@ -27,6 +30,15 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 });
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+
+async function withTempHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-usage-"));
+  try {
+    return await fn(homeDir);
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+}
 
 describe("resolveProviderAuths plugin boundary", () => {
   beforeAll(async () => {
@@ -58,33 +70,70 @@ describe("resolveProviderAuths plugin boundary", () => {
   });
 
   it("skips plugin usage auth when requested and no direct credential source exists", async () => {
-    await expect(
-      resolveProviderAuths({
-        providers: ["zai"],
-        skipPluginAuthWithoutCredentialSource: true,
-        env: {},
-      }),
-    ).resolves.toEqual([]);
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuths({
+          providers: ["zai"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([]);
+    });
 
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
-  it("skips plugin usage auth per provider when only another provider has direct credentials", async () => {
-    await expect(
-      resolveProviderAuths({
-        providers: ["anthropic", "zai"],
-        skipPluginAuthWithoutCredentialSource: true,
-        env: {
-          ANTHROPIC_API_KEY: "sk-ant",
+  it("keeps plugin usage auth when a shared legacy plugin credential source exists", async () => {
+    await withTempHome(async (homeDir) => {
+      fs.mkdirSync(path.join(homeDir, ".pi", "agent"), { recursive: true });
+      fs.writeFileSync(
+        path.join(homeDir, ".pi", "agent", "auth.json"),
+        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } })}\n`,
+      );
+      resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+        token: "legacy-zai-token",
+      });
+      await expect(
+        resolveProviderAuths({
+          providers: ["zai"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "zai",
+          token: "legacy-zai-token",
         },
+      ]);
+    });
+
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "zai",
       }),
-    ).resolves.toEqual([
-      {
-        provider: "anthropic",
-        token: "sk-ant",
-      },
-    ]);
+    );
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("skips plugin usage auth per provider when only another provider has direct credentials", async () => {
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuths({
+          providers: ["anthropic", "zai"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: {
+            HOME: homeDir,
+            ANTHROPIC_API_KEY: "sk-ant",
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "anthropic",
+          token: "sk-ant",
+        },
+      ]);
+    });
 
     expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledTimes(1);
     expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledWith(
