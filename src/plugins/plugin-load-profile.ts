@@ -33,10 +33,28 @@ export function shouldProfilePluginLoader(): boolean {
  */
 export type PluginLoadProfileExtras = ReadonlyArray<readonly [string, number | string]>;
 
+/** Per-call scope: which plugin and which source path the probe is for. */
+export type PluginLoadProfileScope = {
+  pluginId?: string;
+  source: string;
+};
+
+/**
+ * A scope-bound profiler — call it with a `phase` + sync `run` to time and
+ * emit a `[plugin-load-profile]` line that already includes the bound
+ * `pluginId` and `source`. Build one with `createProfiler(scope)`.
+ */
+export type PluginLoadProfiler = <T>(
+  phase: string,
+  run: () => T,
+  extras?: PluginLoadProfileExtras,
+) => T;
+
 /**
  * Render a `[plugin-load-profile]` line. Exported so that callers needing
- * custom timing splits (e.g. dual-timer probes) can build their own start/stop
- * logic and still emit a line in the canonical format.
+ * custom timing splits (e.g. dual-timer probes in
+ * `channel-entry-contract.ts`) can build their own start/stop logic and
+ * still emit a line in the canonical format.
  */
 export function formatPluginLoadProfileLine(params: {
   phase: string;
@@ -56,39 +74,62 @@ export function formatPluginLoadProfileLine(params: {
 }
 
 /**
- * Wrap a synchronous step with start/stop timing and a `[plugin-load-profile]`
- * log line. When the env flag is unset, calls `params.run()` directly with no
+ * Time a single synchronous step and emit a `[plugin-load-profile]` line.
+ * Use this when you only need to wrap one call:
+ *
+ * ```ts
+ * const mod = withProfile(
+ *   { pluginId: id, source },
+ *   "phase-name",
+ *   () => loadIt(),
+ * );
+ * ```
+ *
+ * For repeated calls that share the same `{ pluginId, source }` scope,
+ * prefer `createProfiler(scope)` and call the returned profiler.
+ *
+ * When the env flag is unset, this runs `run()` directly with no timing
  * overhead. Errors propagate naturally; the log line is still emitted via
  * `try { … } finally { … }`.
  */
-export function profilePluginLoaderSync<T>(params: {
-  phase: string;
-  pluginId?: string;
-  source: string;
-  run: () => T;
-  /**
-   * Optional extras to render between `elapsedMs=` and `source=`. Numeric
-   * extras are formatted with one decimal place to match the `elapsedMs`
-   * precision.
-   */
-  extras?: PluginLoadProfileExtras;
-}): T {
+export function withProfile<T>(
+  scope: PluginLoadProfileScope,
+  phase: string,
+  run: () => T,
+  extras?: PluginLoadProfileExtras,
+): T {
   if (!shouldProfilePluginLoader()) {
-    return params.run();
+    return run();
   }
   const startMs = performance.now();
   try {
-    return params.run();
+    return run();
   } finally {
     const elapsedMs = performance.now() - startMs;
     console.error(
       formatPluginLoadProfileLine({
-        phase: params.phase,
-        pluginId: params.pluginId,
-        source: params.source,
+        phase,
+        pluginId: scope.pluginId,
+        source: scope.source,
         elapsedMs,
-        extras: params.extras,
+        extras,
       }),
     );
   }
+}
+
+/**
+ * Build a scope-bound profiler. Useful when several consecutive steps share
+ * the same `{ pluginId, source }`:
+ *
+ * ```ts
+ * const profile = createProfiler({ pluginId: id, source: importMetaUrl });
+ * profile("phase-a", () => stepA());
+ * const v = profile("phase-b", () => stepB());
+ * ```
+ *
+ * Each call has the same semantics as `withProfile(scope, phase, run)`.
+ */
+export function createProfiler(scope: PluginLoadProfileScope): PluginLoadProfiler {
+  return (phase, run, extras) => withProfile(scope, phase, run, extras);
 }

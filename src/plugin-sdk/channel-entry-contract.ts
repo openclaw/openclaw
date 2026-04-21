@@ -13,8 +13,8 @@ import {
   type PluginJitiLoaderCache,
 } from "../plugins/jiti-loader-cache.js";
 import {
+  createProfiler,
   formatPluginLoadProfileLine,
-  profilePluginLoaderSync,
   shouldProfilePluginLoader,
 } from "../plugins/plugin-load-profile.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -441,39 +441,17 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         registerCliMetadata?.(api);
         return;
       }
-      profilePluginLoaderSync({
-        phase: "bundled-register:setChannelRuntime",
-        pluginId: id,
-        source: importMetaUrl,
-        run: () => setChannelRuntime?.(api.runtime),
-      });
-      const channelPlugin = profilePluginLoaderSync({
-        phase: "bundled-register:loadChannelPlugin",
-        pluginId: id,
-        source: importMetaUrl,
-        run: () => loadChannelPlugin(),
-      });
-      profilePluginLoaderSync({
-        phase: "bundled-register:registerChannel",
-        pluginId: id,
-        source: importMetaUrl,
-        run: () => api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
-      });
+      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
+      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
+      const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
+      profile("bundled-register:registerChannel", () =>
+        api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
+      );
       if (api.registrationMode !== "full") {
         return;
       }
-      profilePluginLoaderSync({
-        phase: "bundled-register:registerCliMetadata",
-        pluginId: id,
-        source: importMetaUrl,
-        run: () => registerCliMetadata?.(api),
-      });
-      profilePluginLoaderSync({
-        phase: "bundled-register:registerFull",
-        pluginId: id,
-        source: importMetaUrl,
-        run: () => registerFull?.(api),
-      });
+      profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
+      profile("bundled-register:registerFull", () => registerFull?.(api));
     },
     loadChannelPlugin,
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
