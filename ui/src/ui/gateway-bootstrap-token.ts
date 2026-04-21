@@ -64,6 +64,10 @@ export function resolvePreferredGatewayAccessToken(params: {
   storedToken?: string | null;
   pageUrl?: string;
 }): string | undefined {
+  const storedToken = params.storedToken?.trim();
+  if (storedToken) {
+    return storedToken;
+  }
   const bootstrapToken =
     typeof params.gatewayUrl === "string" && params.gatewayUrl.trim().length > 0
       ? resolveLoopbackGatewayBootstrapToken({
@@ -75,6 +79,5 @@ export function resolvePreferredGatewayAccessToken(params: {
   if (bootstrapToken) {
     return bootstrapToken;
   }
-  const storedToken = params.storedToken?.trim();
-  return storedToken ? storedToken : undefined;
+  return undefined;
 }

@@ -49,15 +49,15 @@ describe("resolveLoopbackGatewayBootstrapToken", () => {
 });
 
 describe("resolvePreferredGatewayAccessToken", () => {
-  it("prefers the loopback bootstrap token over a stored token", () => {
+  it("prefers an explicit stored token over a bootstrap token", () => {
     expect(
       resolvePreferredGatewayAccessToken({
         pageUrl: "http://127.0.0.1:18789/",
         gatewayUrl: "ws://localhost:18789",
         bootstrapGatewayToken: "bootstrap-token",
-        storedToken: "stale-token",
+        storedToken: "fresh-token",
       }),
-    ).toBe("bootstrap-token");
+    ).toBe("fresh-token");
   });
 
   it("falls back to the stored token when bootstrap auth is not valid for this page/gateway pair", () => {
@@ -69,5 +69,16 @@ describe("resolvePreferredGatewayAccessToken", () => {
         storedToken: "session-token",
       }),
     ).toBe("session-token");
+  });
+
+  it("falls back to the bootstrap token when the stored token is blank", () => {
+    expect(
+      resolvePreferredGatewayAccessToken({
+        pageUrl: "http://127.0.0.1:18789/",
+        gatewayUrl: "ws://localhost:18789",
+        bootstrapGatewayToken: "bootstrap-token",
+        storedToken: "   ",
+      }),
+    ).toBe("bootstrap-token");
   });
 });

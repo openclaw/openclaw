@@ -254,16 +254,16 @@ describe("connectGateway", () => {
     );
   });
 
-  it("prefers the bootstrap gateway token over a stale stored loopback token", () => {
+  it("prefers an explicit stored token over the bootstrap gateway token", () => {
     const host = createHost();
-    host.settings.token = "stale-token";
+    host.settings.token = "fresh-token";
     host.bootstrapGatewayToken = "bootstrap-token";
 
     connectGateway(host);
     const client = gatewayClientInstances[0];
 
     expect(client).toBeDefined();
-    expect(client.options).toMatchObject({ token: "bootstrap-token" });
+    expect(client.options).toMatchObject({ token: "fresh-token" });
   });
 
   it("does not use the bootstrap gateway token for non-loopback gateway urls", () => {

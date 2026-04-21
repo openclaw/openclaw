@@ -168,17 +168,17 @@ describe("resolveAssistantAttachmentAuthToken", () => {
     ).toBe("device-token");
   });
 
-  it("prefers the loopback bootstrap token over a stored token for the same control-ui instance", () => {
+  it("prefers an explicit stored token over the loopback bootstrap token", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
         settings: {
-          token: "session-token",
+          token: "fresh-token",
           gatewayUrl: "ws://127.0.0.1:18789",
         } as AppViewState["settings"],
         bootstrapGatewayToken: "bootstrap-token",
         password: "shared-password",
       }, { pageUrl: "http://127.0.0.1:18789/" }),
-    ).toBe("bootstrap-token");
+    ).toBe("fresh-token");
   });
 
   it("falls back to the shared password when token is blank", () => {
