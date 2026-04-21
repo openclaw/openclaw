@@ -76,6 +76,12 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
   - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm test:docker:bundled-channel-deps`
+  - Packs and installs the current OpenClaw build in Docker, starts the Gateway
+    with OpenAI configured, then enables Telegram and Discord via config edits.
+  - Verifies the first Gateway restart installs each bundled channel plugin's
+    runtime dependencies on demand, and a second restart does not reinstall
+    dependencies that were already activated.
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
