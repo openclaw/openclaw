@@ -3,6 +3,7 @@ import {
   formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  resolveSupportedThinkingLevel,
   supportsXHighThinking,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -798,6 +799,27 @@ async function agentCommandInternal(
           storePath,
           entry,
         });
+      }
+    }
+    if (resolvedThinkLevel === "max") {
+      const fallbackThinkLevel = resolveSupportedThinkingLevel({
+        provider,
+        model,
+        level: resolvedThinkLevel,
+      });
+      if (fallbackThinkLevel !== resolvedThinkLevel) {
+        resolvedThinkLevel = fallbackThinkLevel;
+        if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "max") {
+          const entry = sessionEntry;
+          entry.thinkingLevel = fallbackThinkLevel;
+          entry.updatedAt = Date.now();
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry,
+          });
+        }
       }
     }
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();

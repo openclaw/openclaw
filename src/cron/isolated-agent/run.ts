@@ -39,6 +39,7 @@ import {
   resolveCronStyleNow,
   resolveDefaultAgentId,
   resolveHookExternalContentSource,
+  resolveSupportedThinkingLevel,
   resolveSessionTranscriptPath,
   resolveThinkingDefault,
   setSessionRuntimeModel,
@@ -387,6 +388,19 @@ async function prepareCronRunContext(params: {
       `[cron:${input.job.id}] Thinking level "xhigh" is not supported for ${provider}/${model}; downgrading to "high".`,
     );
     thinkLevel = "high";
+  }
+  if (thinkLevel === "max") {
+    const fallbackThinkLevel = resolveSupportedThinkingLevel({
+      provider,
+      model,
+      level: thinkLevel,
+    });
+    if (fallbackThinkLevel !== thinkLevel) {
+      logWarn(
+        `[cron:${input.job.id}] Thinking level "max" is not supported for ${provider}/${model}; downgrading to "${fallbackThinkLevel}".`,
+      );
+      thinkLevel = fallbackThinkLevel;
+    }
   }
 
   const timeoutMs = resolveAgentTimeoutMs({
