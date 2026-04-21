@@ -128,7 +128,7 @@ One assistant across **20+ platforms**. Wherever you already chat, OpenClaw is t
 
 ---
 
-### 🎙️ Voice — Wake Words & Talk Mode
+### 🎙 Voice — Wake Words & Talk Mode
 
 - **macOS / iOS:** Voice Wake with configurable wake words + push-to-talk overlay
 - **Android:** Continuous Talk Mode with ElevenLabs TTS (system TTS fallback)
@@ -137,7 +137,7 @@ One assistant across **20+ platforms**. Wherever you already chat, OpenClaw is t
 
 ---
 
-### 🖼️ Live Canvas
+### 🖼 Live Canvas
 
 An agent-driven visual workspace with [A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui) — your assistant can draw, annotate, and update a live surface in real time.
 
