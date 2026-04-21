@@ -14,6 +14,12 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
   "openai-codex-responses",
   "openai-completions",
+  // Ollama Cloud and local Ollama expose an OpenAI-compatible /v1/chat/completions
+  // endpoint. Registering 'ollama' here routes it through the openai-completions
+  // transport so the pi-ai provider registry has an entry for it at runtime.
+  // Without this, model calls throw "No API provider registered for api: ollama".
+  // (#69683)
+  "ollama",
   "azure-openai-responses",
   "anthropic-messages",
   "google-generative-ai",
@@ -23,6 +29,9 @@ const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-responses": "openclaw-openai-responses-transport",
   "openai-codex-responses": "openclaw-openai-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
+  // Ollama uses the same OpenAI-completions transport; share the same alias
+  // so prepareTransportAwareSimpleModel can normalise the api field. (#69683)
+  "ollama": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
   "google-generative-ai": "openclaw-google-generative-ai-transport",
@@ -81,6 +90,9 @@ function createSupportedTransportStreamFn(
     case "openai-codex-responses":
       return createOpenAIResponsesTransportStreamFn();
     case "openai-completions":
+    // Ollama's /v1/chat/completions is OpenAI-compatible; route through the
+    // same completions transport. (#69683)
+    case "ollama":
       return createOpenAICompletionsTransportStreamFn();
     case "azure-openai-responses":
       return createAzureOpenAIResponsesTransportStreamFn();

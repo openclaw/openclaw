@@ -111,12 +111,14 @@ describe("provider transport stream contracts", () => {
     }
   });
 
-  it("fails closed when unsupported apis carry transport overrides", () => {
+  it("fails closed when truly unsupported apis carry transport overrides", () => {
+    // 'ollama' is now supported (OpenAI-completions alias) — use a genuinely
+    // unsupported api to keep the "fails closed" contract tested. (#69683)
     const model = attachModelProviderRequestTransport(
-      buildModel("ollama", {
-        id: "qwen3:32b",
-        provider: "ollama",
-        baseUrl: "http://localhost:11434",
+      buildModel("mistral-conversations" as Api, {
+        id: "mistral-small",
+        provider: "mistral",
+        baseUrl: "https://api.mistral.ai/v1",
       }),
       {
         proxy: {
@@ -130,25 +132,90 @@ describe("provider transport stream contracts", () => {
     expect(resolveTransportAwareSimpleApi(model.api)).toBeUndefined();
     expect(createBoundaryAwareStreamFnForModel(model)).toBeUndefined();
     expect(() => createTransportAwareStreamFnForModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
-    );
-    expect(() => buildTransportAwareSimpleStreamFn(model)).toThrow(
-      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
-    );
-    expect(() => prepareTransportAwareSimpleModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls is not yet supported for api "mistral-conversations"',
     );
   });
 
-  it("keeps unsupported apis unchanged when no transport overrides are attached", () => {
+  it("keeps truly unsupported apis unchanged when no transport overrides are attached", () => {
+    // 'ollama' is now supported — use a genuinely unsupported api. (#69683)
+    const model = buildModel("mistral-conversations" as Api, {
+      id: "mistral-small",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+    });
+
+    expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
+    expect(prepareTransportAwareSimpleModel(model)).toBe(model);
+  });
+
+  // --- #69683: Ollama OpenAI-completions transport registration ---
+
+  it("registers ollama as a supported transport api (isTransportAwareApiSupported)", () => {
+    expect(isTransportAwareApiSupported("ollama")).toBe(true);
+  });
+
+  it("resolves ollama to the openai-completions transport alias", () => {
+    expect(resolveTransportAwareSimpleApi("ollama")).toBe(
+      "openclaw-openai-completions-transport",
+    );
+  });
+
+  it("returns a stream fn for ollama without transport overrides", () => {
     const model = buildModel("ollama", {
       id: "qwen3:32b",
       provider: "ollama",
       baseUrl: "http://localhost:11434",
     });
 
-    expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
+    // With ollama registered, createBoundaryAwareStreamFnForModel must return a fn.
+    expect(createBoundaryAwareStreamFnForModel(model)).toBeTypeOf("function");
+    // buildTransportAwareSimpleStreamFn returns undefined when there are no proxy/tls
+    // overrides (it's only used for transport-override paths), which is correct.
     expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
+    // prepareTransportAwareSimpleModel should return the model unchanged when there
+    // are no transport overrides (no alias needed at this stage).
     expect(prepareTransportAwareSimpleModel(model)).toBe(model);
+  });
+
+  it("returns a transport stream fn for ollama when proxy overrides are present", () => {
+    const model = attachModelProviderRequestTransport(
+      buildModel("ollama", {
+        id: "llama3.2",
+        provider: "ollama",
+        baseUrl: "http://localhost:11434",
+      }),
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    );
+
+    // ollama is now in SUPPORTED_TRANSPORT_APIS — should not throw.
+    expect(isTransportAwareApiSupported(model.api)).toBe(true);
+    expect(() => createTransportAwareStreamFnForModel(model)).not.toThrow();
+    expect(createTransportAwareStreamFnForModel(model)).toBeTypeOf("function");
+  });
+
+  it("prepares ollama model with transport alias when proxy override is present", () => {
+    const model = attachModelProviderRequestTransport(
+      buildModel("ollama", {
+        id: "gemma3:27b",
+        provider: "ollama",
+        baseUrl: "http://localhost:11434",
+      }),
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://corp-proxy:3128",
+        },
+      },
+    );
+
+    const prepared = prepareTransportAwareSimpleModel(model);
+    // api should be aliased to the openclaw transport id.
+    expect(prepared.api).toBe("openclaw-openai-completions-transport");
   });
 });
