@@ -734,6 +734,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Exec host=node/macOS: when the paired node advertises `system.run` without `system.run.prepare` (for example the macOS companion app predating the prepare handshake), synthesize the canonical approval plan on the agent side instead of failing the preflight, so `exec host=node` against macOS nodes no longer errors with `node command not allowed: the node ... does not support "system.run.prepare"`. Fixes #66839.
 - Exec/YOLO: stop rejecting gateway-host exec in `security=full` plus `ask=off` mode via the Python/Node script preflight hardening path, so promptless YOLO exec once again runs direct interpreter stdin and heredoc forms such as `node <<'NODE' ... NODE`. Thanks @steipete.
 - OpenAI Codex: normalize legacy `openai-completions` transport overrides on default OpenAI/Codex and GitHub Copilot-compatible hosts back to the native Codex Responses transport while leaving custom proxies untouched. (#45304, #42194) Thanks @dyss1992 and @DeadlySilent.
 - Anthropic/plugins: scope Anthropic `api: "anthropic-messages"` defaulting to Anthropic-owned providers, so `openai-codex` and other providers without an explicit `api` no longer get rewritten to the wrong transport. Fixes #64534. Thanks @steipete.

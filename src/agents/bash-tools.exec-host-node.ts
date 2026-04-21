@@ -4,6 +4,7 @@ import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
+  type SystemRunApprovalPlan,
   evaluateShellAllowlist,
   hasDurableExecApproval,
   requiresExecApproval,
@@ -16,6 +17,8 @@ import {
 } from "../infra/exec-inline-eval.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import { formatExecCommand } from "../infra/system-run-command.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -57,6 +60,60 @@ export type ExecuteNodeHostCommandParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
+async function requestRemoteSystemRunPlan(params: {
+  nodeId: string;
+  argv: string[];
+  rawCommand: string;
+  workdir: string | undefined;
+  agentId: string | undefined;
+  sessionKey: string | undefined;
+}): Promise<{ plan: SystemRunApprovalPlan }> {
+  const prepareRaw = await callGatewayTool(
+    "node.invoke",
+    { timeoutMs: 15_000 },
+    {
+      nodeId: params.nodeId,
+      command: "system.run.prepare",
+      params: {
+        command: params.argv,
+        rawCommand: params.rawCommand,
+        ...(params.workdir != null ? { cwd: params.workdir } : {}),
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      },
+      idempotencyKey: crypto.randomUUID(),
+    },
+  );
+  const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+  if (!prepared) {
+    throw new Error("invalid system.run.prepare response");
+  }
+  return prepared;
+}
+
+// Legacy nodes advertise `system.run` without `system.run.prepare`. Build the
+// canonical approval plan on the agent side so the exec flow can still bind
+// approvals to a stable argv/cwd without a round-trip to the node. Plan
+// hardening that depends on the node's filesystem is skipped; these nodes
+// already ignore `systemRunPlan` when executing.
+function buildLocalSystemRunPlan(params: {
+  argv: string[];
+  workdir: string | undefined;
+  agentId: string | undefined;
+  sessionKey: string | undefined;
+}): { plan: SystemRunApprovalPlan } {
+  return {
+    plan: {
+      argv: [...params.argv],
+      cwd: normalizeOptionalString(params.workdir) ?? null,
+      commandText: formatExecCommand(params.argv),
+      commandPreview: null,
+      agentId: normalizeOptionalString(params.agentId) ?? null,
+      sessionKey: normalizeOptionalString(params.sessionKey) ?? null,
+    },
+  };
+}
+
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
@@ -89,35 +146,30 @@ export async function executeNodeHostCommand(
     throw err;
   }
   const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
-  const supportsSystemRun = Array.isArray(nodeInfo?.commands)
-    ? nodeInfo?.commands?.includes("system.run")
-    : false;
+  const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
+  const supportsSystemRun = declaredCommands.includes("system.run");
   if (!supportsSystemRun) {
     throw new Error(
       "exec host=node requires a node that supports system.run (companion app or node host).",
     );
   }
+  const supportsSystemRunPrepare = declaredCommands.includes("system.run.prepare");
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
-  const prepareRaw = await callGatewayTool(
-    "node.invoke",
-    { timeoutMs: 15_000 },
-    {
-      nodeId,
-      command: "system.run.prepare",
-      params: {
-        command: argv,
+  const prepared = supportsSystemRunPrepare
+    ? await requestRemoteSystemRunPlan({
+        nodeId,
+        argv,
         rawCommand: params.command,
-        ...(params.workdir != null ? { cwd: params.workdir } : {}),
+        workdir: params.workdir,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-      },
-      idempotencyKey: crypto.randomUUID(),
-    },
-  );
-  const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
-  if (!prepared) {
-    throw new Error("invalid system.run.prepare response");
-  }
+      })
+    : buildLocalSystemRunPlan({
+        argv,
+        workdir: params.workdir,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
   const runArgv = prepared.plan.argv;
   const runRawCommand = prepared.plan.commandText;
   const runCwd = prepared.plan.cwd ?? params.workdir;

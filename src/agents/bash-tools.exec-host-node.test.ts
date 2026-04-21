@@ -182,7 +182,11 @@ describe("executeNodeHostCommand", () => {
     );
     listNodesMock.mockReset();
     listNodesMock.mockResolvedValue([
-      { nodeId: "node-1", commands: ["system.run"], platform: process.platform },
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        platform: process.platform,
+      },
     ]);
     parsePreparedSystemRunPayloadMock.mockReset();
     parsePreparedSystemRunPayloadMock.mockReturnValue({ plan: preparedPlan });
@@ -348,5 +352,54 @@ describe("executeNodeHostCommand", () => {
       );
     });
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips system.run.prepare and builds a local plan when the node does not advertise it", async () => {
+    // Repro of #66839: macOS app nodes advertise system.run + system.which but
+    // omit system.run.prepare. Gateway declaration check rejects the prepare
+    // RPC before it reaches the node, breaking exec host=node.
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.which", "system.notify"],
+        platform: "macos",
+      },
+    ]);
+    requiresExecApprovalMock.mockReturnValueOnce(false);
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("completed");
+    expect(parsePreparedSystemRunPayloadMock).not.toHaveBeenCalled();
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        command: "system.run",
+        params: expect.objectContaining({
+          command: ["bash", "-lc", "bun ./script.ts"],
+          systemRunPlan: {
+            argv: ["bash", "-lc", "bun ./script.ts"],
+            cwd: "/tmp/work",
+            commandText: 'bash -lc "bun ./script.ts"',
+            commandPreview: null,
+            agentId: "requested-agent",
+            sessionKey: "requested-session",
+          },
+        }),
+      }),
+    );
   });
 });
