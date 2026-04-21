@@ -11,6 +11,7 @@ const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
 const ZALO_OUTBOUND_MEDIA_DIR = join(tmpdir(), "openclaw-zalo-outbound-media");
+const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 
 type HostedZaloMediaMetadata = {
   routePath: string;
@@ -182,8 +183,10 @@ export async function tryHandleHostedZaloMediaRequest(
 
   const routePath = mediaPath.slice(0, prefixIndex + ZALO_OUTBOUND_MEDIA_PREFIX.length);
   const id = mediaPath.slice(prefixIndex + ZALO_OUTBOUND_MEDIA_PREFIX.length);
-  if (!id) {
-    return false;
+  if (!id || !ZALO_OUTBOUND_MEDIA_ID_RE.test(id)) {
+    res.statusCode = 404;
+    res.end("Not Found");
+    return true;
   }
 
   const entry = await readHostedZaloMediaEntry(id);

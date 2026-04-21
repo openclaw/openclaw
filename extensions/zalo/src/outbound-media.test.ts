@@ -166,4 +166,20 @@ describe("zalo outbound hosted media", () => {
     expect(response.res.statusCode).toBe(401);
     expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
   });
+
+  it("rejects malformed hosted media ids before touching disk", async () => {
+    const response = createMockResponse();
+
+    const handled = await tryHandleHostedZaloMediaRequest(
+      {
+        method: "GET",
+        url: "/zalo-webhook/media/%2e%2e/secret?token=wrong",
+      } as never,
+      response.res as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(404);
+    expect(response.res.end).toHaveBeenCalledWith("Not Found");
+  });
 });

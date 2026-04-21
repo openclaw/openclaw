@@ -88,11 +88,68 @@ type ZaloUpdateProcessingParams = ZaloProcessingContext & {
 };
 
 let zaloWebhookModulePromise: Promise<ZaloWebhookModule> | undefined;
+const hostedMediaRouteRefs = new Map<string, { count: number; unregister: () => void }>();
 
 function loadZaloWebhookModule(): Promise<ZaloWebhookModule> {
   zaloWebhookModulePromise ??= import("./monitor.webhook.js");
   return zaloWebhookModulePromise;
 }
+
+function registerSharedHostedMediaRoute(params: {
+  path: string;
+  accountId: string;
+  log?: (message: string) => void;
+}): () => void {
+  const existing = hostedMediaRouteRefs.get(params.path);
+  if (existing) {
+    existing.count += 1;
+    return () => {
+      const current = hostedMediaRouteRefs.get(params.path);
+      if (!current) {
+        return;
+      }
+      if (current.count > 1) {
+        current.count -= 1;
+        return;
+      }
+      hostedMediaRouteRefs.delete(params.path);
+      current.unregister();
+    };
+  }
+
+  const unregister = registerPluginHttpRoute({
+    auth: "plugin",
+    match: "prefix",
+    path: params.path,
+    replaceExisting: true,
+    pluginId: "zalo",
+    source: "zalo-hosted-media",
+    accountId: params.accountId,
+    log: params.log,
+    handler: async (req, res) => {
+      const handled = await tryHandleHostedZaloMediaRequest(req, res);
+      if (!handled && !res.headersSent) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Not Found");
+      }
+    },
+  });
+  hostedMediaRouteRefs.set(params.path, { count: 1, unregister });
+  return () => {
+    const current = hostedMediaRouteRefs.get(params.path);
+    if (!current) {
+      return;
+    }
+    if (current.count > 1) {
+      current.count -= 1;
+      return;
+    }
+    hostedMediaRouteRefs.delete(params.path);
+    current.unregister();
+  };
+}
+
 type ZaloMessagePipelineParams = ZaloProcessingContext & {
   message: ZaloMessage;
   text?: string;
@@ -757,23 +814,10 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         await webhookCleanupPromise;
       };
       runtime.log?.(`[${account.accountId}] Zalo webhook registered path=${path}`);
-      const unregisterHostedMediaRoute = registerPluginHttpRoute({
-        auth: "plugin",
-        match: "prefix",
+      const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
         path: hostedMediaRoutePath,
-        replaceExisting: true,
-        pluginId: "zalo",
-        source: "zalo-hosted-media",
         accountId: account.accountId,
         log: runtime.log,
-        handler: async (req, res) => {
-          const handled = await tryHandleHostedZaloMediaRequest(req, res);
-          if (!handled && !res.headersSent) {
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Not Found");
-          }
-        },
       });
       stopHandlers.push(unregisterHostedMediaRoute);
 
