@@ -107,6 +107,7 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
+      .option("--dry-run", "Preview the job that would be created without submitting it", false)
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
@@ -237,6 +238,17 @@ export function registerCronAddCommand(cron: Command) {
                 }
               : undefined,
           };
+
+          if (opts.dryRun) {
+            if (opts.json) {
+              defaultRuntime.writeJson(params);
+            } else {
+              defaultRuntime.writeStdout(
+                `Dry run — job would be created with the following parameters:\n${JSON.stringify(params, null, 2)}\n`,
+              );
+            }
+            return;
+          }
 
           const res = await callGatewayFromCli("cron.add", opts, params);
           printCronJson(res);
