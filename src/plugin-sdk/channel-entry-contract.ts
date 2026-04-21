@@ -311,6 +311,34 @@ function getJiti(modulePath: string) {
   });
 }
 
+// File-local mirror of `profilePluginLoaderSync` from `src/plugins/loader.ts`.
+// Kept inline to avoid pulling host internals into the SDK boundary, and to
+// keep the profile log format identical so existing tooling that scrapes
+// `[plugin-load-profile]` lines keeps working.
+function shouldProfileBundledEntryLoader(): boolean {
+  return process.env.OPENCLAW_PLUGIN_LOAD_PROFILE === "1";
+}
+
+function profileBundledEntryStepSync<T>(params: {
+  phase: string;
+  pluginId?: string;
+  source: string;
+  run: () => T;
+}): T {
+  if (!shouldProfileBundledEntryLoader()) {
+    return params.run();
+  }
+  const startMs = performance.now();
+  try {
+    return params.run();
+  } finally {
+    const elapsedMs = performance.now() - startMs;
+    console.error(
+      `[plugin-load-profile] phase=${params.phase} plugin=${params.pluginId ?? "(core)"} elapsedMs=${elapsedMs.toFixed(1)} source=${params.source}`,
+    );
+  }
+}
+
 function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): unknown {
   const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
   const cached = loadedModuleExports.get(modulePath);
@@ -318,6 +346,9 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
     return cached;
   }
   let loaded: unknown;
+  const profile = shouldProfileBundledEntryLoader();
+  const loadStartMs = profile ? performance.now() : 0;
+  let getJitiEndMs = 0;
   if (
     process.platform === "win32" &&
     modulePath.includes(`${path.sep}dist${path.sep}`) &&
@@ -326,10 +357,24 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
     try {
       loaded = nodeRequire(modulePath);
     } catch {
-      loaded = getJiti(modulePath)(modulePath);
+      const jiti = getJiti(modulePath);
+      getJitiEndMs = profile ? performance.now() : 0;
+      loaded = jiti(modulePath);
     }
   } else {
-    loaded = getJiti(modulePath)(modulePath);
+    const jiti = getJiti(modulePath);
+    getJitiEndMs = profile ? performance.now() : 0;
+    loaded = jiti(modulePath);
+  }
+  if (profile) {
+    const endMs = performance.now();
+    const getJitiMs = (getJitiEndMs - loadStartMs).toFixed(1);
+    const jitiCallMs = (endMs - (getJitiEndMs || loadStartMs)).toFixed(1);
+    const totalMs = (endMs - loadStartMs).toFixed(1);
+    // Single line, key=value pairs so existing log scrapers can parse it.
+    console.error(
+      `[plugin-load-profile] phase=bundled-entry-module-load plugin=(bundled-entry) elapsedMs=${totalMs} getJitiMs=${getJitiMs} jitiCallMs=${jitiCallMs} source=${modulePath}`,
+    );
   }
   loadedModuleExports.set(modulePath, loaded);
   return loaded;
@@ -410,13 +455,23 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         registerCliMetadata?.(api);
         return;
       }
-      setChannelRuntime?.(api.runtime);
-      api.registerChannel({ plugin: loadChannelPlugin() as ChannelPlugin });
+      const profileStep = <T>(phase: string, run: () => T): T =>
+        profileBundledEntryStepSync({
+          phase: `bundled-register:${phase}`,
+          pluginId: id,
+          source: importMetaUrl,
+          run,
+        });
+      profileStep("setChannelRuntime", () => setChannelRuntime?.(api.runtime));
+      const channelPlugin = profileStep("loadChannelPlugin", () => loadChannelPlugin());
+      profileStep("registerChannel", () =>
+        api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
+      );
       if (api.registrationMode !== "full") {
         return;
       }
-      registerCliMetadata?.(api);
-      registerFull?.(api);
+      profileStep("registerCliMetadata", () => registerCliMetadata?.(api));
+      profileStep("registerFull", () => registerFull?.(api));
     },
     loadChannelPlugin,
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
