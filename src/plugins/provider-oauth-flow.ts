@@ -44,7 +44,7 @@ export function createVpsAwareOAuthHandlers(params: {
       } catch {
         opened = false;
       }
-      if (opened === false) {
+      if (opened !== true) {
         params.spin.update(
           "Could not open a browser automatically. Open the URL below, then paste the redirect URL here…",
         );

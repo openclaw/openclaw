@@ -140,9 +140,7 @@ export async function runProviderPluginAuthMethod(params: {
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote: isRemoteEnvironment(),
-    openUrl: async (url) => {
-      await openUrl(url);
-    },
+    openUrl: async (url) => await openUrl(url),
     oauth: {
       createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
     },
