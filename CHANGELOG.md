@@ -34,7 +34,7 @@ Docs: https://docs.openclaw.ai
 - OpenShell: pin host-side sandbox writes under the mounted root so symlink-parent rebinds cannot redirect `writeFile` outside the workspace during local mirror updates. (#69797) Thanks @drobison00.
 - Ollama/media understanding: register Ollama as an image-capable media-understanding provider so `agents.defaults.imageModel.primary` values like `ollama/qwen2.5vl:7b` route through the Ollama plugin instead of failing as unknown models. (#69816) Thanks @soloclz.
 - CLI/media understanding: make `openclaw infer image describe --model <provider/model>` execute the explicit image model instead of skipping description when that model supports native vision.
-- Google Chat/install: localize the Google auth `gaxios` compat shim to the Google Chat plugin, remove the dead root `gaxios` startup hook, and stage Google Chat runtime dependencies so the plugin owns its auth runtime. Thanks @vincentkoc.
+- Google Chat/auth: replace the Google auth `gaxios` shim with a scoped SSRF-guarded transport, validate service-account auth endpoints against trusted Google URLs, and let the plugin own its staged `gaxios` auth runtime instead of patching process-wide globals or the root CLI startup path. Thanks @vincentkoc.
 
 ## 2026.4.20
 

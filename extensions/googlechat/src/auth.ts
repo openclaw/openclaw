@@ -1,7 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { installGoogleAuthGaxiosFetchCompat } from "./gaxios-fetch-compat.js";
+import {
+  __testing as googleAuthRuntimeTesting,
+  getGoogleAuthTransport,
+  loadGoogleAuthRuntime,
+  resolveValidatedGoogleChatCredentials,
+} from "./google-auth.runtime.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
@@ -18,39 +23,28 @@ type GoogleAuthRuntime = {
   OAuth2Client: GoogleAuthModule["OAuth2Client"];
 };
 type GoogleAuthInstance = InstanceType<GoogleAuthRuntime["GoogleAuth"]>;
+type GoogleAuthOptions = ConstructorParameters<GoogleAuthRuntime["GoogleAuth"]>[0];
+type GoogleAuthTransport = NonNullable<GoogleAuthOptions>["clientOptions"] extends {
+  transporter?: infer T;
+}
+  ? T
+  : never;
 type OAuth2ClientInstance = InstanceType<GoogleAuthRuntime["OAuth2Client"]>;
 
 const authCache = new Map<string, { key: string; auth: GoogleAuthInstance }>();
 
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
-let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 let verifyClientPromise: Promise<OAuth2ClientInstance> | null = null;
-
-async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
-  if (!googleAuthRuntimePromise) {
-    googleAuthRuntimePromise = (async () => {
-      try {
-        await installGoogleAuthGaxiosFetchCompat();
-        const mod = await import("google-auth-library");
-        return {
-          GoogleAuth: mod.GoogleAuth,
-          OAuth2Client: mod.OAuth2Client,
-        };
-      } catch (error) {
-        googleAuthRuntimePromise = null;
-        throw error;
-      }
-    })();
-  }
-  return await googleAuthRuntimePromise;
-}
 
 async function getVerifyClient(): Promise<OAuth2ClientInstance> {
   if (!verifyClientPromise) {
     verifyClientPromise = (async () => {
       try {
         const { OAuth2Client } = await loadGoogleAuthRuntime();
-        return new OAuth2Client();
+        // google-auth-library types its transporter through gaxios' CJS surface,
+        // while the plugin imports the ESM entrypoint directly.
+        const transporter = (await getGoogleAuthTransport()) as unknown as GoogleAuthTransport;
+        return new OAuth2Client({ transporter });
       } catch (error) {
         verifyClientPromise = null;
         throw error;
@@ -76,7 +70,12 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
   if (cached && cached.key === key) {
     return cached.auth;
   }
-  const { GoogleAuth } = await loadGoogleAuthRuntime();
+  const [{ GoogleAuth }, rawTransporter, credentials] = await Promise.all([
+    loadGoogleAuthRuntime(),
+    getGoogleAuthTransport(),
+    resolveValidatedGoogleChatCredentials(account),
+  ]);
+  const transporter = rawTransporter as unknown as GoogleAuthTransport;
 
   const evictOldest = () => {
     if (authCache.size > MAX_AUTH_CACHE_SIZE) {
@@ -87,21 +86,11 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
     }
   };
 
-  if (account.credentialsFile) {
-    const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
-    authCache.set(account.accountId, { key, auth });
-    evictOldest();
-    return auth;
-  }
-
-  if (account.credentials) {
-    const auth = new GoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
-    authCache.set(account.accountId, { key, auth });
-    evictOldest();
-    return auth;
-  }
-
-  const auth = new GoogleAuth({ scopes: [CHAT_SCOPE] });
+  const auth = new GoogleAuth({
+    ...(credentials ? { credentials } : {}),
+    clientOptions: { transporter },
+    scopes: [CHAT_SCOPE],
+  });
   authCache.set(account.accountId, { key, auth });
   evictOldest();
   return auth;
@@ -211,3 +200,12 @@ export async function verifyGoogleChatRequest(params: {
 }
 
 export const GOOGLE_CHAT_SCOPE = CHAT_SCOPE;
+
+export const __testing = {
+  resetGoogleChatAuthForTests(): void {
+    authCache.clear();
+    cachedCerts = null;
+    verifyClientPromise = null;
+    googleAuthRuntimeTesting.resetGoogleAuthRuntimeForTests();
+  },
+};
