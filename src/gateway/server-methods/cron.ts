@@ -99,7 +99,9 @@ function assertConfiguredAnnounceAccount(params: {
     cfg: params.cfg,
     accountIds,
   });
-  const configuredAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
+  const configuredAccountIds = [
+    ...new Set(accountIds.length > 0 ? [defaultAccountId, ...accountIds] : [defaultAccountId]),
+  ];
   if (configuredAccountIds.includes(accountId)) {
     return;
   }
