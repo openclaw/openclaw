@@ -7,6 +7,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  redactExecApprovalsForTransport,
   saveExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -162,14 +163,6 @@ export function decodeCapturedOutputBuffer(params: {
   } catch {
     return utf8;
   }
-}
-
-function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
-  const socketPath = file.socket?.path?.trim();
-  return {
-    ...file,
-    socket: socketPath ? { path: socketPath } : undefined,
-  };
 }
 
 function requireExecApprovalsBaseHash(
@@ -430,7 +423,7 @@ export async function handleInvoke(
         path: snapshot.path,
         exists: snapshot.exists,
         hash: snapshot.hash,
-        file: redactExecApprovals(snapshot.file),
+        file: redactExecApprovalsForTransport(snapshot.file),
       };
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
@@ -460,7 +453,7 @@ export async function handleInvoke(
         path: nextSnapshot.path,
         exists: nextSnapshot.exists,
         hash: nextSnapshot.hash,
-        file: redactExecApprovals(nextSnapshot.file),
+        file: redactExecApprovalsForTransport(nextSnapshot.file),
       };
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {

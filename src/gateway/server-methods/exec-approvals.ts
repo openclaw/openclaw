@@ -3,6 +3,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  redactExecApprovalsForTransport,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
@@ -69,20 +70,12 @@ function requireApprovalsBaseHash(
   return true;
 }
 
-function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
-  const socketPath = file.socket?.path?.trim();
-  return {
-    ...file,
-    socket: socketPath ? { path: socketPath } : undefined,
-  };
-}
-
 function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
   return {
     path: snapshot.path,
     exists: snapshot.exists,
     hash: snapshot.hash,
-    file: redactExecApprovals(snapshot.file),
+    file: redactExecApprovalsForTransport(snapshot.file),
   };
 }
 

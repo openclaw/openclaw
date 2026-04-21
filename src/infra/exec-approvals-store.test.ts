@@ -20,6 +20,7 @@ let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSoc
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
+let redactExecApprovalsForTransport: ExecApprovalsModule["redactExecApprovalsForTransport"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
@@ -39,6 +40,7 @@ beforeAll(async () => {
     normalizeExecApprovals,
     persistAllowAlwaysPatterns,
     readExecApprovalsSnapshot,
+    redactExecApprovalsForTransport,
     recordAllowlistMatchesUse,
     recordAllowlistUse,
     requestExecApprovalViaSocket,
@@ -275,6 +277,47 @@ describe("exec approvals store helpers", () => {
         },
       }).agents?.main?.allowlist?.[0],
     ).not.toHaveProperty("commandText");
+  });
+
+  it("redacts internal allowlist metadata from transport payloads", () => {
+    const redacted = redactExecApprovalsForTransport({
+      version: 1,
+      socket: { path: " ~/.openclaw/exec-approvals.sock ", token: "secret-token" },
+      agents: {
+        main: {
+          allowlist: [
+            {
+              id: "entry-1",
+              pattern: "/usr/bin/python3",
+              argPattern: "^script\\.py\\x00$",
+              source: "allow-always",
+              lastUsedAt: 321_000,
+              lastUsedCommand: "python3 script.py",
+              lastResolvedPath: "/opt/homebrew/bin/python3",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(redacted).toEqual({
+      version: 1,
+      socket: { path: "~/.openclaw/exec-approvals.sock" },
+      agents: {
+        main: {
+          allowlist: [
+            {
+              id: "entry-1",
+              pattern: "/usr/bin/python3",
+              argPattern: "^script\\.py\\x00$",
+              lastUsedAt: 321_000,
+              lastUsedCommand: "python3 script.py",
+              lastResolvedPath: "/opt/homebrew/bin/python3",
+            },
+          ],
+        },
+      },
+    });
   });
 
   it("preserves source and argPattern metadata for allow-always entries", () => {

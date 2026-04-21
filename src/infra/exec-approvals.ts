@@ -425,6 +425,26 @@ export function mergeExecApprovalsSocketDefaults(params: {
   };
 }
 
+export function redactExecApprovalsForTransport(file: ExecApprovalsFile): ExecApprovalsFile {
+  const socketPath = file.socket?.path?.trim();
+  const agents = file.agents
+    ? Object.fromEntries(
+        Object.entries(file.agents).map(([agentId, agent]) => [
+          agentId,
+          {
+            ...agent,
+            allowlist: agent.allowlist?.map(({ source: _source, ...entry }) => entry),
+          },
+        ]),
+      )
+    : undefined;
+  return {
+    ...file,
+    socket: socketPath ? { path: socketPath } : undefined,
+    agents,
+  };
+}
+
 function generateToken(): string {
   return crypto.randomBytes(24).toString("base64url");
 }
