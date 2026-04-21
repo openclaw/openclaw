@@ -1,3 +1,4 @@
+import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { updateSessionStoreEntry } from "../../config/sessions/store.js";
@@ -43,8 +44,17 @@ export async function maybeHandleResetCommand(
     }
 
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const previousSessionEntry =
+      params.previousSessionEntry ?? (targetSessionEntry ? { ...targetSessionEntry } : undefined);
     if (targetSessionEntry) {
       clearAllCliSessions(targetSessionEntry);
+      if (params.sessionEntry && params.sessionEntry !== targetSessionEntry) {
+        clearAllCliSessions(params.sessionEntry);
+        params.sessionEntry.updatedAt = Date.now();
+      }
+      if (params.sessionKey) {
+        clearBootstrapSnapshot(params.sessionKey);
+      }
       targetSessionEntry.updatedAt = Date.now();
       if (params.sessionStore && params.sessionKey) {
         params.sessionStore[params.sessionKey] = targetSessionEntry;
@@ -74,7 +84,7 @@ export async function maybeHandleResetCommand(
       command: params.command,
       sessionKey: params.sessionKey,
       sessionEntry: targetSessionEntry,
-      previousSessionEntry: params.previousSessionEntry,
+      previousSessionEntry,
       workspaceDir: params.workspaceDir,
     });
     params.command.softResetTriggered = true;

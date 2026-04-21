@@ -4,10 +4,11 @@ export type SoftResetParseResult = { matched: false } | { matched: true; tail: s
 
 export function parseSoftResetCommand(commandBodyNormalized: string): SoftResetParseResult {
   const normalized = normalizeLowercaseStringOrEmpty(commandBodyNormalized);
-  if (!normalized.startsWith("/reset")) {
+  const resetMatch = normalized.match(/^\/reset(?:\s|$)/);
+  if (!resetMatch) {
     return { matched: false };
   }
-  const rest = commandBodyNormalized.slice("/reset".length).trimStart();
+  const rest = commandBodyNormalized.slice(resetMatch[0].length).trimStart();
   if (!rest) {
     return { matched: false };
   }
