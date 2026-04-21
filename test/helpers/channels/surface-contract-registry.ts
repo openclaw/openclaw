@@ -43,6 +43,36 @@ const surfaceContractEntryCache = new Map<ChannelId, SurfaceContractEntry | null
 let threadingContractRegistryCache: ThreadingContractEntry[] | undefined;
 let directoryContractRegistryCache: DirectoryContractEntry[] | undefined;
 
+const threadingContractPluginIds = new Set<ChannelId>([
+  "bluebubbles",
+  "discord",
+  "googlechat",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "slack",
+  "telegram",
+  "zalo",
+  "zalouser",
+]);
+
+const directoryContractPluginIds = new Set<ChannelId>([
+  "discord",
+  "feishu",
+  "googlechat",
+  "irc",
+  "line",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "slack",
+  "synology-chat",
+  "telegram",
+  "whatsapp",
+  "zalo",
+  "zalouser",
+]);
+
 function toSurfaceContractEntry(plugin: ChannelPlugin): SurfaceContractEntry {
   return {
     id: plugin.id,
@@ -86,12 +116,19 @@ export function getSurfaceContractRegistryShard(params: {
 }
 
 export function getThreadingContractRegistry(): ThreadingContractEntry[] {
-  threadingContractRegistryCache ??= getSurfaceContractRegistry()
-    .filter((entry) => entry.surfaces.includes("threading"))
-    .map((entry) => ({
-      id: entry.id,
-      plugin: entry.plugin,
-    }));
+  threadingContractRegistryCache ??= listBundledChannelPluginIds()
+    .filter((id) => threadingContractPluginIds.has(id))
+    .flatMap((id) => {
+      const entry = getSurfaceContractEntry(id);
+      return entry && entry.surfaces.includes("threading")
+        ? [
+            {
+              id: entry.id,
+              plugin: entry.plugin,
+            },
+          ]
+        : [];
+    });
   return threadingContractRegistryCache;
 }
 
@@ -99,24 +136,38 @@ export function getThreadingContractRegistryShard(params: {
   shardIndex: number;
   shardCount: number;
 }): ThreadingContractEntry[] {
-  return getSurfaceContractRegistryShard(params)
-    .filter((entry) => entry.surfaces.includes("threading"))
-    .map((entry) => ({
-      id: entry.id,
-      plugin: entry.plugin,
-    }));
+  return getBundledChannelPluginIdsForShard(params)
+    .filter((id) => threadingContractPluginIds.has(id))
+    .flatMap((id) => {
+      const entry = getSurfaceContractEntry(id);
+      return entry && entry.surfaces.includes("threading")
+        ? [
+            {
+              id: entry.id,
+              plugin: entry.plugin,
+            },
+          ]
+        : [];
+    });
 }
 
 const directoryPresenceOnlyIds = new Set(["whatsapp", "zalouser"]);
 
 export function getDirectoryContractRegistry(): DirectoryContractEntry[] {
-  directoryContractRegistryCache ??= getSurfaceContractRegistry()
-    .filter((entry) => entry.surfaces.includes("directory"))
-    .map((entry) => ({
-      id: entry.id,
-      plugin: entry.plugin,
-      coverage: directoryPresenceOnlyIds.has(entry.id) ? "presence" : "lookups",
-    }));
+  directoryContractRegistryCache ??= listBundledChannelPluginIds()
+    .filter((id) => directoryContractPluginIds.has(id))
+    .flatMap((id) => {
+      const entry = getSurfaceContractEntry(id);
+      return entry && entry.surfaces.includes("directory")
+        ? [
+            {
+              id: entry.id,
+              plugin: entry.plugin,
+              coverage: directoryPresenceOnlyIds.has(entry.id) ? "presence" : "lookups",
+            },
+          ]
+        : [];
+    });
   return directoryContractRegistryCache;
 }
 
@@ -124,11 +175,18 @@ export function getDirectoryContractRegistryShard(params: {
   shardIndex: number;
   shardCount: number;
 }): DirectoryContractEntry[] {
-  return getSurfaceContractRegistryShard(params)
-    .filter((entry) => entry.surfaces.includes("directory"))
-    .map((entry) => ({
-      id: entry.id,
-      plugin: entry.plugin,
-      coverage: directoryPresenceOnlyIds.has(entry.id) ? "presence" : "lookups",
-    }));
+  return getBundledChannelPluginIdsForShard(params)
+    .filter((id) => directoryContractPluginIds.has(id))
+    .flatMap((id) => {
+      const entry = getSurfaceContractEntry(id);
+      return entry && entry.surfaces.includes("directory")
+        ? [
+            {
+              id: entry.id,
+              plugin: entry.plugin,
+              coverage: directoryPresenceOnlyIds.has(entry.id) ? "presence" : "lookups",
+            },
+          ]
+        : [];
+    });
 }

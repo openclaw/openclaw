@@ -903,6 +903,57 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("applies silent-reply policy from the outbound session", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-silent", roomId: "!room" });
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "NO_REPLY" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:slash:!room",
+        policyKey: "agent:main:matrix:direct:!room",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(sendMatrix.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMatrix.mock.calls[0]?.[1]).not.toBe("NO_REPLY");
+  });
+
+  it("keeps allowed group silent replies silent during outbound delivery", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-silent", roomId: "!room" });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "NO_REPLY" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:group:ops",
+      },
+    });
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
   it("acks the queue entry when delivery is aborted", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     const abortController = new AbortController();

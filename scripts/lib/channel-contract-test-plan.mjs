@@ -23,16 +23,16 @@ const CONTRACT_FILE_WEIGHTS = new Map([
 function resolveContractFileWeight(file) {
   const name = file.replaceAll("\\", "/").split("/").pop();
   if (name.startsWith("plugin.registry-backed-shard-")) {
-    return 5;
+    return 40;
   }
   if (name.startsWith("surfaces-only.registry-backed-shard-")) {
-    return 5;
+    return 40;
   }
   if (name.startsWith("directory.registry-backed-shard-")) {
-    return 4;
+    return 24;
   }
   if (name.startsWith("threading.registry-backed-shard-")) {
-    return 4;
+    return 18;
   }
   return CONTRACT_FILE_WEIGHTS.get(name) ?? 8;
 }

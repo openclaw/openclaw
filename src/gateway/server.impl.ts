@@ -228,6 +228,10 @@ export type GatewayServerOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   /**
+   * Test-only: wait for post-listen sidecars such as plugin services before returning.
+   */
+  awaitStartupSidecars?: boolean;
+  /**
    * Optional startup timestamp used for concise readiness logging.
    */
   startupStartedAt?: number;
@@ -833,6 +837,7 @@ export async function startGatewayServer(
           startupSidecarsReady = true;
         },
         startupTrace,
+        awaitSidecars: opts.awaitStartupSidecars,
       }),
     ));
     startupTrace.mark("ready");
