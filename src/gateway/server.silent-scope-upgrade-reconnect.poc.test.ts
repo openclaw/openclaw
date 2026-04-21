@@ -113,7 +113,57 @@ async function expectRejectedScopeUpgradeAttempt({
   expect(paired?.tokens?.operator?.token).toBe(token);
 }
 
+async function openPairingWatcherSession(port: number): Promise<WebSocket> {
+  const watcher = await issueOperatorToken({
+    name: "silent-scope-upgrade-watcher",
+    approvedScopes: ["operator.admin"],
+    tokenScopes: ["operator.pairing"],
+    clientId: GATEWAY_CLIENT_NAMES.TEST,
+    clientMode: GATEWAY_CLIENT_MODES.TEST,
+  });
+  const ws = await openTrackedWs(port);
+  await connectOk(ws, {
+    skipDefaultAuth: true,
+    deviceToken: watcher.token,
+    deviceIdentityPath: watcher.identityPath,
+    scopes: ["operator.pairing"],
+  });
+  return ws;
+}
+
 describe("gateway silent scope-upgrade reconnect", () => {
+  test("does not silently self-approve admin scopes for first-time shared-auth pairing", async () => {
+    const started = await startServerWithClient("secret");
+    const loaded = loadDeviceIdentity("silent-first-pairing-admin-scope");
+    let firstPairingAttemptWs: WebSocket | undefined;
+
+    try {
+      firstPairingAttemptWs = await openTrackedWs(started.port);
+      const firstAttempt = await connectReq(firstPairingAttemptWs, {
+        token: "secret",
+        deviceIdentityPath: loaded.identityPath,
+        scopes: ["operator.admin"],
+      });
+      expect(firstAttempt.ok).toBe(false);
+      expect(firstAttempt.error?.message).toBe("pairing required: device is not approved yet");
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending).toHaveLength(1);
+      expect(pending.pending[0]?.deviceId).toBe(loaded.identity.deviceId);
+      expect(pending.pending[0]?.publicKey).toBe(loaded.publicKey);
+      expect(pending.pending[0]?.scopes).toEqual(["operator.admin"]);
+      expect(pending.pending[0]?.silent).toBe(true);
+
+      const paired = await getPairedDevice(loaded.identity.deviceId);
+      expect(paired).toBeNull();
+    } finally {
+      firstPairingAttemptWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("does not silently widen a read-scoped paired device to admin on shared-auth reconnect", async () => {
     const started = await startServerWithClient("secret");
     const paired = await issueOperatorToken({
@@ -128,8 +178,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     let postAttemptDeviceTokenWs: WebSocket | undefined;
 
     try {
-      watcherWs = await openTrackedWs(started.port);
-      await connectOk(watcherWs, { scopes: ["operator.admin"] });
+      watcherWs = await openPairingWatcherSession(started.port);
       const requestedEvent = onceMessage(
         watcherWs,
         (obj) => obj.type === "event" && obj.event === "device.pair.requested",
@@ -183,8 +232,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     let backendReconnectWs: WebSocket | undefined;
 
     try {
-      watcherWs = await openTrackedWs(started.port);
-      await connectOk(watcherWs, { scopes: ["operator.admin"] });
+      watcherWs = await openPairingWatcherSession(started.port);
       const requestedEvent = onceMessage(
         watcherWs,
         (obj) => obj.type === "event" && obj.event === "device.pair.requested",
@@ -255,6 +303,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       const res = await connectReq(ws, {
         token: "secret",
         deviceIdentityPath: loaded.identityPath,
+        scopes: [],
       });
       expect(res.ok).toBe(true);
 

@@ -926,6 +926,14 @@ export function attachGatewayWsMessageHandler(params: {
             const bootstrapProfileForSilentApproval = allowSilentBootstrapPairing
               ? boundBootstrapProfile
               : null;
+            const pairedScopeBaseline =
+              existingPairedDevice && existingPairedDevice.publicKey === devicePublicKey
+                ? Array.isArray(existingPairedDevice.approvedScopes)
+                  ? existingPairedDevice.approvedScopes
+                  : Array.isArray(existingPairedDevice.scopes)
+                    ? existingPairedDevice.scopes
+                    : []
+                : [];
             const bootstrapPairingRoles = bootstrapProfileForSilentApproval
               ? Array.from(new Set([role, ...bootstrapProfileForSilentApproval.roles]))
               : undefined;
@@ -964,7 +972,7 @@ export function attachGatewayWsMessageHandler(params: {
                     bootstrapProfileForSilentApproval,
                   )
                 : await approveDevicePairing(pairing.request.requestId, {
-                    callerScopes: scopes,
+                    callerScopes: pairedScopeBaseline,
                   });
               if (approved?.status === "approved") {
                 if (bootstrapProfileForSilentApproval) {
