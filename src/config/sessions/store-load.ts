@@ -8,12 +8,18 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import {
+  capEntryCount,
+  pruneStaleEntries,
+  resolveMaintenanceConfigFromInput,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
-import { capEntryCount, pruneStaleEntries, resolveMaintenanceConfig } from "./store-maintenance.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
 
 const log = createSubsystemLogger("sessions/store");
@@ -122,7 +128,7 @@ export function loadSessionStore(
 
   applySessionStoreMigrations(store);
   normalizeSessionStore(store);
-  const maintenance = resolveMaintenanceConfig();
+  const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfigFromInput();
   if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
     const beforeCount = Object.keys(store).length;
     const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
