@@ -455,6 +455,41 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
+  it("records generic message tool sends with the resolved channel", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "123" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        id: "message-tool-generic-target",
+        name: "Message Tool Generic Target",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      } as never,
+    });
+
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        resolved: { ok: true, channel: "telegram", to: "123", source: "explicit" },
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+      }),
+    );
+  });
+
   it("does not mark message tool delivery as matched when cron target resolution failed", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
