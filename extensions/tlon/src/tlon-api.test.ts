@@ -38,11 +38,14 @@ const mockAuthenticate = vi.mocked(authenticate);
 const mockScryUrbitPath = vi.mocked(scryUrbitPath);
 const mockGuardedFetch = vi.mocked(fetchWithSsrFGuard);
 
-function createMemexResponse(uploadUrl: string): Response {
+function createMemexResponse(
+  uploadUrl: string,
+  filePath = "https://memex.tlon.network/files/uploaded.png",
+): Response {
   return new Response(
     JSON.stringify({
       url: uploadUrl,
-      filePath: "https://memex.tlon.network/files/uploaded.png",
+      filePath,
     }),
     {
       status: 200,
@@ -208,6 +211,37 @@ describe("uploadFile memex upload hardening", () => {
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Memex hosted result URLs outside the hosted Tlon domain allowlist", async () => {
+    mockGuardedFetch
+      .mockResolvedValueOnce(
+        createGuardedResult(
+          createMemexResponse(
+            "https://uploads.tlon.network/put",
+            "https://evil.example/files/uploaded.png",
+          ),
+          "https://memex.tlon.network/v1/zod/upload",
+        ),
+      )
+      .mockResolvedValueOnce(
+        createGuardedResult(
+          new Response(null, { status: 200 }),
+          "https://uploads.tlon.network/put",
+        ),
+      );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex hosted URL must target a trusted hosted Tlon domain");
+
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
+    expect(mockRelease).toHaveBeenCalledTimes(2);
   });
 
   it("rejects Memex upload targets with a non-standard port", async () => {
@@ -503,6 +537,51 @@ describe("uploadFile custom S3 upload hardening", () => {
         policy: { allowPrivateNetwork: true },
       }),
     );
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects custom S3 result URLs that are not http(s)", async () => {
+    mockScryUrbitPath.mockImplementation(async (_deps, params) => {
+      if (params.path === "/storage/configuration.json") {
+        return {
+          currentBucket: "uploads",
+          buckets: ["uploads"],
+          publicUrlBase: "ftp://files.example.com/",
+          presignedUrl: "",
+          region: "us-east-1",
+          service: "custom",
+        };
+      }
+      if (params.path === "/storage/credentials.json") {
+        return {
+          "storage-update": {
+            credentials: {
+              endpoint: "https://s3.example.com",
+              accessKeyId: "AKIAFAKE",
+              secretAccessKey: "fake-secret",
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected scry path: ${params.path}`);
+    });
+    mockGetSignedUrl.mockResolvedValueOnce("https://s3.example.com/uploads/file?sig=abc");
+    mockGuardedFetch.mockResolvedValueOnce(
+      createGuardedResult(
+        new Response(null, { status: 200 }),
+        "https://s3.example.com/uploads/file?sig=abc",
+      ),
+    );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Upload result URL must use http or https");
+
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 });

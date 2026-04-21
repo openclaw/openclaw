@@ -147,6 +147,21 @@ function assertTrustedMemexUploadUrl(rawUrl: string, label: string): string {
   return parsed.toString();
 }
 
+function assertSafeUploadResultUrl(rawUrl: string, label: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`${label} must be a valid http(s) URL`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${label} must use http or https`);
+  }
+
+  return parsed.toString();
+}
+
 function prefixEndpoint(endpoint: string): string {
   return endpoint.match(/https?:\/\//) ? endpoint : `https://${endpoint}`;
 }
@@ -227,7 +242,6 @@ async function getMemexUploadUrl(params: {
 
   const endpoint = `${MEMEX_BASE_URL}/v1/${params.config.shipName}/upload`;
   let release: (() => Promise<void>) | undefined;
-  let response: Response;
   try {
     const guarded = await fetchWithSsrFGuard({
       url: endpoint,
@@ -246,21 +260,19 @@ async function getMemexUploadUrl(params: {
       maxRedirects: 0,
     });
     release = guarded.release;
-    response = guarded.response;
+    if (!guarded.response.ok) {
+      throw new Error(`Memex upload request failed: ${guarded.response.status}`);
+    }
+
+    const data = (await guarded.response.json()) as { url?: string; filePath?: string } | null;
+    if (!data?.url || !data.filePath) {
+      throw new Error("Invalid response from Memex");
+    }
+
+    return { hostedUrl: data.filePath, uploadUrl: data.url };
   } finally {
     await release?.();
   }
-
-  if (!response.ok) {
-    throw new Error(`Memex upload request failed: ${response.status}`);
-  }
-
-  const data = (await response.json()) as { url?: string; filePath?: string } | null;
-  if (!data?.url || !data.filePath) {
-    throw new Error("Invalid response from Memex");
-  }
-
-  return { hostedUrl: data.filePath, uploadUrl: data.url };
 }
 
 export async function uploadFile(params: UploadFileParams): Promise<UploadResult> {
@@ -319,7 +331,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       await release?.();
     }
 
-    return { url: hostedUrl };
+    return { url: assertTrustedMemexUploadUrl(hostedUrl, "Memex hosted URL") };
   }
 
   if (!hasCustomS3Creds(credentials)) {
@@ -386,5 +398,5 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     ? new URL(fileKey, storageConfig.publicUrlBase).toString()
     : signedUrl.split("?")[0];
 
-  return { url: publicUrl };
+  return { url: assertSafeUploadResultUrl(publicUrl, "Upload result URL") };
 }
