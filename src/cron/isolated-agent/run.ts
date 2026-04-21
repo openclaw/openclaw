@@ -662,17 +662,19 @@ async function finalizeCronRun(params: {
     matchesMessagingToolDeliveryTarget,
     resolveCronDeliveryBestEffort,
   } = await loadCronDeliveryRuntime();
+  const messagingToolSentTargets = finalRunResult.messagingToolSentTargets ?? [];
+  const didSendViaMessagingTool =
+    finalRunResult.didSendViaMessagingTool === true && messagingToolSentTargets.length > 0;
   const skipMessagingToolDelivery =
-    finalRunResult.didSendViaMessagingTool === true &&
-    (prepared.resolvedDelivery.ok
-      ? (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
-          matchesMessagingToolDeliveryTarget(target, {
-            channel: prepared.resolvedDelivery.channel,
-            to: prepared.resolvedDelivery.to,
-            accountId: prepared.resolvedDelivery.accountId,
-          }),
-        )
-      : (finalRunResult.messagingToolSentTargets ?? []).length > 0);
+    didSendViaMessagingTool &&
+    prepared.resolvedDelivery.ok &&
+    messagingToolSentTargets.some((target) =>
+      matchesMessagingToolDeliveryTarget(target, {
+        channel: prepared.resolvedDelivery.channel,
+        to: prepared.resolvedDelivery.to,
+        accountId: prepared.resolvedDelivery.accountId,
+      }),
+    );
   const deliveryResult = await dispatchCronDelivery({
     cfg: prepared.input.cfg,
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
@@ -687,6 +689,7 @@ async function finalizeCronRun(params: {
     deliveryRequested: prepared.deliveryRequested,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
+    unverifiedMessagingToolDelivery: didSendViaMessagingTool && !prepared.resolvedDelivery.ok,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,

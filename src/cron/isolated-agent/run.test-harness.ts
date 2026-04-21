@@ -386,15 +386,22 @@ function resetRunOutcomeMocks(): void {
       deliveryRequested,
       skipHeartbeatDelivery,
       skipMessagingToolDelivery,
+      resolvedDelivery,
     }) => ({
       result: undefined,
       delivered: Boolean(
         skipMessagingToolDelivery ||
-        (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery),
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
       ),
       deliveryAttempted: Boolean(
         skipMessagingToolDelivery ||
-        (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery),
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
       ),
       summary,
       outputText,
