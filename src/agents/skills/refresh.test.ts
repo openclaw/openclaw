@@ -85,4 +85,12 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
   });
+
+  it("seeds a non-zero version when attaching the first watcher", async () => {
+    expect(refreshModule.getSkillsSnapshotVersion("/tmp/workspace")).toBe(0);
+
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+
+    expect(refreshModule.getSkillsSnapshotVersion("/tmp/workspace")).toBeGreaterThan(0);
+  });
 });

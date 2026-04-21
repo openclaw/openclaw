@@ -105,4 +105,28 @@ describe("ensureSkillSnapshot", () => {
     );
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
   });
+
+  it("reads the snapshot version after ensuring the watcher", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    ensureSkillsWatcherMock.mockImplementation(() => {
+      getSkillsSnapshotVersionMock.mockReturnValue(123);
+    });
+
+    await ensureSkillSnapshot({
+      sessionStore: {},
+      sessionKey: "main",
+      isFirstTurnInSession: true,
+      workspaceDir: "/tmp/workspace",
+      cfg: {},
+    });
+
+    expect(ensureSkillsWatcherMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+    });
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
+      "/tmp/workspace",
+      expect.objectContaining({ snapshotVersion: 123 }),
+    );
+  });
 });

@@ -167,6 +167,15 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   });
 
   watchers.set(workspaceDir, state);
+
+  // Seed a non-zero workspace version the first time this process attaches a
+  // watcher. Persisted session snapshots can carry version 0 across restarts;
+  // without an initial bump, those stale snapshots compare equal to the fresh
+  // process state and never rebuild, even if skills changed while the gateway
+  // was down.
+  if (getSkillsSnapshotVersion(workspaceDir) === 0) {
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "manual" });
+  }
 }
 
 export async function resetSkillsRefreshForTest(): Promise<void> {
