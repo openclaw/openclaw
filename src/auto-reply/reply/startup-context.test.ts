@@ -91,14 +91,21 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("hostile filename body");
   });
 
-  it("caps same-day slugged artifacts to avoid unbounded startup reads", async () => {
+  it("caps same-day slugged artifacts by recency rather than slug name", async () => {
     const workspaceDir = await makeWorkspace();
-    for (const suffix of ["0001", "0002", "0003", "0004", "0005", "0006"]) {
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", `2026-04-11-${suffix}.md`),
-        `notes ${suffix}`,
-        "utf-8",
-      );
+    const baseTime = new Date("2026-04-11T18:00:00.000Z");
+    for (const [index, suffix] of [
+      "zz-old",
+      "yy-old",
+      "xx-old",
+      "ww-keep",
+      "aa-keep",
+      "bb-keep",
+    ].entries()) {
+      const filePath = path.join(workspaceDir, "memory", `2026-04-11-${suffix}.md`);
+      await fs.writeFile(filePath, `notes ${suffix}`, "utf-8");
+      const mtime = new Date(baseTime.getTime() + index * 60_000);
+      await fs.utimes(filePath, mtime, mtime);
     }
 
     const prelude = await buildSessionStartupContextPrelude({
@@ -109,12 +116,12 @@ describe("buildSessionStartupContextPrelude", () => {
       nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
     });
 
-    expect(prelude).toContain("notes 0006");
-    expect(prelude).toContain("notes 0005");
-    expect(prelude).toContain("notes 0004");
-    expect(prelude).toContain("notes 0003");
-    expect(prelude).not.toContain("notes 0002");
-    expect(prelude).not.toContain("notes 0001");
+    expect(prelude).toContain("notes bb-keep");
+    expect(prelude).toContain("notes aa-keep");
+    expect(prelude).toContain("notes ww-keep");
+    expect(prelude).toContain("notes xx-old");
+    expect(prelude).not.toContain("notes yy-old");
+    expect(prelude).not.toContain("notes zz-old");
   });
 
   it("returns null when no daily memory files exist", async () => {

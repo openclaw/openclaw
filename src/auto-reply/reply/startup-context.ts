@@ -221,11 +221,24 @@ async function listStartupMemoryPathsForDate(params: {
       })
       .map((entry) => entry.name);
 
-    const sluggedNames = candidates
-      .filter((name) => name !== exactName)
-      // Reverse lexical order keeps later HHMM-style hook slugs ahead of earlier ones.
-      .toSorted((left, right) => right.localeCompare(left));
-    return [exactName, ...sluggedNames.slice(0, STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY)];
+    const sluggedNames = await Promise.all(
+      candidates
+        .filter((name) => name !== exactName)
+        .map(async (name) => ({
+          name,
+          stat: await fs.promises.stat(path.join(memoryDir, name)),
+        })),
+    );
+    const newestSluggedNames = sluggedNames
+      .toSorted((left, right) => {
+        const mtimeDiff = right.stat.mtimeMs - left.stat.mtimeMs;
+        if (mtimeDiff !== 0) {
+          return mtimeDiff;
+        }
+        return right.name.localeCompare(left.name);
+      })
+      .map((entry) => entry.name);
+    return [exactName, ...newestSluggedNames.slice(0, STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY)];
   } catch {
     return [exactName];
   }
