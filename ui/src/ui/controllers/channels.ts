@@ -56,6 +56,14 @@ function isStrongerChannelsRequest(
   );
 }
 
+function buildChannelsStatusRequestParams(request: ChannelsRequestStrength): Record<string, unknown> {
+  return {
+    probe: request.probe,
+    ...(request.includeAccounts ? {} : { includeAccounts: false }),
+    timeoutMs: 8000,
+  };
+}
+
 export async function loadChannels(
   state: ChannelsState,
   probe: boolean,
@@ -84,11 +92,10 @@ export async function loadChannels(
   state.channelsLoading = true;
   state.channelsError = null;
   try {
-    const res = await state.client.request<ChannelsStatusSnapshot | null>("channels.status", {
-      probe: request.probe,
-      includeAccounts: request.includeAccounts,
-      timeoutMs: 8000,
-    });
+    const res = await state.client.request<ChannelsStatusSnapshot | null>(
+      "channels.status",
+      buildChannelsStatusRequestParams(request),
+    );
     if (privateState.__channelsRequestSeq === seq) {
       state.channelsSnapshot = res;
       state.channelsLastSuccess = Date.now();
