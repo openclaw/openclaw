@@ -102,9 +102,10 @@ describe("system events (session routing)", () => {
     const dup = enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:456" });
     expect(dup).toBe(false); // must be deduplicated
 
-    // isSystemEventContextChanged should detect no change from the original event
-    expect(isSystemEventContextChanged(key, "build:456")).toBe(false);
+    // isSystemEventContextChanged should detect no change from the original event's context
     expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+    // context different from original is correctly detected as changed
+    expect(isSystemEventContextChanged(key, "build:456")).toBe(true);
   });
 
   it("normalizes context keys when checking for context changes", () => {

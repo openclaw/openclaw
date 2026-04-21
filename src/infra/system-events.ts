@@ -103,7 +103,9 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     return false;
   } // skip non-consecutive duplicates in the same queue
   entry.lastText = cleaned;
-  entry.lastContextKey = normalizedContextKey;
+  if (normalizedContextKey !== null) {
+    entry.lastContextKey = normalizedContextKey;
+  } // only update context when explicitly provided, preserving prior context for subsequent checks
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
