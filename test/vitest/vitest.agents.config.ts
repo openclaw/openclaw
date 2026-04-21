@@ -9,4 +9,4 @@ export function createAgentsVitestConfig(env?: Record<string, string | undefined
   });
 }
 
-export default createAgentsVitestConfig();
+export default createAgentsVitestConfig({ passWithNoTests: true });

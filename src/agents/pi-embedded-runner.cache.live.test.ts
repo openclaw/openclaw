@@ -324,7 +324,6 @@ async function runEmbeddedCacheProbe(params: {
       runId: `${params.sessionId}-${params.suffix}-${params.transport ?? "default"}`,
       extraSystemPrompt: params.prefix,
       disableTools: true,
-      cleanupBundleMcpOnRunEnd: true,
     }),
     `${params.providerTag} embedded cache probe ${params.suffix}${params.transport ? ` (${params.transport})` : ""}`,
   );

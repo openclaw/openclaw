@@ -133,9 +133,6 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).not.toMatchObject({
-        cleanupBundleMcpOnRunEnd: true,
-      });
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
@@ -148,9 +145,6 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).not.toMatchObject({
-        cleanupBundleMcpOnRunEnd: true,
-      });
     });
   });
 });
