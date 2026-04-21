@@ -27,11 +27,17 @@ export type MatrixQaScenarioContext = {
   observerDeviceId?: string;
   observerPassword?: string;
   observerUserId: string;
+  gatewayStateDir?: string;
   outputDir?: string;
   restartGateway?: () => Promise<void>;
+  restartGatewayAfterStateMutation?: (
+    mutateState: (context: { stateDir: string }) => Promise<void>,
+  ) => Promise<void>;
+  restartGatewayWithQueuedMessage?: (queueMessage: () => Promise<void>) => Promise<void>;
   roomId: string;
   interruptTransport?: () => Promise<void>;
   sutAccessToken: string;
+  sutAccountId?: string;
   sutDeviceId?: string;
   sutPassword?: string;
   syncState: MatrixQaSyncState;
@@ -39,6 +45,10 @@ export type MatrixQaScenarioContext = {
   sutUserId: string;
   timeoutMs: number;
   topology: MatrixQaProvisionedTopology;
+  patchGatewayConfig?: (
+    patch: Record<string, unknown>,
+    opts?: { restartDelayMs?: number },
+  ) => Promise<void>;
 };
 
 export const NO_REPLY_WINDOW_MS = 8_000;
@@ -553,6 +563,10 @@ export async function runNoReplyExpectedScenario(params: {
   syncState: MatrixQaSyncState;
   syncStreams?: MatrixQaSyncStreams;
   sutUserId: string;
+  replyPredicate?: (
+    event: MatrixQaObservedEvent,
+    match: { driverEventId: string; token: string },
+  ) => boolean;
   timeoutMs: number;
   token: string;
 }) {
@@ -574,7 +588,8 @@ export async function runNoReplyExpectedScenario(params: {
     predicate: (event) =>
       event.roomId === params.roomId &&
       event.sender === params.sutUserId &&
-      event.type === "m.room.message",
+      event.type === "m.room.message" &&
+      (params.replyPredicate?.(event, { driverEventId, token: params.token }) ?? true),
     roomId: params.roomId,
     since: startSince,
     timeoutMs: params.timeoutMs,

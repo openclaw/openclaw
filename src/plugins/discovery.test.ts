@@ -68,12 +68,20 @@ function writePluginPackageManifest(params: {
   packageDir: string;
   packageName: string;
   extensions: string[];
+  runtimeExtensions?: string[];
+  setupEntry?: string;
+  runtimeSetupEntry?: string;
 }) {
   fs.writeFileSync(
     path.join(params.packageDir, "package.json"),
     JSON.stringify({
       name: params.packageName,
-      openclaw: { extensions: params.extensions },
+      openclaw: {
+        extensions: params.extensions,
+        ...(params.runtimeExtensions ? { runtimeExtensions: params.runtimeExtensions } : {}),
+        ...(params.setupEntry ? { setupEntry: params.setupEntry } : {}),
+        ...(params.runtimeSetupEntry ? { runtimeSetupEntry: params.runtimeSetupEntry } : {}),
+      },
     }),
     "utf-8",
   );
@@ -400,6 +408,109 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
   });
 
+  it("uses explicit runtime extension entries for installed package plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "runtime-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/runtime-pack",
+      extensions: ["./src/index.ts"],
+      runtimeExtensions: ["./dist/index.js"],
+      setupEntry: "./src/setup-entry.ts",
+      runtimeSetupEntry: "./dist/setup-entry.js",
+    });
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+    writePluginEntry(path.join(pluginDir, "dist", "setup-entry.js"));
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const candidate = findCandidateById(candidates, "runtime-pack");
+    expect(fs.realpathSync(candidate?.source ?? "")).toBe(
+      fs.realpathSync(path.join(pluginDir, "dist", "index.js")),
+    );
+    expect(fs.realpathSync(candidate?.setupSource ?? "")).toBe(
+      fs.realpathSync(path.join(pluginDir, "dist", "setup-entry.js")),
+    );
+  });
+
+  it("infers built dist entries for installed TypeScript package plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "built-peer-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/built-peer-pack",
+      extensions: ["src/index.ts"],
+      setupEntry: "src/setup-entry.ts",
+    });
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "index.js"));
+    writePluginEntry(path.join(pluginDir, "src", "setup-entry.js"));
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+    writePluginEntry(path.join(pluginDir, "dist", "setup-entry.js"));
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const candidate = findCandidateById(candidates, "built-peer-pack");
+    expect(fs.realpathSync(candidate?.source ?? "")).toBe(
+      fs.realpathSync(path.join(pluginDir, "dist", "index.js")),
+    );
+    expect(fs.realpathSync(candidate?.setupSource ?? "")).toBe(
+      fs.realpathSync(path.join(pluginDir, "dist", "setup-entry.js")),
+    );
+  });
+
+  it("preserves nested entry paths when inferring installed dist entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "nested-pack");
+    mkdirSafe(path.join(pluginDir, "plugin"));
+    mkdirSafe(path.join(pluginDir, "dist", "plugin"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/nested-pack",
+      extensions: ["./plugin/index.ts"],
+    });
+    writePluginEntry(path.join(pluginDir, "plugin", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "dist", "plugin", "index.js"));
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const candidate = findCandidateById(candidates, "nested-pack");
+    expect(fs.realpathSync(candidate?.source ?? "")).toBe(
+      fs.realpathSync(path.join(pluginDir, "dist", "plugin", "index.js")),
+    );
+  });
+
+  it("keeps workspace package TypeScript entries unless runtime entries are explicit", () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/workspace-pack",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+
+    const { candidates } = discoverOpenClawPlugins({
+      workspaceDir,
+      env: buildDiscoveryEnv(stateDir),
+    });
+    expect(fs.realpathSync(findCandidateById(candidates, "workspace-pack")?.source ?? "")).toBe(
+      fs.realpathSync(path.join(pluginDir, "src", "index.ts")),
+    );
+  });
+
   it("does not discover nested node_modules copies under installed plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "opik-openclaw");
@@ -497,17 +608,17 @@ describe("discoverOpenClawPlugins", () => {
     {
       name: "strips provider suffixes from package-derived ids",
       setup: (stateDir: string) => {
-        const packageDir = path.join(stateDir, "extensions", "ollama-provider-pack");
+        const packageDir = path.join(stateDir, "extensions", "local-provider-pack");
         createPackagePluginWithEntry({
           packageDir,
-          packageName: "@openclaw/ollama-provider",
-          pluginId: "ollama",
+          packageName: "@example/local-provider",
+          pluginId: "local",
           entryPath: "src/index.ts",
         });
         return {};
       },
-      includes: ["ollama"],
-      excludes: ["ollama-provider"],
+      includes: ["local"],
+      excludes: ["local-provider"],
     },
     {
       name: "normalizes bundled speech package ids to canonical plugin ids",

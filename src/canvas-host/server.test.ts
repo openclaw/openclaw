@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
-import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
+import {
+  A2UI_PATH,
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  handleA2uiHttpRequest,
+  injectCanvasLiveReload,
+} from "./a2ui.js";
 
 type MockWatcher = {
   on: (event: string, cb: (...args: unknown[]) => void) => MockWatcher;
@@ -30,10 +35,10 @@ type CapturedResponse = {
   body: string;
 };
 
-function isLoopbackBindDenied(error: unknown) {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "EPERM" || code === "EACCES";
-}
+type HttpRequestHandler = (
+  req: IncomingMessage,
+  res: import("node:http").ServerResponse,
+) => boolean | Promise<boolean>;
 
 function createMockWatcherState() {
   const watchers: MockWatcher[] = [];
@@ -62,8 +67,8 @@ function createMockWatcherState() {
   };
 }
 
-async function captureHandlerResponse(
-  handler: Pick<import("./server.js").CanvasHostHandler, "handleHttpRequest">,
+async function captureHttpResponse(
+  handleRequest: HttpRequestHandler,
   url: string,
   method = "GET",
 ): Promise<CapturedResponse> {
@@ -76,7 +81,9 @@ async function captureHandlerResponse(
   const res = {
     statusCode: 200,
     setHeader(name: string, value: number | string | readonly string[]) {
-      response.headers[name.toLowerCase()] = Array.isArray(value) ? [...value] : value;
+      const headerValue: number | string | string[] =
+        typeof value === "object" ? [...value] : value;
+      response.headers[name.toLowerCase()] = headerValue;
       return this;
     },
     end(chunk?: string | Buffer) {
@@ -85,12 +92,24 @@ async function captureHandlerResponse(
       return this;
     },
   };
-  response.handled = await handler.handleHttpRequest(
+  response.handled = await handleRequest(
     { method, url } as IncomingMessage,
     res as import("node:http").ServerResponse,
   );
   response.status = res.statusCode;
   return response;
+}
+
+async function captureHandlerResponse(
+  handler: Pick<import("./server.js").CanvasHostHandler, "handleHttpRequest">,
+  url: string,
+  method = "GET",
+): Promise<CapturedResponse> {
+  return await captureHttpResponse(handler.handleHttpRequest, url, method);
+}
+
+async function captureA2uiResponse(url: string, method = "GET"): Promise<CapturedResponse> {
+  return await captureHttpResponse(handleA2uiHttpRequest, url, method);
 }
 
 describe("canvas host", () => {
@@ -100,7 +119,6 @@ describe("canvas host", () => {
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
-  let realFetch: typeof import("undici").fetch;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -112,29 +130,26 @@ describe("canvas host", () => {
     return dir;
   };
 
-  const startFixtureCanvasHost = async (
+  const createTestCanvasHostHandler = async (
     rootDir: string,
-    overrides: Partial<Parameters<typeof startCanvasHost>[0]> = {},
+    options: Partial<Parameters<typeof createCanvasHostHandler>[0]> = {},
   ) =>
-    await startCanvasHost({
+    await createCanvasHostHandler({
       runtime: quietRuntime,
       rootDir,
-      port: 0,
-      listenHost: "127.0.0.1",
+      basePath: CANVAS_HOST_PATH,
       allowInTests: true,
       watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof startCanvasHost
+        typeof createCanvasHostHandler
       >[0]["watchFactory"],
       webSocketServerClass: WebSocketServerClass,
-      ...overrides,
+      ...options,
     });
 
   beforeAll(async () => {
     vi.doUnmock("undici");
     vi.resetModules();
-    const require = createRequire(import.meta.url);
     ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
-    ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -159,16 +174,7 @@ describe("canvas host", () => {
 
   it("creates a default index.html when missing", async () => {
     const dir = await createCaseDir();
-    const handler = await createCanvasHostHandler({
-      runtime: quietRuntime,
-      rootDir: dir,
-      basePath: CANVAS_HOST_PATH,
-      allowInTests: true,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof createCanvasHostHandler
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
-    });
+    const handler = await createTestCanvasHostHandler(dir);
 
     try {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
@@ -186,17 +192,7 @@ describe("canvas host", () => {
   it("skips live reload injection when disabled", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>no-reload</body></html>", "utf8");
-    const handler = await createCanvasHostHandler({
-      runtime: quietRuntime,
-      rootDir: dir,
-      basePath: CANVAS_HOST_PATH,
-      allowInTests: true,
-      liveReload: false,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof createCanvasHostHandler
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
-    });
+    const handler = await createTestCanvasHostHandler(dir, { liveReload: false });
 
     try {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
@@ -215,16 +211,7 @@ describe("canvas host", () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
-    const handler = await createCanvasHostHandler({
-      runtime: quietRuntime,
-      rootDir: dir,
-      basePath: CANVAS_HOST_PATH,
-      allowInTests: true,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof createCanvasHostHandler
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
-    });
+    const handler = await createTestCanvasHostHandler(dir);
 
     const originalClose = handler.close;
     const closeSpy = vi.fn(async () => originalClose());
@@ -324,14 +311,7 @@ describe("canvas host", () => {
         }
       };
 
-      const handler = await createCanvasHostHandler({
-        runtime: quietRuntime,
-        rootDir: dir,
-        basePath: CANVAS_HOST_PATH,
-        allowInTests: true,
-        watchFactory: watcherState.watchFactory as unknown as Parameters<
-          typeof createCanvasHostHandler
-        >[0]["watchFactory"],
+      const handler = await createTestCanvasHostHandler(dir, {
         webSocketServerClass:
           TrackingWebSocketServerClass as unknown as typeof import("ws").WebSocketServer,
       });
@@ -361,14 +341,12 @@ describe("canvas host", () => {
   );
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
-    const dir = await createCaseDir();
     const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
     const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
     let createdLink = false;
-    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>> | undefined;
 
     try {
       await fs.stat(bundlePath);
@@ -381,37 +359,23 @@ describe("canvas host", () => {
     createdLink = true;
 
     try {
-      try {
-        server = await startFixtureCanvasHost(dir);
-      } catch (error) {
-        if (isLoopbackBindDenied(error)) {
-          return;
-        }
-        throw error;
-      }
-
-      const res = await realFetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
-      const html = await res.text();
+      const res = await captureA2uiResponse(`${A2UI_PATH}/`);
+      const html = res.body;
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
-      const bundleRes = await realFetch(
-        `http://127.0.0.1:${server.port}/__openclaw__/a2ui/a2ui.bundle.js`,
-      );
-      const js = await bundleRes.text();
+      const bundleRes = await captureA2uiResponse(`${A2UI_PATH}/a2ui.bundle.js`);
+      const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
-      const traversalRes = await realFetch(
-        `http://127.0.0.1:${server.port}${A2UI_PATH}/%2e%2e%2fpackage.json`,
-      );
+      const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
-      expect(await traversalRes.text()).toBe("not found");
-      const symlinkRes = await realFetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
+      expect(traversalRes.body).toBe("not found");
+      const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
-      expect(await symlinkRes.text()).toBe("not found");
+      expect(symlinkRes.body).toBe("not found");
     } finally {
-      await server?.close();
       if (createdLink) {
         await fs.rm(linkPath, { force: true });
       }

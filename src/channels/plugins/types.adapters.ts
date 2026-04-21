@@ -317,6 +317,7 @@ export type ChannelLogoutResult = {
 export type ChannelLoginWithQrStartResult = {
   qrDataUrl?: string;
   message: string;
+  connected?: boolean;
 };
 
 export type ChannelLoginWithQrWaitResult = {
@@ -761,7 +762,7 @@ export type ChannelConversationBindingSupport = {
     conversationId: string;
     parentConversationId?: string;
   } | null;
-  buildBoundReplyChannelData?: (params: {
+  buildBoundReplyPayload?: (params: {
     operation: "acp-spawn";
     placement: "current" | "child";
     conversation: {
@@ -770,7 +771,10 @@ export type ChannelConversationBindingSupport = {
       conversationId: string;
       parentConversationId?: string;
     };
-  }) => ReplyPayload["channelData"] | null | Promise<ReplyPayload["channelData"] | null>;
+  }) =>
+    | Pick<ReplyPayload, "channelData" | "delivery" | "presentation">
+    | null
+    | Promise<Pick<ReplyPayload, "channelData" | "delivery" | "presentation"> | null>;
   buildModelOverrideParentCandidates?: (params: {
     parentConversationId?: string | null;
   }) => string[] | null | undefined;

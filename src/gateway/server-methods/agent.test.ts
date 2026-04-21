@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  getDetachedTaskLifecycleRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
@@ -72,9 +77,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/session-reset-prompt.js")>(
-    "../../auto-reply/reply/session-reset-prompt.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../../auto-reply/reply/session-reset-prompt.js")
+  >("../../auto-reply/reply/session-reset-prompt.js");
   return {
     ...actual,
     resolveBareResetBootstrapFileAccess: mocks.resolveBareResetBootstrapFileAccess,
@@ -327,6 +332,7 @@ describe("gateway agent handler", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
   });
@@ -990,6 +996,49 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      const defaultRuntime = getDetachedTaskLifecycleRuntime();
+      const createRunningTaskRunSpy = vi.fn(
+        (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+          defaultRuntime.createRunningTaskRun(...args),
+      );
+
+      setDetachedTaskLifecycleRuntime({
+        ...defaultRuntime,
+        createRunningTaskRun: createRunningTaskRunSpy,
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli seam task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-seam",
+        },
+        { reqId: "task-registry-agent-seam" },
+      );
+
+      expect(createRunningTaskRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: "cli",
+          runId: "task-registry-agent-seam",
+          childSessionKey: "agent:main:main",
+          sourceId: "task-registry-agent-seam",
+          task: expect.stringContaining("background cli seam task"),
+        }),
+      );
+      expect(findTaskByRunId("task-registry-agent-seam")).toMatchObject({
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 
@@ -1278,45 +1327,48 @@ describe("gateway agent handler", () => {
   });
 
   it("uses request model override when resolving bare /new bootstrap file access", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-reset-model-override-" }, async (workspaceDir) => {
-      await fs.writeFile(`${workspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
-      mocks.loadConfigReturn = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
+    await withTempDir(
+      { prefix: "openclaw-gateway-reset-model-override-" },
+      async (workspaceDir) => {
+        await fs.writeFile(`${workspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
+        mocks.loadConfigReturn = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
           },
-        },
-      };
-      mockSessionResetSuccess({ reason: "new" });
-      primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
+        };
+        mockSessionResetSuccess({ reason: "new" });
+        primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
 
-      await invokeAgent(
-        {
-          message: "/new",
-          sessionKey: "agent:main:main",
-          provider: "openai",
-          model: "gpt-5.4-mini",
-          idempotencyKey: "test-idem-new-bootstrap-model-override",
-        },
-        {
-          reqId: "4-bootstrap-model-override",
-          client: {
-            connect: { scopes: ["operator.admin"] },
-            internal: { allowModelOverride: true },
-          } as AgentHandlerArgs["client"],
-        },
-      );
+        await invokeAgent(
+          {
+            message: "/new",
+            sessionKey: "agent:main:main",
+            provider: "openai",
+            model: "gpt-5.4-mini",
+            idempotencyKey: "test-idem-new-bootstrap-model-override",
+          },
+          {
+            reqId: "4-bootstrap-model-override",
+            client: {
+              connect: { scopes: ["operator.admin"] },
+              internal: { allowModelOverride: true },
+            } as AgentHandlerArgs["client"],
+          },
+        );
 
-      await waitForAssertion(() =>
-        expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalled(),
-      );
-      expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalledWith(
-        expect.objectContaining({
-          modelProvider: "openai",
-          modelId: "gpt-5.4-mini",
-        }),
-      );
-    });
+        await waitForAssertion(() =>
+          expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalled(),
+        );
+        expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalledWith(
+          expect.objectContaining({
+            modelProvider: "openai",
+            modelId: "gpt-5.4-mini",
+          }),
+        );
+      },
+    );
   });
 
   it("rejects malformed agent session keys early in agent handler", async () => {
