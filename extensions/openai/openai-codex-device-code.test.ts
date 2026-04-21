@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveCodexAccessTokenExpiry } from "./openai-codex-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -86,6 +87,45 @@ describe("loginOpenAICodexDeviceCode", () => {
       idToken: expect.any(String),
     });
     expect(credentials.expires).toBeGreaterThan(Date.now());
+  });
+
+  it("treats JWT-derived expiry fallback as an absolute timestamp", async () => {
+    const accessToken = createJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct_123",
+      },
+    });
+    const expectedExpiry = resolveCodexAccessTokenExpiry(accessToken);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          device_auth_id: "device-auth-123",
+          user_code: "CODE-12345",
+          interval: "0",
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          authorization_code: "authorization-code-123",
+          code_verifier: "code-verifier-123",
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          access_token: accessToken,
+          refresh_token: "refresh-token-123",
+        }),
+      );
+
+    const credentials = await loginOpenAICodexDeviceCode({
+      fetchFn: fetchMock as typeof fetch,
+      onVerification: async () => {},
+    });
+
+    expect(expectedExpiry).toBeDefined();
+    expect(credentials.expires).toBe(expectedExpiry);
   });
 
   it("surfaces user-code request failures", async () => {

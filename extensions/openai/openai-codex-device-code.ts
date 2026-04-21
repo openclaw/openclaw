@@ -240,9 +240,11 @@ async function exchangeOpenAICodexDeviceCode(params: {
     throw new Error("OpenAI token exchange succeeded but did not return OAuth tokens.");
   }
 
+  const expiresInMs = normalizeTokenLifetimeMs(body?.expires_in);
   const expires =
-    Date.now() +
-    (normalizeTokenLifetimeMs(body?.expires_in) ?? resolveCodexAccessTokenExpiry(access) ?? 0);
+    expiresInMs !== undefined
+      ? Date.now() + expiresInMs
+      : (resolveCodexAccessTokenExpiry(access) ?? Date.now());
   const accountId =
     resolveCodexChatgptAccountId(access) ?? (idToken && resolveCodexChatgptAccountId(idToken));
 
