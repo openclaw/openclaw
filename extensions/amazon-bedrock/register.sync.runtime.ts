@@ -191,8 +191,16 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       }
       return undefined;
     },
-    supportsAdaptiveThinking: ({ modelId }) => claude46ModelRe.test(modelId.trim()),
-    resolveDefaultThinkingLevel: ({ modelId }) =>
-      claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(claude46ModelRe.test(modelId.trim()) ? [{ id: "adaptive" as const }] : []),
+      ],
+      defaultLevel: claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
+    }),
   });
 }
