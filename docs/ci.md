@@ -63,6 +63,8 @@ GitHub may mark superseded jobs as `cancelled` when a newer push lands on the sa
 | `blacksmith-32vcpu-windows-2025` | `checks-windows`                                                                                                                                       |
 | `macos-latest`                   | `macos-node`, `macos-swift`                                                                                                                            |
 
+Blacksmith Linux jobs use `useblacksmith/checkout` so repeat CI runs can reuse the Blacksmith git mirror cache. Windows and macOS jobs stay on upstream `actions/checkout`.
+
 ## Local Equivalents
 
 ```bash

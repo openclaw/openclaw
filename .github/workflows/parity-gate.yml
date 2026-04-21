@@ -48,7 +48,7 @@ jobs:
       OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v6
+        uses: useblacksmith/checkout@v1
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

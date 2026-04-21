@@ -26,7 +26,7 @@ jobs:
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: useblacksmith/checkout@v1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -91,7 +91,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@v6
+        uses: useblacksmith/checkout@v1
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
