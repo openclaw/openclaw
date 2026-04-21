@@ -32,6 +32,7 @@ export type ZaloWebhookTarget = {
   secret: string;
   path: string;
   mediaMaxMb: number;
+  canHostMedia: boolean;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   fetcher?: ZaloFetch;
 };

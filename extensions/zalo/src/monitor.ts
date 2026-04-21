@@ -73,6 +73,7 @@ type ZaloProcessingContext = {
   config: OpenClawConfig;
   runtime: ZaloRuntimeEnv;
   core: ZaloCoreRuntime;
+  canHostMedia: boolean;
   statusSink?: ZaloStatusSink;
   fetcher?: ZaloFetch;
 };
@@ -154,6 +155,7 @@ export async function handleZaloWebhookRequest(
       runtime: target.runtime,
       core: target.core as ZaloCoreRuntime,
       mediaMaxMb: target.mediaMaxMb,
+      canHostMedia: target.canHostMedia,
       statusSink: target.statusSink,
       fetcher: target.fetcher,
     });
@@ -167,6 +169,7 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     config,
     runtime,
     core,
+    canHostMedia,
     abortSignal,
     isStopped,
     mediaMaxMb,
@@ -180,6 +183,7 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     config,
     runtime,
     core,
+    canHostMedia,
     mediaMaxMb,
     statusSink,
     fetcher,
@@ -221,7 +225,16 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> {
   const { update, token, account, config, runtime, core, mediaMaxMb, statusSink, fetcher } = params;
   const { event_name, message } = update;
-  const sharedContext = { token, account, config, runtime, core, statusSink, fetcher };
+  const sharedContext = {
+    token,
+    account,
+    config,
+    runtime,
+    core,
+    canHostMedia: params.canHostMedia,
+    statusSink,
+    fetcher,
+  };
   if (!message) {
     return undefined;
   }
@@ -574,8 +587,8 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           config,
           webhookUrl: account.config.webhookUrl,
           webhookPath: account.config.webhookPath,
-          mediaMaxBytes: effectiveMediaMaxMb * 1024 * 1024,
-          canHostMedia: useWebhook === true,
+          mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
+          canHostMedia: params.canHostMedia,
           accountId: account.accountId,
           statusSink,
           fetcher,
@@ -774,6 +787,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
           secret: webhookSecret,
           statusSink: (patch) => statusSink?.(patch),
           mediaMaxMb: effectiveMediaMaxMb,
+          canHostMedia: true,
           fetcher,
         },
         {
@@ -837,6 +851,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       config,
       runtime,
       core,
+      canHostMedia: false,
       abortSignal,
       isStopped: () => stopped,
       mediaMaxMb: effectiveMediaMaxMb,
