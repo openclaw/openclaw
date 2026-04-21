@@ -14,14 +14,19 @@ const tempHarness = createBundleMcpTempHarness();
 let bundleProbeHomeDir = "";
 let bundleProbeWorkspaceDir = "";
 let bundleProbeServerPath = "";
+let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 beforeAll(async () => {
+  envSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
   bundleProbeHomeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
   bundleProbeWorkspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
+  const emptyBundledDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-bundled-");
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = emptyBundledDir;
   ({ serverPath: bundleProbeServerPath } = await createBundleProbePlugin(bundleProbeHomeDir));
 });
 
 afterAll(async () => {
+  envSnapshot?.restore();
   await tempHarness.cleanup();
 });
 
