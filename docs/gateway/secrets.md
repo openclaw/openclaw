@@ -261,6 +261,87 @@ Optional per-id errors:
 }
 ```
 
+### password-store (`pass`)
+
+Use a small resolver wrapper when you want SecretRef ids to map directly to
+`pass` entries. Save this as `/usr/local/bin/openclaw-pass-resolver` and make it
+executable:
+
+```js
+#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("error", (err) => {
+  process.stderr.write(`${err.message}\n`);
+  process.exit(1);
+});
+process.stdin.on("end", () => {
+  const request = JSON.parse(stdin || "{}");
+  const passBin = process.env.PASS_BIN || "/opt/homebrew/bin/pass";
+  const values = {};
+  const errors = {};
+
+  for (const id of request.ids ?? []) {
+    const result = spawnSync(passBin, ["show", id], { encoding: "utf8" });
+    if (result.status === 0) {
+      values[id] = result.stdout.trimEnd();
+    } else {
+      errors[id] = { message: (result.stderr || `pass exited ${result.status}`).trim() };
+    }
+  }
+
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
+});
+```
+
+Then configure the exec provider and point `apiKey` at the `pass` entry path:
+
+```json5
+{
+  secrets: {
+    providers: {
+      pass_store: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-pass-resolver",
+        env: {
+          // Change this to /usr/bin/pass, /usr/local/bin/pass, or your install path.
+          PASS_BIN: "/opt/homebrew/bin/pass",
+        },
+        passEnv: ["HOME", "GNUPGHOME", "GPG_TTY", "PASSWORD_STORE_DIR"],
+        jsonOnly: true,
+      },
+    },
+  },
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
+        apiKey: {
+          source: "exec",
+          provider: "pass_store",
+          id: "openclaw/providers/openai/apiKey",
+        },
+      },
+    },
+  },
+}
+```
+
+Keep the `pass` entry value to the secret itself, or customize the wrapper to
+select the first line. After updating config, verify both the static audit and
+the exec resolver path:
+
+```bash
+openclaw secrets audit --check
+openclaw secrets audit --allow-exec
+```
+
 ### `sops`
 
 ```json5
