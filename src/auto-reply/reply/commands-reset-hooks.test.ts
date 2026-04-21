@@ -334,6 +334,33 @@ describe("handleCommands reset hooks", () => {
     expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
   });
 
+  it("requires operator.admin for internal /reset soft commands", async () => {
+    const params = buildResetParams(
+      "/reset soft",
+      {
+        commands: { text: true },
+        channels: { webchat: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "webchat",
+        Surface: "webchat",
+        CommandAuthorized: true,
+        GatewayClientScopes: ["operator.write"],
+      },
+    );
+    params.command.isAuthorizedSender = true;
+    params.command.channel = "webchat";
+    params.command.channelId = "webchat";
+    params.command.surface = "webchat";
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+    expect(params.command.softResetTriggered).not.toBe(true);
+    expect(clearBootstrapSnapshotSpy).not.toHaveBeenCalled();
+  });
+
   it("clears both sessionStore and sessionEntry when they are distinct objects", async () => {
     const params = buildResetParams("/reset soft", {
       commands: { text: true },

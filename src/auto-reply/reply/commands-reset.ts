@@ -4,6 +4,8 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionStoreEntry } from "../../config/sessions/store.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -19,12 +21,36 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.BodyStripped = resetTail;
   mutableCtx.AcpDispatchTailAfterReset = true;
 }
+
+function isResetAuthorized(params: HandleCommandsParams): boolean {
+  const auth = resolveCommandAuthorization({
+    ctx: params.ctx,
+    cfg: params.cfg,
+    commandAuthorized: params.ctx.CommandAuthorized === true,
+  });
+  if (!params.command.isAuthorizedSender && !auth.isAuthorizedSender) {
+    return false;
+  }
+  const provider = params.ctx.Provider;
+  const internalGatewayCaller = provider
+    ? isInternalMessageChannel(provider)
+    : isInternalMessageChannel(params.ctx.Surface);
+  if (!internalGatewayCaller) {
+    return true;
+  }
+  const scopes = params.ctx.GatewayClientScopes;
+  if (!Array.isArray(scopes) || scopes.length === 0) {
+    return true;
+  }
+  return scopes.includes("operator.admin");
+}
+
 export async function maybeHandleResetCommand(
   params: HandleCommandsParams,
 ): Promise<CommandHandlerResult | null> {
   const softReset = parseSoftResetCommand(params.command.commandBodyNormalized);
   if (softReset.matched) {
-    if (!params.command.isAuthorizedSender) {
+    if (!isResetAuthorized(params)) {
       logVerbose(
         `Ignoring /reset soft from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
       );
@@ -96,7 +122,7 @@ export async function maybeHandleResetCommand(
   if (!resetMatch) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
+  if (!isResetAuthorized(params)) {
     logVerbose(
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
