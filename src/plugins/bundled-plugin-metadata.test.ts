@@ -187,6 +187,13 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Matrix's narrow runtime-setter sidecar on the bundled public surface", () => {
+    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expectArtifactPresence(matrix?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
   it("keeps bundled configured-state metadata on channel package manifests", () => {
     const configuredChannels = listRepoBundledPluginMetadata()
       .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
