@@ -8,6 +8,7 @@ import {
   loadConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
@@ -200,14 +201,97 @@ async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise
   }
 }
 
+/**
+ * Optional hints the caller may pass to short-circuit work when it already
+ * knows the exact provider/model it wants. When set AND the requested
+ * provider is already fully configured in models.json with a usable apiKey
+ * or auth, the plugin-discovery pipeline is skipped entirely (saving several
+ * seconds on cache-miss calls).
+ */
+export type EnsureOpenClawModelsJsonOptions = {
+  /** Provider id the caller intends to use (e.g. "anthropic", "openai"). */
+  targetProvider?: string;
+  /** Model id the caller intends to use. Reserved for future refinements. */
+  targetModel?: string;
+};
+
+/**
+ * Inspect on-disk models.json to see if the requested provider is already
+ * present with functional credentials. Used for the short-circuit fast path.
+ */
+async function readExistingProviderIsConfigured(
+  targetPath: string,
+  targetProvider: string,
+): Promise<boolean> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(targetPath, "utf8");
+  } catch {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) {
+    return false;
+  }
+  const provider = parsed.providers[targetProvider];
+  if (!isRecord(provider)) {
+    return false;
+  }
+  // Must have some form of usable credential material. We accept either a
+  // non-empty apiKey or a non-empty headers map or explicit auth config — any
+  // of these indicates the provider row is fully populated and usable by the
+  // pi-embedded runner without a fresh discovery pass.
+  const apiKey = provider.apiKey;
+  if (typeof apiKey === "string" && apiKey.length > 0) {
+    return true;
+  }
+  if (isRecord(apiKey) && Object.keys(apiKey).length > 0) {
+    // Unresolved secret ref — provider row exists but secret isn't baked yet.
+    // Be conservative: this still means the shape is stable, so short-circuit.
+    return true;
+  }
+  if (isRecord(provider.headers) && Object.keys(provider.headers).length > 0) {
+    return true;
+  }
+  if (provider.auth !== undefined) {
+    return true;
+  }
+  return false;
+}
+
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
+  options?: EnsureOpenClawModelsJsonOptions,
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
   const targetPath = path.join(agentDir, "models.json");
+
+  // --- SHORT-CIRCUIT FAST PATH ---
+  // If the caller specified a target provider and that provider is already
+  // configured in both the in-memory config AND the on-disk models.json, we
+  // can skip the entire implicit-discovery pipeline. The pi-embedded runner
+  // only needs models.json to contain the one provider it's about to call.
+  const targetProvider = options?.targetProvider?.trim();
+  if (targetProvider) {
+    const explicitProviders = cfg.models?.providers ?? {};
+    const explicitHasTarget = Boolean(explicitProviders[targetProvider]);
+    if (explicitHasTarget) {
+      const onDiskHasTarget = await readExistingProviderIsConfigured(targetPath, targetProvider);
+      if (onDiskHasTarget) {
+        await ensureModelsFileModeForModelsJson(targetPath);
+        return { agentDir, wrote: false };
+      }
+    }
+  }
+
   const fingerprint = await buildModelsJsonFingerprint({
     config: cfg,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
