@@ -13,6 +13,7 @@ import {
   type SessionSummaryDailyMemoryDependency,
 } from "./daily-content.js";
 import { readRememberedDailyMemoryFile, rememberRecentDailyMemoryFile } from "./daily-files.js";
+import { buildSessionSummaryDailyMemoryProbePaths } from "./daily-session-summary-probes.js";
 
 const tmpDirs: string[] = [];
 
@@ -698,6 +699,24 @@ describe("daily-content", () => {
         startLine: 11,
       }),
     ).resolves.toBe(true);
+  });
+
+  it("treats Windows drive-letter case as equivalent for in-workspace absolute probe paths", () => {
+    const resolveSpy = vi
+      .spyOn(path, "resolve")
+      .mockImplementation(((...segments: string[]) =>
+        path.win32.resolve(...segments)) as typeof path.resolve);
+
+    try {
+      expect(
+        buildSessionSummaryDailyMemoryProbePaths(
+          "C:/Users/example/workspace",
+          "c:/Users/example/workspace/memory/2026-04-19-vendor-pitch.md",
+        ).map((candidate) => candidate.relativePath),
+      ).toEqual(["memory/2026-04-19-vendor-pitch.md"]);
+    } finally {
+      resolveSpy.mockRestore();
+    }
   });
 
   it("does not probe unrelated local files for foreign absolute-path aliases", async () => {

@@ -43,13 +43,24 @@ function isPathInside(parentPath: string, candidatePath: string): boolean {
   );
 }
 
+function normalizeSessionSummaryWorkspaceComparablePath(rawPath: string): string {
+  const normalizedPath = normalizeSessionSummaryPath(rawPath);
+  if (!path.win32.isAbsolute(normalizedPath)) {
+    return normalizedPath;
+  }
+  return normalizedPath.replace(/^([a-z]):/i, (_, drive: string) => `${drive.toLowerCase()}:`);
+}
+
 function resolveSessionSummaryProbeInputPath(workspaceDir: string, filePath: string): string {
   const normalizedPath = normalizeSessionSummaryPath(filePath);
   if (isCrossPlatformAbsolutePath(normalizedPath)) {
     const normalizedWorkspaceDir = normalizeSessionSummaryPath(path.resolve(workspaceDir));
+    const comparablePath = normalizeSessionSummaryWorkspaceComparablePath(normalizedPath);
+    const comparableWorkspaceDir =
+      normalizeSessionSummaryWorkspaceComparablePath(normalizedWorkspaceDir);
     if (
-      normalizedPath === normalizedWorkspaceDir ||
-      normalizedPath.startsWith(`${normalizedWorkspaceDir}/`)
+      comparablePath === comparableWorkspaceDir ||
+      comparablePath.startsWith(`${comparableWorkspaceDir}/`)
     ) {
       const relativePath = normalizeSessionSummaryPath(
         normalizedPath.slice(normalizedWorkspaceDir.length + 1),
