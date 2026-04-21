@@ -59,6 +59,43 @@ function parseHttpUrl(sourceUrl: string): URL | null {
   }
 }
 
+function parsePublicOriginFromGatewayUrl(gatewayUrl: string | undefined): string | undefined {
+  const trimmed = gatewayUrl?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+
+  let protocol: "http:" | "https:";
+  if (parsed.protocol === "ws:" || parsed.protocol === "http:") {
+    protocol = "http:";
+  } else if (parsed.protocol === "wss:" || parsed.protocol === "https:") {
+    protocol = "https:";
+  } else {
+    return undefined;
+  }
+
+  if (
+    !parsed.hostname ||
+    isPrivateOrLoopbackHost(parsed.hostname) ||
+    isBlockedSpecialIpLiteral(parsed.hostname)
+  ) {
+    return undefined;
+  }
+
+  parsed.protocol = protocol;
+  parsed.pathname = "/";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.origin;
+}
+
 function isDirectPublicIpLiteralUrl(parsed: URL): boolean {
   return (
     !!parsed.hostname &&
@@ -114,7 +151,11 @@ export function getSynologyHostedMediaPathPrefix(account: ResolvedSynologyChatAc
 }
 
 export function registerSynologyHostedMediaTransport(account: ResolvedSynologyChatAccount): void {
-  mediaProxyStateByAccountId.set(account.accountId, {});
+  const previousOrigin = mediaProxyStateByAccountId.get(account.accountId)?.publicOrigin;
+  mediaProxyStateByAccountId.set(account.accountId, {
+    publicOrigin:
+      previousOrigin ?? parsePublicOriginFromGatewayUrl(process.env.OPENCLAW_GATEWAY_URL),
+  });
 }
 
 export function unregisterSynologyHostedMediaTransport(account: ResolvedSynologyChatAccount): void {
