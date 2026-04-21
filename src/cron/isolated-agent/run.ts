@@ -580,6 +580,14 @@ async function prepareCronRunContext(params: {
   }
   if (agentPayload?.planCycleId) {
     const livePlanMode = cronSession.sessionEntry.planMode;
+    // PR #68939 follow-up (P2.5) — `mode !== "plan"` correctly covers
+    // BOTH `"executing"` (plan approved, agent is mid-execution) AND
+    // `"normal"` (no plan activity). Design-phase nudges are bound
+    // to the planning phase and should NOT fire post-approval under
+    // any path. Execution-phase nudges (P2.9) are scheduled
+    // separately on the approve transition with their own cron
+    // payload + their own suppression guard checking `mode !==
+    // "executing"`.
     if (!livePlanMode || livePlanMode.mode !== "plan") {
       return {
         ok: false,

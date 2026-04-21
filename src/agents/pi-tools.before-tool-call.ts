@@ -268,7 +268,16 @@ export async function runBeforeToolCallHook(args: {
   // the fresh disk read is returning "plan", undefined, or something
   // else. One log line per gate evaluation; trivially filterable in the
   // gateway log ([plan-mode-gate] prefix).
-  if (latestPlanMode === "plan" || args.ctx?.planMode === "plan") {
+  //
+  // P2.5 widened: also fires for `"executing"` so operators can trace
+  // the approve-to-execute transition end-to-end (was: only "plan"
+  // visibility, which lost the post-approve handshake).
+  if (
+    latestPlanMode === "plan" ||
+    latestPlanMode === "executing" ||
+    args.ctx?.planMode === "plan" ||
+    args.ctx?.planMode === "executing"
+  ) {
     log.info(
       `[plan-mode-gate] tool=${toolName} sessionKey=${args.ctx?.sessionKey ?? "<none>"} ` +
         `cachedCtxPlanMode=${args.ctx?.planMode ?? "<undefined>"} ` +
@@ -292,7 +301,16 @@ export async function runBeforeToolCallHook(args: {
         reason: gateResult.reason ?? `Tool "${toolName}" is blocked while plan mode is active.`,
       };
     }
-  } else if (latestPlanMode === "normal" && args.ctx?.getLatestAcceptEdits?.()) {
+  } else if (
+    // P2.5 widened: acceptEdits constraint gate fires during BOTH
+    // "executing" (post-approve, plan steps in flight) AND "normal"
+    // (post-close-on-complete, no active plan but acceptEdits could
+    // have been granted by a prior cycle and not yet cleared). The
+    // permission scope is the approvalId of the granting cycle, so
+    // running through both states is correct.
+    (latestPlanMode === "normal" || latestPlanMode === "executing") &&
+    args.ctx?.getLatestAcceptEdits?.()
+  ) {
     // Post-approval acceptEdits gate. Only runs when:
     //   (a) mode is "normal" (plan already approved + closed), AND
     //   (b) the user granted acceptEdits via "Accept, allow edits".

@@ -748,6 +748,12 @@ export function buildActivePlanNudge(
     idleThresholdMs?: number;
   },
 ): string | null {
+  // PR #68939 follow-up (P2.5) — `mode !== "plan"` covers BOTH
+  // `"executing"` AND `"normal"`. The plan-nudge prefix is a
+  // PLANNING-phase steer ("advance the next step" / "exit_plan_mode
+  // when ready"); it's irrelevant once the plan is approved and
+  // executing. Execution-phase steering uses a different mechanism
+  // (the new execution-phase nudge cron class in P2.9).
   if (!planMode || planMode.mode !== "plan") {
     return null;
   }

@@ -171,7 +171,14 @@ export function checkMutationGate(
   currentMode: PlanMode,
   execCommand?: string,
 ): MutationGateResult {
-  // Normal mode: nothing blocked.
+  // PR #68939 follow-up (P2.5) — `currentMode !== "plan"` covers BOTH
+  // `"normal"` (no plan activity) AND `"executing"` (plan approved,
+  // agent is executing the steps). Mutations are unblocked in both
+  // cases by design: the approval IS the mutation-unlock, and we
+  // don't want to re-arm the gate during execution. This guard is
+  // intentionally inclusive so that adding more mode values in the
+  // future (e.g. "paused", "review") defaults to mutations-allowed
+  // unless we explicitly add them to the gate-armed list.
   if (currentMode !== "plan") {
     return { blocked: false };
   }
