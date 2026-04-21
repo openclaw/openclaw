@@ -1290,7 +1290,13 @@ async function isSessionSummaryShortTermPath(params: {
   startLine?: number;
   recordDependency?: (dependency: SessionSummaryDailyMemoryDependency) => void;
 }): Promise<boolean> {
-  return await isSessionSummaryDailyMemoryPath(params);
+  return await isSessionSummaryDailyMemoryPath({
+    ...params,
+    // Upgraded workspaces can still contain deleted pre-index session-memory notes with
+    // semantic LLM slugs. Short-term cleanup should purge those bookkeeping recalls even
+    // though doctor keeps the default stricter heuristic for missing durable notes.
+    allowLegacySemanticSlugTranscriptFallback: true,
+  });
 }
 
 async function shortTermRecallSourceExists(params: {

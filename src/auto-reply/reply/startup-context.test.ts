@@ -914,6 +914,72 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-11.md]");
   });
 
+  it("prefers the newest same-day session summary over a legacy canonical summary when total chars are capped", async () => {
+    const workspaceDir = await makeWorkspace();
+    const canonicalPath = path.join(workspaceDir, "memory", "2026-04-11.md");
+    const sluggedPath = path.join(workspaceDir, "memory", "2026-04-11-reset-summary.md");
+    await fs.writeFile(
+      canonicalPath,
+      [
+        "# Session: 2026-04-11 08:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: old-summary",
+        "- **Source**: cli",
+        "",
+        "assistant: old continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      sluggedPath,
+      [
+        "# Session: 2026-04-11 12:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: new-summary",
+        "- **Source**: cli",
+        "",
+        "assistant: latest continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.utimes(
+      canonicalPath,
+      new Date("2026-04-11T08:00:00.000Z"),
+      new Date("2026-04-11T08:00:00.000Z"),
+    );
+    await fs.utimes(
+      sluggedPath,
+      new Date("2026-04-11T12:00:00.000Z"),
+      new Date("2026-04-11T12:00:00.000Z"),
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "UTC",
+            startupContext: {
+              dailyMemoryDays: 1,
+              maxFileChars: 160,
+              maxTotalChars: 260,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+  });
+
   it("prioritizes the previous local-day session summary ahead of other previous-day notes when total chars are capped", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");

@@ -139,6 +139,32 @@ describe("daily-content", () => {
     ).resolves.toBe(false);
   });
 
+  it("keeps missing semantic slugs durable by default but can opt into the legacy transcript fallback", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-legacy-slug-"));
+    tmpDirs.push(root);
+    await fs.mkdir(path.join(root, "memory"), { recursive: true });
+
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "memory/2026-04-19-vendor-pitch.md",
+        cache: new Map(),
+        snippet: "assistant: bookkeeping only",
+        startLine: 9,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "memory/2026-04-19-vendor-pitch.md",
+        cache: new Map(),
+        snippet: "assistant: bookkeeping only",
+        startLine: 9,
+        allowLegacySemanticSlugTranscriptFallback: true,
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("records consulted dependencies so callers can invalidate cache entries after in-place edits", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-deps-"));
     tmpDirs.push(root);
@@ -263,6 +289,21 @@ describe("daily-content", () => {
         snippet: "we should follow up with the vendor tomorrow",
       }),
     ).toBe(false);
+  });
+
+  it("does not treat canonical deleted notes as bookkeeping from a conversation-summary heading alone", () => {
+    expect(
+      isLikelyMissingSessionSummaryDailyMemory({
+        filePath: "memory/2026-04-19.md",
+        snippet: "## Conversation Summary",
+      }),
+    ).toBe(false);
+    expect(
+      isLikelyMissingSessionSummaryDailyMemory({
+        filePath: "memory/2026-04-19.md",
+        snippet: "# Session: 2026-04-19 10:00:00 UTC",
+      }),
+    ).toBe(true);
   });
 
   it("classifies transcript-like or metadata snippets as session-summary-like without relying on slug provenance", () => {

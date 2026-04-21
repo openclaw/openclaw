@@ -141,6 +141,9 @@ function groupStartupPathsByDay(params: {
           if (leftPriority !== rightPriority) {
             return leftPriority - rightPriority;
           }
+          if (leftPriority === 0 && left.entry.mtimeMs !== right.entry.mtimeMs) {
+            return right.entry.mtimeMs - left.entry.mtimeMs;
+          }
           return left.index - right.index;
         })
         .map(({ entry }) => entry.relativePath),

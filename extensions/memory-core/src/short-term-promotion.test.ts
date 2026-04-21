@@ -2730,6 +2730,61 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("purges deleted semantic LLM slug session summaries from pre-index workspaces", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      await expect(
+        fs.readFile(storePath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        entries: {},
+        sessionSummaryPurgedAt: expect.any(String),
+      });
+    });
+  });
+
   it("purges deleted canonical session-summary recall entries when bookkeeping provenance was remembered", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
@@ -2780,7 +2835,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("does not purge deleted transcript-like semantic slugs without remembered bookkeeping provenance", async () => {
+  it("purges deleted transcript-like semantic slugs from pre-index workspaces", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       await fs.writeFile(
@@ -2821,12 +2876,7 @@ describe("short-term promotion", () => {
           workspaceDir,
           nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
         }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          path: "memory/2026-04-03-vendor-pitch.md",
-          snippet: "assistant: bookkeeping only",
-        }),
-      ]);
+      ).resolves.toEqual([]);
     });
   });
 
