@@ -331,7 +331,7 @@ describe("createManagedOutgoingImageBlocks", () => {
   it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    const sourcePath = path.join(stateDir, "fixtures", "dot.png");
+    const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
@@ -340,6 +340,7 @@ describe("createManagedOutgoingImageBlocks", () => {
         stateDir,
         sessionKey: "agent:main:main",
         mediaUrls: [sourcePath],
+        localRoots: [path.join(stateDir, "workspace")],
       });
 
       expect(blocks).toHaveLength(1);
@@ -516,6 +517,42 @@ describe("createManagedOutgoingImageBlocks", () => {
         process.env.OPENCLAW_STATE_DIR = previousStateDir;
       }
     }
+  });
+
+  it("rejects local image paths outside allowed roots", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-outside-"));
+    const outsidePath = path.join(outsideDir, "outside.png");
+    await fs.writeFile(outsidePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      await expect(
+        createManagedOutgoingImageBlocks({
+          sessionKey: "agent:main:main",
+          mediaUrls: [outsidePath],
+          stateDir,
+          localRoots: [path.join(stateDir, "workspace")],
+        }),
+      ).rejects.toThrow(/could not be prepared/i);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts local image paths inside allowed roots", async () => {
+    const allowedDir = path.join(stateDir, "workspace", "uploads");
+    const allowedPath = path.join(allowedDir, "inside.png");
+    await fs.mkdir(allowedDir, { recursive: true });
+    await fs.writeFile(allowedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [allowedPath],
+      stateDir,
+      localRoots: [path.join(stateDir, "workspace")],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: "image" });
   });
 
   it("drops downloaded non-image sources without leaving orphaned originals", async () => {

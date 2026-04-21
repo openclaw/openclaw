@@ -10,6 +10,8 @@ import {
   resizeToJpeg,
   resizeToPng,
 } from "../media/image-ops.js";
+import { assertLocalMediaAllowed } from "../media/local-media-access.js";
+import { resolveLocalMediaPath } from "../media/local-roots.js";
 import { saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -638,6 +640,7 @@ export async function createManagedOutgoingImageBlocks(params: {
   stateDir?: string;
   messageId?: string | null;
   limits?: ManagedImageAttachmentLimitsConfig | null;
+  localRoots?: readonly string[] | "any";
 }): Promise<ManagedImageBlock[]> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -675,7 +678,18 @@ export async function createManagedOutgoingImageBlocks(params: {
               limits.maxBytes,
               `generated-image-${index + 1}`,
             )
-          : await saveMediaSource(mediaUrl, undefined, "outgoing/originals", limits.maxBytes);
+          : await (async () => {
+              const localMediaPath = resolveLocalMediaPath(mediaUrl);
+              if (localMediaPath) {
+                await assertLocalMediaAllowed(localMediaPath, params.localRoots);
+              }
+              return await saveMediaSource(
+                mediaUrl,
+                undefined,
+                "outgoing/originals",
+                limits.maxBytes,
+              );
+            })();
       savedOriginalPath = savedOriginal.path;
       if (savedOriginal.size > limits.maxBytes) {
         throw createManagedImageAttachmentError(

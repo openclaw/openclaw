@@ -1435,6 +1435,7 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
   sessionKey: string;
   payloads: ReplyPayload[];
   managedImageAttachmentsLimits?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["limits"];
+  managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
     (payload) => typeof payload.text === "string" && payload.text.trim().length > 0,
@@ -1461,6 +1462,7 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
       sessionKey: params.sessionKey,
       mediaUrls,
       limits: params.managedImageAttachmentsLimits,
+      localRoots: params.managedImageLocalRoots,
     });
     if (imageBlocks.length > 0) {
       content.push(...imageBlocks);
@@ -2340,6 +2342,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
                 payloads: finalPayloads,
                 managedImageAttachmentsLimits: undefined,
+                managedImageLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
               });
               const combinedReply =
                 extractAssistantDisplayTextFromContent(assistantContent) ??
