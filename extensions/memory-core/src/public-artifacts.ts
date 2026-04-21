@@ -100,15 +100,5 @@ export async function listMemoryCorePublicArtifacts(params: {
       })),
     );
   }
-  if (process.env.OPENCLAW_DEBUG_PLUGIN_SCOPE === "1") {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[memory-core-artifacts-probe] ${JSON.stringify({
-        workspaceCount: workspaces.length,
-        workspaceDirs: workspaces.map((w) => w.workspaceDir),
-        artifactCount: artifacts.length,
-      })}`,
-    );
-  }
   return artifacts;
 }

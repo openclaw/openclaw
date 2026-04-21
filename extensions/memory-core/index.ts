@@ -27,78 +27,49 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    const dbg = process.env.OPENCLAW_DEBUG_PLUGIN_SCOPE === "1";
-    const step = (n: number, label: string) => {
-      if (dbg) {
-        // eslint-disable-next-line no-console
-        console.warn(`[memory-core-register-probe] step=${n} ${label}`);
-      }
-    };
-    try {
-      step(0, "enter");
-      registerBuiltInMemoryEmbeddingProviders(api);
-      step(1, "after registerBuiltInMemoryEmbeddingProviders");
-      registerShortTermPromotionDreaming(api);
-      step(2, "after registerShortTermPromotionDreaming");
-      registerDreamingCommand(api);
-      step(3, "after registerDreamingCommand");
-      api.registerMemoryCapability({
-        promptBuilder: buildPromptSection,
-        flushPlanResolver: buildMemoryFlushPlan,
-        runtime: memoryRuntime,
-        publicArtifacts: {
-          listArtifacts: listMemoryCorePublicArtifacts,
-        },
-      });
-      step(4, "after registerMemoryCapability");
+    registerBuiltInMemoryEmbeddingProviders(api);
+    registerShortTermPromotionDreaming(api);
+    registerDreamingCommand(api);
+    api.registerMemoryCapability({
+      promptBuilder: buildPromptSection,
+      flushPlanResolver: buildMemoryFlushPlan,
+      runtime: memoryRuntime,
+      publicArtifacts: {
+        listArtifacts: listMemoryCorePublicArtifacts,
+      },
+    });
 
-      api.registerTool(
-        (ctx) =>
-          createMemorySearchTool({
-            config: ctx.config,
-            agentSessionKey: ctx.sessionKey,
-          }),
-        { names: ["memory_search"] },
-      );
-      step(5, "after registerTool memory_search");
+    api.registerTool(
+      (ctx) =>
+        createMemorySearchTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        }),
+      { names: ["memory_search"] },
+    );
 
-      api.registerTool(
-        (ctx) =>
-          createMemoryGetTool({
-            config: ctx.config,
-            agentSessionKey: ctx.sessionKey,
-          }),
-        { names: ["memory_get"] },
-      );
-      step(6, "after registerTool memory_get");
+    api.registerTool(
+      (ctx) =>
+        createMemoryGetTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        }),
+      { names: ["memory_get"] },
+    );
 
-      api.registerCli(
-        ({ program }) => {
-          registerMemoryCli(program);
-        },
-        {
-          descriptors: [
-            {
-              name: "memory",
-              description: "Search, inspect, and reindex memory files",
-              hasSubcommands: true,
-            },
-          ],
-        },
-      );
-      step(7, "after registerCli (exit)");
-    } catch (err) {
-      if (dbg) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[memory-core-register-probe] THREW ${
-            err instanceof Error
-              ? `${err.name}: ${err.message}\n${err.stack ?? ""}`
-              : String(err)
-          }`,
-        );
-      }
-      throw err;
-    }
+    api.registerCli(
+      ({ program }) => {
+        registerMemoryCli(program);
+      },
+      {
+        descriptors: [
+          {
+            name: "memory",
+            description: "Search, inspect, and reindex memory files",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
   },
 });
