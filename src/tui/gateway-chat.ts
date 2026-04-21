@@ -23,7 +23,12 @@ import {
 } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { VERSION } from "../version.js";
-import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
+import {
+  TUI_LAUNCH_GATEWAY_PASSWORD_ENV,
+  TUI_LAUNCH_GATEWAY_TOKEN_ENV,
+  TUI_SETUP_AUTH_SOURCE_CONFIG,
+  TUI_SETUP_AUTH_SOURCE_ENV,
+} from "./setup-launch-env.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -254,10 +259,15 @@ export async function resolveGatewayConnection(
   const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
   const preferConfiguredAuth = env[TUI_SETUP_AUTH_SOURCE_ENV] === TUI_SETUP_AUTH_SOURCE_CONFIG;
+  const launchToken = env[TUI_LAUNCH_GATEWAY_TOKEN_ENV];
+  const launchPassword = env[TUI_LAUNCH_GATEWAY_PASSWORD_ENV];
 
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
-  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  const explicitAuth = resolveExplicitGatewayAuth({
+    token: opts.token ?? launchToken,
+    password: opts.password ?? launchPassword,
+  });
   ensureExplicitGatewayAuth({
     urlOverride,
     urlOverrideSource: "cli",
