@@ -1025,6 +1025,30 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
+  // Skip update if already on the target version
+  if (
+    updateInstallKind === "package" &&
+    currentVersion &&
+    targetVersion &&
+    currentVersion === targetVersion &&
+    !explicitTag
+  ) {
+    if (!opts.json) {
+      defaultRuntime.log(theme.success(`Already on ${currentVersion} (latest). Nothing to update.`));
+    } else {
+      defaultRuntime.log(
+        JSON.stringify({
+          status: "ok",
+          message: `Already on ${currentVersion} (latest). Nothing to update.`,
+          currentVersion,
+          targetVersion,
+        }),
+      );
+    }
+    defaultRuntime.exit(0);
+    return;
+  }
+
   if (updateInstallKind === "git" && opts.tag && !opts.json) {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
