@@ -101,6 +101,31 @@ describe("embedded run lifecycle seam", () => {
     ).resolves.toEqual({ next: "noop" });
   });
 
+  it("rejects unsupported decision modes even when no seam decision is returned", async () => {
+    await expect(
+      resolveEmbeddedRunPassTransitionDecision({
+        decisionMode: "ship_it" as never,
+        event: {
+          ...createEmbeddedRunLifecycleBaseEvent({
+            runId: "run-1",
+            sessionId: "session-1",
+            provider: "openai",
+            modelId: "gpt-5.4",
+            passIndex: 1,
+            passKind: "model_call",
+            correlationId: "corr-1",
+          }),
+          event: "pass_transition_decision",
+          source: "prompt",
+          proposedAction: "surface_error",
+          proposedReason: null,
+          envelopeOnly: true,
+          decisionEffective: false,
+        },
+      }),
+    ).rejects.toThrow(/unsupported decision mode/i);
+  });
+
   it("freezes decision mode and next enums", () => {
     expect(EMBEDDED_RUN_LIFECYCLE_DECISION_MODES).toEqual(["observe_only", "decide"]);
     expect(EMBEDDED_RUN_LIFECYCLE_DECISION_NEXT_VALUES).toEqual(["noop", "continue", "halt"]);

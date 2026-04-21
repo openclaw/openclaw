@@ -142,7 +142,10 @@ type ApiKeyInfo = ResolvedProviderAuth;
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 
 function derivePassEndOutcome(
-  attempt: Pick<EmbeddedRunAttemptResult, "promptError" | "timedOut" | "aborted">,
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    "promptError" | "timedOut" | "aborted" | "currentAttemptAssistant" | "lastAssistant"
+  >,
 ): EmbeddedRunPassEndEvent["outcome"] {
   if (attempt.timedOut) {
     return "timed_out";
@@ -152,6 +155,10 @@ function derivePassEndOutcome(
   }
   if (attempt.promptError) {
     return "prompt_error";
+  }
+  const assistant = attempt.currentAttemptAssistant ?? attempt.lastAssistant;
+  if (assistant?.stopReason === "error") {
+    return "assistant_retry";
   }
   return "success";
 }
@@ -707,7 +714,7 @@ export async function runEmbeddedPiAgent(
           proposedAction: string;
           proposedReason?: string | null;
         }) => {
-          return resolveEmbeddedRunPassTransitionDecision({
+          const decision = await resolveEmbeddedRunPassTransitionDecision({
             seam: lifecycleSeam,
             decisionMode: lifecycleDecisionMode,
             event: {
@@ -730,6 +737,11 @@ export async function runEmbeddedPiAgent(
               decisionEffective: false,
             },
           });
+          if (decision.next !== "noop") {
+            throw new Error(
+              `Embedded run lifecycle seam returned ${decision.next} before transition execution is wired for ${params2.source}.`,
+            );
+          }
         };
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;

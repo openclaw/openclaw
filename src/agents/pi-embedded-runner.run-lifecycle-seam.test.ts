@@ -132,6 +132,30 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
     expect(decisions).toEqual([{ event: "pass_transition_decision", next: "noop" }]);
   });
 
+  it("emits assistant_retry when the assistant ends the pass with an error", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        lastAssistant: {
+          stopReason: "error",
+          errorMessage: "rate limited",
+        } as never,
+      }),
+    );
+    const events: string[] = [];
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lifecycleSeam: {
+        onPassEnd: async (event) => {
+          events.push(`${event.event}:${event.passIndex}:${event.outcome}`);
+        },
+      },
+    });
+
+    expect(result.meta.livenessState).toBe("abandoned");
+    expect(events).toEqual(["pass_end:1:assistant_retry"]);
+  });
+
   it("fails closed on decision events when a seam returns non-noop control", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -147,5 +171,23 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
         },
       }),
     ).rejects.toThrow(/decision mode is observe_only/i);
+  });
+
+  it("fails closed in decide mode until transition execution is explicitly wired", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: new Error("plain prompt failure"),
+      }),
+    );
+
+    await expect(
+      runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        lifecycleDecisionMode: "decide",
+        lifecycleSeam: {
+          onPassTransitionDecision: vi.fn(async () => ({ next: "halt" as const })),
+        },
+      }),
+    ).rejects.toThrow(/before transition execution is wired/i);
   });
 });

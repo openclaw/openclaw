@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 
+// `m13` is intentional: the persisted receipt surface was first spec'd in M13,
+// and M14 is landing the implementation without renaming stored envelope ids.
 export const EMBEDDED_RUN_LIFECYCLE_SURFACE = "m13_lifecycle_seam_v1" as const;
 export const EMBEDDED_RUN_LIFECYCLE_SEAM_VERSION = 1 as const;
 
@@ -201,17 +203,17 @@ export async function resolveEmbeddedRunPassTransitionDecision(params: {
   event: EmbeddedRunPassTransitionDecisionEvent;
   decisionMode?: EmbeddedRunLifecycleDecisionMode;
 }): Promise<EmbeddedRunLifecycleDecisionResult> {
-  const result = normalizeEmbeddedRunLifecycleDecisionResult(
-    await params.seam?.onPassTransitionDecision?.(params.event),
-  );
-  if (!result) {
-    return { next: "noop" };
-  }
   const decisionMode = params.decisionMode ?? "observe_only";
   if (!EMBEDDED_RUN_LIFECYCLE_DECISION_MODES.includes(decisionMode)) {
     throw new Error(
       `Embedded run lifecycle seam received unsupported decision mode (${decisionMode}).`,
     );
+  }
+  const result = normalizeEmbeddedRunLifecycleDecisionResult(
+    await params.seam?.onPassTransitionDecision?.(params.event),
+  );
+  if (!result) {
+    return { next: "noop" };
   }
   if (decisionMode !== "decide" && result.next !== "noop") {
     throw new Error(
