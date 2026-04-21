@@ -2201,6 +2201,32 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("runs deferred final-delivery hooks only after final replies are queued", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const events: string[] = [];
+    (dispatcher.sendFinalReply as Mock).mockImplementation((payload: ReplyPayload) => {
+      events.push(`send:${payload.text ?? "<empty>"}`);
+      return true;
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      options?.registerAfterFinalDelivery?.(() => {
+        events.push("after-final");
+      });
+      return { text: "hi" } as ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx(),
+      cfg,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(events).toEqual(["send:hi", "after-final"]);
+  });
+
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {
     setNoAbort();
     const cfg = emptyConfig;

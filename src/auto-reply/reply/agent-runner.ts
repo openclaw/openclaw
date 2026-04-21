@@ -289,6 +289,20 @@ export async function runReplyAgent(params: {
     throw error;
   }
   let runFollowupTurn = queuedRunFollowupTurn;
+  const finalizePayloadWithFollowup = <T extends ReplyPayload | ReplyPayload[] | undefined>(
+    payload: T,
+  ): T => {
+    if (payload === undefined) {
+      return finalizeWithFollowup(payload, queueKey, runFollowupTurn);
+    }
+    if (opts?.registerAfterFinalDelivery) {
+      opts.registerAfterFinalDelivery(() => {
+        finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      });
+      return payload;
+    }
+    return finalizeWithFollowup(payload, queueKey, runFollowupTurn);
+  };
 
   try {
     await typingSignals.signalRunStart();
@@ -471,7 +485,7 @@ export async function runReplyAgent(params: {
       if (!replyOperation.result) {
         replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
       }
-      return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
+      return finalizePayloadWithFollowup(runOutcome.payload);
     }
 
     if (runOutcome.kind === "aborted") {
@@ -836,40 +850,32 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-    return finalizeWithFollowup(
+    return finalizePayloadWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
-      queueKey,
-      runFollowupTurn,
     );
   } catch (error) {
     if (
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"
     ) {
-      return finalizeWithFollowup(
-        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
-        queueKey,
-        runFollowupTurn,
-      );
+      return finalizePayloadWithFollowup({
+        text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      });
     }
     if (replyOperation.result?.kind === "aborted") {
-      return finalizeWithFollowup({ text: SILENT_REPLY_TOKEN }, queueKey, runFollowupTurn);
+      return finalizePayloadWithFollowup({ text: SILENT_REPLY_TOKEN });
     }
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
-      return finalizeWithFollowup(
-        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
-        queueKey,
-        runFollowupTurn,
-      );
+      return finalizePayloadWithFollowup({
+        text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      });
     }
     if (error instanceof CommandLaneClearedError) {
       replyOperation.fail("command_lane_cleared", error);
-      return finalizeWithFollowup(
-        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
-        queueKey,
-        runFollowupTurn,
-      );
+      return finalizePayloadWithFollowup({
+        text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      });
     }
     replyOperation.fail("run_failed", error);
     // Keep the followup queue moving even when an unexpected exception escapes

@@ -154,6 +154,10 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Register a callback that should run only after final reply delivery completed.
+   * Used by queued followup turns that depend on the just-sent assistant reply
+   * being mirrored into the session transcript before the next run starts. */
+  registerAfterFinalDelivery?: (callback: () => Promise<void> | void) => void;
   /** Channel-specific full dispatch for followup turns.
    * When set, the followup runner delegates user-initiated messages
    * (those with originatingChannel) to this callback for full UX:

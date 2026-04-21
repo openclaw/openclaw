@@ -806,6 +806,13 @@ export async function dispatchReplyFromConfig(params: {
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
+    const afterFinalDeliveryCallbacks: Array<() => Promise<void> | void> = [];
+    const runAfterFinalDeliveryCallbacks = async () => {
+      while (afterFinalDeliveryCallbacks.length > 0) {
+        const callback = afterFinalDeliveryCallbacks.shift();
+        await callback?.();
+      }
+    };
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
@@ -815,6 +822,9 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        registerAfterFinalDelivery: (callback) => {
+          afterFinalDeliveryCallbacks.push(callback);
+        },
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToReplyPayload({
@@ -1068,6 +1078,10 @@ export async function dispatchReplyFromConfig(params: {
           `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+
+    if (afterFinalDeliveryCallbacks.length > 0) {
+      await runAfterFinalDeliveryCallbacks();
     }
 
     const counts = dispatcher.getQueuedCounts();
