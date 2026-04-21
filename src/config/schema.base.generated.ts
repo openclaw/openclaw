@@ -4773,6 +4773,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     const: "adaptive",
                   },
+                  {
+                    type: "string",
+                    const: "max",
+                  },
                 ],
               },
               verboseDefault: {
@@ -5743,7 +5747,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 thinkingDefault: {
                   type: "string",
-                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",

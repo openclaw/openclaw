@@ -2,7 +2,10 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
@@ -534,6 +537,22 @@ export interface UploadMediaResponse {
   id?: string;
 }
 
+async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch (err) {
+    throw new Error(`Invalid media URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("Direct-upload media URL must use HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  return parsed.toString();
+}
+
 export async function uploadC2CMedia(
   accessToken: string,
   openid: string,
@@ -557,7 +576,7 @@ export async function uploadC2CMedia(
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
   if (url) {
-    body.url = url;
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }
@@ -610,7 +629,7 @@ export async function uploadGroupMedia(
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
   if (url) {
-    body.url = url;
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }

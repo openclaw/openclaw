@@ -347,6 +347,12 @@ export function createOpenClawCodingTools(options?: {
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;
+<<<<<<< jdc4429-custom-build
+=======
+  /** Keep the message tool available even when the selected profile omits it. */
+  forceMessageTool?: boolean;
+  /** Whether the sender is an owner (required for owner-only tools). */
+>>>>>>> main
   senderIsOwner?: boolean;
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
@@ -392,11 +398,25 @@ export function createOpenClawCodingTools(options?: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
+<<<<<<< jdc4429-custom-build
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+=======
+  const runtimeProfileAlsoAllow = options?.forceMessageTool ? ["message"] : [];
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
+    ...(profileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
+    ...(providerProfileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
+  // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
+  // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
+>>>>>>> main
   const scopeKey =
     options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
