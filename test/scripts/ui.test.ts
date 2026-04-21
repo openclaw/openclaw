@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { assertSafeWindowsShellArgs, shouldUseShellForCommand } from "../../scripts/ui.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  assertSafeWindowsShellArgs,
+  resolveRunner,
+  shouldUseShellForCommand,
+} from "../../scripts/ui.js";
 
 describe("scripts/ui windows spawn behavior", () => {
   it("enables shell for Windows command launchers that require cmd.exe", () => {
@@ -31,5 +35,32 @@ describe("scripts/ui windows spawn behavior", () => {
 
   it("does not reject args on non-windows platforms", () => {
     expect(() => assertSafeWindowsShellArgs(["contains&metacharacters"], "linux")).not.toThrow();
+  });
+});
+
+describe("scripts/ui runner resolution", () => {
+  it("prefers pnpm when it is on PATH", () => {
+    expect(
+      resolveRunner({
+        which: (cmd) => (cmd === "pnpm" ? "/usr/local/bin/pnpm" : null),
+        spawnSync: vi.fn(),
+      }),
+    ).toEqual({ cmd: "/usr/local/bin/pnpm", args: [], kind: "pnpm" });
+  });
+
+  it("falls back to corepack pnpm when pnpm is missing", () => {
+    const spawnSync = vi.fn().mockReturnValue({ status: 0 });
+
+    expect(
+      resolveRunner({
+        which: (cmd) => (cmd === "corepack" ? "/usr/local/bin/corepack" : null),
+        spawnSync,
+      }),
+    ).toEqual({
+      cmd: "/usr/local/bin/corepack",
+      args: ["pnpm"],
+      kind: "corepack-pnpm",
+    });
+    expect(spawnSync).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
@@ -90,6 +90,38 @@ function ensurePreparedArtifacts(): void {
   process.exit(1);
 }
 
+type CommandSpec = {
+  command: string;
+  args: string[];
+};
+
+type SpawnSyncLike = (
+  command: string,
+  args: string[],
+  options: { stdio: "ignore"; env: NodeJS.ProcessEnv },
+) => SpawnSyncReturns<Buffer | string>;
+
+export function resolvePnpmCommand(runCommand: SpawnSyncLike = spawnSync): CommandSpec {
+  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const pnpmCheck = runCommand(pnpmCommand, ["--version"], {
+    stdio: "ignore",
+    env: process.env,
+  });
+  if (pnpmCheck.status === 0) {
+    return { command: pnpmCommand, args: [] };
+  }
+
+  const corepackCheck = runCommand("corepack", ["pnpm", "--version"], {
+    stdio: "ignore",
+    env: process.env,
+  });
+  if (corepackCheck.status === 0) {
+    return { command: "corepack", args: ["pnpm"] };
+  }
+
+  return { command: pnpmCommand, args: [] };
+}
+
 function run(command: string, args: string[]): void {
   const result = spawnSync(command, args, {
     stdio: "inherit",
@@ -110,9 +142,9 @@ async function writeDistInventory(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  run(pnpmCommand, ["build"]);
-  run(pnpmCommand, ["ui:build"]);
+  const pnpmCommand = resolvePnpmCommand();
+  run(pnpmCommand.command, [...pnpmCommand.args, "build"]);
+  run(pnpmCommand.command, [...pnpmCommand.args, "ui:build"]);
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();

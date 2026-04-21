@@ -176,7 +176,13 @@ function resolvePackedTarballPath(packDestination: string, results: PackResult[]
   return resolve(packDestination, filenames[0]);
 }
 
-function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
+function installPackedTarball(
+  prefixDir: string,
+  tarballPath: string,
+  cwd: string,
+  cacheDir: string,
+): void {
+  mkdirSync(cacheDir, { recursive: true });
   execFileSync(
     "npm",
     [
@@ -193,6 +199,11 @@ function installPackedTarball(prefixDir: string, tarballPath: string, cwd: strin
       cwd,
       encoding: "utf8",
       stdio: "inherit",
+      env: {
+        ...process.env,
+        NPM_CONFIG_CACHE: cacheDir,
+        npm_config_cache: cacheDir,
+      },
     },
   );
 }
@@ -214,7 +225,8 @@ async function runPackedBundledChannelEntrySmoke(): Promise<void> {
     const packResults = runPack(packDir);
     const tarballPath = resolvePackedTarballPath(packDir, packResults);
     const prefixDir = join(tmpRoot, "prefix");
-    installPackedTarball(prefixDir, tarballPath, tmpRoot);
+    const npmCacheDir = join(tmpRoot, "npm-cache");
+    installPackedTarball(prefixDir, tarballPath, tmpRoot, npmCacheDir);
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
     execFileSync(
