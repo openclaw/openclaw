@@ -306,6 +306,45 @@ describe("lookupContextTokens", () => {
     expect(result).toBe(200_000);
   });
 
+  it("resolveContextTokensForModel maps claude-cli lookups to anthropic alias entries", async () => {
+    mockDiscoveryDeps([]);
+
+    const cfg = createContextOverrideConfig("anthropic", "sonnet", 222_000);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    const result = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "claude-cli",
+      model: "sonnet",
+    });
+    expect(result).toBe(222_000);
+  });
+
+  it("resolveContextTokensForModel prefers anthropic family aliases over canonical ids when both are configured", async () => {
+    mockDiscoveryDeps([]);
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [
+              { id: "claude-sonnet-4-6", contextWindow: 200_000 },
+              { id: "sonnet", contextWindow: 222_000 },
+            ],
+          },
+        },
+      },
+    };
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    const result = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    expect(result).toBe(222_000);
+  });
+
   it("resolveContextTokensForModel: config direct scan prevents OpenRouter qualified key collision for Google provider", async () => {
     // When provider is explicitly "google" and cfg has a Google contextWindow
     // override, the config direct scan returns it before any cache lookup —

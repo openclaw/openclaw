@@ -39,6 +39,25 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
 
     expect(contextTokens).toBe(272_000);
   });
+
+  it("reads claude-cli context windows from anthropic sonnet alias entries", () => {
+    const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              models: [{ id: "sonnet", contextWindow: 222_000 }],
+            },
+          },
+        },
+      } as never,
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      fallbackContextTokens: 999,
+    });
+
+    expect(contextTokens).toBe(222_000);
+  });
 });
 
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {

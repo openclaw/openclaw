@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveConfiguredProviderContextTokens } from "./configured-model-context.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -311,63 +312,6 @@ function resolveProviderModelRef(params: {
     return undefined;
   }
   return { provider, model };
-}
-
-// Look up an explicit runtime context cap for a specific provider+model
-// directly from config, without going through the shared discovery cache.
-// This avoids the cache keyspace collision where "provider/model" synthetic
-// keys overlap with raw slash-containing model IDs (e.g. OpenRouter's
-// "google/gemini-2.5-pro" stored as a raw catalog entry).
-function resolveConfiguredProviderContextTokens(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-  model: string,
-): number | undefined {
-  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
-  if (!providers) {
-    return undefined;
-  }
-
-  // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
-  // then normalized fallback. This prevents alias collisions from picking the
-  // wrong configured cap based on Object.entries iteration order.
-  function findContextTokens(matchProviderId: (id: string) => boolean): number | undefined {
-    for (const [providerId, providerConfig] of Object.entries(providers!)) {
-      if (!matchProviderId(providerId)) {
-        continue;
-      }
-      if (!Array.isArray(providerConfig?.models)) {
-        continue;
-      }
-      for (const m of providerConfig.models) {
-        const contextTokens =
-          typeof m?.contextTokens === "number"
-            ? m.contextTokens
-            : typeof m?.contextWindow === "number"
-              ? m.contextWindow
-              : undefined;
-        if (
-          typeof m?.id === "string" &&
-          m.id === model &&
-          typeof contextTokens === "number" &&
-          contextTokens > 0
-        ) {
-          return contextTokens;
-        }
-      }
-    }
-    return undefined;
-  }
-
-  // 1. Exact match (case-insensitive, no alias expansion).
-  const exactResult = findContextTokens((id) => id.trim().toLowerCase() === provider.toLowerCase());
-  if (exactResult !== undefined) {
-    return exactResult;
-  }
-
-  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
-  const normalizedProvider = normalizeProviderId(provider);
-  return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
