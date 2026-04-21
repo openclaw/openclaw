@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-21 (run 31)
+**Date:** 2026-04-21 (run 32)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -15,7 +15,7 @@
 | #54363 | fix/chat-send-button-contrast           | CLOSED without merge (2026-03-27) | N/A | N/A | N/A | None (closed without merge) |
 | #54730 | fix/subagent-identity-fallback          | CLOSED without merge (2026-04-17) | N/A | N/A | N/A | None (closed by maintainer) |
 
-No change to any of the four originally monitored PRs since run 30.
+No change to any of the four originally monitored PRs since run 31.
 
 ---
 
@@ -43,7 +43,7 @@ No change to any of the four originally monitored PRs since run 30.
 
 ---
 
-## Actions Taken This Run (run 31 — 2026-04-21)
+## Actions Taken This Run (run 32 — 2026-04-21)
 
 **GitHub API access:** Partial — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI
 not installed; PR comment/review bodies for `openclaw/openclaw` are inaccessible via MCP.
@@ -54,21 +54,23 @@ not installed; PR comment/review bodies for `openclaw/openclaw` are inaccessible
 
 ---
 
-## Notable Activity Since Run 30 (2026-04-20)
+## Notable Activity Since Run 31 (2026-04-21 earlier)
 
-**No new activity.** All three open PRs have the same comment counts and update timestamps as
-run 30. No new merges since run 30.
+**New PR opened:** #69685 was filed today (2026-04-21T10:51:36Z), now showing 2 comments and
+1 reaction (+1). This is a companion to #66225 (both address `<final>` tag handling).
 
+- #69685: 2 comments, updated 2026-04-21T11:04:21Z (**NEW since run 31**)
 - #68446: 2 comments, updated 2026-04-18T07:19:26Z (unchanged)
 - #66544: 3 comments, updated 2026-04-19T00:33:48Z (unchanged)
 - #66225: 5 comments, updated 2026-04-19T00:34:20Z (unchanged)
 
 ---
 
-## Open PRs by suboss87 (current — 3 total)
+## Open PRs by suboss87 (current — 4 total)
 
 | PR | Title | Labels | Updated | Comments | Reactions |
 | --- | --- | --- | --- | --- | --- |
+| #69685 | fix(agents): strip final tags from persisted assistant message | agents, size: M | 2026-04-21T11:04:21Z | 2 | 👍×1 |
 | #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass | channel: whatsapp-web, size: XS | 2026-04-18T07:19:26Z | 2 | 👍×1 |
 | #66544 | fix(gateway): exclude heartbeat sender ID from session display name | gateway, size: XS | 2026-04-19T00:33:48Z | 3 | 👍×1 |
 | #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size: S | 2026-04-19T00:34:20Z | 5 | 👍×1 |
@@ -77,14 +79,27 @@ run 30. No new merges since run 30.
 
 ## PRs Requiring Human Attention
 
-1. **#66225** — Comment count reached 5 as of 2026-04-19 (was 4 in run 28). Still unresolved
-   as of run 31 — no further update since 2026-04-19T00:34:20Z. The comment body is
-   inaccessible in this session (MCP restricted to fork only). Check for code change requests
-   or review threads that need a reply or fix.
+1. **#69685** — Opened 2026-04-21; companion to #66225. Brand new — review thread content
+   inaccessible (MCP scope limit). Check for any early review feedback.
+   https://github.com/openclaw/openclaw/pull/69685
+
+2. **#66225** — 5 comments as of 2026-04-19T00:34:20Z (unchanged from run 28 through run 32).
+   Review thread content inaccessible. Check for outstanding code change requests.
    https://github.com/openclaw/openclaw/pull/66225
 
 All four originally monitored PRs (#45911, #45584, #54363, #54730) remain resolved with
 no further action needed.
+
+---
+
+## Branch SHAs (confirmed run 32 vs run 28)
+
+| Branch                                  | SHA (tip)                                  | Changed since run 28? |
+| --------------------------------------- | ------------------------------------------ | --------------------- |
+| fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No |
+| feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No |
+| fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No |
+| fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No |
 
 ---
 
