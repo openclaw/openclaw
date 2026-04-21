@@ -38,8 +38,7 @@ export default defineBundledChannelEntry({
       exportName: "createWeComMcpTool",
     });
     api.registerTool(
-      ((ctx: { agentAccountId?: string }) =>
-        createWeComMcpTool(ctx.agentAccountId ?? "default")) as Parameters<
+      ((ctx: { agentAccountId?: string }) => createWeComMcpTool(ctx.agentAccountId)) as Parameters<
         typeof api.registerTool
       >[0],
       { name: "wecom_mcp" },

@@ -187,10 +187,12 @@ const parseArgs = (args: string | Record<string, unknown> | undefined): Record<s
 /**
  * Create the wecom_mcp Agent Tool definition
  *
- * @param accountId - Account ID used to scope the WSClient lookup and MCP cache.
- *                    Defaults to "default" for single-account setups.
+ * @param accountId - Optional account ID from the trusted per-session context
+ *                    (e.g. ctx.agentAccountId). Pass undefined when no session
+ *                    context is available so that resolution falls back to the
+ *                    global default account instead of a hard-coded "default".
  */
-export function createWeComMcpTool(accountId = "default") {
+export function createWeComMcpTool(accountId?: string) {
   return {
     name: "wecom_mcp",
     label: "企业微信 MCP 工具",
@@ -234,16 +236,27 @@ export function createWeComMcpTool(accountId = "default") {
     },
     async execute(_toolCallId: string, params: unknown) {
       const p = params as WeComToolsParams;
-      // Resolve accountId dynamically: per-request param → runtime default → factory fallback
+      // Resolve accountId with the following priority:
+      //   1. params.accountId           — explicit per-call override from the caller
+      //   2. factory-provided accountId — trusted per-session context (ctx.agentAccountId),
+      //                                   routes MCP calls to the active account in
+      //                                   multi-account chats
+      //   3. runtime default account    — single-account setups / missing session context
+      //   4. "default" literal          — last-resort fallback when runtime unavailable
       let resolvedAccountId = p.accountId?.trim() || "";
       if (!resolvedAccountId) {
-        try {
-          const { getWeComRuntime } = await import("../runtime.js");
-          const { resolveDefaultWeComAccountId } = await import("../accounts.js");
-          const cfg = getWeComRuntime().config.loadConfig();
-          resolvedAccountId = resolveDefaultWeComAccountId(cfg);
-        } catch {
-          resolvedAccountId = accountId; // factory fallback
+        const sessionAccountId = accountId?.trim() || "";
+        if (sessionAccountId) {
+          resolvedAccountId = sessionAccountId;
+        } else {
+          try {
+            const { getWeComRuntime } = await import("../runtime.js");
+            const { resolveDefaultWeComAccountId } = await import("../accounts.js");
+            const cfg = getWeComRuntime().config.loadConfig();
+            resolvedAccountId = resolveDefaultWeComAccountId(cfg);
+          } catch {
+            resolvedAccountId = "default";
+          }
         }
       }
       wecomMcpLog.debug(
