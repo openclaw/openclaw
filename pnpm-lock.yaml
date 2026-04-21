@@ -909,6 +909,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/notion:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
+
   extensions/nvidia:
     devDependencies:
       '@openclaw/plugin-sdk':
