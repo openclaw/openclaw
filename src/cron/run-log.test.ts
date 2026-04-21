@@ -209,6 +209,13 @@ describe("cron run log", () => {
             delivered: true,
             deliveryStatus: "not-delivered",
             deliveryError: "announce failed",
+            delivery: {
+              intended: { channel: "last", to: null, source: "last" },
+              resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+              messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+              fallbackUsed: false,
+              delivered: true,
+            },
           }),
         ].join("\n") + "\n",
         "utf-8",
@@ -220,6 +227,13 @@ describe("cron run log", () => {
       expect(entries[0]?.delivered).toBe(true);
       expect(entries[0]?.deliveryStatus).toBe("not-delivered");
       expect(entries[0]?.deliveryError).toBe("announce failed");
+      expect(entries[0]?.delivery).toEqual({
+        intended: { channel: "last", to: null, source: "last" },
+        resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+        messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+        fallbackUsed: false,
+        delivered: true,
+      });
     });
   });
 

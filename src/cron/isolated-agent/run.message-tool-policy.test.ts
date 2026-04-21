@@ -382,7 +382,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    await runCronIsolatedAgentTurn({
+    const result = await runCronIsolatedAgentTurn({
       ...params,
       job: job as never,
     });
@@ -392,6 +392,15 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       expect.objectContaining({
         deliveryRequested: true,
         skipMessagingToolDelivery: true,
+      }),
+    );
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        intended: { channel: "telegram", to: "123", source: "explicit" },
+        resolved: { ok: true, channel: "telegram", to: "123", source: "explicit" },
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+        fallbackUsed: false,
+        delivered: true,
       }),
     );
   });
@@ -419,7 +428,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    await runCronIsolatedAgentTurn(makeParams());
+    const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
     expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
@@ -427,6 +436,19 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         deliveryRequested: true,
         skipMessagingToolDelivery: false,
         unverifiedMessagingToolDelivery: true,
+      }),
+    );
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        intended: { channel: "last", to: null, source: "last" },
+        resolved: expect.objectContaining({
+          ok: false,
+          source: "last",
+          error: "sessionKey is required to resolve delivery.channel=last",
+        }),
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+        fallbackUsed: false,
+        delivered: false,
       }),
     );
   });

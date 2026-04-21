@@ -1,4 +1,4 @@
-import type { CronRunOutcome, CronRunTelemetry } from "../types.js";
+import type { CronDeliveryTrace, CronRunOutcome, CronRunTelemetry } from "../types.js";
 
 export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
@@ -16,5 +16,6 @@ export type RunCronAgentTurnResult = {
    * cannot guarantee a final delivery ack synchronously.
    */
   deliveryAttempted?: boolean;
+  delivery?: CronDeliveryTrace;
 } & CronRunOutcome &
   CronRunTelemetry;
