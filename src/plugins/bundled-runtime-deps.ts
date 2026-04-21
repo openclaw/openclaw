@@ -62,6 +62,17 @@ function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
   };
 }
 
+function normalizeInstallableRuntimeDepVersion(rawVersion: unknown): string | null {
+  if (typeof rawVersion !== "string") {
+    return null;
+  }
+  const version = rawVersion.trim();
+  if (version === "" || version.toLowerCase().startsWith("workspace:")) {
+    return null;
+  }
+  return version;
+}
+
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
     fs.existsSync(path.join(packageRoot, ".git")) &&
@@ -402,10 +413,10 @@ function collectBundledPluginRuntimeDeps(params: {
       continue;
     }
     for (const [name, rawVersion] of Object.entries(collectRuntimeDeps(packageJson))) {
-      if (typeof rawVersion !== "string" || rawVersion.trim() === "") {
+      const version = normalizeInstallableRuntimeDepVersion(rawVersion);
+      if (!version) {
         continue;
       }
-      const version = rawVersion.trim();
       const byVersion = versionMap.get(name) ?? new Map<string, Set<string>>();
       const pluginIds = byVersion.get(version) ?? new Set<string>();
       pluginIds.add(pluginId);
@@ -549,11 +560,10 @@ export function ensureBundledPluginRuntimeDeps(params: {
     return { installedSpecs: [], retainSpecs: [] };
   }
   const deps = Object.entries(collectRuntimeDeps(packageJson))
-    .map(([name, rawVersion]) =>
-      typeof rawVersion === "string" && rawVersion.trim() !== ""
-        ? { name, version: rawVersion.trim() }
-        : null,
-    )
+    .map(([name, rawVersion]) => {
+      const version = normalizeInstallableRuntimeDepVersion(rawVersion);
+      return version ? { name, version } : null;
+    })
     .filter((entry): entry is { name: string; version: string } => Boolean(entry));
   if (deps.length === 0) {
     return { installedSpecs: [], retainSpecs: [] };

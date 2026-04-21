@@ -262,6 +262,72 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
   });
 
+  it("skips workspace-only runtime deps before npm install", () => {
+    const packageRoot = makeTempDir();
+    const extensionsRoot = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(extensionsRoot, "qa-channel");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+          "external-runtime": "^1.2.3",
+          openclaw: "workspace:*",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "qa-channel",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["external-runtime@^1.2.3"],
+      retainSpecs: ["external-runtime@^1.2.3"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        missingSpecs: ["external-runtime@^1.2.3"],
+        installSpecs: ["external-runtime@^1.2.3"],
+      },
+    ]);
+  });
+
+  it("does not install when runtime deps are only workspace links", () => {
+    const packageRoot = makeTempDir();
+    const extensionsRoot = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(extensionsRoot, "qa-channel");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+          openclaw: "workspace:*",
+        },
+      }),
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: () => {
+        throw new Error("workspace-only runtime deps should not install");
+      },
+      pluginId: "qa-channel",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+  });
+
   it("skips install when staged plugin-local runtime deps are present", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");
