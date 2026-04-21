@@ -2,9 +2,13 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
+import { QQBOT_MEDIA_SSRF_POLICY } from "./utils/file-utils.js";
 import { sanitizeFileName } from "./utils/platform.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
 
@@ -534,6 +538,24 @@ export interface UploadMediaResponse {
   id?: string;
 }
 
+async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch (err) {
+    throw new Error(`Invalid media URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("Direct-upload media URL must use HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    policy: QQBOT_MEDIA_SSRF_POLICY,
+  });
+  return parsed.toString();
+}
+
 export async function uploadC2CMedia(
   accessToken: string,
   openid: string,
@@ -547,6 +569,8 @@ export async function uploadC2CMedia(
     throw new Error("uploadC2CMedia: url or fileData is required");
   }
 
+  const validatedUrl = url ? await assertDirectUploadUrlAllowed(url) : undefined;
+
   if (fileData) {
     const contentHash = computeFileHash(fileData);
     const cachedInfo = getCachedFileInfo(contentHash, "c2c", openid, fileType);
@@ -556,8 +580,8 @@ export async function uploadC2CMedia(
   }
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
-  if (url) {
-    body.url = url;
+  if (validatedUrl) {
+    body.url = validatedUrl;
   } else if (fileData) {
     body.file_data = fileData;
   }
@@ -600,6 +624,8 @@ export async function uploadGroupMedia(
     throw new Error("uploadGroupMedia: url or fileData is required");
   }
 
+  const validatedUrl = url ? await assertDirectUploadUrlAllowed(url) : undefined;
+
   if (fileData) {
     const contentHash = computeFileHash(fileData);
     const cachedInfo = getCachedFileInfo(contentHash, "group", groupOpenid, fileType);
@@ -609,8 +635,8 @@ export async function uploadGroupMedia(
   }
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
-  if (url) {
-    body.url = url;
+  if (validatedUrl) {
+    body.url = validatedUrl;
   } else if (fileData) {
     body.file_data = fileData;
   }
