@@ -304,6 +304,8 @@ export async function createModelSelectionState(params: {
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
   });
+  const hadDirectAutoSessionOverride =
+    sessionEntry?.modelOverrideSource === "auto" && Boolean(directStoredOverride);
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -339,7 +341,42 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
+  // Auto-failover overrides are transient: on this turn, retry the configured
+  // primary so the session self-heals when the primary recovers. The fallback loop
+  // in runWithModelFallback will re-set the override if the primary is still down.
+  // User-selected overrides (/model command) are preserved across turns.
+  //
+  // Clear this before allowlist validation so an old fallback outside the current
+  // agent allowlist does not emit the unrelated "Model override not allowed" event.
+  if (hadDirectAutoSessionOverride && sessionEntry && sessionStore && sessionKey) {
+    const { updated } = applyModelOverrideToSessionEntry({
+      entry: sessionEntry,
+      selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+    });
+    if (updated) {
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await (
+          await loadSessionStoreRuntime()
+        ).updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
+      }
+      // Reset in-memory selection to the configured primary. The caller-provided
+      // provider/model may already be set to the fallback by stored-override preload
+      // in get-reply.ts; updating them here ensures this turn retries the primary.
+      provider = defaultProvider;
+      model = defaultModel;
+    }
+  }
+
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    directStoredOverride &&
+    !hadDirectAutoSessionOverride
+  ) {
     const normalizedOverride = normalizeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
@@ -364,55 +401,21 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const storedOverride = resolveStoredModelOverride({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-    defaultProvider,
-  });
+  const storedOverride = hadDirectAutoSessionOverride
+    ? undefined
+    : resolveStoredModelOverride({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        parentSessionKey,
+        defaultProvider,
+      });
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
   const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
 
-  // Auto-failover overrides are transient: on this turn, retry the configured
-  // primary so the session self-heals when the primary recovers. The fallback loop
-  // in runWithModelFallback will re-set the override if the primary is still down.
-  // User-selected overrides (/model command) are preserved across turns.
-  //
-  // Note: channel model overrides (channels.modelByChannel) are skipped when
-  // hasSessionModelOverride was true at get-reply-directives preload time. They
-  // resume on the following turn once the session state is clear.
-  const isAutoSessionOverride =
-    storedOverride?.source === "session" && sessionEntry?.modelOverrideSource === "auto";
-  if (isAutoSessionOverride && sessionEntry && sessionStore && sessionKey && !resetModelOverride) {
-    const { updated } = applyModelOverrideToSessionEntry({
-      entry: sessionEntry,
-      selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
-    });
-    if (updated) {
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await (
-          await loadSessionStoreRuntime()
-        ).updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
-      }
-      // Reset in-memory selection to the configured primary. The caller-provided
-      // provider/model were already set to the fallback by the stored-override
-      // preload in get-reply-directives.ts; updating them here ensures this turn
-      // retries the primary rather than incurring one extra fallback call.
-      provider = defaultProvider;
-      model = defaultModel;
-      // Do NOT set resetModelOverride — that flag triggers a "Model override not
-      // allowed for this agent" system event, which is incorrect for auto-heal.
-      // The override was valid; it just expired after the primary recovered.
-    }
-  }
-
-  if (storedOverride?.model && !skipStoredOverride && !isAutoSessionOverride) {
+  if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
       storedOverride.provider || defaultProvider,
       storedOverride.model,
