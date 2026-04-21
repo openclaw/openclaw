@@ -78,6 +78,11 @@ function parseRateLimitPerMinute(raw: string | undefined): number {
   return Number.parseInt(trimmed, 10);
 }
 
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 /**
  * List all configured account IDs for this channel.
  * Returns ["default"] if there's a base config, plus any named accounts.
@@ -119,6 +124,7 @@ export function resolveAccount(
   const envToken = process.env.SYNOLOGY_CHAT_TOKEN ?? "";
   const envIncomingUrl = process.env.SYNOLOGY_CHAT_INCOMING_URL ?? "";
   const envNasHost = process.env.SYNOLOGY_NAS_HOST ?? "localhost";
+  const envPublicOrigin = normalizeOptionalString(process.env.SYNOLOGY_CHAT_PUBLIC_ORIGIN);
   const envAllowedUserIds = process.env.SYNOLOGY_ALLOWED_USER_IDS ?? "";
   const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
@@ -135,6 +141,7 @@ export function resolveAccount(
     token: merged.token ?? envToken,
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
     nasHost: merged.nasHost ?? envNasHost,
+    publicOrigin: normalizeOptionalString(merged.publicOrigin) ?? envPublicOrigin,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
     webhookPathSource,
     dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({

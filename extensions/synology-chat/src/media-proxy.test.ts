@@ -21,6 +21,7 @@ const testAccount: ResolvedSynologyChatAccount = {
   token: "token",
   incomingUrl: "https://nas.example.com/incoming",
   nasHost: "nas.example.com",
+  publicOrigin: undefined,
   webhookPath: "/webhook/synology",
   webhookPathSource: "default",
   dangerouslyAllowNameMatching: false,
@@ -47,6 +48,26 @@ describe("resolveSynologyWebhookFileUrl", () => {
   afterEach(() => {
     clearSynologyHostedMediaStateForTest();
     vi.unstubAllEnvs();
+  });
+
+  it("uses a configured public origin to bootstrap hostname-backed media before the first inbound webhook", async () => {
+    registerSynologyHostedMediaTransport({
+      ...testAccount,
+      publicOrigin: "https://gateway-config.example.com",
+    });
+
+    const resolved = await resolveSynologyWebhookFileUrl({
+      account: testAccount,
+      sourceUrl: "https://example.com/file.png",
+    });
+
+    expect(resolved).toMatch(
+      /^https:\/\/gateway-config\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
+    );
+    expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
+      maxBytes: 5 * 1024 * 1024,
+      url: "https://example.com/file.png",
+    });
   });
 
   it("uses OPENCLAW_GATEWAY_URL to bootstrap hostname-backed media before the first inbound webhook", async () => {
@@ -82,7 +103,10 @@ describe("resolveSynologyWebhookFileUrl", () => {
 
   it("prefers the observed webhook origin over the bootstrap gateway origin", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.com/ws");
-    registerSynologyHostedMediaTransport(testAccount);
+    registerSynologyHostedMediaTransport({
+      ...testAccount,
+      publicOrigin: "https://gateway-config.example.com",
+    });
     rememberSynologyHostedMediaOrigin(testAccount, "https://hooks.example.com");
 
     const resolved = await resolveSynologyWebhookFileUrl({

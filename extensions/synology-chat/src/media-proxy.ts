@@ -60,8 +60,8 @@ function parseHttpUrl(sourceUrl: string): URL | null {
   }
 }
 
-function parsePublicOriginFromGatewayUrl(gatewayUrl: string | undefined): string | undefined {
-  const trimmed = gatewayUrl?.trim();
+function parsePublicOrigin(candidate: string | undefined): string | undefined {
+  const trimmed = candidate?.trim();
   if (!trimmed) {
     return undefined;
   }
@@ -155,7 +155,9 @@ export function registerSynologyHostedMediaTransport(account: ResolvedSynologyCh
   const previousOrigin = mediaProxyStateByAccountId.get(account.accountId)?.publicOrigin;
   mediaProxyStateByAccountId.set(account.accountId, {
     publicOrigin:
-      previousOrigin ?? parsePublicOriginFromGatewayUrl(process.env.OPENCLAW_GATEWAY_URL),
+      previousOrigin ??
+      parsePublicOrigin(account.publicOrigin) ??
+      parsePublicOrigin(process.env.OPENCLAW_GATEWAY_URL),
   });
 }
 

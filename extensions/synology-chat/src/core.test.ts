@@ -60,6 +60,7 @@ describe("synology-chat core", () => {
     delete process.env.SYNOLOGY_CHAT_TOKEN;
     delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
     delete process.env.SYNOLOGY_NAS_HOST;
+    delete process.env.SYNOLOGY_CHAT_PUBLIC_ORIGIN;
     delete process.env.SYNOLOGY_ALLOWED_USER_IDS;
     delete process.env.SYNOLOGY_RATE_LIMIT;
     delete process.env.OPENCLAW_BOT_NAME;
@@ -189,6 +190,7 @@ describe("synology-chat account resolution", () => {
     process.env.SYNOLOGY_CHAT_TOKEN = "env-tok";
     process.env.SYNOLOGY_CHAT_INCOMING_URL = "https://nas/incoming";
     process.env.SYNOLOGY_NAS_HOST = "192.0.2.1";
+    process.env.SYNOLOGY_CHAT_PUBLIC_ORIGIN = "https://gateway.example.com";
     process.env.OPENCLAW_BOT_NAME = "TestBot";
 
     const cfg = { channels: { "synology-chat": {} } };
@@ -196,6 +198,7 @@ describe("synology-chat account resolution", () => {
     expect(account.token).toBe("env-tok");
     expect(account.incomingUrl).toBe("https://nas/incoming");
     expect(account.nasHost).toBe("192.0.2.1");
+    expect(account.publicOrigin).toBe("https://gateway.example.com");
     expect(account.botName).toBe("TestBot");
   });
 
@@ -206,11 +209,13 @@ describe("synology-chat account resolution", () => {
         "synology-chat": {
           token: "base-tok",
           botName: "BaseName",
+          publicOrigin: "https://base.example.com",
           dangerouslyAllowNameMatching: false,
           accounts: {
             work: {
               token: "work-tok",
               botName: "WorkBot",
+              publicOrigin: "https://work.example.com",
               dangerouslyAllowNameMatching: true,
             },
           },
@@ -225,6 +230,7 @@ describe("synology-chat account resolution", () => {
     const account = resolveAccount(cfg, "work");
     expect(account.token).toBe("work-tok");
     expect(account.botName).toBe("WorkBot");
+    expect(account.publicOrigin).toBe("https://work.example.com");
     expect(account.dangerouslyAllowNameMatching).toBe(true);
   });
 
