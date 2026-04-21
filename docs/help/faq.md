@@ -1293,7 +1293,7 @@ for usage/billing and raise limits as needed.
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
     Yes - if your private traffic is **DMs** and your public traffic is **groups**.
 
-    Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in Docker, while the main DM session stays on-host. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
+    Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend, while the main DM session stays on-host. Docker is the default backend if you do not choose one. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
 
     Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 

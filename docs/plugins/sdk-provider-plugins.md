@@ -535,16 +535,18 @@ API key auth, and dynamic model resolution.
       | 31 | `augmentModelCatalog` | Synthetic forward-compat rows |
       | 32 | `isBinaryThinking` | Binary thinking on/off |
       | 33 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 34 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 35 | `isModernModelRef` | Live/smoke model matching |
-      | 36 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 37 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 38 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 39 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
-      | 40 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 41 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 34 | `supportsAdaptiveThinking` | Adaptive thinking support |
+      | 35 | `supportsMaxThinking` | `max` reasoning support |
+      | 36 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 37 | `isModernModelRef` | Live/smoke model matching |
+      | 38 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 39 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 40 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 41 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | 42 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 43 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 44 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 45 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       Prompt tuning note:
 

@@ -39,6 +39,11 @@ When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
+  `openclaw models list --provider moonshot --json`, then run an isolated
+  `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`
+  against `moonshot/kimi-k2.6`. Verify the JSON reports Moonshot/K2.6 and the
+  assistant transcript stores normalized `usage.cost`.
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
 

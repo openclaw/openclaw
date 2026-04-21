@@ -59,11 +59,14 @@ Scoped guides:
 - Install: `pnpm install` (Bun supported; keep lockfiles/patches aligned if touched).
 - Dev CLI: `pnpm openclaw ...` or `pnpm dev`.
 - Build: `pnpm build`
-- Smart local gate: `pnpm check:changed`
+- Smart local gate: `pnpm check:changed` (scoped typecheck/lint/guards + relevant tests)
 - Explain smart gate: `pnpm changed:lanes --json`
 - Pre-commit view: `pnpm check:changed --staged`
-- Normal full prod sweep: `pnpm check`
+- Normal full prod sweep: `pnpm check` (prod typecheck/lint/guards, no tests)
 - Full tests: `pnpm test`
+- Changed tests only: `pnpm test:changed`
+- Extension tests: `pnpm test:extensions` or `pnpm test extensions` = all extension shards; `pnpm test extensions/<id>` = one extension lane. Heavy channels/OpenAI have dedicated shards.
+- Shard timing artifact: `.artifacts/vitest-shard-timings.json`; auto-used for balanced shard ordering. Disable with `OPENCLAW_TEST_PROJECTS_TIMINGS=0`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; do not call raw `vitest`.
 - Coverage: `pnpm test:coverage`
 - Format check/fix: `pnpm format:check` / `pnpm format`
@@ -92,7 +95,7 @@ Scoped guides:
   - extension tests => extension test typecheck/tests only
   - public SDK/plugin contract => extension prod/test validation too
   - unknown root/config => all lanes
-- Local loop: prefer `pnpm check:changed`; use `pnpm check` for full prod TS/lint sweep.
+- Local loop: prefer `pnpm check:changed`; use `pnpm test:changed` for tests only; use `pnpm check` for full prod TS/lint sweep without tests.
 - Landing on `main`: verify touched surface near landing; default bar is `pnpm check` + `pnpm test` when feasible.
 - Hard build gate: run/pass `pnpm build` before push if build output, packaging, lazy/module boundaries, or published surfaces can change.
 - Do not land related failing format/lint/type/build/tests. If failures are unrelated on latest `origin/main`, say so and give scoped proof.
@@ -122,6 +125,12 @@ Scoped guides:
 - Example models in tests: `sonnet-4.6`, `gpt-5.4`.
 - Clean up timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` must stay safe.
 - Hot tests: avoid per-test `vi.resetModules()` + fresh heavy imports; prefer static or `beforeAll` imports and reset state directly.
+- Measure first: `pnpm test:perf:imports <file>` for import drag; `pnpm test:perf:hotspots --limit N` for suite targets.
+- Keep tests at seam depth: unit-test pure helpers/contracts; one integration smoke per boundary, not per branch.
+- Mock expensive runtime seams directly: scanners, manifests, package registries, filesystem crawls, provider SDKs, network/process launch.
+- Prefer injected deps over module mocks; if mocking modules, mock narrow local `*.runtime.ts` seams, not broad barrels.
+- Share fixtures/builders; do not recreate temp dirs, package manifests, or plugin workspaces in every case unless state isolation needs it.
+- Delete duplicate assertions when another test owns the boundary; assert only the behavior that can regress here.
 - Avoid broad `importOriginal()` / broad `openclaw/plugin-sdk/*` partial mocks in hot tests. Add narrow local `*.runtime.ts` seam and mock it.
 - Use existing deps/callback/runtime injection seams before module mocks.
 - Import-dominated test time is a boundary smell; shrink import surface before adding cases.

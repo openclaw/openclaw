@@ -1408,6 +1408,18 @@ export type ProviderPlugin = {
    */
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   /**
+   * Provider-owned adaptive thinking support.
+   *
+   * Return true only for models that should expose the `adaptive` thinking level.
+   */
+  supportsAdaptiveThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
+   * Provider-owned max thinking support.
+   *
+   * Return true only for models that should expose the `max` thinking level.
+   */
+  supportsMaxThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
    * Provider-owned default thinking level.
    *
    * Use this to keep model-family defaults (for example Claude 4.6 =>
@@ -1415,7 +1427,17 @@ export type ProviderPlugin = {
    */
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
-  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  ) =>
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max"
+    | null
+    | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *

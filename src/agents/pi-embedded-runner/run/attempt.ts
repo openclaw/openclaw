@@ -79,8 +79,11 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
+import {
+  applyPiAutoCompactionGuard,
+  applyPiCompactionSettingsFromConfig,
+} from "../../pi-settings.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
-import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -1019,18 +1022,20 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
       });
-      // Only create an explicit resource loader when there are extension factories
-      // to register; otherwise let createAgentSession use its built-in default.
-      let resourceLoader: DefaultResourceLoader | undefined;
-      if (extensionFactories.length > 0) {
-        resourceLoader = new DefaultResourceLoader({
-          cwd: resolvedWorkspace,
-          agentDir,
-          settingsManager,
-          extensionFactories,
-        });
-        await resourceLoader.reload();
-      }
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        extensionFactories,
+      });
+      await resourceLoader.reload();
+      // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: params.config,
+        contextTokenBudget: params.contextTokenBudget,
+      });
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();

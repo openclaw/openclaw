@@ -191,6 +191,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       }
       return undefined;
     },
+    supportsAdaptiveThinking: ({ modelId }) => claude46ModelRe.test(modelId.trim()),
     resolveDefaultThinkingLevel: ({ modelId }) =>
       claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
   });
