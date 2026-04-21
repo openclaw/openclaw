@@ -54,6 +54,71 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
 }
 
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
+
+function isIpv4LanRange(host: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return false;
+  }
+  const [a, b] = host.split(".").map(Number);
+  if (a === 10) {
+    return true;
+  }
+  if (a === 172 && b >= 16 && b <= 31) {
+    return true;
+  }
+  if (a === 192 && b === 168) {
+    return true;
+  }
+  return false;
+}
+
+function isIpv6LocalRange(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (lower === "::1") {
+    return true;
+  }
+  if (lower.startsWith("fe80:")) {
+    return true;
+  }
+  if (/^f[cd][0-9a-f]{2}:/.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return true;
+  }
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  let host = url.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  if (LOCAL_HOSTNAMES.has(host)) {
+    return true;
+  }
+  if (host.endsWith(".local")) {
+    return true;
+  }
+  if (isIpv4LanRange(host)) {
+    return true;
+  }
+  if (isIpv6LocalRange(host)) {
+    return true;
+  }
+  if (!host.includes(".") && !host.includes(":")) {
+    return true;
+  }
+  return false;
+}
+
 export function hasMeaningfulExplicitOllamaConfig(
   providerConfig: ModelProviderConfig | undefined,
 ): boolean {

@@ -495,4 +495,65 @@ describe("ollama plugin", () => {
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(payloadSeen?.think).toBeUndefined();
   });
+
+  it("mints synthetic auth for explicit LAN ollama config", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "http://192.168.1.50:11434",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toEqual({
+      apiKey: "ollama-local",
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
+  it("does not mint synthetic auth for remote Ollama Cloud baseUrl", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "https://ollama.com",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toBeUndefined();
+  });
+
+  it("does not mint synthetic auth for public IPv4 baseUrl outside LAN ranges", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "http://8.8.8.8:11434",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toBeUndefined();
+  });
+
+  it("does not mint synthetic auth for remote baseUrl even when explicit apiKey is present", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "https://ollama.com",
+        apiKey: "some-real-key",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toBeUndefined();
+  });
 });

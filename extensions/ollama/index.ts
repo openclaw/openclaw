@@ -18,6 +18,7 @@ import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
   hasMeaningfulExplicitOllamaConfig,
+  isLocalOllamaBaseUrl,
   resolveOllamaDiscoveryResult,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
@@ -173,6 +174,9 @@ export default definePluginEntry({
         /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
       resolveSyntheticAuth: ({ providerConfig }) => {
         if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
+          return undefined;
+        }
+        if (!isLocalOllamaBaseUrl(providerConfig?.baseUrl)) {
           return undefined;
         }
         return {
