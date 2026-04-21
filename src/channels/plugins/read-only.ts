@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  listConfiguredChannelIdsForPluginScope,
+  listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
@@ -141,7 +141,7 @@ export function listReadOnlyChannelPluginsForConfig(
   });
   const configuredChannelIds = [
     ...new Set(
-      listConfiguredChannelIdsForPluginScope({
+      listConfiguredChannelIdsForReadOnlyScope({
         config: cfg,
         workspaceDir,
         env,

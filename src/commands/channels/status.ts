@@ -1,4 +1,3 @@
-import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
@@ -7,6 +6,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../../plugins/channel-plugin-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -196,9 +196,11 @@ export async function channelsStatusCommand(
           path: snapshot.path,
           mode,
         },
-        configuredChannels: listPotentialConfiguredChannelIds(resolvedConfig, process.env, {
+        configuredChannels: listConfiguredChannelIdsForReadOnlyScope({
+          config: resolvedConfig,
+          env: process.env,
           includePersistedAuthState: false,
-        }).toSorted(),
+        }),
       });
       return;
     }

@@ -1,5 +1,9 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
+import {
+  hasPotentialConfiguredChannels,
+  listPotentialConfiguredChannelIds,
+} from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMemoryDreamingConfig,
@@ -109,6 +113,52 @@ export function listConfiguredChannelIdsForPluginScope(params: {
       }),
     ]),
   ].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listConfiguredChannelIdsForReadOnlyScope(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  cache?: boolean;
+  includePersistedAuthState?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
+}): string[] {
+  const env = params.env ?? process.env;
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config));
+  return listConfiguredChannelIdsForPluginScope({
+    config: params.config,
+    workspaceDir,
+    env,
+    cache: params.cache,
+    includePersistedAuthState: params.includePersistedAuthState,
+    manifestRecords: params.manifestRecords,
+  });
+}
+
+export function hasConfiguredChannelsForReadOnlyScope(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  cache?: boolean;
+  includePersistedAuthState?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
+}): boolean {
+  const env = params.env ?? process.env;
+  if (
+    hasPotentialConfiguredChannels(params.config, env, {
+      includePersistedAuthState: params.includePersistedAuthState,
+    })
+  ) {
+    return true;
+  }
+  return (
+    listConfiguredChannelIdsForReadOnlyScope({
+      ...params,
+      env,
+    }).length > 0
+  );
 }
 
 function isChannelPluginEligibleForScopedOwnership(params: {

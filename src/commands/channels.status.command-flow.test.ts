@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
   requireValidConfigSnapshot: vi.fn(),
   listChannelPlugins: vi.fn(),
+  listConfiguredChannelIdsForReadOnlyScope: vi.fn((_params: unknown) => ["discord"]),
   withProgress: vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run()),
 }));
 
@@ -33,8 +34,9 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
-  listPotentialConfiguredChannelIds: () => ["discord"],
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  listConfiguredChannelIdsForReadOnlyScope: (params: unknown) =>
+    mocks.listConfiguredChannelIdsForReadOnlyScope(params),
 }));
 
 vi.mock("./channels/shared.js", () => ({
@@ -192,6 +194,8 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.readConfigFileSnapshot.mockClear();
     mocks.requireValidConfigSnapshot.mockReset();
     mocks.listChannelPlugins.mockReset();
+    mocks.listConfiguredChannelIdsForReadOnlyScope.mockClear();
+    mocks.listConfiguredChannelIdsForReadOnlyScope.mockReturnValue(["discord"]);
     mocks.withProgress.mockClear();
     mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
@@ -259,6 +263,12 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     await channelsStatusCommand({ json: true, probe: false }, runtime as never);
 
     expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+    expect(mocks.listConfiguredChannelIdsForReadOnlyScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ secretResolved: true }),
+        includePersistedAuthState: false,
+      }),
+    );
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload).toEqual(
       expect.objectContaining({

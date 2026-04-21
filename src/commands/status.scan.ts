@@ -1,5 +1,5 @@
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { withProgress } from "../cli/progress.js";
+import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { buildPluginCompatibilitySnapshotNotices } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
@@ -25,7 +25,8 @@ export async function scanStatus(
       _runtime,
       {
         commandName: "status --json",
-        resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannels(cfg),
+        resolveHasConfiguredChannels: (cfg) =>
+          hasConfiguredChannelsForReadOnlyScope({ config: cfg }),
         resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
           await resolveStatusMemoryStatusSnapshot({
             cfg,
