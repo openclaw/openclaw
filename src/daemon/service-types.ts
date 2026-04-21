@@ -34,6 +34,7 @@ export type GatewayServiceCommandConfig = {
   workingDirectory?: string;
   environment?: Record<string, string>;
   environmentValueSources?: Record<string, "inline" | "file">;
+  requiresCmdScriptLaunch?: boolean;
   sourcePath?: string;
 };
 
