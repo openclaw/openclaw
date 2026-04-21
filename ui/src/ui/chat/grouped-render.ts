@@ -874,28 +874,11 @@ function renderMessageImages(images: ImageBlock[]) {
               class="chat-message-image"
               @load=${(e: Event) => {
                 const imgEl = e.target as HTMLImageElement;
-                const naturalWidth = imgEl.naturalWidth;
-                
                 const bubble = imgEl.closest('.chat-bubble') as HTMLElement;
                 if (bubble && !bubble.style.width) {
-                  let targetWidth: number;
-                  
-                  if (naturalWidth >= 3840) {
-                    targetWidth = 400;
-                  } else if (naturalWidth >= 2560) {
-                    targetWidth = 380;
-                  } else if (naturalWidth >= 1920) {
-                    targetWidth = 360;
-                  } else if (naturalWidth >= 1280) {
-                    targetWidth = 340;
-                  } else if (naturalWidth >= 800) {
-                    targetWidth = 320;
-                  } else if (naturalWidth >= 500) {
-                    targetWidth = 300;
-                  } else {
-                    targetWidth = Math.floor(naturalWidth * 0.8);
-                  }
-                  
+                  const naturalWidth = imgEl.naturalWidth;
+                  // Use the smaller of 600px or the image's natural width
+                  const targetWidth = Math.min(naturalWidth, 600);
                   bubble.style.width = `${targetWidth}px`;
                 }
               }}
@@ -968,7 +951,7 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
           Your browser does not support the audio element.
         </audio>
         ${audio.filename 
-          ? html`<div class="chat-image-filename" style="display: block; width: 100%;">${audio.filename}</div>`
+          ? html`<div style="display: block; width: 100%;">${audio.filename}</div>`
           : nothing}
       </div>
     `);
@@ -1001,6 +984,14 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
             if (savedTime && savedTime < videoEl.duration) {
               videoEl.currentTime = savedTime;
             }
+            
+            const bubble = videoEl.closest('.chat-bubble') as HTMLElement;
+            if (bubble && !bubble.style.width) {
+              const videoWidth = videoEl.videoWidth;
+              // Use the smaller of 600px or the video's natural width
+              const targetWidth = Math.min(videoWidth, 600);
+              bubble.style.width = `${targetWidth}px`;
+            }
           }}
           @timeupdate=${(e: Event) => {
             const videoEl = e.target as HTMLVideoElement;
@@ -1023,7 +1014,7 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
           Your browser does not support the video element.
         </video>
         ${video.filename 
-          ? html`<div class="chat-image-filename" style="display: block; width: 100%;">${video.filename}</div>`
+          ? html`<div style="display: block; width: 100%;">${video.filename}</div>`
           : nothing}
       </div>
     `);
