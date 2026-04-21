@@ -195,6 +195,7 @@ function buildPluginReport(
         activationSourceConfig: rawConfig,
         workspaceDir,
         env: params?.env,
+        logger: params?.logger,
         loadModules: false,
       });
   const importedPluginIds = new Set([
