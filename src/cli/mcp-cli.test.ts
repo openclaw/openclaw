@@ -79,6 +79,12 @@ describe("mcp cli", () => {
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "context7", "--json"]);
       expect(mockLog).toHaveBeenCalledWith(expect.stringContaining('"command": "uvx"'));
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "context7"]);
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining('OpenClaw-managed MCP server "context7"'),
+      );
     });
   });
 
@@ -94,6 +100,22 @@ describe("mcp cli", () => {
 
       expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("OpenClaw-managed MCP servers"));
       expect(mockLog).toHaveBeenCalledWith("- context7");
+      expect(mockLog).toHaveBeenCalledWith(
+        "Note: this command does not include mcporter servers from config/mcporter.json.",
+      );
+    });
+  });
+
+  it("clarifies the OpenClaw-managed scope when mcp list is empty", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "list"]);
+
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining("No OpenClaw-managed MCP servers configured"),
+      );
       expect(mockLog).toHaveBeenCalledWith(
         "Note: this command does not include mcporter servers from config/mcporter.json.",
       );

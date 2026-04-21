@@ -114,9 +114,9 @@ export function registerMcpCli(program: Command) {
         return;
       }
       if (name) {
-        defaultRuntime.log(`MCP server "${name}" (${loaded.path}):`);
+        defaultRuntime.log(`OpenClaw-managed MCP server "${name}" (${loaded.path}):`);
       } else {
-        defaultRuntime.log(`MCP servers (${loaded.path}):`);
+        defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
       }
       printJson(value ?? {});
     });
