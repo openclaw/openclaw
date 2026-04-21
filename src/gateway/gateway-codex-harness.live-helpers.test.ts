@@ -75,6 +75,19 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(false);
   });
 
+  it("accepts the sandboxed CLI failure active-model summary", () => {
+    const text = [
+      "I couldn’t inspect the CLI model list because sandboxed `codex --help` failed on a namespace restriction, and the escalated retry was rejected.",
+      "",
+      "What I can confirm from the current session is:",
+      "- Active model: `codex/gpt-5.4`",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
   it("rejects unrelated codex command output", () => {
     expect(isExpectedCodexModelsCommandText("Codex is healthy.")).toBe(false);
   });

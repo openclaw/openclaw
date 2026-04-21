@@ -38,6 +38,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "This harness is configured with a single Codex model: `codex/",
   "Primary model: `codex/",
   "Registered models: `codex/",
+  "Active model: `codex/",
   "Current active model is `codex/",
   "Current OpenClaw session status reports the active model as:",
 ] as const;
