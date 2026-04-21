@@ -331,12 +331,12 @@ describe("resolveGatewayListenHosts", () => {
     expect(canBindToHost).not.toHaveBeenCalled();
   });
 
-  it("skips ::1 on Windows for non-loopback host passthrough", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  it("still includes ::1 on non-Windows when IPv6 is bindable", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const canBindToHost = vi.fn().mockResolvedValue(true);
-    const hosts = await resolveGatewayListenHosts("0.0.0.0", { canBindToHost });
-    expect(hosts).toEqual(["0.0.0.0"]);
-    expect(canBindToHost).not.toHaveBeenCalled();
+    const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
+    expect(hosts).toEqual(["127.0.0.1", "::1"]);
+    expect(canBindToHost).toHaveBeenCalledWith("::1");
   });
 });
 
