@@ -10,6 +10,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
@@ -66,6 +67,9 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
+  if (!isSafeChannelEnvVarTriggerName(key)) {
+    return false;
+  }
   const value = env[key];
   return typeof value === "string" && value.trim().length > 0;
 }

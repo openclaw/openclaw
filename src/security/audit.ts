@@ -358,13 +358,16 @@ async function collectPluginSecurityAuditFindings(
       }
     }
     if (context.includeChannelSecurity && context.plugins !== undefined) {
+      const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
       for (const pluginId of resolveConfiguredChannelPluginIds({
         config: autoEnabled.config,
         activationSourceConfig: context.sourceConfig,
         workspaceDir: context.workspaceDir,
         env: context.env,
       })) {
-        requestedPluginIds.delete(pluginId);
+        if (auditedChannelPluginIds.has(pluginId)) {
+          requestedPluginIds.delete(pluginId);
+        }
       }
     }
     if (requestedPluginIds.size === 0) {

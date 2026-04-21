@@ -116,6 +116,17 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
+        id: "ambient-env-channel-plugin",
+        channels: ["ambient-env-channel"],
+        channelEnvVars: {
+          "ambient-env-channel": ["HOME", "PATH", "lowercase_token"],
+        },
+        origin: "config",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "voice-call",
         channels: [],
         origin: "bundled",
@@ -659,6 +670,25 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         includePersistedAuthState: false,
       }),
     ).toEqual(["external-env-channel"]);
+  });
+
+  it("ignores ambient or malformed manifest env vars as read-only configured channel triggers", () => {
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          plugins: {
+            allow: ["ambient-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          HOME: "/tmp/user",
+          PATH: "/usr/bin",
+          lowercase_token: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
   });
 
   it("uses manifest env vars for read-only channel presence checks", () => {

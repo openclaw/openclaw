@@ -40,7 +40,7 @@ describe("security audit read-only plugin scope", () => {
     resolveConfiguredChannelPluginIdsMock.mockReturnValue([]);
   });
 
-  it("removes configured channel owner plugin ids before loading audit collectors", async () => {
+  it("keeps configured channel owner collectors when the provided channel plugin list omits them", async () => {
     const sourceConfig = {
       plugins: {
         allow: ["external-channel-plugin", "audit-plugin"],
@@ -72,6 +72,38 @@ describe("security audit read-only plugin scope", () => {
         env: {},
       }),
     );
+    expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["external-channel-plugin", "audit-plugin"],
+      }),
+    );
+  });
+
+  it("removes configured channel owner collectors only when channel security will audit them", async () => {
+    const sourceConfig = {
+      plugins: {
+        allow: ["external-channel-plugin", "audit-plugin"],
+      },
+    };
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: sourceConfig,
+      changes: [],
+      autoEnabledReasons: {
+        "external-channel-plugin": ["channel:external"],
+        "audit-plugin": ["explicit"],
+      },
+    });
+    resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
+
+    await runSecurityAudit({
+      config: sourceConfig,
+      sourceConfig,
+      env: {} as NodeJS.ProcessEnv,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [{ id: "external-channel-plugin" }] as never,
+    });
+
     expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["audit-plugin"],
