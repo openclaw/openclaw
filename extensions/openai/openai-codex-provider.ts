@@ -30,7 +30,6 @@ import {
   readOpenAICodexCliOAuthProfile,
 } from "./openai-codex-cli-auth.js";
 import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
-import { trimNonEmptyString } from "./openai-codex-shared.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -357,7 +356,6 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       expires: creds.expires,
       email: identity.email,
       profileName: identity.profileName,
-      credentialExtra: trimNonEmptyString(creds.accountId) ? { accountId: creds.accountId } : {},
     });
   } catch (error) {
     spin.stop("OpenAI device code failed");

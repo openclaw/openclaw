@@ -60,11 +60,6 @@ export function resolveCodexStableSubject(payload: CodexJwtPayload | null): stri
   return sub;
 }
 
-export function resolveCodexChatgptAccountId(token: string): string | undefined {
-  const auth = decodeCodexJwtPayload(token)?.["https://api.openai.com/auth"];
-  return trimNonEmptyString(auth?.chatgpt_account_id);
-}
-
 export function resolveCodexAccessTokenExpiry(accessToken: string): number | undefined {
   const payload = decodeCodexJwtPayload(accessToken);
   const exp = normalizeFutureEpochSeconds(payload?.exp);

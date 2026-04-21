@@ -252,7 +252,6 @@ describe("openai codex provider", () => {
         "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
       refresh: "device-refresh-token",
       expires: Date.now() + 60_000,
-      accountId: "acct-device-123",
     });
 
     const result = await deviceCodeMethod?.run({
@@ -283,13 +282,13 @@ describe("openai codex provider", () => {
             access:
               "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
             refresh: "device-refresh-token",
-            accountId: "acct-device-123",
           },
         },
       ],
       defaultModel: "openai-codex/gpt-5.4",
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
+    expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");
   });
 
   it("does not log the device pairing code in remote mode", async () => {
@@ -313,7 +312,6 @@ describe("openai codex provider", () => {
           "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
         refresh: "device-refresh-token",
         expires: Date.now() + 60_000,
-        accountId: "acct-device-123",
       };
     });
 

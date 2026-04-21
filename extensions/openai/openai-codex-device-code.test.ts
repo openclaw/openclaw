@@ -91,8 +91,8 @@ describe("loginOpenAICodexDeviceCode", () => {
       expect(credentials).toMatchObject({
         access: expect.any(String),
         refresh: "refresh-token-123",
-        accountId: "acct_123",
       });
+      expect(credentials).not.toHaveProperty("accountId");
       expect(credentials.expires).toBeGreaterThan(Date.now());
     } finally {
       vi.useRealTimers();

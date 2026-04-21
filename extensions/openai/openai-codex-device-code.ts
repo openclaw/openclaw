@@ -1,8 +1,4 @@
-import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import {
-  resolveCodexAccessTokenExpiry,
-  resolveCodexChatgptAccountId,
-} from "./openai-codex-auth-identity.js";
+import { resolveCodexAccessTokenExpiry } from "./openai-codex-auth-identity.js";
 import { trimNonEmptyString } from "./openai-codex-shared.js";
 
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
@@ -22,7 +18,6 @@ type OpenAICodexDeviceCodeCredentials = {
   access: string;
   refresh: string;
   expires: number;
-  accountId?: string;
 };
 
 type DeviceCodeUserCodePayload = {
@@ -41,7 +36,6 @@ type DeviceCodeTokenPayload = {
 type OAuthTokenPayload = {
   access_token?: unknown;
   refresh_token?: unknown;
-  id_token?: unknown;
   expires_in?: unknown;
 };
 
@@ -259,7 +253,6 @@ async function exchangeOpenAICodexDeviceCode(params: {
   const body = parseJsonObject(bodyText) as OAuthTokenPayload | null;
   const access = trimNonEmptyString(body?.access_token);
   const refresh = trimNonEmptyString(body?.refresh_token);
-  const idToken = trimNonEmptyString(body?.id_token);
   if (!access || !refresh) {
     throw new Error("OpenAI token exchange succeeded but did not return OAuth tokens.");
   }
@@ -269,14 +262,11 @@ async function exchangeOpenAICodexDeviceCode(params: {
     expiresInMs !== undefined
       ? Date.now() + expiresInMs
       : (resolveCodexAccessTokenExpiry(access) ?? Date.now());
-  const accountId =
-    resolveCodexChatgptAccountId(access) ?? (idToken && resolveCodexChatgptAccountId(idToken));
 
   return {
     access,
     refresh,
     expires,
-    ...(accountId ? { accountId } : {}),
   };
 }
 
@@ -285,7 +275,6 @@ export async function loginOpenAICodexDeviceCode(params: {
   onVerification: (prompt: OpenAICodexDeviceCodePrompt) => Promise<void> | void;
   onProgress?: (message: string) => void;
 }): Promise<OpenAICodexDeviceCodeCredentials> {
-  ensureGlobalUndiciEnvProxyDispatcher();
   const fetchFn = params.fetchFn ?? fetch;
 
   params.onProgress?.("Requesting device code…");
