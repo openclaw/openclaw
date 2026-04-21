@@ -1,0 +1,30 @@
+{
+  "id": "heygen",
+  "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "heygen": ["HEYGEN_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "heygen",
+      "method": "api-key",
+      "choiceId": "heygen-api-key",
+      "choiceLabel": "HeyGen API key",
+      "groupId": "heygen",
+      "groupLabel": "HeyGen",
+      "groupHint": "Avatar video generation",
+      "optionKey": "heygenApiKey",
+      "cliFlag": "--heygen-api-key",
+      "cliOption": "--heygen-api-key <key>",
+      "cliDescription": "HeyGen API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["heygen"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

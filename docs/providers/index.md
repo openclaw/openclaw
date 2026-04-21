@@ -41,6 +41,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)
 - [Groq (LPU inference)](/providers/groq)
+- [HeyGen (avatar video generation)](/providers/heygen)
 - [Hugging Face (Inference)](/providers/huggingface)
 - [inferrs (local models)](/providers/inferrs)
 - [Kilocode](/providers/kilocode)

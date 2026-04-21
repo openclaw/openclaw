@@ -43,6 +43,7 @@ import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
+import heygenPlugin from "./heygen/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openaiPlugin from "./openai/index.js";
 import qwenPlugin from "./qwen/index.js";
@@ -104,6 +105,7 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   { plugin: googlePlugin, pluginId: "google", pluginName: "Google Provider", providerId: "google" },
+  { plugin: heygenPlugin, pluginId: "heygen", pluginName: "HeyGen Provider", providerId: "heygen" },
   {
     plugin: minimaxPlugin,
     pluginId: "minimax",
