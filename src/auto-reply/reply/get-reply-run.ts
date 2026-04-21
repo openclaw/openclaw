@@ -30,6 +30,7 @@ import {
   formatXHighModelHint,
   normalizeThinkLevel,
   type ReasoningLevel,
+  resolveSupportedThinkingLevel,
   supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
@@ -413,7 +414,10 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
+    if (
+      maybeLevel &&
+      (maybeLevel === "max" || maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
@@ -482,6 +486,27 @@ export async function runPreparedReply(
   let { prefixedCommandBody, queuedBody } = await rebuildPromptBodies();
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+  }
+  if (resolvedThinkLevel === "max") {
+    const fallbackThinkLevel = resolveSupportedThinkingLevel({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+    });
+    if (fallbackThinkLevel !== resolvedThinkLevel) {
+      resolvedThinkLevel = fallbackThinkLevel;
+      if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "max") {
+        sessionEntry.thinkingLevel = fallbackThinkLevel;
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          const { updateSessionStore } = await loadSessionStoreRuntime();
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
+        }
+      }
+    }
   }
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;

@@ -659,6 +659,7 @@ Provider plugins now have two layers:
   `classifyFailoverReason`, `isCacheTtlEligible`,
   `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`,
   `isBinaryThinking`, `supportsXHighThinking`, `supportsAdaptiveThinking`,
+  `supportsMaxThinking`,
   `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`,
   `resolveUsageAuth`, `fetchUsageSnapshot`, `createEmbeddingProvider`,
   `buildReplayPolicy`,
@@ -725,16 +726,17 @@ The "When to use" column is the quick decision guide.
 | 33  | `isBinaryThinking`                | On/off reasoning toggle for binary-thinking providers                                                          | Provider exposes only binary thinking on/off                                                                                                |
 | 34  | `supportsXHighThinking`           | `xhigh` reasoning support for selected models                                                                  | Provider wants `xhigh` on only a subset of models                                                                                           |
 | 35  | `supportsAdaptiveThinking`        | `adaptive` thinking support for selected models                                                                | Provider wants `adaptive` shown only for models with provider-managed adaptive thinking                                                     |
-| 36  | `resolveDefaultThinkingLevel`     | Default `/think` level for a specific model family                                                             | Provider owns default `/think` policy for a model family                                                                                    |
-| 37  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                           |
-| 38  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                           |
-| 39  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                             |
-| 40  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                         |
-| 41  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                  |
-| 42  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                             |
-| 43  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                           |
-| 44  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                  |
-| 45  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                |
+| 36  | `supportsMaxThinking`             | `max` reasoning support for selected models                                                                    | Provider wants `max` shown only for models with provider max thinking                                                                       |
+| 37  | `resolveDefaultThinkingLevel`     | Default `/think` level for a specific model family                                                             | Provider owns default `/think` policy for a model family                                                                                    |
+| 38  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                           |
+| 39  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                           |
+| 40  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                             |
+| 41  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                         |
+| 42  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                  |
+| 43  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                             |
+| 44  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                           |
+| 45  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                  |
+| 46  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                |
 
 `normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
 matched provider plugin, then fall through other hook-capable provider plugins
@@ -806,7 +808,7 @@ api.registerProvider({
 
 - Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
   `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
-  `supportsAdaptiveThinking`, `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  `supportsAdaptiveThinking`, `supportsMaxThinking`, `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
   and `wrapStreamFn` because it owns Claude 4.6 forward-compat,
   provider-family hints, auth repair guidance, usage endpoint integration,
   prompt-cache eligibility, auth-aware config defaults, Claude

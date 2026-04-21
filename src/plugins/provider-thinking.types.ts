@@ -3,7 +3,7 @@
  *
  * Used by shared `/think`, ACP controls, and directive parsing to ask a
  * provider whether a model supports special reasoning UX such as adaptive,
- * xhigh, or a binary on/off toggle.
+ * xhigh, max, or a binary on/off toggle.
  */
 export type ProviderThinkingPolicyContext = {
   provider: string;

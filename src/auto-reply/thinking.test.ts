@@ -4,6 +4,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderAdaptiveThinking: vi.fn(),
   resolveProviderBinaryThinking: vi.fn(),
   resolveProviderDefaultThinkingLevel: vi.fn(),
+  resolveProviderMaxThinking: vi.fn(),
   resolveProviderXHighThinking: vi.fn(),
 }));
 
@@ -19,6 +20,7 @@ async function loadFreshThinkingModuleForTest() {
     resolveProviderAdaptiveThinking: providerRuntimeMocks.resolveProviderAdaptiveThinking,
     resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
     resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderMaxThinking: providerRuntimeMocks.resolveProviderMaxThinking,
     resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
   }));
   return await import("./thinking.js");
@@ -31,6 +33,8 @@ beforeEach(async () => {
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+  providerRuntimeMocks.resolveProviderMaxThinking.mockReset();
+  providerRuntimeMocks.resolveProviderMaxThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
 
@@ -75,6 +79,11 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("adaptive")).toBe("adaptive");
     expect(normalizeThinkLevel("auto")).toBe("adaptive");
     expect(normalizeThinkLevel("Adaptive")).toBe("adaptive");
+  });
+
+  it("accepts max as its own level", () => {
+    expect(normalizeThinkLevel("max")).toBe("max");
+    expect(normalizeThinkLevel("MAX")).toBe("max");
   });
 });
 
@@ -121,6 +130,16 @@ describe("listThinkingLevels", () => {
     providerRuntimeMocks.resolveProviderAdaptiveThinking.mockReturnValue(true);
 
     expect(listThinkingLevels("demo", "demo-model")).toContain("adaptive");
+  });
+
+  it("uses provider runtime hooks for max support", () => {
+    providerRuntimeMocks.resolveProviderMaxThinking.mockReturnValue(true);
+
+    expect(listThinkingLevels("demo", "demo-model")).toContain("max");
+  });
+
+  it("does not include max without provider support", () => {
+    expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("max");
   });
 
   it("does not include adaptive without provider support", () => {

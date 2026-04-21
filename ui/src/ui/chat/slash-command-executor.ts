@@ -258,7 +258,7 @@ async function executeThink(
       return {
         content: formatDirectiveOptions(
           `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
-          formatThinkingLevels(session?.modelProvider),
+          formatThinkingLevels(session?.modelProvider, session?.model),
         ),
       };
     } catch (err) {
@@ -271,7 +271,7 @@ async function executeThink(
     try {
       const session = await loadCurrentSession(client, sessionKey);
       return {
-        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider)}.`,
+        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider, session?.model)}.`,
       };
     } catch (err) {
       return { content: `Failed to validate thinking level: ${String(err)}` };
