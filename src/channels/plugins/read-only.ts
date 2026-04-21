@@ -101,6 +101,16 @@ function addSetupChannelPlugins(
         onlyIds: new Set(ownedMissingChannelIds),
         allowOverwrite: false,
       });
+      addChannelPlugins(
+        byId,
+        ownedMissingChannelIds
+          .filter((channelId) => channelId !== setup.plugin.id)
+          .map((channelId) => cloneChannelPluginForChannelId(setup.plugin, channelId)),
+        {
+          onlyIds: new Set(ownedMissingChannelIds),
+          allowOverwrite: false,
+        },
+      );
       continue;
     }
     if (setup.plugin.id !== setup.pluginId) {

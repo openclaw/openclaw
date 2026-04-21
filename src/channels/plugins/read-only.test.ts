@@ -216,6 +216,40 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
+  it("clones setup-only plugins for every configured owned channel when setup id matches one channel", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "alpha-chat",
+      manifestChannelIds: ["alpha-chat", "beta-chat"],
+      setupChannelId: "alpha-chat",
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "alpha-chat": { token: "configured" },
+          "beta-chat": { token: "configured" },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env },
+        includePersistedAuthState: false,
+      },
+    );
+
+    const alphaPlugin = plugins.find((entry) => entry.id === "alpha-chat");
+    const betaPlugin = plugins.find((entry) => entry.id === "beta-chat");
+    expect(alphaPlugin?.meta.id).toBe("alpha-chat");
+    expect(betaPlugin?.meta.id).toBe("beta-chat");
+    expect(alphaPlugin?.meta.blurb).toBe("setup entry");
+    expect(betaPlugin?.meta.blurb).toBe("setup entry");
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
   it("keeps configured external channels visible when no setup entry exists", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       setupEntry: false,
