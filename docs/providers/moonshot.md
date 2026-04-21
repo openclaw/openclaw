@@ -79,6 +79,25 @@ Choose your provider and follow the setup steps.
         openclaw models list --provider moonshot
         ```
       </Step>
+      <Step title="Run a live smoke test">
+        Use an isolated state dir when you want to verify model access and cost
+        tracking without touching your normal sessions:
+
+        ```bash
+        OPENCLAW_CONFIG_PATH=/tmp/openclaw-kimi/openclaw.json \
+        OPENCLAW_STATE_DIR=/tmp/openclaw-kimi \
+        openclaw agent --local \
+          --session-id live-kimi-cost \
+          --message 'Reply exactly: KIMI_LIVE_OK' \
+          --thinking off \
+          --json
+        ```
+
+        The JSON response should report `provider: "moonshot"` and
+        `model: "kimi-k2.6"`. The assistant transcript entry stores normalized
+        token usage plus estimated cost under `usage.cost` when Moonshot returns
+        usage metadata.
+      </Step>
     </Steps>
 
     ### Config example
@@ -335,6 +354,12 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     shared `openai-completions` transport. OpenClaw keys that off endpoint
     capabilities, so compatible custom provider ids targeting the same native
     Moonshot hosts inherit the same streaming-usage behavior.
+
+    With the bundled K2.6 pricing, streamed usage that includes input, output,
+    and cache-read tokens is also converted into local estimated USD cost for
+    `/status`, `/usage full`, `/usage cost`, and transcript-backed session
+    accounting.
+
   </Accordion>
 
   <Accordion title="Endpoint and model ref reference">
