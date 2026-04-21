@@ -173,7 +173,7 @@ describe("zalo outbound hosted media", () => {
     const handled = await tryHandleHostedZaloMediaRequest(
       {
         method: "GET",
-        url: "/zalo-webhook/media/%2e%2e/secret?token=wrong",
+        url: "/zalo-webhook/media/not-a-valid-hex-id?token=wrong",
       } as never,
       response.res as never,
     );
