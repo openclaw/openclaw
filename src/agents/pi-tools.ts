@@ -330,6 +330,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Keep the message tool available even when the selected profile omits it. */
+  forceMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
@@ -380,7 +382,11 @@ export function createOpenClawCodingTools(options?: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
+  const runtimeProfileAlsoAllow = options?.forceMessageTool ? ["message"] : [];
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
+    ...(profileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
