@@ -506,6 +506,38 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).toContain("Tic-Tac-Toe");
   });
 
+  it("adds has-copy class when assistant copy/expand actions reserve top-right bubble space (#69605)", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-has-copy-actions",
+        role: "assistant",
+        content: [{ type: "text", text: "Intro\n\n```ts\nconst x = 1;\n```" }],
+        timestamp: Date.now(),
+      },
+    );
+
+    const bubble = container.querySelector(".chat-group.assistant .chat-bubble");
+    expect(bubble?.classList.contains("has-copy")).toBe(true);
+  });
+
+  it("does not add has-copy for user bubbles (#69605)", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-no-has-copy",
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: Date.now(),
+      },
+      "user",
+    );
+    const bubble = container.querySelector(".chat-group .chat-bubble");
+    expect(bubble?.classList.contains("has-copy")).toBe(false);
+  });
+
   it("opens only safe assistant image URLs in a hardened new tab", () => {
     const container = document.createElement("div");
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
