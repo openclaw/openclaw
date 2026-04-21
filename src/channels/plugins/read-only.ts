@@ -368,7 +368,6 @@ export function resolveReadOnlyChannelPluginsForConfig(
         env,
         cache: options.cache,
         includePersistedAuthState: options.includePersistedAuthState,
-        manifestRecords: externalManifestRecords,
       }),
     ),
   ];

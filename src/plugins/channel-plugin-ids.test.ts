@@ -3,11 +3,22 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
+const hasMeaningfulChannelConfig = vi.hoisted(() =>
+  vi.fn((value: unknown) => {
+    return (
+      !!value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).some((key) => key !== "enabled")
+    );
+  }),
+);
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
   hasPotentialConfiguredChannels,
+  hasMeaningfulChannelConfig,
 }));
 
 vi.mock("./manifest-registry.js", async (importOriginal) => {
@@ -20,7 +31,9 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
 
 import {
   hasConfiguredChannelsForReadOnlyScope,
+  listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
+  listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
@@ -652,7 +665,165 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue([]);
     hasPotentialConfiguredChannels.mockReset().mockReturnValue(false);
+    hasMeaningfulChannelConfig.mockClear();
     loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
+  });
+
+  it("filters bundled ambient channel triggers through effective activation", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          plugins: {
+            allow: ["memory-core"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+
+    expect(
+      hasConfiguredChannelsForReadOnlyScope({
+        config: {
+          plugins: {
+            allow: ["memory-core"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps explicitly enabled bundled ambient channel triggers", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          plugins: {
+            entries: {
+              "demo-channel": {
+                enabled: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual(["demo-channel"]);
+  });
+
+  it("keeps explicitly configured bundled channels discovered from potential ids", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          channels: {
+            "demo-channel": {
+              token: "configured",
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual(["demo-channel"]);
+  });
+
+  it("blocks explicitly configured bundled channels when plugins are disabled or denied", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          channels: {
+            "demo-channel": {
+              token: "configured",
+            },
+          },
+          plugins: {
+            enabled: false,
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          channels: {
+            "demo-channel": {
+              token: "configured",
+            },
+          },
+          plugins: {
+            deny: ["demo-channel"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("lists explicit configured channels without ambient env triggers", () => {
+    expect(
+      listExplicitConfiguredChannelIdsForConfig({
+        channels: {
+          defaults: {
+            model: "sonnet-4.6",
+          },
+          "demo-channel": {
+            token: "configured",
+          },
+          "demo-other-channel": {
+            enabled: false,
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual(["demo-channel"]);
+  });
+
+  it("uses effective read-only channel policy for announce channels", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel", "demo-other-channel"]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          channels: {
+            "demo-other-channel": {
+              token: "configured",
+            },
+          },
+          plugins: {
+            allow: ["demo-other-channel"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "ambient",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual(["demo-other-channel"]);
   });
 
   it("uses manifest env vars as read-only configured channel triggers", () => {

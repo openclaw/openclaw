@@ -48,9 +48,14 @@ async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
   return loadConfig();
 }
 
-async function listChannelSummaryPlugins(cfg: OpenClawConfig): Promise<ChannelPlugin[]> {
+async function listChannelSummaryPlugins(params: {
+  cfg: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+}): Promise<ChannelPlugin[]> {
   const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
-  return listReadOnlyChannelPluginsForConfig(cfg);
+  return listReadOnlyChannelPluginsForConfig(params.cfg, {
+    activationSourceConfig: params.sourceConfig,
+  });
 }
 
 const buildAccountDetails = (params: {
@@ -123,7 +128,8 @@ export async function buildChannelSummary(
     resolved.colorize && color ? color(value) : value;
   const sourceConfig = options?.sourceConfig ?? effective;
 
-  const plugins = options?.plugins ?? (await listChannelSummaryPlugins(effective));
+  const plugins =
+    options?.plugins ?? (await listChannelSummaryPlugins({ cfg: effective, sourceConfig }));
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(effective);
     const defaultAccountId =
