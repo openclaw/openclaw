@@ -987,10 +987,10 @@ export async function promptSingleChannelToken(params: {
 }): Promise<{ useEnv: boolean; token: string | null }> {
   const promptToken = async (): Promise<string> =>
     (
-      await params.prompter.text({
+      (await params.prompter.text({
         message: params.inputPrompt,
         validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
+      })) ?? ""
     ).trim();
 
   if (params.canUseEnv) {

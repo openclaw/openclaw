@@ -177,11 +177,11 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
 
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
   return (
-    await prompter.text({
+    (await prompter.text({
       message: "Model ID",
       placeholder: "e.g. llama3, claude-3-7-sonnet",
       validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-    })
+    })) ?? ""
   ).trim();
 }
 

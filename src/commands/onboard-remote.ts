@@ -194,11 +194,11 @@ export async function promptRemoteGatewayConfig(
       token = resolved.ref;
     } else {
       token = (
-        await prompter.text({
+        (await prompter.text({
           message: "Gateway token",
           initialValue: typeof token === "string" ? token : undefined,
           validate: (value) => (value?.trim() ? undefined : "Required"),
-        })
+        })) ?? ""
       ).trim();
     }
     password = undefined;
@@ -226,11 +226,11 @@ export async function promptRemoteGatewayConfig(
       password = resolved.ref;
     } else {
       password = (
-        await prompter.text({
+        (await prompter.text({
           message: "Gateway password",
           initialValue: typeof password === "string" ? password : undefined,
           validate: (value) => (value?.trim() ? undefined : "Required"),
-        })
+        })) ?? ""
       ).trim();
     }
     token = undefined;
