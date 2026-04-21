@@ -215,10 +215,14 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
               pendingHeredocs.shift();
             }
           } else {
-            if (line === current.delimiter) {
+            // An unquoted heredoc body whose previous physical line ended with
+            // `\<newline>` is spliced into the next line at runtime. In that
+            // case bash does not treat the next physical line as the delimiter,
+            // even if it matches literally — the splice wins and the body
+            // continues. Only recognize the delimiter when no continuation is
+            // pending.
+            if (line === current.delimiter && unquotedHeredocLogicalChunks.length === 0) {
               pendingHeredocs.shift();
-              unquotedHeredocLogicalChunks = [];
-              unquotedHeredocLogicalLength = 0;
             } else {
               const continued = stripUnquotedHeredocLineContinuation(line);
               unquotedHeredocLogicalChunks.push(continued.line);
@@ -383,7 +387,21 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   if (inHeredocBody && pendingHeredocs.length > 0) {
     const current = pendingHeredocs[0];
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-    if (line === current.delimiter) {
+    // Mirror the in-loop guard: a pending unquoted continuation splices into
+    // the trailing line and prevents the delimiter from terminating the
+    // heredoc, so only accept the tail as a delimiter when no continuation
+    // chunks are pending. If a continuation is pending, splice the tail into
+    // the buffered logical line and run the expansion check against what bash
+    // would actually expand at runtime, so payloads like
+    // `cat <<KEY\n$OPENAI_API_\\\nKEY` cannot slip through as "unterminated".
+    const pendingContinuation = !current.quoted && unquotedHeredocLogicalChunks.length > 0;
+    if (pendingContinuation) {
+      const continued = stripUnquotedHeredocLineContinuation(line);
+      const logical = [...unquotedHeredocLogicalChunks, continued.line].join("");
+      if (hasUnquotedHeredocExpansionToken(logical)) {
+        return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
+      }
+    } else if (line === current.delimiter) {
       pendingHeredocs.shift();
       unquotedHeredocLogicalChunks = [];
       unquotedHeredocLogicalLength = 0;
