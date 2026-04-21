@@ -297,6 +297,16 @@ async function tryResolveOAuthProfile(
     agentDir: params.agentDir,
   });
   if (!refreshed) {
+    // If refresh returned null (e.g. provider has no refreshOAuth implementation)
+    // but the token hasn't actually expired yet, fall back to the existing token
+    // rather than dropping the fallback profile entirely.
+    if (Date.now() < cred.expires) {
+      return await buildOAuthProfileResult({
+        provider: cred.provider,
+        credentials: cred,
+        email: cred.email,
+      });
+    }
     return null;
   }
   return buildApiKeyProfileResult({
