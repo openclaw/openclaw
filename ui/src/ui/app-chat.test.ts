@@ -107,10 +107,33 @@ describe("refreshChatAvatar", () => {
     await refreshChatAvatar(host);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "avatar/main?meta=1",
+      "/avatar/main?meta=1",
       expect.objectContaining({ method: "GET" }),
     );
     expect(host.chatAvatarUrl).toBe("/avatar/main");
+  });
+
+  it("prefers the paired device token for avatar metadata and local avatar URLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ avatarUrl: "/avatar/main" }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({
+      basePath: "/openclaw/",
+      sessionKey: "agent:main",
+      settings: { token: "session-token" },
+      password: "shared-password",
+      hello: { auth: { deviceToken: "device-token" } } as ChatHost["hello"],
+    });
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/avatar/main?meta=1&token=device-token",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(host.chatAvatarUrl).toBe("/avatar/main?token=device-token");
   });
 
   it("includes the gateway token in avatar metadata and local avatar URLs", async () => {

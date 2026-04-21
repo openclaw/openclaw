@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
+import { appendControlUiAuthToken } from "../control-ui-auth.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -647,7 +648,7 @@ function renderAvatar(
     if (isAvatarUrl(assistantAvatar)) {
       return html`<img
         class="chat-avatar ${className}"
-        src="${appendAvatarAuthToken(assistantAvatar, authToken)}"
+        src="${appendControlUiAuthToken(assistantAvatar, authToken)}"
         alt="${assistantName}"
       />`;
     }
@@ -673,25 +674,6 @@ function renderAvatar(
 
 function isAvatarUrl(value: string): boolean {
   return isRenderableControlUiAvatarUrl(value);
-}
-
-function appendAvatarAuthToken(url: string, authToken?: string | null): string {
-  const token = authToken?.trim();
-  if (!token || /^https?:\/\//i.test(url) || /^data:image\//i.test(url)) {
-    return url;
-  }
-  const hashIndex = url.indexOf("#");
-  const hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
-  const pathAndQuery = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
-  const queryIndex = pathAndQuery.indexOf("?");
-  const path = queryIndex >= 0 ? pathAndQuery.slice(0, queryIndex) : pathAndQuery;
-  const query = queryIndex >= 0 ? pathAndQuery.slice(queryIndex + 1) : "";
-  const params = new URLSearchParams(query);
-  if (!params.has("token")) {
-    params.set("token", token);
-  }
-  const nextQuery = params.toString();
-  return `${path}${nextQuery ? `?${nextQuery}` : ""}${hash}`;
 }
 
 function resolveRenderableMessageImages(
