@@ -67,7 +67,7 @@ function resolveSendContext(options: ZaloSendOptions): {
 async function resolveZaloPhotoParam(photoUrl: string, options: ZaloSendOptions): Promise<string> {
   const trimmedPhotoUrl = photoUrl.trim();
   if (!options.cfg) {
-    return trimmedPhotoUrl;
+    throw new Error("Zalo photo sends require a configured webhookUrl to host media safely");
   }
 
   const account = resolveZaloAccount({
@@ -76,7 +76,7 @@ async function resolveZaloPhotoParam(photoUrl: string, options: ZaloSendOptions)
   });
   const webhookUrl = account.config.webhookUrl?.trim();
   if (!webhookUrl) {
-    return trimmedPhotoUrl;
+    throw new Error("Zalo photo sends require a configured webhookUrl to host media safely");
   }
 
   const mediaMaxBytes = (account.config.mediaMaxMb ?? 5) * 1024 * 1024;

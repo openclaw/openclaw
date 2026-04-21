@@ -52,13 +52,23 @@ describe("zalo send", () => {
   });
 
   it("routes media-bearing sends through the photo API and uses text as caption", async () => {
+    prepareHostedZaloMediaUrlMock.mockResolvedValueOnce(
+      "https://gateway.example.com/zalo-webhook/media/abc?token=secret",
+    );
     sendPhotoMock.mockResolvedValueOnce({
       ok: true,
       result: { message_id: "z-photo-1" },
     });
 
     const result = await sendMessageZalo("dm-chat-2", "caption text", {
-      token: "zalo-token",
+      cfg: {
+        channels: {
+          zalo: {
+            botToken: "zalo-token",
+            webhookUrl: "https://gateway.example.com/zalo-webhook",
+          },
+        },
+      } as never,
       mediaUrl: "https://example.com/photo.jpg",
       caption: "ignored fallback caption",
     });
@@ -67,7 +77,7 @@ describe("zalo send", () => {
       "zalo-token",
       {
         chat_id: "dm-chat-2",
-        photo: "https://example.com/photo.jpg",
+        photo: "https://gateway.example.com/zalo-webhook/media/abc?token=secret",
         caption: "caption text",
       },
       undefined,
@@ -92,6 +102,20 @@ describe("zalo send", () => {
     });
 
     expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(sendPhotoMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for media sends without a configured webhookUrl", async () => {
+    await expect(
+      sendPhotoZalo("dm-chat-6", "https://example.com/photo.jpg", {
+        token: "zalo-token",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Zalo photo sends require a configured webhookUrl to host media safely",
+    });
+
+    expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
     expect(sendPhotoMock).not.toHaveBeenCalled();
   });
 

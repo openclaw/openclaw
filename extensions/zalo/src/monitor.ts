@@ -27,6 +27,7 @@ import {
   createChannelReplyPipeline,
   deliverTextOrMediaReply,
   logTypingFailure,
+  registerPluginHttpRoute,
   resolveWebhookPath,
   resolveDefaultGroupPolicy,
   resolveDirectDmAuthorizationOutcome,
@@ -38,7 +39,11 @@ import {
 import { getZaloRuntime } from "./runtime.js";
 export type { ZaloRuntimeEnv } from "./monitor.types.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
-import { prepareHostedZaloMediaUrl, tryHandleHostedZaloMediaRequest } from "./outbound-media.js";
+import {
+  prepareHostedZaloMediaUrl,
+  resolveHostedZaloMediaRoutePrefix,
+  tryHandleHostedZaloMediaRequest,
+} from "./outbound-media.js";
 
 export type ZaloMonitorOptions = {
   token: string;
@@ -570,6 +575,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           webhookUrl: account.config.webhookUrl,
           webhookPath: account.config.webhookPath,
           mediaMaxBytes: effectiveMediaMaxMb * 1024 * 1024,
+          canHostMedia: useWebhook === true,
           accountId: account.accountId,
           statusSink,
           fetcher,
@@ -596,6 +602,7 @@ async function deliverZaloReply(params: {
   webhookUrl?: string;
   webhookPath?: string;
   mediaMaxBytes: number;
+  canHostMedia: boolean;
   accountId?: string;
   statusSink?: ZaloStatusSink;
   fetcher?: ZaloFetch;
@@ -611,6 +618,7 @@ async function deliverZaloReply(params: {
     webhookUrl,
     webhookPath,
     mediaMaxBytes,
+    canHostMedia,
     accountId,
     statusSink,
     fetcher,
@@ -634,14 +642,15 @@ async function deliverZaloReply(params: {
       }
     },
     sendMedia: async ({ mediaUrl, caption }) => {
-      const sendableMediaUrl = webhookUrl
-        ? await prepareHostedZaloMediaUrl({
-            mediaUrl,
-            webhookUrl,
-            webhookPath,
-            maxBytes: mediaMaxBytes,
-          })
-        : mediaUrl;
+      if (!canHostMedia || !webhookUrl) {
+        throw new Error("Zalo outbound media requires webhook mode with a configured webhookUrl");
+      }
+      const sendableMediaUrl = await prepareHostedZaloMediaUrl({
+        mediaUrl,
+        webhookUrl,
+        webhookPath,
+        maxBytes: mediaMaxBytes,
+      });
       await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher);
       statusSink?.({ lastOutboundAt: Date.now() });
     },
@@ -713,6 +722,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         `[${account.accountId}] Zalo configuring webhook path=${path} target=${describeWebhookTarget(webhookUrl)}`,
       );
       await setWebhook(token, { url: webhookUrl, secret_token: webhookSecret }, fetcher);
+      const hostedMediaRoutePath = resolveHostedZaloMediaRoutePrefix({ webhookUrl, webhookPath });
       let webhookCleanupPromise: Promise<void> | undefined;
       cleanupWebhook = async () => {
         if (!webhookCleanupPromise) {
@@ -733,6 +743,25 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         await webhookCleanupPromise;
       };
       runtime.log?.(`[${account.accountId}] Zalo webhook registered path=${path}`);
+      const unregisterHostedMediaRoute = registerPluginHttpRoute({
+        auth: "plugin",
+        match: "prefix",
+        path: hostedMediaRoutePath,
+        replaceExisting: true,
+        pluginId: "zalo",
+        source: "zalo-hosted-media",
+        accountId: account.accountId,
+        log: runtime.log,
+        handler: async (req, res) => {
+          const handled = await tryHandleHostedZaloMediaRequest(req, res);
+          if (!handled && !res.headersSent) {
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+          }
+        },
+      });
+      stopHandlers.push(unregisterHostedMediaRoute);
 
       const unregister = registerZaloWebhookTarget(
         {
@@ -750,15 +779,12 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         {
           route: {
             auth: "plugin",
-            match: "prefix",
+            match: "exact",
             pluginId: "zalo",
             source: "zalo-webhook",
             accountId: account.accountId,
             log: runtime.log,
             handler: async (req, res) => {
-              if (await tryHandleHostedZaloMediaRequest(req, res)) {
-                return;
-              }
               const handled = await handleZaloWebhookRequest(req, res);
               if (!handled && !res.headersSent) {
                 res.statusCode = 404;

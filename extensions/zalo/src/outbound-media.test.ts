@@ -9,6 +9,7 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
 import {
   clearHostedZaloMediaForTest,
   prepareHostedZaloMediaUrl,
+  resolveHostedZaloMediaRoutePrefix,
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
 
@@ -50,6 +51,14 @@ describe("zalo outbound hosted media", () => {
     expect(hostedUrl).toMatch(
       /^https:\/\/gateway\.example\.com\/zalo-webhook\/media\/[a-f0-9]+\?token=[a-f0-9]+$/,
     );
+  });
+
+  it("preserves the root webhook path when deriving the hosted media route", () => {
+    expect(
+      resolveHostedZaloMediaRoutePrefix({
+        webhookUrl: "https://gateway.example.com/",
+      }),
+    ).toBe("/media");
   });
 
   it("serves hosted media once when the route token matches", async () => {
