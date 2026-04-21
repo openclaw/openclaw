@@ -7,6 +7,12 @@ type ErrorWithMessageAndDetails = {
   details?: unknown;
 };
 
+type PairingRequiredReason =
+  | "not-paired"
+  | "role-upgrade"
+  | "scope-upgrade"
+  | "metadata-upgrade";
+
 function normalizeErrorMessage(message: unknown): string {
   if (typeof message === "string") {
     return message;
@@ -15,6 +21,37 @@ function normalizeErrorMessage(message: unknown): string {
     return message.message;
   }
   return "unknown error";
+}
+
+function readPairingRequiredReason(details: unknown): PairingRequiredReason | undefined {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return undefined;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty((details as { reason?: unknown }).reason);
+  switch (normalized) {
+    case "not-paired":
+    case "role-upgrade":
+    case "scope-upgrade":
+    case "metadata-upgrade":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function buildPairingRequiredMessage(reason: PairingRequiredReason | undefined): string {
+  switch (reason) {
+    case "not-paired":
+      return "pairing required: device is not approved yet";
+    case "role-upgrade":
+      return "pairing required: device is asking for a higher role than currently approved";
+    case "scope-upgrade":
+      return "pairing required: device is asking for more scopes than currently approved";
+    case "metadata-upgrade":
+      return "pairing required: device identity changed and must be re-approved";
+    default:
+      return "pairing required";
+  }
 }
 
 function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): string {
@@ -29,7 +66,7 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
     case ConnectErrorDetailCodes.AUTH_RATE_LIMITED:
       return "too many failed authentication attempts";
     case ConnectErrorDetailCodes.PAIRING_REQUIRED:
-      return "gateway pairing required";
+      return `gateway ${buildPairingRequiredMessage(readPairingRequiredReason(error.details))}`;
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
       return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:
