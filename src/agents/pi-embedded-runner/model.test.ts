@@ -612,6 +612,29 @@ describe("resolveModel", () => {
     });
   });
 
+  it("resolves openrouter/auto to id=auto for OpenRouter API auto-selection (#69527)", () => {
+    mockGetOpenRouterModelCapabilities.mockReturnValue({
+      name: "OpenRouter Best Available",
+      input: ["text", "image"],
+      reasoning: false,
+      contextWindow: 200_000,
+      maxTokens: 8192,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const result = resolveModelForTest("openrouter", "openrouter/auto", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "auto",
+      name: "OpenRouter Best Available",
+      input: ["text", "image"],
+      reasoning: false,
+      contextWindow: 200_000,
+    });
+  });
+
   it("matches prefixed Hugging Face ids against discovered registry models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "huggingface",

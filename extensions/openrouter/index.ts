@@ -49,10 +49,13 @@ export default definePluginEntry({
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
-      const capabilities = getOpenRouterModelCapabilities(ctx.modelId);
+      // "openrouter/auto" is a special sentinel that means "let OpenRouter pick the best model".
+      // The OpenRouter API expects the bare model id "auto", not the prefixed "openrouter/auto".
+      const apiModelId = ctx.modelId === "openrouter/auto" ? "auto" : ctx.modelId;
+      const capabilities = getOpenRouterModelCapabilities(apiModelId);
       return {
-        id: ctx.modelId,
-        name: capabilities?.name ?? ctx.modelId,
+        id: apiModelId,
+        name: capabilities?.name ?? apiModelId,
         api: "openai-completions",
         provider: PROVIDER_ID,
         baseUrl: OPENROUTER_BASE_URL,
@@ -112,7 +115,8 @@ export default definePluginEntry({
       },
       resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
       prepareDynamicModel: async (ctx) => {
-        await loadOpenRouterModelCapabilities(ctx.modelId);
+        const apiModelId = ctx.modelId === "openrouter/auto" ? "auto" : ctx.modelId;
+        await loadOpenRouterModelCapabilities(apiModelId);
       },
       normalizeConfig: ({ providerConfig }) => {
         const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
@@ -134,7 +138,10 @@ export default definePluginEntry({
       resolveReasoningOutputMode: () => "native",
       isModernModelRef: () => true,
       wrapStreamFn: wrapOpenRouterProviderStream,
-      isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
+      isCacheTtlEligible: (ctx) => {
+        const apiModelId = ctx.modelId === "openrouter/auto" ? "auto" : ctx.modelId;
+        return isOpenRouterCacheTtlModel(apiModelId);
+      },
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
   },

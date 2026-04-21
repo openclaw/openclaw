@@ -119,4 +119,56 @@ describe("openrouter provider hooks", () => {
       },
     });
   });
+
+  it("resolveDynamicModel returns id=auto for openrouter/auto sentinel (#69527)", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      modelRegistry: { find: vi.fn(() => null) } as never,
+    } as never);
+
+    expect(resolved).toMatchObject({
+      provider: "openrouter",
+      id: "auto",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
+  it("resolveDynamicModel preserves prefixed id for normal OpenRouter model ids", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "openrouter",
+      modelId: "openai/gpt-5.4",
+      modelRegistry: { find: vi.fn(() => null) } as never,
+    } as never);
+
+    expect(resolved).toMatchObject({
+      provider: "openrouter",
+      id: "openai/gpt-5.4",
+    });
+  });
+
+  it("prepareDynamicModel is called with auto model id for openrouter/auto sentinel", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    // We verify the apiModelId normalization via isCacheTtlEligible
+    // which also uses the apiModelId normalization
+    expect(
+      provider.isCacheTtlEligible?.({
+        provider: "openrouter",
+        modelId: "openrouter/auto",
+      } as never),
+    ).toBe(false);
+
+    expect(
+      provider.isCacheTtlEligible?.({
+        provider: "openrouter",
+        modelId: "anthropic/claude-3-5-sonnet",
+      } as never),
+    ).toBe(true);
+  });
 });

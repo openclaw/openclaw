@@ -180,10 +180,13 @@ function buildDynamicModel(
   const lower = lowercasePreservingWhitespace(modelId);
   switch (params.provider) {
     case "openrouter": {
-      const capabilities = options.getOpenRouterModelCapabilities(modelId);
+      // "openrouter/auto" is a special sentinel that means "let OpenRouter pick the best model".
+      // The OpenRouter API expects the bare model id "auto", not the prefixed "openrouter/auto".
+      const apiModelId = modelId === "openrouter/auto" ? "auto" : modelId;
+      const capabilities = options.getOpenRouterModelCapabilities(apiModelId);
       return {
-        id: modelId,
-        name: capabilities?.name ?? modelId,
+        id: apiModelId,
+        name: capabilities?.name ?? apiModelId,
         api: "openai-completions" as const,
         provider: "openrouter",
         baseUrl: OPENROUTER_BASE_URL,
@@ -522,7 +525,8 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
             prepareDynamicModel:
               provider === "openrouter"
                 ? async ({ modelId }: { modelId: string }) => {
-                    await loadOpenRouterModelCapabilities(modelId);
+                    const apiModelId = modelId === "openrouter/auto" ? "auto" : modelId;
+                    await loadOpenRouterModelCapabilities(apiModelId);
                   }
                 : undefined,
             resolveDynamicModel: (ctx: DynamicModelContext) =>
