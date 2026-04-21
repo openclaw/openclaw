@@ -437,15 +437,7 @@ describe("openai plugin", () => {
   });
 
   it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "If the user asks you to do the work, start in the same turn instead of restating the plan.",
-    );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      'If the latest user message is a short approval like "ok do it" or "go ahead", skip the recap and start acting.',
-    );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Commentary-only turns are incomplete when the next action is clear.",
-    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Keep progress updates clear and concrete.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
@@ -495,23 +487,22 @@ describe("openai plugin", () => {
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<tool_persistence_rules>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<dependency_checks>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<parallel_tool_calling>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completeness_contract>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<verification_loop>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<autonomy_and_persistence>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<execution_policy>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<tool_discipline>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<output_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completion_contract>");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Use tools whenever they materially improve correctness, completeness, or grounding.",
+      "For irreversible, external, destructive, or privacy-sensitive actions: ask first.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Do not stop early when another tool call is likely to materially improve correctness or completeness.",
+      "Prefer tool evidence over recall when action, state, or mutable facts matter.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Treat the task as incomplete until all requested items are covered or explicitly marked [blocked].",
+      "If more tool work would likely change the answer, do it before replying.",
     );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Return requested sections/order only.");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Return exactly the sections requested, in the requested order.",
+      "Treat the task as incomplete until every requested item is handled",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("/approve");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");

@@ -98,6 +98,31 @@ function parseNumberString(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatTimeoutSeconds(timeoutMs: number): string {
+  const seconds = timeoutMs / 1000;
+  return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
+}
+
+function readErrorName(error: unknown): string | undefined {
+  return error && typeof error === "object" && "name" in error
+    ? String((error as { name?: unknown }).name)
+    : undefined;
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (readErrorName(error) === "TimeoutError") {
+    return true;
+  }
+  return /\bTimeoutError\b/u.test(String(error));
+}
+
+function formatPricingFetchFailure(source: "LiteLLM" | "OpenRouter", error: unknown): string {
+  if (isTimeoutError(error)) {
+    return `${source} pricing fetch failed (timeout ${formatTimeoutSeconds(FETCH_TIMEOUT_MS)}): ${String(error)}`;
+  }
+  return `${source} pricing fetch failed: ${String(error)}`;
+}
+
 function toPricePerMillion(value: number | null): number {
   if (value === null || value < 0 || !Number.isFinite(value)) {
     return 0;
@@ -153,6 +178,7 @@ type LiteLLMTierRaw = {
   input_cost_per_token?: unknown;
   output_cost_per_token?: unknown;
   cache_read_input_token_cost?: unknown;
+  cache_creation_input_token_cost?: unknown;
   range?: unknown;
 };
 
@@ -194,7 +220,7 @@ function parseLiteLLMTieredPricing(tiers: unknown): CachedPricingTier[] | undefi
       input: toPricePerMillion(inputPerToken),
       output: toPricePerMillion(outputPerToken),
       cacheRead: toPricePerMillion(parseNumberString(tier.cache_read_input_token_cost)),
-      cacheWrite: 0,
+      cacheWrite: toPricePerMillion(parseNumberString(tier.cache_creation_input_token_cost)),
       range: [start, end],
     });
   }
@@ -211,7 +237,7 @@ function parseLiteLLMPricing(entry: LiteLLMModelEntry): CachedModelPricing | nul
     input: toPricePerMillion(inputPerToken),
     output: toPricePerMillion(outputPerToken),
     cacheRead: toPricePerMillion(parseNumberString(entry.cache_read_input_token_cost)),
-    cacheWrite: 0,
+    cacheWrite: toPricePerMillion(parseNumberString(entry.cache_creation_input_token_cost)),
   };
   const tieredPricing = parseLiteLLMTieredPricing(entry.tiered_pricing);
   if (tieredPricing) {
@@ -534,12 +560,12 @@ export async function refreshGatewayModelPricingCache(params: {
     let litellmFailed = false;
     const [catalogById, litellmCatalog] = await Promise.all([
       fetchOpenRouterPricingCatalog(fetchImpl).catch((error: unknown) => {
-        log.warn(`OpenRouter pricing fetch failed: ${String(error)}`);
+        log.warn(formatPricingFetchFailure("OpenRouter", error));
         openRouterFailed = true;
         return new Map<string, OpenRouterPricingEntry>();
       }),
       fetchLiteLLMPricingCatalog(fetchImpl).catch((error: unknown) => {
-        log.warn(`LiteLLM pricing fetch failed: ${String(error)}`);
+        log.warn(formatPricingFetchFailure("LiteLLM", error));
         litellmFailed = true;
         return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
       }),
