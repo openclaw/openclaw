@@ -69,12 +69,12 @@ function buildChannelSetupSelectionContribution(params: {
   };
 }
 
-function formatSetupSelectionLabel(label: string, fallback: string): string {
-  return (
-    sanitizeTerminalText(label).trim() ||
-    sanitizeTerminalText(fallback).trim() ||
-    "<invalid channel>"
-  );
+function formatSetupSelectionLabel(label: string | undefined, fallback: string | undefined): string {
+  const sanitized =
+    (label ? sanitizeTerminalText(label).trim() : "") ||
+    (fallback ? sanitizeTerminalText(fallback).trim() : "") ||
+    "<invalid channel>";
+  return sanitized;
 }
 
 function formatSetupSelectionHint(hint: string | undefined): string | undefined {
