@@ -42,7 +42,12 @@ type ChatWebhookPayload = {
 };
 
 function isBlockedSpecialIpLiteral(hostname: string): boolean {
-  return net.isIP(hostname) !== 0 && (hostname === "0.0.0.0" || hostname === "::");
+  const normalizedHostname =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  return (
+    net.isIP(normalizedHostname) !== 0 &&
+    (normalizedHostname === "0.0.0.0" || normalizedHostname === "::")
+  );
 }
 
 function isSafeWebhookFileUrl(fileUrl: string): boolean {
