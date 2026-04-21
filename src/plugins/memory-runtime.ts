@@ -6,31 +6,49 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 
-function ensureMemoryRuntime(cfg?: OpenClawConfig) {
+function ensureMemoryRuntime(params?: {
+  cfg?: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+}) {
   const current = getMemoryRuntime();
-  if (current || !cfg) {
+  if (current || !params?.cfg) {
     return current;
   }
   resolveRuntimePluginRegistry(
-    buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext({ config: cfg })),
+    buildPluginRuntimeLoadOptions(
+      resolvePluginRuntimeLoadContext({
+        config: params.cfg,
+        ...(params.activationSourceConfig
+          ? { activationSourceConfig: params.activationSourceConfig }
+          : {}),
+      }),
+    ),
   );
   return getMemoryRuntime();
 }
 
 export async function getActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   agentId: string;
   purpose?: "default" | "status";
 }) {
-  const runtime = ensureMemoryRuntime(params.cfg);
+  const runtime = ensureMemoryRuntime({
+    cfg: params.cfg,
+    activationSourceConfig: params.activationSourceConfig,
+  });
   if (!runtime) {
     return { manager: null, error: "memory plugin unavailable" };
   }
-  return await runtime.getMemorySearchManager(params);
+  return await runtime.getMemorySearchManager({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    ...(params.purpose ? { purpose: params.purpose } : {}),
+  });
 }
 
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
-  return ensureMemoryRuntime(params.cfg)?.resolveMemoryBackendConfig(params) ?? null;
+  return ensureMemoryRuntime({ cfg: params.cfg })?.resolveMemoryBackendConfig(params) ?? null;
 }
 
 export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {

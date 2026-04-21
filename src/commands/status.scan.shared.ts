@@ -164,11 +164,13 @@ export function buildTailscaleHttpsUrl(params: {
 
 export async function resolveSharedMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   agentStatus: { defaultId?: string | null };
   memoryPlugin: MemoryPluginStatus;
   resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
   getMemorySearchManager: (params: {
     cfg: OpenClawConfig;
+    activationSourceConfig?: OpenClawConfig;
     agentId: string;
     purpose: "status";
   }) => Promise<{
@@ -202,7 +204,14 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (!shouldInspectStore) {
     return null;
   }
-  const { manager } = await params.getMemorySearchManager({ cfg, agentId, purpose: "status" });
+  const { manager } = await params.getMemorySearchManager({
+    cfg,
+    ...(params.activationSourceConfig
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    agentId,
+    purpose: "status",
+  });
   if (!manager) {
     return null;
   }

@@ -1,10 +1,27 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  LLMock,
-  type ChatCompletionRequest,
-  type JournalEntry,
-  type Mountable,
-} from "@copilotkit/aimock";
+import { LLMock } from "@copilotkit/aimock";
+
+type QaChatCompletionMessage = {
+  role?: string;
+  content?: unknown;
+};
+
+type QaChatCompletionRequest = {
+  model?: string;
+  messages?: QaChatCompletionMessage[];
+};
+
+type QaJournalEntry = {
+  path?: string;
+  body?: QaChatCompletionRequest | Record<string, unknown> | null;
+  response?: {
+    fixture?: {
+      response?: {
+        toolCalls?: Array<{ name?: unknown }>;
+      };
+    };
+  };
+};
 
 type AimockRequestSnapshot = {
   raw: string;
@@ -53,11 +70,11 @@ function stringifyContent(content: unknown): string {
   return "";
 }
 
-function requestMessages(body: ChatCompletionRequest | null | undefined) {
+function requestMessages(body: QaChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
 }
 
-function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
+function extractLastUserText(body: QaChatCompletionRequest | null | undefined) {
   const messages = requestMessages(body);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -68,14 +85,14 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
   return "";
 }
 
-function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
+function extractAllInputText(body: QaChatCompletionRequest | null | undefined) {
   return requestMessages(body)
     .map((message) => stringifyContent(message.content))
     .filter(Boolean)
     .join("\n");
 }
 
-function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
+function extractToolOutput(body: QaChatCompletionRequest | null | undefined) {
   const messages = requestMessages(body);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -122,15 +139,15 @@ function resolveProviderVariant(model: string): AimockRequestSnapshot["providerV
   return "unknown";
 }
 
-function extractPlannedToolName(entry: JournalEntry) {
-  const response = entry.response.fixture?.response as
+function extractPlannedToolName(entry: QaJournalEntry) {
+  const response = entry.response?.fixture?.response as
     | { toolCalls?: Array<{ name?: unknown }> }
     | undefined;
   const name = response?.toolCalls?.[0]?.name;
   return typeof name === "string" && name.length > 0 ? name : undefined;
 }
 
-function toRequestSnapshot(entry: JournalEntry): AimockRequestSnapshot {
+function toRequestSnapshot(entry: QaJournalEntry): AimockRequestSnapshot {
   const body = entry.body ?? null;
   const model = typeof body?.model === "string" ? body.model : "";
   return {
@@ -146,7 +163,7 @@ function toRequestSnapshot(entry: JournalEntry): AimockRequestSnapshot {
   };
 }
 
-function createDebugMount(mock: LLMock): Mountable {
+function createDebugMount(mock: LLMock) {
   return {
     async handleRequest(_req: IncomingMessage, res: ServerResponse, pathname: string) {
       const entries = mock.getRequests();

@@ -13,6 +13,7 @@ type StatusMemoryManager = {
 
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   agentId: string;
   purpose: "status";
 }): Promise<{ manager: StatusMemoryManager | null }> {

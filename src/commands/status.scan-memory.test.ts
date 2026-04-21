@@ -50,6 +50,7 @@ describe("status.scan-memory", () => {
     const agentStatus = createMainAgentStatus();
     await resolveStatusMemoryStatusSnapshot({
       cfg: { agents: {} },
+      sourceConfig: { plugins: { allow: ["openclaw-mem0"] } },
       agentStatus,
       memoryPlugin: { enabled: true, slot: "memory-core" },
       requireDefaultStore,
@@ -57,6 +58,7 @@ describe("status.scan-memory", () => {
 
     expect(mocks.resolveSharedMemoryStatusSnapshot).toHaveBeenCalledWith({
       cfg: { agents: {} },
+      activationSourceConfig: { plugins: { allow: ["openclaw-mem0"] } },
       agentStatus,
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig: mocks.resolveMemorySearchConfig,

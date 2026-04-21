@@ -189,7 +189,7 @@ export async function executeMiniMaxWebSearchProviderTool(
     "minimax",
     resolveProviderWebSearchPluginConfig(ctx.config, "minimax"),
     { mirrorApiKeyToTopLevel: true },
-  ) as SearchConfigRecord | undefined;
+  );
   const config = ctx.config;
   const apiKey = resolveMiniMaxApiKey(searchConfig);
   if (!apiKey) {

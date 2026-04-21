@@ -191,9 +191,11 @@ export async function resolveTelegramInboundBody(params: {
     bodyText = `${mediaTag}\n${bodyText}`.trim();
   }
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+  const groupDisableAudioPreflight = isGroup
+    ? (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight
+    : undefined;
   const disableAudioPreflight =
-    (topicConfig?.disableAudioPreflight ??
-      (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
+    (topicConfig?.disableAudioPreflight ?? groupDisableAudioPreflight) === true;
   const senderAllowedForAudioPreflight =
     !useAccessGroups || !allowForCommands.hasEntries || senderAllowedForCommands;
 

@@ -14,6 +14,7 @@ export async function executeStatusScanFromOverview(params: {
   runtime?: RuntimeEnv;
   resolveMemory: (args: {
     cfg: StatusScanOverviewResult["cfg"];
+    sourceConfig: StatusScanOverviewResult["sourceConfig"];
     agentStatus: StatusScanOverviewResult["agentStatus"];
     memoryPlugin: MemoryPluginStatus;
     runtime?: RuntimeEnv;
@@ -26,6 +27,7 @@ export async function executeStatusScanFromOverview(params: {
   const [memory, summary] = await Promise.all([
     params.resolveMemory({
       cfg: params.overview.cfg,
+      sourceConfig: params.overview.sourceConfig,
       agentStatus: params.overview.agentStatus,
       memoryPlugin,
       ...(params.runtime ? { runtime: params.runtime } : {}),
