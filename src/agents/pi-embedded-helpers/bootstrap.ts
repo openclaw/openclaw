@@ -204,7 +204,8 @@ function trimBootstrapContent(
   }
   if (headChars === 0 && tailChars === 0 && trimmed.length > 0) {
     const singleHeadMarker = resolvedMarkerTemplate(1, 0);
-    const singleHeadLength = 1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
+    const singleHeadLength =
+      1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
     if (singleHeadLength <= maxChars) {
       headChars = 1;
       marker = singleHeadMarker;
@@ -290,16 +291,6 @@ export function buildBootstrapContextFiles(
       continue;
     }
     if (file.missing) {
-      const missingText = `[MISSING] Expected at: ${pathValue}`;
-      const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
-      if (!cappedMissingText) {
-        break;
-      }
-      remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
-      result.push({
-        path: pathValue,
-        content: cappedMissingText,
-      });
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {

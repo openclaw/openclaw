@@ -115,11 +115,10 @@ describe("workspace bootstrap file caching", () => {
     // Delete the file
     await fs.unlink(filePath);
 
-    // Second load should handle deletion gracefully
+    // Second load should omit deleted bootstrap files rather than surfacing missing markers.
     const result2 = await loadWorkspaceBootstrapFiles(workspaceDir);
     const agentsFile2 = result2.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-    expect(agentsFile2?.missing).toBe(true);
-    expect(agentsFile2?.content).toBeUndefined();
+    expect(agentsFile2).toBeUndefined();
   });
 
   it("handles concurrent access", async () => {
@@ -160,9 +159,8 @@ describe("workspace bootstrap file caching", () => {
     expect(agentsFile2?.content).toBe(content2);
   });
 
-  it("returns missing=true when bootstrap file never existed", async () => {
+  it("omits bootstrap files when they never existed", async () => {
     const agentsFile = await loadAgentsFile(workspaceDir);
-    expect(agentsFile?.missing).toBe(true);
-    expect(agentsFile?.content).toBeUndefined();
+    expect(agentsFile).toBeUndefined();
   });
 });

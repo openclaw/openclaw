@@ -895,7 +895,38 @@ describe("gateway agent handler", () => {
     expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
   });
 
-  it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
+  it("prefers explicit workspaceDir over inherited spawned workspace", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      spawnedBy: "agent:main:subagent:parent",
+      spawnedWorkspaceDir: "/tmp/inherited",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          spawnedBy: "agent:main:subagent:parent",
+          spawnedWorkspaceDir: "/tmp/inherited",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "spawned run",
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/explicit",
+        idempotencyKey: "workspace-forwarded-explicit",
+      },
+      { reqId: "workspace-forwarded-explicit-1" },
+    );
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const spawnedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
+    expect(spawnedCall.workspaceDir).toBe("/tmp/explicit");
+  });
+
+  it("only forwards inherited workspaceDir for spawned sessions with stored workspace inheritance", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({
       spawnedBy: "agent:main:subagent:parent",

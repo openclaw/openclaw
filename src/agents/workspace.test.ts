@@ -251,7 +251,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
-  it("treats hardlinked bootstrap aliases as missing", async () => {
+  it("omits hardlinked bootstrap aliases that resolve outside the workspace", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -275,8 +275,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
       const files = await loadWorkspaceBootstrapFiles(workspaceDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      expect(agents).toBeUndefined();
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }

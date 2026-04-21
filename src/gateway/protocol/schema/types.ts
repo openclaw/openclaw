@@ -15,6 +15,7 @@ export type PresenceEntry = SchemaType<"PresenceEntry">;
 export type ErrorShape = SchemaType<"ErrorShape">;
 export type StateVersion = SchemaType<"StateVersion">;
 export type AgentEvent = SchemaType<"AgentEvent">;
+export type AgentParams = SchemaType<"AgentParams">;
 export type AgentIdentityParams = SchemaType<"AgentIdentityParams">;
 export type AgentIdentityResult = SchemaType<"AgentIdentityResult">;
 export type MessageActionParams = SchemaType<"MessageActionParams">;

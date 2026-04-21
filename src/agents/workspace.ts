@@ -555,8 +555,6 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         content: loaded.content,
         missing: false,
       });
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
     }
   }
   return result;
