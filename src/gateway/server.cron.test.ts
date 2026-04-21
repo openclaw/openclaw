@@ -860,6 +860,377 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("rejects cron.add when announce delivery.accountId is not configured for the channel", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-invalid-delivery-account-add-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          accounts: {
+            sentry: {
+              botToken: "telegram-sentry-token",
+            },
+          },
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "invalid announce account",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          accountId: "nonexistent_bot_xyz",
+          to: "6522813629",
+        },
+      });
+
+      expect(addRes.ok).toBe(false);
+      expect(addRes.error?.message).toContain("delivery.accountId");
+      expect(addRes.error?.message).toContain("telegram");
+      expect(addRes.error?.message).toContain("default");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("rejects cron.update when announce delivery.accountId is not configured for the channel", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-invalid-delivery-account-update-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          accounts: {
+            sentry: {
+              botToken: "telegram-sentry-token",
+            },
+          },
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "valid announce account",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          accountId: "default",
+          to: "6522813629",
+        },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            accountId: "nonexistent_bot_xyz",
+          },
+        },
+      });
+
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message).toContain("delivery.accountId");
+      expect(updateRes.error?.message).toContain("telegram");
+      expect(updateRes.error?.message).toContain("default");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("rejects cron.add when announce failure destination accountId is not configured for the channel", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-invalid-failure-destination-account-add-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          accounts: {
+            sentry: {
+              botToken: "telegram-sentry-token",
+            },
+          },
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "invalid failure destination account",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          accountId: "default",
+          to: "6522813629",
+          failureDestination: {
+            mode: "announce",
+            channel: "telegram",
+            accountId: "nonexistent_bot_xyz",
+            to: "6522813629",
+          },
+        },
+      });
+
+      expect(addRes.ok).toBe(false);
+      expect(addRes.error?.message).toContain("delivery.failureDestination.accountId");
+      expect(addRes.error?.message).toContain("telegram");
+      expect(addRes.error?.message).toContain("default");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("rejects cron.update when announce failure destination accountId is not configured for the channel", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-invalid-failure-destination-account-update-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          accounts: {
+            sentry: {
+              botToken: "telegram-sentry-token",
+            },
+          },
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "valid failure destination account",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          accountId: "default",
+          to: "6522813629",
+          failureDestination: {
+            mode: "announce",
+            channel: "telegram",
+            accountId: "default",
+            to: "6522813629",
+          },
+        },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          delivery: {
+            failureDestination: {
+              mode: "announce",
+              channel: "telegram",
+              accountId: "nonexistent_bot_xyz",
+            },
+          },
+        },
+      });
+
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message).toContain("delivery.failureDestination.accountId");
+      expect(updateRes.error?.message).toContain("telegram");
+      expect(updateRes.error?.message).toContain("default");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("accepts announce delivery for configured unlisted default accounts", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-unlisted-default-account-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            default: {
+              appId: "feishu-default-app-id",
+            },
+          },
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "unlisted default account",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "feishu",
+          accountId: "work",
+          to: "ou_feishu_direct_123",
+        },
+      });
+
+      expect(addRes.ok).toBe(true);
+      expectCronJobIdFromResponse(addRes);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("accepts normalized announce delivery account ids", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-normalized-account-id-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        feishu: {
+          defaultAccount: "Work Bot",
+          accounts: {
+            default: {
+              appId: "feishu-default-app-id",
+            },
+          },
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "normalized account id",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "feishu",
+          accountId: "work-bot",
+          to: "ou_feishu_direct_123",
+        },
+      });
+
+      expect(addRes.ok).toBe(true);
+      expectCronJobIdFromResponse(addRes);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("allows explicit accountId when announce channel is omitted", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-implicit-last-account-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          botToken: "telegram-default-token",
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "implicit last announce account",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          accountId: "nonexistent_bot_xyz",
+        },
+      });
+
+      expect(addRes.ok).toBe(true);
+      expectCronJobIdFromResponse(addRes);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("writes cron run history and auto-runs due jobs", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-log-",
