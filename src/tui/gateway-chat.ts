@@ -57,6 +57,17 @@ type ResolvedGatewayConnection = {
   allowInsecureLocalOperatorUi?: boolean;
 };
 
+function consumeOneShotTuiLaunchAuth(env: NodeJS.ProcessEnv): {
+  token?: string;
+  password?: string;
+} {
+  const token = env[TUI_LAUNCH_GATEWAY_TOKEN_ENV];
+  const password = env[TUI_LAUNCH_GATEWAY_PASSWORD_ENV];
+  delete env[TUI_LAUNCH_GATEWAY_TOKEN_ENV];
+  delete env[TUI_LAUNCH_GATEWAY_PASSWORD_ENV];
+  return { token, password };
+}
+
 function throwGatewayAuthResolutionError(reason: string): never {
   throw new Error(
     [
@@ -259,14 +270,13 @@ export async function resolveGatewayConnection(
   const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
   const preferConfiguredAuth = env[TUI_SETUP_AUTH_SOURCE_ENV] === TUI_SETUP_AUTH_SOURCE_CONFIG;
-  const launchToken = env[TUI_LAUNCH_GATEWAY_TOKEN_ENV];
-  const launchPassword = env[TUI_LAUNCH_GATEWAY_PASSWORD_ENV];
+  const launchAuth = consumeOneShotTuiLaunchAuth(env);
 
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
   const explicitAuth = resolveExplicitGatewayAuth({
-    token: opts.token ?? launchToken,
-    password: opts.password ?? launchPassword,
+    token: opts.token ?? launchAuth.token,
+    password: opts.password ?? launchAuth.password,
   });
   ensureExplicitGatewayAuth({
     urlOverride,
