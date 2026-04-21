@@ -205,7 +205,8 @@ export function createConfiguredOllamaCompatStreamWrapper(
   // Only apply the think parameter for models that are known to support thinking.
   // Models like qwen2.5:0.5b don't support the think parameter at all and will
   // return a 400 error if the parameter is sent (even with think=false).
-  const supportsThinking = isReasoningModelHeuristic(ctx.modelId);
+  // Check both the heuristic (model ID patterns) AND explicit model config reasoning flag.
+  const supportsThinking = isReasoningModelHeuristic(ctx.modelId) || ctx.model?.reasoning === true;
 
   if (supportsThinking && ctx.thinkingLevel === "off") {
     streamFn = createOllamaThinkingWrapper(streamFn, false);
