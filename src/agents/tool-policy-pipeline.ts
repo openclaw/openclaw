@@ -1,7 +1,7 @@
 import { filterToolsByPolicy } from "./pi-tools.policy.js";
-import { explainToolPolicyNameDecision } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
+import { explainToolPolicyNameDecision } from "./tool-policy-match.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -37,11 +37,13 @@ export type ToolPolicyPipelineStep = {
   suppressUnavailableCoreToolWarningAllowlist?: string[];
 };
 
-export type ToolPolicyPipelineAudit = {
+export type ToolPolicyAudit = {
   decision: "allow" | "deny";
   matchedBy: string;
   rule?: string;
 };
+
+export type ToolPolicyPipelineAudit = ToolPolicyAudit;
 
 export function buildDefaultToolPolicyPipelineSteps(params: {
   profilePolicy?: ToolPolicyLike;
@@ -183,7 +185,6 @@ export function explainToolPolicyPipelineDecision(params: {
   });
 
   let lastAllow: { matchedBy: string; rule?: string } | undefined;
-  let lastPolicyLabel: string | undefined;
   for (const step of params.steps) {
     if (!step.policy) {
       continue;
@@ -199,12 +200,11 @@ export function explainToolPolicyPipelineDecision(params: {
       continue;
     }
 
-    lastPolicyLabel = step.label;
     const decision = explainToolPolicyNameDecision(params.toolName, expanded);
     if (!decision.allowed) {
       return {
         decision: "deny",
-        matchedBy: step.label,
+        matchedBy: resolveAuditMatchedBy(step.label, decision.reason),
         ...(decision.rule ? { rule: decision.rule } : {}),
       };
     }
@@ -219,10 +219,29 @@ export function explainToolPolicyPipelineDecision(params: {
   if (lastAllow) {
     return { decision: "allow", ...lastAllow };
   }
-  if (lastPolicyLabel) {
-    return { decision: "allow", matchedBy: lastPolicyLabel };
-  }
   return { decision: "allow", matchedBy: "default" };
+}
+
+function resolveAuditMatchedBy(label: string, reason: ToolPolicyNameDecision["reason"]): string {
+  if (reason !== "deny_rule") {
+    return label;
+  }
+  if (label.endsWith(".tools.byProvider.allow")) {
+    return `${label.slice(0, -".tools.byProvider.allow".length)}.tools.byProvider.deny`;
+  }
+  if (label.endsWith(".tools.allow")) {
+    return `${label.slice(0, -".tools.allow".length)}.tools.deny`;
+  }
+  if (label.endsWith(" tools.allow")) {
+    return `${label.slice(0, -" tools.allow".length)} tools.deny`;
+  }
+  if (label.endsWith(".byProvider.allow")) {
+    return `${label.slice(0, -".byProvider.allow".length)}.byProvider.deny`;
+  }
+  if (label.endsWith(".allow")) {
+    return `${label.slice(0, -".allow".length)}.deny`;
+  }
+  return label;
 }
 
 function shouldWarnAboutUnknownAllowlist(params: {

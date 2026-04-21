@@ -7,7 +7,7 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
-import type { ToolPolicyPipelineAudit } from "./tool-policy-pipeline.js";
+import type { ToolPolicyAudit } from "./tool-policy-pipeline.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -19,7 +19,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
-  toolPolicyAudit?: ToolPolicyPipelineAudit | (() => ToolPolicyPipelineAudit);
+  toolPolicyAudit?: ToolPolicyAudit | (() => ToolPolicyAudit);
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -101,7 +101,7 @@ function formatToolPolicyAuditLog(params: {
   toolName: string;
   toolCallId?: string;
   runId?: string;
-  audit: ToolPolicyPipelineAudit;
+  audit: ToolPolicyAudit;
 }): string {
   return [
     "embedded run tool policy:",

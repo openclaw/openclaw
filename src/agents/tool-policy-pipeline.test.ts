@@ -310,4 +310,47 @@ describe("tool-policy-pipeline", () => {
       matchedBy: "tools.profile (minimal)",
     });
   });
+
+  test("reports deny-rule matches with the deny config surface", () => {
+    const tools = [{ name: "exec" }, { name: "read" }] as unknown as DummyTool[];
+    const audit = explainToolPolicyPipelineDecision({
+      toolName: "exec",
+      tools: tools as any,
+      toolMeta: () => undefined,
+      steps: [
+        {
+          policy: { deny: ["exec"] },
+          label: "agents.main.tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(audit).toEqual({
+      decision: "deny",
+      matchedBy: "agents.main.tools.deny",
+      rule: "exec",
+    });
+  });
+
+  test("falls back to default when deny-only policies do not match", () => {
+    const tools = [{ name: "exec" }, { name: "read" }] as unknown as DummyTool[];
+    const audit = explainToolPolicyPipelineDecision({
+      toolName: "read",
+      tools: tools as any,
+      toolMeta: () => undefined,
+      steps: [
+        {
+          policy: { deny: ["exec"] },
+          label: "agents.main.tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(audit).toEqual({
+      decision: "allow",
+      matchedBy: "default",
+    });
+  });
 });
