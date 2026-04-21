@@ -424,8 +424,10 @@ export class NotionApiClient {
   ) {
     const body: Record<string, unknown> = {
       parent: { database_id: parentDatabaseId },
-      title: [{ type: "text", text: { content: title } }],
-      properties: properties || {},
+      title: [{ text: { content: title } }],
+      properties: isRecord(properties) && Object.keys(properties).length > 0
+        ? properties
+        : { Name: { title: {} } },
     };
     if (icon) {
       body.icon = icon;
