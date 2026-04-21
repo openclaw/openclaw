@@ -81,6 +81,19 @@ type CleanupManagedOutgoingImageRecordsResult = {
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
 
+type SessionManagedOutgoingAttachmentIndexCacheEntry = {
+  transcriptPath: string;
+  mtimeMs: number;
+  size: number;
+  index: SessionManagedOutgoingAttachmentIndex;
+};
+
+const sessionManagedOutgoingAttachmentIndexCache = new Map<
+  string,
+  SessionManagedOutgoingAttachmentIndexCacheEntry
+>();
+const MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES = 500;
+
 export function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
@@ -594,6 +607,50 @@ function collectManagedOutgoingAttachmentRefs(
   return [...refs.values()];
 }
 
+function getCachedSessionManagedOutgoingAttachmentIndex(
+  sessionKey: string,
+  stat: { transcriptPath: string; mtimeMs: number; size: number },
+) {
+  const cached = sessionManagedOutgoingAttachmentIndexCache.get(sessionKey);
+  if (!cached) {
+    return null;
+  }
+  if (
+    cached.transcriptPath !== stat.transcriptPath ||
+    cached.mtimeMs !== stat.mtimeMs ||
+    cached.size !== stat.size
+  ) {
+    sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
+    return null;
+  }
+  sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
+  sessionManagedOutgoingAttachmentIndexCache.set(sessionKey, cached);
+  return cached.index;
+}
+
+function setCachedSessionManagedOutgoingAttachmentIndex(
+  sessionKey: string,
+  stat: { transcriptPath: string; mtimeMs: number; size: number },
+  index: SessionManagedOutgoingAttachmentIndex,
+) {
+  sessionManagedOutgoingAttachmentIndexCache.set(sessionKey, {
+    transcriptPath: stat.transcriptPath,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    index,
+  });
+  while (
+    sessionManagedOutgoingAttachmentIndexCache.size >
+    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES
+  ) {
+    const oldestKey = sessionManagedOutgoingAttachmentIndexCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    sessionManagedOutgoingAttachmentIndexCache.delete(oldestKey);
+  }
+}
+
 async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
@@ -607,6 +664,30 @@ async function getSessionManagedOutgoingAttachmentIndex(
     cache?.set(sessionKey, null);
     return null;
   }
+
+  let transcriptStat: { transcriptPath: string; mtimeMs: number; size: number } | null = null;
+  const transcriptPath = typeof entry?.sessionFile === "string" ? entry.sessionFile.trim() : "";
+  if (transcriptPath) {
+    try {
+      const stat = await fs.stat(transcriptPath);
+      transcriptStat = {
+        transcriptPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      };
+      const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
+        sessionKey,
+        transcriptStat,
+      );
+      if (cachedIndex) {
+        cache?.set(sessionKey, cachedIndex);
+        return cachedIndex;
+      }
+    } catch {
+      sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
+    }
+  }
+
   const messages = readSessionMessages(sessionId, storePath, entry.sessionFile);
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
@@ -623,6 +704,10 @@ async function getSessionManagedOutgoingAttachmentIndex(
     )) {
       index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
     }
+  }
+
+  if (transcriptStat) {
+    setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, transcriptStat, index);
   }
   cache?.set(sessionKey, index);
   return index;

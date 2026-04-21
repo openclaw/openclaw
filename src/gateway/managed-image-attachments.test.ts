@@ -120,6 +120,7 @@ async function requestManagedImage(params: {
   headers?: Record<string, string>;
   transcriptMessages?: Record<string, unknown>[];
   subagentRun?: Record<string, unknown> | null;
+  sessionEntry?: { sessionId: string; sessionFile?: string };
 }) {
   authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
     if (params.denyAuth) {
@@ -133,7 +134,7 @@ async function requestManagedImage(params: {
   getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(params.subagentRun ?? null);
   loadSessionEntryMock.mockReturnValue({
     storePath: path.join(params.stateDir, "gateway-sessions.json"),
-    entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    entry: params.sessionEntry ?? { sessionId: "sess-1", sessionFile: "session.jsonl" },
   });
   readSessionMessagesMock.mockReturnValue(
     params.transcriptMessages ?? [
@@ -285,6 +286,60 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(result.statusCode).toBe(405);
+  });
+
+  it("reuses the session attachment index across requests until the transcript changes", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const sessionFile = path.join(stateDir, "sessions", "sess-main.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, '{"message":{}}\n', "utf-8");
+
+    const transcriptMessages = [
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+          },
+        ],
+      },
+    ];
+
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    const first = await requestManagedImage({
+      stateDir,
+      pathName,
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+      sessionEntry: { sessionId: "sess-main", sessionFile },
+      transcriptMessages,
+    });
+    const second = await requestManagedImage({
+      stateDir,
+      pathName,
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+      sessionEntry: { sessionId: "sess-main", sessionFile },
+      transcriptMessages,
+    });
+
+    expect(first.result.statusCode).toBe(200);
+    expect(second.result.statusCode).toBe(200);
+    expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await fs.writeFile(sessionFile, '{"message":{}}\n{"message":{"content":"updated"}}\n', "utf-8");
+
+    const third = await requestManagedImage({
+      stateDir,
+      pathName,
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+      sessionEntry: { sessionId: "sess-main", sessionFile },
+      transcriptMessages,
+    });
+
+    expect(third.result.statusCode).toBe(200);
+    expect(readSessionMessagesMock).toHaveBeenCalledTimes(2);
   });
 });
 
