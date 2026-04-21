@@ -1100,8 +1100,23 @@ async function agentCommandInternal(
           }
         }
       }
-      const isFromFallback =
+      // A fallback occurred if the fallback resolution settled on a different
+      // model than the user intended.  However, in embedded runs hook selection
+      // can rewrite the effective model (agentMeta), so the model actually
+      // persisted may differ from both the fallback candidate and the intended
+      // target.  Only mark the session as "from fallback" when the persisted
+      // runtime model still matches the fallback candidate — if hooks rewrote
+      // it, the stored model is not "sticky fallback" and should not be
+      // suppressed during later resolution.
+      const fallbackOccurred =
         fallbackProvider !== intendedProvider || fallbackModel !== intendedModel;
+      const runtimeModel = result.meta.agentMeta?.model;
+      const runtimeProvider = result.meta.agentMeta?.provider;
+      const isFromFallback =
+        fallbackOccurred &&
+        (!runtimeModel ||
+          (runtimeModel === fallbackModel &&
+            (runtimeProvider ?? fallbackProvider) === fallbackProvider));
       await updateSessionStoreAfterAgentRun({
         cfg,
         contextTokensOverride: agentCfg?.contextTokens,
