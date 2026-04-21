@@ -204,6 +204,45 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 describe("chat view", () => {
+  it("renders assistant reasoning only once for normal messages", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          sessions: {
+            ...createSessions(),
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: Date.now(),
+                reasoningLevel: "low",
+              },
+            ],
+          },
+          messages: [
+            {
+              id: "assistant-reasoning-once",
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Plan carefully" },
+                { type: "text", text: "Done." },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const reasoningBlocks = container.querySelectorAll(".chat-thinking");
+    expect(reasoningBlocks).toHaveLength(1);
+    expect(reasoningBlocks[0]?.textContent).toContain("Reasoning");
+    expect(container.textContent).toContain("Done.");
+  });
+
   it("renders BTW side results outside transcript history", () => {
     const container = document.createElement("div");
     render(

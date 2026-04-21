@@ -2011,11 +2011,6 @@ function renderGroupedMessage(
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,
             )}
-            ${reasoningMarkdown
-              ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                </div>`
-              : nothing}
             ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
               ? html`${assistantViewBlocks.map(
                   (block) => html`${renderToolPreview(block.preview, "chat_message", {
