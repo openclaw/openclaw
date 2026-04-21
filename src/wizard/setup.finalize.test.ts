@@ -35,6 +35,7 @@ const resolveGatewayInstallToken = vi.hoisted(() =>
     warnings: [],
   })),
 );
+const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const readSystemdUserLingerStatus = vi.hoisted(() =>
   vi.fn(async () => ({ user: "test-user", linger: "yes" as const })),
@@ -128,6 +129,10 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUserServiceAvailable,
   readSystemdUserLingerStatus,
+}));
+
+vi.mock("../commands/systemd-linger.js", () => ({
+  ensureSystemdUserLingerInteractive,
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => ({
@@ -251,6 +256,7 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
     gatewayServiceUninstall.mockReset();
     resolveGatewayInstallToken.mockClear();
+    ensureSystemdUserLingerInteractive.mockReset();
     isSystemdUserServiceAvailable.mockReset();
     isSystemdUserServiceAvailable.mockResolvedValue(true);
     readSystemdUserLingerStatus.mockReset();
@@ -349,6 +355,18 @@ describe("finalizeSetupWizard", () => {
       flow: "quickstart",
       prompter,
     });
+  });
+
+  it("skips systemd linger checks when daemon install is disabled", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await finalizeSetupWizard(createAdvancedFinalizeArgs({ installDaemon: false }));
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
+    expect(ensureSystemdUserLingerInteractive).not.toHaveBeenCalled();
   });
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {

@@ -84,7 +84,14 @@ describe("loadChannels", () => {
       { probe: false, includeAccounts: false, timeoutMs: 8000 },
       { probe: true, timeoutMs: 8000 },
     ]);
-    expect(state.channelsSnapshot).toBeNull();
+    expect(state.channelsSnapshot).toEqual({
+      ts: 1,
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: true } },
+      channelAccounts: { telegram: [] },
+      channelDefaultAccountId: { telegram: "default" },
+    });
 
     fullDeferred.resolve({
       ts: 2,
@@ -136,6 +143,7 @@ describe("loadChannels", () => {
     expect(state.channelsSnapshot).toEqual(summarySnapshot);
     expect(state.channelsError).toBe("Error: full refresh failed");
   });
+<<<<<<< HEAD
 
   it("omits default includeAccounts=true for compatibility with older gateways", async () => {
     const requestCalls: Array<Record<string, unknown>> = [];
