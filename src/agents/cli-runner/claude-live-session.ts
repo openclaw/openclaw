@@ -139,15 +139,18 @@ export function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
   systemPrompt: string;
+  useResume: boolean;
 }): string[] {
   return appendArg(
     upsertArgValue(
       upsertArgValue(
-        appendSystemPromptArg(
-          stripLiveProcessArgs(params.args, params.backend),
-          params.backend,
-          params.systemPrompt,
-        ),
+        params.useResume
+          ? stripLiveProcessArgs(params.args, params.backend)
+          : appendSystemPromptArg(
+              stripLiveProcessArgs(params.args, params.backend),
+              params.backend,
+              params.systemPrompt,
+            ),
         "--input-format",
         "stream-json",
       ),
@@ -194,7 +197,11 @@ function buildClaudeLiveFingerprint(params: {
       )
     : undefined;
   const normalizePluginDir = Boolean(skillsFingerprint);
-  const omittedValueFlags = new Set(["--resume", "-r"]);
+  const omittedValueFlags = new Set(
+    [params.context.preparedBackend.backend.systemPromptArg, "--resume", "-r"].filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    ),
+  );
   const unstableValueFlags = new Set(
     [
       params.context.preparedBackend.backend.sessionArg,
@@ -304,20 +311,7 @@ function abortTurn(session: ClaudeLiveSession, error: Error): void {
   if (!turn) {
     return;
   }
-  clearTurnTimers(turn);
-  turn.streamingParser.finish();
-  session.drainingAbortedTurn = true;
-  turn.reject(error);
-  session.drainTimer = setTimeout(() => {
-    closeLiveSession(
-      session,
-      "abort",
-      createTimeoutError(
-        session,
-        `CLI produced no output for ${Math.round(session.noOutputTimeoutMs / 1000)}s after abort.`,
-      ),
-    );
-  }, session.noOutputTimeoutMs);
+  closeLiveSession(session, "abort", error);
 }
 
 function cleanupLiveSession(session: ClaudeLiveSession): void {
@@ -779,6 +773,7 @@ export async function runClaudeLiveSessionTurn(params: {
       args: params.args,
       backend: params.context.preparedBackend.backend,
       systemPrompt: params.context.systemPrompt,
+      useResume: params.args.includes("--resume") || params.args.includes("-r"),
     }),
   ];
   const fingerprint = buildClaudeLiveFingerprint({

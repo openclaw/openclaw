@@ -987,15 +987,16 @@ describe("runCliAgent spawn path", () => {
       ],
       backend,
       systemPrompt: "current prompt",
+      useResume: true,
     });
 
     expect(args).toContain("--resume");
     expect(args).toContain("claude-session");
     expect(args).not.toContain("--session-id");
     expect(args).not.toContain("openclaw-session");
+    expect(args).not.toContain("--append-system-prompt");
     expect(args).not.toContain("old prompt");
-    expect(args).toContain("--append-system-prompt");
-    expect(args).toContain("current prompt");
+    expect(args).not.toContain("current prompt");
   });
 
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
@@ -1093,39 +1094,58 @@ describe("runCliAgent spawn path", () => {
     });
   });
 
-  it("does not cancel the Claude live process on request abort", async () => {
+  it("restarts the Claude live process after request abort", async () => {
     const abortController = new AbortController();
     let stdoutListener: ((chunk: string) => void) | undefined;
-    let writeCount = 0;
-    const cancel = vi.fn();
-    const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
-        writeCount += 1;
-        if (writeCount === 2) {
-          stdoutListener?.(
-            [
-              JSON.stringify({ type: "system", subtype: "init", session_id: "live-abort" }),
-              JSON.stringify({
-                type: "result",
-                session_id: "live-abort",
-                result: "second-ok",
-              }),
-            ].join("\n") + "\n",
-          );
-        }
-        cb?.();
-      }),
-      end: vi.fn(),
-    };
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+    const cancels: Array<ReturnType<typeof vi.fn>> = [];
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
       stdoutListener = input.onStdout;
+      const spawnIndex = supervisorSpawnMock.mock.calls.length;
+      const cancel = vi.fn();
+      cancels.push(cancel);
+      const stdin = {
+        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+          if (spawnIndex === 2) {
+            stdoutListener?.(
+              [
+                JSON.stringify({ type: "system", subtype: "init", session_id: "live-abort-2" }),
+                JSON.stringify({
+                  type: "result",
+                  session_id: "live-abort-2",
+                  result: "second-ok",
+                }),
+              ].join("\n") + "\n",
+            );
+          }
+          cb?.();
+        }),
+        end: vi.fn(),
+      };
       return {
-        runId: "live-run",
-        pid: 2345,
+        runId: `live-run-${spawnIndex}`,
+        pid: 2345 + spawnIndex,
         startedAtMs: Date.now(),
         stdin,
-        wait: vi.fn(() => new Promise(() => {})),
+        wait: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              if (spawnIndex === 1) {
+                cancel.mockImplementationOnce(() => {
+                  resolve({
+                    reason: "manual-cancel",
+                    exitCode: null,
+                    exitSignal: null,
+                    durationMs: 50,
+                    stdout: "",
+                    stderr: "",
+                    timedOut: false,
+                    noOutputTimedOut: false,
+                  });
+                });
+              }
+            }),
+        ),
         cancel,
       };
     });
@@ -1142,12 +1162,12 @@ describe("runCliAgent spawn path", () => {
     const first = executePreparedCliRun(firstContext);
 
     await vi.waitFor(() => {
-      expect(writeCount).toBe(1);
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
     });
     abortController.abort();
 
     await expect(first).rejects.toMatchObject({ name: "AbortError" });
-    expect(cancel).not.toHaveBeenCalled();
+    expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
     stdoutListener?.(
       [
         JSON.stringify({ type: "system", subtype: "init", session_id: "live-abort" }),
@@ -1171,8 +1191,7 @@ describe("runCliAgent spawn path", () => {
     );
 
     expect(second.text).toBe("second-ok");
-    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
-    expect(cancel).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
   });
 
   it("restarts Claude live sessions when selected skills change", async () => {
