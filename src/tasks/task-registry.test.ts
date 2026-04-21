@@ -338,6 +338,7 @@ describe("task-registry", () => {
         startedAt: futureStartedAt,
       });
       expect(futureStart.createdAt).toBeLessThan(futureStartedAt);
+      expect(futureStart.createdAt).toBeGreaterThanOrEqual(before);
     });
   });
 
