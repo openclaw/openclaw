@@ -445,4 +445,51 @@ describe("describeImageWithModel", () => {
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
+
+  it("seeds runtime auth before model discovery for SecretRef-backed image auth", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "anthropic",
+        id: "claude-haiku-4-5",
+        input: ["text", "image"],
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "anthropic ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      preferredProfile: "anthropic:default",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "anthropic ok",
+      model: "claude-haiku-4-5",
+    });
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        preferredProfile: "anthropic:default",
+      }),
+    );
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("anthropic", "oauth-test");
+    expect(setRuntimeApiKeyMock.mock.invocationCallOrder[0]).toBeLessThan(
+      discoverModelsMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
 });

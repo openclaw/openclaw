@@ -105,9 +105,18 @@ async function resolveImageRuntime(params: {
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
+  const authStorage = discoverAuthStorage(params.agentDir);
+  const providerAuth = await resolveApiKeyForProvider({
+    provider: resolvedRef.provider,
+    cfg: params.cfg,
+    profileId: params.profile,
+    preferredProfile: params.preferredProfile,
+    store: params.authStore,
+    agentDir: params.agentDir,
+  });
+  authStorage.setRuntimeApiKey(resolvedRef.provider, requireApiKey(providerAuth, resolvedRef.provider));
+  const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
