@@ -73,6 +73,7 @@ type ZaloProcessingContext = {
   config: OpenClawConfig;
   runtime: ZaloRuntimeEnv;
   core: ZaloCoreRuntime;
+  mediaMaxMb: number;
   canHostMedia: boolean;
   webhookUrl?: string;
   webhookPath?: string;
@@ -82,11 +83,9 @@ type ZaloProcessingContext = {
 type ZaloPollingLoopParams = ZaloProcessingContext & {
   abortSignal: AbortSignal;
   isStopped: () => boolean;
-  mediaMaxMb: number;
 };
 type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
-  mediaMaxMb: number;
 };
 
 let zaloWebhookModulePromise: Promise<ZaloWebhookModule> | undefined;
@@ -161,7 +160,6 @@ type ZaloMessagePipelineParams = ZaloProcessingContext & {
 };
 type ZaloImageMessageParams = ZaloProcessingContext & {
   message: ZaloMessage;
-  mediaMaxMb: number;
 };
 type ZaloMessageAuthorizationResult = {
   chatId: string;
@@ -230,10 +228,12 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     config,
     runtime,
     core,
+    mediaMaxMb,
     canHostMedia,
+    webhookUrl,
+    webhookPath,
     abortSignal,
     isStopped,
-    mediaMaxMb,
     statusSink,
     fetcher,
   } = params;
@@ -244,10 +244,10 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     config,
     runtime,
     core,
+    mediaMaxMb,
     canHostMedia,
     webhookUrl,
     webhookPath,
-    mediaMaxMb,
     statusSink,
     fetcher,
   };
@@ -294,6 +294,7 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
     config,
     runtime,
     core,
+    mediaMaxMb,
     canHostMedia: params.canHostMedia,
     webhookUrl: params.webhookUrl,
     webhookPath: params.webhookPath,
