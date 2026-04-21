@@ -59,6 +59,7 @@ import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-lo
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
+import { profilePluginLoaderSync } from "./plugin-load-profile.js";
 import {
   clearMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
@@ -243,30 +244,6 @@ export function clearPluginLoaderCache(): void {
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
-
-function shouldProfilePluginLoader(): boolean {
-  return process.env.OPENCLAW_PLUGIN_LOAD_PROFILE === "1";
-}
-
-function profilePluginLoaderSync<T>(params: {
-  phase: string;
-  pluginId?: string;
-  source: string;
-  run: () => T;
-}): T {
-  if (!shouldProfilePluginLoader()) {
-    return params.run();
-  }
-  const startMs = performance.now();
-  try {
-    return params.run();
-  } finally {
-    const elapsedMs = performance.now() - startMs;
-    console.error(
-      `[plugin-load-profile] phase=${params.phase} plugin=${params.pluginId ?? "(core)"} elapsedMs=${elapsedMs.toFixed(1)} source=${params.source}`,
-    );
-  }
-}
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (

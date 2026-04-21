@@ -12,6 +12,11 @@ import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../plugins/jiti-loader-cache.js";
+import {
+  formatPluginLoadProfileLine,
+  profilePluginLoaderSync,
+  shouldProfilePluginLoader,
+} from "../plugins/plugin-load-profile.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
@@ -311,34 +316,6 @@ function getJiti(modulePath: string) {
   });
 }
 
-// File-local mirror of `profilePluginLoaderSync` from `src/plugins/loader.ts`.
-// Kept inline to avoid pulling host internals into the SDK boundary, and to
-// keep the profile log format identical so existing tooling that scrapes
-// `[plugin-load-profile]` lines keeps working.
-function shouldProfileBundledEntryLoader(): boolean {
-  return process.env.OPENCLAW_PLUGIN_LOAD_PROFILE === "1";
-}
-
-function profileBundledEntryStepSync<T>(params: {
-  phase: string;
-  pluginId?: string;
-  source: string;
-  run: () => T;
-}): T {
-  if (!shouldProfileBundledEntryLoader()) {
-    return params.run();
-  }
-  const startMs = performance.now();
-  try {
-    return params.run();
-  } finally {
-    const elapsedMs = performance.now() - startMs;
-    console.error(
-      `[plugin-load-profile] phase=${params.phase} plugin=${params.pluginId ?? "(core)"} elapsedMs=${elapsedMs.toFixed(1)} source=${params.source}`,
-    );
-  }
-}
-
 function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): unknown {
   const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
   const cached = loadedModuleExports.get(modulePath);
@@ -346,7 +323,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
     return cached;
   }
   let loaded: unknown;
-  const profile = shouldProfileBundledEntryLoader();
+  const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;
   let getJitiEndMs = 0;
   if (
@@ -368,12 +345,21 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
   }
   if (profile) {
     const endMs = performance.now();
-    const getJitiMs = (getJitiEndMs - loadStartMs).toFixed(1);
-    const jitiCallMs = (endMs - (getJitiEndMs || loadStartMs)).toFixed(1);
-    const totalMs = (endMs - loadStartMs).toFixed(1);
-    // Single line, key=value pairs so existing log scrapers can parse it.
+    // Use shared formatter — but split timing fields ourselves so we can
+    // attribute time spent in `getJiti(...)` factory creation vs the actual
+    // graph-walking `__j(modulePath)` call. Both are emitted as extras
+    // alongside the canonical `elapsedMs=<total>` field.
     console.error(
-      `[plugin-load-profile] phase=bundled-entry-module-load plugin=(bundled-entry) elapsedMs=${totalMs} getJitiMs=${getJitiMs} jitiCallMs=${jitiCallMs} source=${modulePath}`,
+      formatPluginLoadProfileLine({
+        phase: "bundled-entry-module-load",
+        pluginId: "(bundled-entry)",
+        source: modulePath,
+        elapsedMs: endMs - loadStartMs,
+        extras: [
+          ["getJitiMs", getJitiEndMs - loadStartMs],
+          ["jitiCallMs", endMs - (getJitiEndMs || loadStartMs)],
+        ],
+      }),
     );
   }
   loadedModuleExports.set(modulePath, loaded);
@@ -455,23 +441,39 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         registerCliMetadata?.(api);
         return;
       }
-      const profileStep = <T>(phase: string, run: () => T): T =>
-        profileBundledEntryStepSync({
-          phase: `bundled-register:${phase}`,
-          pluginId: id,
-          source: importMetaUrl,
-          run,
-        });
-      profileStep("setChannelRuntime", () => setChannelRuntime?.(api.runtime));
-      const channelPlugin = profileStep("loadChannelPlugin", () => loadChannelPlugin());
-      profileStep("registerChannel", () =>
-        api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
-      );
+      profilePluginLoaderSync({
+        phase: "bundled-register:setChannelRuntime",
+        pluginId: id,
+        source: importMetaUrl,
+        run: () => setChannelRuntime?.(api.runtime),
+      });
+      const channelPlugin = profilePluginLoaderSync({
+        phase: "bundled-register:loadChannelPlugin",
+        pluginId: id,
+        source: importMetaUrl,
+        run: () => loadChannelPlugin(),
+      });
+      profilePluginLoaderSync({
+        phase: "bundled-register:registerChannel",
+        pluginId: id,
+        source: importMetaUrl,
+        run: () => api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
+      });
       if (api.registrationMode !== "full") {
         return;
       }
-      profileStep("registerCliMetadata", () => registerCliMetadata?.(api));
-      profileStep("registerFull", () => registerFull?.(api));
+      profilePluginLoaderSync({
+        phase: "bundled-register:registerCliMetadata",
+        pluginId: id,
+        source: importMetaUrl,
+        run: () => registerCliMetadata?.(api),
+      });
+      profilePluginLoaderSync({
+        phase: "bundled-register:registerFull",
+        pluginId: id,
+        source: importMetaUrl,
+        run: () => registerFull?.(api),
+      });
     },
     loadChannelPlugin,
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
