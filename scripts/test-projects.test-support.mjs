@@ -201,9 +201,56 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
 ]);
+const GENERATED_CHANGED_TEST_TARGETS = new Set([
+  "src/canvas-host/a2ui/.bundle.hash",
+  "src/canvas-host/a2ui/a2ui.bundle.js",
+]);
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
+const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
+  [
+    CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
+    [
+      "src/channels/plugins/contracts/channel-catalog.contract.test.ts",
+      "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
+      "src/channels/plugins/contracts/group-policy.fallback.contract.test.ts",
+      "src/channels/plugins/contracts/outbound-payload.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-a.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-e.contract.test.ts",
+    ],
+  ],
+  [
+    CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
+    [
+      "src/channels/plugins/contracts/plugins-core.authorize-config-write.policy.contract.test.ts",
+      "src/channels/plugins/contracts/plugins-core.authorize-config-write.targets.contract.test.ts",
+      "src/channels/plugins/contracts/plugins-core.catalog.entries.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-b.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-f.contract.test.ts",
+    ],
+  ],
+  [
+    CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
+    [
+      "src/channels/plugins/contracts/plugins-core.catalog.paths.contract.test.ts",
+      "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
+      "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-c.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-g.contract.test.ts",
+    ],
+  ],
+  [
+    CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG,
+    [
+      "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
+      "src/channels/plugins/contracts/registry.contract.test.ts",
+      "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
+      "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
+    ],
+  ],
+]);
 
 function normalizePathPattern(value) {
   return value.replaceAll("\\", "/");
@@ -404,6 +451,9 @@ function resolveToolingChangedTestTargets(changedPaths) {
 }
 
 function isRoutableChangedTarget(changedPath) {
+  if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
+    return false;
+  }
   return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
 }
 
@@ -953,7 +1003,8 @@ export function applyParallelVitestCachePaths(specs, params = {}) {
 
 export function createVitestRunSpecs(args, params = {}) {
   const cwd = params.cwd ?? process.cwd();
-  const plans = buildVitestRunPlans(args, cwd);
+  const baseEnv = params.baseEnv ?? process.env;
+  const plans = filterPlansForContractIncludeFile(buildVitestRunPlans(args, cwd), baseEnv);
   return plans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
       ? path.join(
@@ -965,15 +1016,49 @@ export function createVitestRunSpecs(args, params = {}) {
       config: plan.config,
       env: includeFilePath
         ? {
-            ...(params.baseEnv ?? process.env),
+            ...baseEnv,
             [INCLUDE_FILE_ENV_KEY]: includeFilePath,
           }
-        : (params.baseEnv ?? process.env),
+        : baseEnv,
       includeFilePath,
       includePatterns: plan.includePatterns,
       pnpmArgs: createVitestArgs(plan),
       watchMode: plan.watchMode,
     };
+  });
+}
+
+function loadIncludePatternsForSpecFilter(env) {
+  const filePath = env[INCLUDE_FILE_ENV_KEY]?.trim();
+  if (!filePath) {
+    return null;
+  }
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter((value) => typeof value === "string" && value.length > 0);
+}
+
+function includePatternMatchesConfig(candidate, configPatterns) {
+  return configPatterns.some(
+    (pattern) => path.matchesGlob(candidate, pattern) || path.matchesGlob(pattern, candidate),
+  );
+}
+
+function filterPlansForContractIncludeFile(plans, env) {
+  const includePatterns = loadIncludePatternsForSpecFilter(env);
+  if (!includePatterns) {
+    return plans;
+  }
+  return plans.filter((plan) => {
+    const configPatterns = CHANNEL_CONTRACT_CONFIG_PATTERNS.get(plan.config);
+    if (!configPatterns) {
+      return true;
+    }
+    return includePatterns.some((candidate) =>
+      includePatternMatchesConfig(candidate, configPatterns),
+    );
   });
 }
 

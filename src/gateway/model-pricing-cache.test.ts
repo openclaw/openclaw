@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import type { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
@@ -26,6 +28,8 @@ describe("model-pricing-cache", () => {
 
   afterEach(() => {
     __resetGatewayModelPricingCacheForTest();
+    loggingState.rawConsole = null;
+    resetLogger();
   });
 
   it("collects configured model refs across defaults, aliases, overrides, and media tools", () => {
@@ -279,21 +283,25 @@ describe("model-pricing-cache", () => {
           "volcengine/doubao-seed-2-0-pro": {
             input_cost_per_token: 4.6e-7,
             output_cost_per_token: 2.3e-6,
+            cache_creation_input_token_cost: 9.2e-7,
             litellm_provider: "volcengine",
             tiered_pricing: [
               {
                 input_cost_per_token: 4.6e-7,
                 output_cost_per_token: 2.3e-6,
+                cache_creation_input_token_cost: 9.2e-8,
                 range: [0, 32000],
               },
               {
                 input_cost_per_token: 7e-7,
                 output_cost_per_token: 3.5e-6,
+                cache_creation_input_token_cost: 1.4e-7,
                 range: [32000, 128000],
               },
               {
                 input_cost_per_token: 1.4e-6,
                 output_cost_per_token: 7e-6,
+                cache_creation_input_token_cost: 2.8e-7,
                 range: [128000, 256000],
               },
             ],
@@ -316,14 +324,16 @@ describe("model-pricing-cache", () => {
     expect(pricing).toBeDefined();
     expect(pricing!.input).toBeCloseTo(0.46);
     expect(pricing!.output).toBeCloseTo(2.3);
+    expect(pricing!.cacheWrite).toBeCloseTo(0.92);
     expect(pricing!.tieredPricing).toHaveLength(3);
     expect(pricing!.tieredPricing![0]).toEqual({
       input: expect.closeTo(0.46),
       output: expect.closeTo(2.3),
       cacheRead: 0,
-      cacheWrite: 0,
+      cacheWrite: expect.closeTo(0.092),
       range: [0, 32000],
     });
+    expect(pricing!.tieredPricing![2].cacheWrite).toBeCloseTo(0.28);
     expect(pricing!.tieredPricing![2].range).toEqual([128000, 256000]);
   });
 
@@ -359,6 +369,7 @@ describe("model-pricing-cache", () => {
               {
                 input_cost_per_token: 7e-7,
                 output_cost_per_token: 3.5e-6,
+                cache_creation_input_token_cost: 1.4e-7,
                 range: [32000],
               },
             ],
@@ -382,6 +393,7 @@ describe("model-pricing-cache", () => {
     expect(pricing!.tieredPricing).toHaveLength(2);
     expect(pricing!.tieredPricing![0].range).toEqual([0, 32000]);
     expect(pricing!.tieredPricing![1].range).toEqual([32000, Infinity]);
+    expect(pricing!.tieredPricing![1].cacheWrite).toBeCloseTo(0.14);
   });
 
   it("merges OpenRouter flat pricing with LiteLLM tiered pricing", async () => {
@@ -424,11 +436,13 @@ describe("model-pricing-cache", () => {
               {
                 input_cost_per_token: 4e-7,
                 output_cost_per_token: 2.4e-6,
+                cache_creation_input_token_cost: 8e-8,
                 range: [0, 256000],
               },
               {
                 input_cost_per_token: 5e-7,
                 output_cost_per_token: 3e-6,
+                cache_creation_input_token_cost: 1e-7,
                 range: [256000, 1000000],
               },
             ],
@@ -455,6 +469,7 @@ describe("model-pricing-cache", () => {
     // LiteLLM tiered pricing is merged in
     expect(pricing!.tieredPricing).toHaveLength(2);
     expect(pricing!.tieredPricing![1].range).toEqual([256000, 1000000]);
+    expect(pricing!.tieredPricing![1].cacheWrite).toBeCloseTo(0.1);
   });
 
   it("falls back gracefully when LiteLLM fetch fails", async () => {
@@ -502,6 +517,45 @@ describe("model-pricing-cache", () => {
       cacheRead: 0,
       cacheWrite: 0,
     });
+  });
+
+  it("logs configured timeout seconds when pricing fetches time out", async () => {
+    const warnings: string[] = [];
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn((message: string) => warnings.push(message)),
+      error: vi.fn(),
+    };
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const timeoutError = new DOMException(
+      "The operation was aborted due to timeout",
+      "TimeoutError",
+    );
+    const fetchImpl = withFetchPreconnect(async () => {
+      throw timeoutError;
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "OpenRouter pricing fetch failed (timeout 15s): TimeoutError: The operation was aborted due to timeout",
+        ),
+        expect.stringContaining(
+          "LiteLLM pricing fetch failed (timeout 15s): TimeoutError: The operation was aborted due to timeout",
+        ),
+      ]),
+    );
   });
 
   it("treats oversized LiteLLM catalog responses as source failures", async () => {
