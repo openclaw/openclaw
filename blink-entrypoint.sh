@@ -7,7 +7,7 @@
 #   3. Seeds /data/agents/main/agent/auth-profiles.json with the Blink provider
 #      api_key credential (required by upstream v2026.4.15+ auth resolver).
 #      Rewritten every boot so BLINK_API_KEY rotations propagate automatically.
-#   4. Sanitizes /data/agents/main/agent/models.json so the blink provider
+#   4. Sanitizes EVERY /data/agents/*/agent/models.json so the blink provider
 #      baseUrl is always exactly https://core.blink.new/api/v1/ai. Upstream
 #      v2026.4.15's openai-completions provider normalization writes an extra
 #      trailing "/v1" on first persistence (observed 2026-04-19: produced
@@ -15,6 +15,16 @@
 #      corrupted baseUrl forever across restarts. This sanitize step breaks
 #      the lock — it rewrites the blink baseUrl on every boot regardless of
 #      what got persisted, so every new LLM call hits the correct route.
+#
+#      A persistent background watcher also re-scans every 5 s to cover:
+#        - fresh-volume first-boot race (gateway lazy-writes > 60 s after boot),
+#        - sub-agent creation triggered by non-default sessionKeys (e.g.
+#          `agent:foo:foo` → /data/agents/foo/agent/models.json).
+#      We deliberately do NOT SIGHUP the gateway on repair: on v2026.4.15 the
+#      Node process does not catch SIGHUP and exits, which Fly treats as a
+#      stop request → machine reboot mid-chat. Rewriting the file alone is
+#      sufficient because the gateway reads the blink provider config fresh
+#      per LLM request, so the next chat picks up the repaired baseUrl.
 #   5. Sources /data/.env (agent-managed secrets via `blink secrets set`).
 #   6. Exports OPENCLAW_NO_RESPAWN=true so the gateway does not daemonize
 #      itself (Fly init supervises the process, daemonization breaks this).
@@ -22,7 +32,8 @@
 set -eu
 
 STATE_DIR="/data"
-AGENT_DIR="${STATE_DIR}/agents/main/agent"
+AGENTS_ROOT="${STATE_DIR}/agents"
+AGENT_DIR="${AGENTS_ROOT}/main/agent"
 AUTH_FILE="${AGENT_DIR}/auth-profiles.json"
 MODELS_FILE="${AGENT_DIR}/models.json"
 CONFIG_FILE="${STATE_DIR}/openclaw.json"
@@ -74,78 +85,90 @@ EOF
   mv -f "${TMP_AUTH}" "${AUTH_FILE}"
 fi
 
-# Sanitize models.json helper — writes a corrected file + SIGHUPs the gateway
-# if the blink.baseUrl is not exactly the expected value. Exit status:
-#   0 = file present and checked (either already ok or rewritten)
-#   2 = file not present (caller should retry later)
-#   other = hard error
-# Runs as root; all writes are atomic (tempfile + rename) and mode 600 owned by node.
+# Sanitize models.json helper — scans ALL agent subdirectories under
+# /data/agents/*/agent/models.json (not just main/), writes a corrected file +
+# SIGHUPs the gateway if any blink.baseUrl is not exactly the expected value.
+#
+# Why scan all agents, not just main/:
+#   OpenClaw creates a separate agent subdirectory per sessionKey prefix (e.g.
+#   `agent:verify:verify` → /data/agents/verify/agent/). Each gets its OWN
+#   models.json, and each is written with the upstream-corrupted /api/v1/ai/v1
+#   baseUrl on first persistence. If we only sanitize main/, any non-default
+#   sessionKey hits 404 "Route not found" → agent run error=model_not_found.
+#
+# Exit status:
+#   0 = at least one matching file was found and checked
+#   2 = no matching file found (caller should retry later)
 sanitize_models_json() {
-  python3 - "${MODELS_FILE}" "${BLINK_EXPECTED_BASE_URL}" <<'PY'
-import json, os, sys, tempfile, subprocess
-path, expected = sys.argv[1], sys.argv[2]
-if not os.path.exists(path):
+  python3 - "${AGENTS_ROOT}" "${BLINK_EXPECTED_BASE_URL}" <<'PY'
+import json, os, sys, glob, tempfile
+agents_root, expected = sys.argv[1], sys.argv[2]
+pattern = os.path.join(agents_root, "*", "agent", "models.json")
+paths = glob.glob(pattern)
+if not paths:
     sys.exit(2)
-try:
-    with open(path) as f:
-        data = json.load(f)
-except Exception:
-    sys.exit(0)
-blink = (data.get("providers") or {}).get("blink")
-if not isinstance(blink, dict):
-    sys.exit(0)
-current = blink.get("baseUrl")
-if current == expected:
-    sys.exit(0)
-blink["baseUrl"] = expected
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
-try:
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f, indent=2); f.write("\n")
-    os.chmod(tmp, 0o600)
+
+repaired_any = False
+for path in paths:
     try:
-        import pwd
-        os.chown(tmp, pwd.getpwnam("node").pw_uid, pwd.getpwnam("node").pw_gid)
+        with open(path) as f:
+            data = json.load(f)
     except Exception:
-        pass
-    os.replace(tmp, path)
-except Exception:
-    if os.path.exists(tmp): os.unlink(tmp)
-    raise
-print(f"[entrypoint] blink baseUrl repaired: {current!r} -> {expected!r}", flush=True)
-# SIGHUP the live gateway if running, so it reloads models.json immediately.
-# openclaw-gateway is 16 chars which exceeds pgrep's 15-char default limit —
-# use ps+awk instead.
-try:
-    out = subprocess.check_output(["ps", "-e", "-o", "pid=,comm="], text=True)
-    for line in out.splitlines():
-        pid, comm = line.strip().split(None, 1)
-        if comm == "openclaw-gateway":
-            os.kill(int(pid), 1)  # SIGHUP
-            print(f"[entrypoint] sent SIGHUP to openclaw-gateway pid {pid}", flush=True)
-            break
-except Exception:
-    pass
+        continue
+    blink = (data.get("providers") or {}).get("blink")
+    if not isinstance(blink, dict):
+        continue
+    current = blink.get("baseUrl")
+    if current == expected:
+        continue
+    blink["baseUrl"] = expected
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2); f.write("\n")
+        os.chmod(tmp, 0o600)
+        try:
+            import pwd
+            os.chown(tmp, pwd.getpwnam("node").pw_uid, pwd.getpwnam("node").pw_gid)
+        except Exception:
+            pass
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp): os.unlink(tmp)
+        continue
+    print(f"[entrypoint] blink baseUrl repaired in {path}: {current!r} -> {expected!r}", flush=True)
+    repaired_any = True
+
+# Do NOT SIGHUP the gateway. On upstream v2026.4.15 SIGHUP is not caught by
+# the Node process — it exits with signal=SIGHUP, Fly's init supervisor treats
+# that as a requested stop and reboots the machine. Empirically verified
+# 2026-04-20: rewriting models.json alone is sufficient; the gateway reads the
+# blink provider config fresh per LLM request, so the next chat picks up the
+# corrected baseUrl without any process-level signal.
 PY
 }
 
 # (1) Sanitize now — covers the steady-state case where the container restarted
-# and models.json is already on disk (most agents).
+# and models.json files are already on disk (most agents).
 sanitize_models_json 2>/dev/null || true
 
-# (2) Background watcher — covers the FIRST-BOOT case: on a fresh volume
-# models.json does not yet exist when the entrypoint runs. The gateway lazy-
-# writes it during startup with the upstream-corrupted baseUrl (/api/v1/ai/v1).
-# We poll for ~60s and sanitize as soon as the file appears, then exit.
+# (2) Persistent background watcher — runs for the entire lifetime of the
+# machine. Re-scans every 5 s and heals any corrupted blink.baseUrl in place.
+# Covers three cases the old 60 s-only watcher missed:
+#   a) First-boot: gateway lazy-writes main/models.json > 60 s after start
+#      (rare but observed on slow cold starts).
+#   b) Sub-agent creation: a sessionKey other than `agent:main:main` creates
+#      /data/agents/<name>/agent/models.json on first use, which upstream
+#      normalization writes with the corrupted /api/v1/ai/v1 baseUrl.
+#   c) Upstream re-persistence: any future OpenClaw upgrade that re-runs the
+#      normalization would re-corrupt the file; this watcher repairs it on
+#      the next 5 s tick before any subsequent LLM call.
 # Runs disowned so `exec gosu node` below replaces the shell cleanly; the
 # watcher is adopted by init (PID 1) and survives the exec.
 (
-  for _ in $(seq 1 30); do
-    sleep 2
-    if sanitize_models_json 2>/dev/null; then
-      # Exit 0 means file was present and checked. We've done our job.
-      exit 0
-    fi
+  while true; do
+    sleep 5
+    sanitize_models_json 2>/dev/null || true
   done
 ) </dev/null >/dev/null 2>&1 &
 disown 2>/dev/null || true
