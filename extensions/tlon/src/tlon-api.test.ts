@@ -49,9 +49,6 @@ function createMemexResponse(uploadUrl: string): Response {
 describe("uploadFile memex upload hardening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGuardedFetch.mockReset();
-    mockRelease.mockReset();
-    mockRelease.mockResolvedValue(undefined);
     vi.stubGlobal("fetch", vi.fn());
     mockAuthenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
     configureClient({
