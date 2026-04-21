@@ -38,6 +38,19 @@ Search, e-commerce sites, and more — just by asking.
 openclaw plugins install @apify/apify-openclaw-plugin
 ```
 
+### ClawNexus
+
+Discovers OpenClaw instances on your network (mDNS, UDP broadcast, HTTP
+probing) and gives them human-readable names. Runs the discovery daemon as an
+embedded Gateway service.
+
+- **npm:** `clawnexus-plugin`
+- **repo:** [github.com/Lattice9AI/ClawNexus](https://github.com/Lattice9AI/ClawNexus)
+
+```bash
+openclaw plugins install clawnexus-plugin
+```
+
 ### Codex App Server Bridge
 
 Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
