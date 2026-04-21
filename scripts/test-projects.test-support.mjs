@@ -50,7 +50,15 @@ const CHANNEL_VITEST_CONFIG = "test/vitest/vitest.channels.config.ts";
 const CLI_VITEST_CONFIG = "test/vitest/vitest.cli.config.ts";
 const COMMANDS_LIGHT_VITEST_CONFIG = "test/vitest/vitest.commands-light.config.ts";
 const COMMANDS_VITEST_CONFIG = "test/vitest/vitest.commands.config.ts";
-const CONTRACTS_VITEST_CONFIG = "test/vitest/vitest.contracts.config.ts";
+const CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG =
+  "test/vitest/vitest.contracts-channel-config.config.ts";
+const CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG =
+  "test/vitest/vitest.contracts-channel-registry.config.ts";
+const CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG =
+  "test/vitest/vitest.contracts-channel-session.config.ts";
+const CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG =
+  "test/vitest/vitest.contracts-channel-surface.config.ts";
+const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
@@ -112,7 +120,11 @@ const VITEST_CONFIG_BY_KIND = {
   cli: CLI_VITEST_CONFIG,
   command: COMMANDS_VITEST_CONFIG,
   commandLight: COMMANDS_LIGHT_VITEST_CONFIG,
-  contracts: CONTRACTS_VITEST_CONFIG,
+  contractsChannelConfig: CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
+  contractsChannelRegistry: CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
+  contractsChannelSession: CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG,
+  contractsChannelSurface: CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
+  contractsPlugin: CONTRACTS_PLUGIN_VITEST_CONFIG,
   cron: CRON_VITEST_CONFIG,
   daemon: DAEMON_VITEST_CONFIG,
   e2e: E2E_VITEST_CONFIG,
@@ -254,6 +266,54 @@ function resolveVitestConfigTargetKind(relative) {
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
+}
+
+function resolveChannelContractTargetKind(relative) {
+  if (!relative.startsWith("src/channels/plugins/contracts/")) {
+    return null;
+  }
+  const name = path.posix.basename(relative);
+  if (/-shard-[ae]\.contract\.test\.ts$/u.test(name)) {
+    return "contractsChannelSurface";
+  }
+  if (/-shard-[bf]\.contract\.test\.ts$/u.test(name)) {
+    return "contractsChannelConfig";
+  }
+  if (/-shard-[cg]\.contract\.test\.ts$/u.test(name)) {
+    return "contractsChannelRegistry";
+  }
+  if (/-shard-[dh]\.contract\.test\.ts$/u.test(name)) {
+    return "contractsChannelSession";
+  }
+  if (
+    [
+      "channel-catalog.contract.test.ts",
+      "channel-import-guardrails.test.ts",
+      "group-policy.fallback.contract.test.ts",
+      "outbound-payload.contract.test.ts",
+    ].includes(name)
+  ) {
+    return "contractsChannelSurface";
+  }
+  if (
+    [
+      "plugins-core.authorize-config-write.policy.contract.test.ts",
+      "plugins-core.authorize-config-write.targets.contract.test.ts",
+      "plugins-core.catalog.entries.contract.test.ts",
+    ].includes(name)
+  ) {
+    return "contractsChannelConfig";
+  }
+  if (
+    [
+      "plugins-core.catalog.paths.contract.test.ts",
+      "plugins-core.loader.contract.test.ts",
+      "plugins-core.registry.contract.test.ts",
+    ].includes(name)
+  ) {
+    return "contractsChannelRegistry";
+  }
+  return "contractsChannelSession";
 }
 
 function listChangedPathsFromGit(baseRef, cwd) {
@@ -471,6 +531,13 @@ function classifyTarget(arg, cwd) {
     }
     return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
   }
+  const channelContractKind = resolveChannelContractTargetKind(relative);
+  if (channelContractKind) {
+    return channelContractKind;
+  }
+  if (relative.startsWith("src/plugins/contracts/")) {
+    return "contractsPlugin";
+  }
   if (isChannelSurfaceTestFile(relative)) {
     return "channel";
   }
@@ -480,16 +547,11 @@ function classifyTarget(arg, cwd) {
   if (
     relative.startsWith("test/") ||
     relative.startsWith("src/scripts/") ||
-    relative.startsWith("src/plugins/contracts/") ||
-    relative.startsWith("src/channels/plugins/contracts/") ||
     relative === "src/config/doc-baseline.integration.test.ts" ||
     relative === "src/config/schema.base.generated.test.ts" ||
     relative === "src/config/schema.help.quality.test.ts"
   ) {
-    return relative.startsWith("src/plugins/contracts/") ||
-      relative.startsWith("src/channels/plugins/contracts/")
-      ? "contracts"
-      : "tooling";
+    return "tooling";
   }
   if (isBundledPluginDependentUnitTestFile(relative)) {
     return "bundled";
@@ -669,7 +731,11 @@ export function buildVitestRunPlans(
     "default",
     "boundary",
     "tooling",
-    "contracts",
+    "contractsChannelSurface",
+    "contractsChannelConfig",
+    "contractsChannelRegistry",
+    "contractsChannelSession",
+    "contractsPlugin",
     "bundled",
     "gateway",
     "hooks",

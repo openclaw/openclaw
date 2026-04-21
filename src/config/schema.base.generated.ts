@@ -2767,6 +2767,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           cacheWrite: {
                             type: "number",
                           },
+                          tieredPricing: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                input: {
+                                  type: "number",
+                                },
+                                output: {
+                                  type: "number",
+                                },
+                                cacheRead: {
+                                  type: "number",
+                                },
+                                cacheWrite: {
+                                  type: "number",
+                                },
+                                range: {
+                                  anyOf: [
+                                    {
+                                      type: "array",
+                                      items: [
+                                        {
+                                          type: "number",
+                                        },
+                                        {
+                                          type: "number",
+                                        },
+                                      ],
+                                    },
+                                    {
+                                      type: "array",
+                                      items: [
+                                        {
+                                          type: "number",
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                              },
+                              required: ["input", "output", "cacheRead", "cacheWrite", "range"],
+                              additionalProperties: false,
+                            },
+                          },
                         },
                         additionalProperties: false,
                       },

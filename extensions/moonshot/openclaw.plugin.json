@@ -52,6 +52,9 @@
     "mediaUnderstandingProviders": ["moonshot"],
     "webSearchProviders": ["kimi"]
   },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

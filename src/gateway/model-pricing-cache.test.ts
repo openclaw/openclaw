@@ -134,9 +134,10 @@ describe("model-pricing-cache", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const fetchImpl = withFetchPreconnect(
-      async () =>
-        new Response(
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
           JSON.stringify({
             data: [
               {
@@ -169,8 +170,14 @@ describe("model-pricing-cache", () => {
             status: 200,
             headers: { "Content-Type": "application/json" },
           },
-        ),
-    );
+        );
+      }
+      // LiteLLM — return empty object (no tiered pricing for these models)
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
@@ -210,9 +217,10 @@ describe("model-pricing-cache", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const fetchImpl = withFetchPreconnect(
-      async () =>
-        new Response(
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
           JSON.stringify({
             data: [
               {
@@ -228,8 +236,13 @@ describe("model-pricing-cache", () => {
             status: 200,
             headers: { "Content-Type": "application/json" },
           },
-        ),
-    );
+        );
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
 
     await expect(refreshGatewayModelPricingCache({ config, fetchImpl })).resolves.toBeUndefined();
     expect(
@@ -238,6 +251,305 @@ describe("model-pricing-cache", () => {
       input: 1,
       output: 2,
       cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("loads tiered pricing from LiteLLM and merges with OpenRouter flat pricing", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "volcengine/doubao-seed-2-0-pro" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        // OpenRouter does not have this model
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // LiteLLM catalog
+      return new Response(
+        JSON.stringify({
+          "volcengine/doubao-seed-2-0-pro": {
+            input_cost_per_token: 4.6e-7,
+            output_cost_per_token: 2.3e-6,
+            litellm_provider: "volcengine",
+            tiered_pricing: [
+              {
+                input_cost_per_token: 4.6e-7,
+                output_cost_per_token: 2.3e-6,
+                range: [0, 32000],
+              },
+              {
+                input_cost_per_token: 7e-7,
+                output_cost_per_token: 3.5e-6,
+                range: [32000, 128000],
+              },
+              {
+                input_cost_per_token: 1.4e-6,
+                output_cost_per_token: 7e-6,
+                range: [128000, 256000],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const pricing = getCachedGatewayModelPricing({
+      provider: "volcengine",
+      model: "doubao-seed-2-0-pro",
+    });
+
+    expect(pricing).toBeDefined();
+    expect(pricing!.input).toBeCloseTo(0.46);
+    expect(pricing!.output).toBeCloseTo(2.3);
+    expect(pricing!.tieredPricing).toHaveLength(3);
+    expect(pricing!.tieredPricing![0]).toEqual({
+      input: expect.closeTo(0.46),
+      output: expect.closeTo(2.3),
+      cacheRead: 0,
+      cacheWrite: 0,
+      range: [0, 32000],
+    });
+    expect(pricing!.tieredPricing![2].range).toEqual([128000, 256000]);
+  });
+
+  it("normalizes LiteLLM open-ended range [start] to [start, Infinity]", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "volcengine/doubao-open" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          "volcengine/doubao-open": {
+            input_cost_per_token: 4.6e-7,
+            output_cost_per_token: 2.3e-6,
+            litellm_provider: "volcengine",
+            tiered_pricing: [
+              {
+                input_cost_per_token: 4.6e-7,
+                output_cost_per_token: 2.3e-6,
+                range: [0, 32000],
+              },
+              {
+                input_cost_per_token: 7e-7,
+                output_cost_per_token: 3.5e-6,
+                range: [32000],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const pricing = getCachedGatewayModelPricing({
+      provider: "volcengine",
+      model: "doubao-open",
+    });
+
+    expect(pricing).toBeDefined();
+    expect(pricing!.tieredPricing).toHaveLength(2);
+    expect(pricing!.tieredPricing![0].range).toEqual([0, 32000]);
+    expect(pricing!.tieredPricing![1].range).toEqual([32000, Infinity]);
+  });
+
+  it("merges OpenRouter flat pricing with LiteLLM tiered pricing", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "dashscope/qwen-plus" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "dashscope/qwen-plus",
+                pricing: {
+                  prompt: "0.0000004",
+                  completion: "0.0000024",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          "dashscope/qwen-plus": {
+            input_cost_per_token: 4e-7,
+            output_cost_per_token: 2.4e-6,
+            litellm_provider: "dashscope",
+            tiered_pricing: [
+              {
+                input_cost_per_token: 4e-7,
+                output_cost_per_token: 2.4e-6,
+                range: [0, 256000],
+              },
+              {
+                input_cost_per_token: 5e-7,
+                output_cost_per_token: 3e-6,
+                range: [256000, 1000000],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const pricing = getCachedGatewayModelPricing({
+      provider: "dashscope",
+      model: "qwen-plus",
+    });
+
+    expect(pricing).toBeDefined();
+    // OpenRouter base flat pricing is used
+    expect(pricing!.input).toBeCloseTo(0.4);
+    expect(pricing!.output).toBeCloseTo(2.4);
+    // LiteLLM tiered pricing is merged in
+    expect(pricing!.tieredPricing).toHaveLength(2);
+    expect(pricing!.tieredPricing![1].range).toEqual([256000, 1000000]);
+  });
+
+  it("falls back gracefully when LiteLLM fetch fails", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "anthropic/claude-opus-4.6",
+                pricing: {
+                  prompt: "0.000005",
+                  completion: "0.000025",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      // LiteLLM fails
+      return new Response("Internal Server Error", { status: 500 });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    // OpenRouter pricing still works
+    expect(
+      getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
+    ).toEqual({
+      input: 5,
+      output: 25,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("treats oversized LiteLLM catalog responses as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "moonshot/kimi-k2.6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "moonshotai/kimi-k2.6",
+                pricing: {
+                  prompt: "0.00000095",
+                  completion: "0.000004",
+                  input_cache_read: "0.00000016",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": "6000000",
+        },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(getCachedGatewayModelPricing({ provider: "moonshot", model: "kimi-k2.6" })).toEqual({
+      input: 0.95,
+      output: 4,
+      cacheRead: 0.16,
       cacheWrite: 0,
     });
   });
