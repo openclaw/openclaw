@@ -132,18 +132,18 @@ describe("sendMessage", () => {
 describe("sendFileUrl", () => {
   installFakeTimerHarness();
 
-  it("returns true on success", async () => {
+  it("returns true on success for public IP-literal file URLs", async () => {
     mockSuccessResponse();
     const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl("https://nas.example.com/incoming", "https://93.184.216.34/file.png"),
     );
     expect(result).toBe(true);
   });
 
-  it("returns false on failure", async () => {
+  it("returns false on failure for public IP-literal file URLs", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl("https://nas.example.com/incoming", "https://93.184.216.34/file.png"),
     );
     expect(result).toBe(false);
   });
@@ -151,10 +151,18 @@ describe("sendFileUrl", () => {
   it("verifies TLS by default", async () => {
     mockSuccessResponse();
     await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl("https://nas.example.com/incoming", "https://93.184.216.34/file.png"),
     );
     const httpsRequest = vi.mocked(https.request);
     expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("blocks hostname-based file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
   it("blocks loopback file URLs before reaching the NAS webhook", async () => {

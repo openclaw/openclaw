@@ -59,6 +59,12 @@ function isBlockedSpecialIpLiteral(hostname: string): boolean {
   return parsed.range() === "unspecified";
 }
 
+function isIpLiteral(hostname: string): boolean {
+  const normalizedHostname =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  return ipaddr.isValid(normalizedHostname);
+}
+
 function isSafeWebhookFileUrl(fileUrl: string): boolean {
   let parsed: URL;
   try {
@@ -73,6 +79,7 @@ function isSafeWebhookFileUrl(fileUrl: string): boolean {
 
   if (
     !parsed.hostname ||
+    !isIpLiteral(parsed.hostname) ||
     isBlockedSpecialIpLiteral(parsed.hostname) ||
     isPrivateOrLoopbackHost(parsed.hostname)
   ) {
