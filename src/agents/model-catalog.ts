@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { loadConfig } from "../config/config.js";
+import { isDebugEnabled } from "./debug-env.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
@@ -43,7 +44,7 @@ let importPiSdk = defaultImportPiSdk;
 let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
 function shouldLogModelCatalogTiming(): boolean {
-  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  return isDebugEnabled("OPENCLAW_DEBUG_INGRESS_TIMING");
 }
 
 function loadModelSuppression() {
