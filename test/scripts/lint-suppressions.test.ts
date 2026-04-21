@@ -103,6 +103,7 @@ describe("production lint suppressions", () => {
       "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
       "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
       "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
+      "src/commands/diagnose/assemble-context.ts|no-control-regex|1",
       "src/config/types.channels.ts|@typescript-eslint/no-explicit-any|1",
       "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
       "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",

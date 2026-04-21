@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { RuntimeEnv } from "../runtime.js";
+import { writeRuntimeJson } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import { assembleDiagnosticContext } from "./diagnose/assemble-context.js";
 import { KNOWN_ISSUES_PROMPT } from "./diagnose/known-issues.js";
@@ -66,7 +67,7 @@ export async function diagnoseCommand(
     if (opts.json) {
       // Return raw context as fallback so --json is usable even when the
       // gateway is down — the documented offline analysis workflow.
-      runtime.writeJson({
+      writeRuntimeJson(runtime, {
         status: "context-only",
         error: String(err),
         context: context.text,
@@ -112,7 +113,7 @@ export async function diagnoseCommand(
 
   // JSON output.
   if (opts.json) {
-    runtime.writeJson({
+    writeRuntimeJson(runtime, {
       status: "ok",
       markdown: report.markdown,
       inputTokens: report.inputTokens,

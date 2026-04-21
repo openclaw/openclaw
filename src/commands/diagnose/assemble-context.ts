@@ -363,7 +363,9 @@ function assembleAuthSummary(
   const sourceIps = new Set<string>();
   for (const entry of rejects) {
     const match = RE_IP.exec(entry.message);
-    if (match) sourceIps.add(match[0]);
+    if (match) {
+      sourceIps.add(match[0]);
+    }
   }
 
   const windowLabel = sinceLabel ?? "today's log";

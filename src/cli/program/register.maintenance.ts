@@ -56,8 +56,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/diagnose", "docs.openclaw.ai/cli/
         let sinceLabel: string | undefined;
         try {
           const filter = parseTimeFilter({
-            since: opts.since as string | undefined,
-            last: opts.last as string | undefined,
+            since: opts.since,
+            last: opts.last,
           });
           if (filter) {
             sinceMs = filter.sinceMs;
