@@ -1578,12 +1578,17 @@ describe("doctor config flow", () => {
     });
 
     const cfg = result.cfg as Record<string, unknown>;
-    expect(cfg.bridge).toBeUndefined();
+    // Unknown top-level keys (bridge) are now preserved by --fix (requires
+    // --force to remove). Only legacy-migrated keys are stripped.
+    expect(cfg.bridge).toEqual({ bind: "auto" });
+    // Nested unknown keys (gateway.auth.extra) are likewise preserved.
     expect((cfg.gateway as Record<string, unknown>)?.auth).toEqual({
       mode: "token",
       token: "ok",
+      extra: true,
     });
     const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
+    // relayBindHost IS a legacy key handled by migration, so it IS removed.
     expect(browser.relayBindHost).toBeUndefined();
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,

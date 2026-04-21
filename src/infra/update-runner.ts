@@ -1142,8 +1142,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      // Use --fix so that doctor auto-strips unknown config keys introduced by
-      // schema changes between versions, preventing a startup validation crash.
+      // Run doctor --fix so that legacy config keys are migrated to the
+      // current schema shapes after version upgrades. Unknown/custom keys
+      // are intentionally preserved to avoid silent data loss (#69631).
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
       const doctorStep = await runStep(

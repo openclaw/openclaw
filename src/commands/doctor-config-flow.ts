@@ -190,15 +190,24 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
   }
 
+  const shouldForce = params.options.force === true;
   const unknownStep = applyUnknownConfigKeyStep({
     state: { cfg, candidate, pendingChanges, fixHints },
     shouldRepair,
+    shouldForce,
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
   if (unknownStep.removed.length > 0) {
     const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
-    note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+    if (shouldRepair && shouldForce) {
+      note(lines, "Removed unknown config keys");
+    } else {
+      note(
+        `${lines}\nThese keys are not part of the OpenClaw schema but have been preserved.\nUse --fix --force to remove them.`,
+        "Unknown config keys (kept)",
+      );
+    }
   }
 
   const finalized = await finalizeDoctorConfigFlow({

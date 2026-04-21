@@ -66,6 +66,7 @@ export function applyLegacyCompatibilityStep(params: {
 export function applyUnknownConfigKeyStep(params: {
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
+  shouldForce?: boolean;
   doctorFixCommand: string;
 }): {
   state: DoctorConfigMutationState;
@@ -76,14 +77,33 @@ export function applyUnknownConfigKeyStep(params: {
     return { state: params.state, removed: [] };
   }
 
+  // Only strip unknown keys when --fix --force is used (opt-in destructive
+  // cleanup). Plain --fix preserves unknown keys to avoid silently deleting
+  // custom integrations or user-defined objects. (#69631)
+  if (params.shouldRepair && params.shouldForce) {
+    return {
+      state: {
+        cfg: unknown.config,
+        candidate: unknown.config,
+        pendingChanges: true,
+        fixHints: params.state.fixHints,
+      },
+      removed: unknown.removed,
+    };
+  }
+
   return {
     state: {
-      cfg: params.shouldRepair ? unknown.config : params.state.cfg,
-      candidate: unknown.config,
-      pendingChanges: true,
+      ...params.state,
+      // Candidate retains stripped config for display only; cfg is untouched.
+      candidate: params.shouldRepair ? params.state.candidate : unknown.config,
+      pendingChanges: params.state.pendingChanges || !params.shouldRepair,
       fixHints: params.shouldRepair
         ? params.state.fixHints
-        : [...params.state.fixHints, `Run "${params.doctorFixCommand}" to remove these keys.`],
+        : [
+            ...params.state.fixHints,
+            `Run "${params.doctorFixCommand} --force" to remove these keys.`,
+          ],
     },
     removed: unknown.removed,
   };
