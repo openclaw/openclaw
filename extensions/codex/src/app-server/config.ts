@@ -12,6 +12,8 @@ export type CodexAppServerStartOptions = {
   url?: string;
   authToken?: string;
   headers: Record<string, string>;
+  env?: Record<string, string>;
+  clearEnv?: string[];
 };
 
 export type CodexAppServerRuntimeOptions = {
@@ -134,7 +136,7 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      "never",
+      "on-request",
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
@@ -158,6 +160,8 @@ export function codexAppServerStartOptionsKey(options: CodexAppServerStartOption
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
+    env: Object.entries(options.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
+    clearEnv: [...(options.clearEnv ?? [])].toSorted(),
   });
 }
 

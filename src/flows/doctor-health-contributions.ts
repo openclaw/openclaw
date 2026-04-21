@@ -7,19 +7,16 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
-import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  maybeRepairLegacyOAuthProfileIds,
-  noteAuthProfileHealth,
-  noteLegacyCodexProviderOverride,
-} from "../commands/doctor-auth.js";
+import { maybeRepairLegacyOAuthProfileIds } from "../commands/doctor-auth-legacy-oauth.js";
+import { noteAuthProfileHealth, noteLegacyCodexProviderOverride } from "../commands/doctor-auth.js";
 import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
 import { noteChromeMcpBrowserReadiness } from "../commands/doctor-browser.js";
 import { maybeRepairBundledPluginRuntimeDeps } from "../commands/doctor-bundled-plugin-runtime-deps.js";
 import { noteClaudeCliHealth } from "../commands/doctor-claude-cli.js";
 import { doctorShellCompletion } from "../commands/doctor-completion.js";
 import { maybeRepairLegacyCronStore } from "../commands/doctor-cron.js";
+import { noteDevicePairingHealth } from "../commands/doctor-device-pairing.js";
 import { maybeRepairGatewayDaemon } from "../commands/doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import {
@@ -61,6 +58,7 @@ import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
 import type { FlowContribution } from "./types.js";
 
 export type DoctorFlowMode = "local" | "remote";
@@ -257,6 +255,7 @@ async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): 
   await maybeRepairBundledPluginRuntimeDeps({
     runtime: ctx.runtime,
     prompter: ctx.prompter,
+    config: ctx.cfg,
   });
 }
 
@@ -294,18 +293,11 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (!ctx.prompter.shouldRepair) {
-    return;
-  }
-  await runChannelPluginStartupMaintenance({
+  await maybeRunDoctorStartupChannelMaintenance({
     cfg: ctx.cfg,
     env: process.env,
-    log: {
-      info: (message) => ctx.runtime.log(message),
-      warn: (message) => ctx.runtime.error(message),
-    },
-    trigger: "doctor-fix",
-    logPrefix: "doctor",
+    runtime: ctx.runtime,
+    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 
@@ -433,6 +425,13 @@ async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): 
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false },
   });
   await noteMemoryRecallHealth(ctx.cfg);
+}
+
+async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await noteDevicePairingHealth({
+    cfg: ctx.cfg,
+    healthOk: ctx.healthOk ?? false,
+  });
 }
 
 async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -606,6 +605,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:memory-search",
       label: "Memory search",
       run: runMemorySearchHealthContribution,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:device-pairing",
+      label: "Device pairing",
+      run: runDevicePairingHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-daemon",

@@ -67,6 +67,9 @@ import type {
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
+  CliBackendAuthEpochMode,
+  CliBackendPreparedExecution,
+  CliBackendPrepareExecutionContext,
   CliBackendPlugin,
   CliBundleMcpMode,
   PluginTextReplacement,
@@ -141,6 +144,9 @@ export type {
   PluginConversationBindingResolutionDecision,
 } from "./conversation-binding.types.js";
 export type {
+  CliBackendAuthEpochMode,
+  CliBackendPreparedExecution,
+  CliBackendPrepareExecutionContext,
   CliBackendPlugin,
   CliBundleMcpMode,
   PluginTextReplacement,
@@ -1402,6 +1408,18 @@ export type ProviderPlugin = {
    */
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   /**
+   * Provider-owned adaptive thinking support.
+   *
+   * Return true only for models that should expose the `adaptive` thinking level.
+   */
+  supportsAdaptiveThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
+   * Provider-owned max thinking support.
+   *
+   * Return true only for models that should expose the `max` thinking level.
+   */
+  supportsMaxThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
    * Provider-owned default thinking level.
    *
    * Use this to keep model-family defaults (for example Claude 4.6 =>
@@ -1409,7 +1427,17 @@ export type ProviderPlugin = {
    */
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
-  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  ) =>
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max"
+    | null
+    | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *
@@ -1838,13 +1866,11 @@ export type OpenClawPluginDefinition = {
   reload?: OpenClawPluginReloadRegistration;
   nodeHostCommands?: OpenClawPluginNodeHostCommand[];
   securityAuditCollectors?: OpenClawPluginSecurityAuditCollector[];
-  register?: (api: OpenClawPluginApi) => void | Promise<void>;
-  activate?: (api: OpenClawPluginApi) => void | Promise<void>;
+  register?: (api: OpenClawPluginApi) => void;
+  activate?: (api: OpenClawPluginApi) => void;
 };
 
-export type OpenClawPluginModule =
-  | OpenClawPluginDefinition
-  | ((api: OpenClawPluginApi) => void | Promise<void>);
+export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPluginApi) => void);
 
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 
@@ -1976,6 +2002,10 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
+  /** Register the active detached task runtime for this plugin (exclusive slot). */
+  registerDetachedTaskRuntime: (
+    runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,
+  ) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,

@@ -16,7 +16,12 @@ const execFileAsync = promisify(execFile) as unknown as ExecFileAsync;
 function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
   const basename = pathModule.basename(execPath).toLowerCase();
-  return basename === "node" || basename === "node.exe";
+  return (
+    basename === "node" ||
+    basename === "node.exe" ||
+    basename === "nodejs" ||
+    basename === "nodejs.exe"
+  );
 }
 
 export async function resolveQaNodeExecPath(params?: {

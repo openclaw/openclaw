@@ -44,10 +44,10 @@ SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
-TIMEOUT_INSTALL_SITE_S=300
-TIMEOUT_INSTALL_TGZ_S=300
-TIMEOUT_INSTALL_REGISTRY_S=300
-TIMEOUT_UPDATE_DEV_S=300
+TIMEOUT_INSTALL_SITE_S=420
+TIMEOUT_INSTALL_TGZ_S=420
+TIMEOUT_INSTALL_REGISTRY_S=420
+TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-600}"
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=180
@@ -646,9 +646,33 @@ guest_current_user_exec_path() {
       "$@"
     return
   fi
-  prlctl exec "$VM_NAME" --current-user /usr/bin/env \
-    "PATH=$path_value" \
-    "$@"
+  local output rc user_name
+  set +e
+  output="$(
+    prlctl exec "$VM_NAME" --current-user /usr/bin/env \
+      "PATH=$path_value" \
+      "$@" 2>&1
+  )"
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    printf '%s' "$output"
+    [[ -z "$output" || "$output" == *$'\n' ]] || printf '\n'
+    return 0
+  fi
+  if [[ "$output" == *"Unable to authenticate the user"* ]]; then
+    user_name="$(resolve_headless_guest_user || true)"
+    if [[ -n "$user_name" ]]; then
+      GUEST_CURRENT_USER="$user_name"
+      GUEST_CURRENT_USER_TRANSPORT="sudo"
+      save_guest_current_user_transport
+      warn "macOS --current-user became unavailable; switching to root sudo fallback for $user_name"
+      guest_current_user_exec_path "$path_value" "$@"
+      return
+    fi
+  fi
+  printf '%s\n' "$output" >&2
+  return "$rc"
 }
 
 guest_current_user_exec() {
@@ -1132,6 +1156,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  write_package_dist_inventory
   stage_pack_runtime_deps
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
@@ -1212,6 +1237,11 @@ ensure_current_build() {
   release_build_lock
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
   current_control_ui_ready || die "dist/control-ui/index.html missing after ui build"
+}
+
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
 }
 
 stage_pack_runtime_deps() {
@@ -1579,12 +1609,13 @@ print(
 PY
   )"
   response="$(discord_api_request POST "/channels/$DISCORD_CHANNEL_ID/messages" "$payload")"
-  printf '%s' "$response" | python3 - "$id_file" <<'PY'
+  RESPONSE="$response" python3 - "$id_file" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
-payload = json.load(sys.stdin)
+payload = json.loads(os.environ["RESPONSE"])
 message_id = payload.get("id")
 if not isinstance(message_id, str) or not message_id:
     raise SystemExit("host Discord post missing message id")

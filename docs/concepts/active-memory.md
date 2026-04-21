@@ -116,6 +116,91 @@ What this means:
 - `config.promptStyle: "balanced"` uses the default general-purpose prompt style for `recent` mode
 - active memory still runs only on eligible interactive persistent chat sessions
 
+## Speed recommendations
+
+The simplest setup is to leave `config.model` unset and let Active Memory use
+the same model you already use for normal replies. That is the safest default
+because it follows your existing provider, auth, and model preferences.
+
+If you want Active Memory to feel faster, use a dedicated inference model
+instead of borrowing the main chat model.
+
+Example fast-provider setup:
+
+```json5
+models: {
+  providers: {
+    cerebras: {
+      baseUrl: "https://api.cerebras.ai/v1",
+      apiKey: "${CEREBRAS_API_KEY}",
+      api: "openai-completions",
+      models: [{ id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" }],
+    },
+  },
+},
+plugins: {
+  entries: {
+    "active-memory": {
+      enabled: true,
+      config: {
+        model: "cerebras/gpt-oss-120b",
+      },
+    },
+  },
+}
+```
+
+Fast-model options worth considering:
+
+- `cerebras/gpt-oss-120b` for a fast dedicated recall model with a narrow tool surface
+- your normal session model, by leaving `config.model` unset
+- a low-latency fallback model such as `google/gemini-3-flash` when you want a separate recall model without changing your primary chat model
+
+Why Cerebras is a strong speed-oriented option for Active Memory:
+
+- the Active Memory tool surface is narrow: it only calls `memory_search` and `memory_get`
+- recall quality matters, but latency matters more than for the main answer path
+- a dedicated fast provider avoids tying memory recall latency to your primary chat provider
+
+If you do not want a separate speed-optimized model, leave `config.model` unset
+and let Active Memory inherit the current session model.
+
+### Cerebras setup
+
+Add a provider entry like this:
+
+```json5
+models: {
+  providers: {
+    cerebras: {
+      baseUrl: "https://api.cerebras.ai/v1",
+      apiKey: "${CEREBRAS_API_KEY}",
+      api: "openai-completions",
+      models: [{ id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" }],
+    },
+  },
+}
+```
+
+Then point Active Memory at it:
+
+```json5
+plugins: {
+  entries: {
+    "active-memory": {
+      enabled: true,
+      config: {
+        model: "cerebras/gpt-oss-120b",
+      },
+    },
+  },
+}
+```
+
+Caveat:
+
+- make sure the Cerebras API key actually has model access for the model you choose, because `/v1/models` visibility alone does not guarantee `chat/completions` access
+
 ## How to see it
 
 Active memory injects a hidden untrusted prompt prefix for the model. It does
@@ -540,10 +625,10 @@ The most important fields are:
 | `config.model`              | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
 | `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
 | `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
-| `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive"`                         | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
+| `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
 | `config.promptOverride`     | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                       |
 | `config.promptAppend`       | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                               |
-| `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory sub-agent                                                         |
+| `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                    |
 | `config.maxSummaryChars`    | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                          |
 | `config.logging`            | `boolean`                                                                                            | Emits active memory logs while tuning                                                                  |
 | `config.persistTranscripts` | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                     |

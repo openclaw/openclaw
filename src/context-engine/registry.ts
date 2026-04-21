@@ -396,6 +396,16 @@ export function listContextEngineIds(): string[] {
   return [...getContextEngineRegistryState().engines.keys()];
 }
 
+export function clearContextEnginesForOwner(owner: string): void {
+  const normalizedOwner = requireContextEngineOwner(owner);
+  const registry = getContextEngineRegistryState().engines;
+  for (const [id, entry] of registry.entries()) {
+    if (entry.owner === normalizedOwner) {
+      registry.delete(id);
+    }
+  }
+}
+
 function describeResolvedContextEngineContractError(
   engineId: string,
   engine: unknown,
@@ -411,11 +421,13 @@ function describeResolvedContextEngineContractError(
     issues.push("missing info");
   } else {
     const infoRecord = info as Record<string, unknown>;
+    // Engines own their internal info.id; it is metadata, not a handle into the
+    // registry. The registered id (plugin slot id) and the engine's own id are
+    // allowed to differ, so we only require that info.id is a non-empty string
+    // for display/logging purposes and do not enforce equality with engineId.
     const infoId = typeof infoRecord.id === "string" ? infoRecord.id.trim() : "";
     if (!infoId) {
       issues.push("missing info.id");
-    } else if (infoId !== engineId) {
-      issues.push(`info.id must match registered id "${engineId}"`);
     }
     if (typeof infoRecord.name !== "string" || !infoRecord.name.trim()) {
       issues.push("missing info.name");

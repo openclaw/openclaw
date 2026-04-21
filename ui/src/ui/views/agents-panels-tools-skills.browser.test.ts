@@ -30,7 +30,7 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
 }
 
 describe("agents tools panel (browser)", () => {
-  it("renders per-tool provenance badges and optional marker", async () => {
+  it("renders catalog provenance and effective runtime tools", async () => {
     const container = document.createElement("div");
     render(
       renderAgentTools(
@@ -77,6 +77,27 @@ describe("agents tools panel (browser)", () => {
               },
             ],
           },
+          toolsEffectiveResult: {
+            agentId: "main",
+            profile: "messaging",
+            groups: [
+              {
+                id: "channel",
+                label: "Channel tools",
+                source: "channel",
+                tools: [
+                  {
+                    id: "message",
+                    label: "Message Actions",
+                    description: "Send and manage messages in this channel",
+                    rawDescription: "Send and manage messages in this channel",
+                    source: "channel",
+                    channelId: "guildchat",
+                  },
+                ],
+              },
+            ],
+          },
         }),
       ),
       container,
@@ -87,6 +108,9 @@ describe("agents tools panel (browser)", () => {
     expect(text).toContain("core");
     expect(text).toContain("plugin:voice-call");
     expect(text).toContain("optional");
+    expect(text).toContain("Available Right Now");
+    expect(text).toContain("Message Actions");
+    expect(text).toContain("Channel: guildchat");
   });
 
   it("shows fallback warning when runtime catalog fails", async () => {
@@ -103,43 +127,5 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
-  });
-
-  it("renders effective runtime tools separately from the config catalog", async () => {
-    const container = document.createElement("div");
-    render(
-      renderAgentTools(
-        createBaseParams({
-          toolsEffectiveResult: {
-            agentId: "main",
-            profile: "messaging",
-            groups: [
-              {
-                id: "channel",
-                label: "Channel tools",
-                source: "channel",
-                tools: [
-                  {
-                    id: "message",
-                    label: "Message Actions",
-                    description: "Send and manage messages in this channel",
-                    rawDescription: "Send and manage messages in this channel",
-                    source: "channel",
-                    channelId: "discord",
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const text = container.textContent ?? "";
-    expect(text).toContain("Available Right Now");
-    expect(text).toContain("Message Actions");
-    expect(text).toContain("Channel: discord");
   });
 });

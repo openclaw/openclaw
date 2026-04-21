@@ -62,6 +62,30 @@ export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Prom
 /** Consume a quote ref exactly once. */
 export type ConsumeQuoteRefFn = () => string | undefined;
 
+type ReplyModeParams = {
+  textWithoutImages: string;
+  imageUrls: string[];
+  mdMatches: RegExpMatchArray[];
+  bareUrlMatches: RegExpMatchArray[];
+  event: DeliverEventContext;
+  actx: DeliverAccountContext;
+  sendWithRetry: SendWithRetryFn;
+  consumeQuoteRef: ConsumeQuoteRefFn;
+};
+
+function resolveReplyModeRuntime(params: ReplyModeParams) {
+  const { event, actx, sendWithRetry, consumeQuoteRef } = params;
+  const { account, log } = actx;
+  return {
+    event,
+    account,
+    log,
+    sendWithRetry,
+    consumeQuoteRef,
+    prefix: `[qqbot:${account.accountId}]`,
+  };
+}
+
 function resolveQQBotMediaTargetContext(
   event: DeliverEventContext,
   account: ResolvedQQBotAccount,
@@ -369,27 +393,27 @@ export async function sendPlainReply(
   }
 
   if (useMarkdown) {
-    await sendMarkdownReply(
+    await sendMarkdownReply({
       textWithoutImages,
-      collectedImageUrls,
+      imageUrls: collectedImageUrls,
       mdMatches,
       bareUrlMatches,
       event,
       actx,
       sendWithRetry,
       consumeQuoteRef,
-    );
+    });
   } else {
-    await sendPlainTextReply(
+    await sendPlainTextReply({
       textWithoutImages,
-      collectedImageUrls,
+      imageUrls: collectedImageUrls,
       mdMatches,
       bareUrlMatches,
       event,
       actx,
       sendWithRetry,
       consumeQuoteRef,
-    );
+    });
   }
 
   // Send local media collected from payload.mediaUrl or markdown local paths.
@@ -637,18 +661,10 @@ async function sendVoiceWithTimeout(
 }
 
 /** Send in markdown mode. */
-async function sendMarkdownReply(
-  textWithoutImages: string,
-  imageUrls: string[],
-  mdMatches: RegExpMatchArray[],
-  bareUrlMatches: RegExpMatchArray[],
-  event: DeliverEventContext,
-  actx: DeliverAccountContext,
-  sendWithRetry: SendWithRetryFn,
-  consumeQuoteRef: ConsumeQuoteRefFn,
-): Promise<void> {
-  const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
+async function sendMarkdownReply(params: ReplyModeParams): Promise<void> {
+  const { textWithoutImages, imageUrls, mdMatches, bareUrlMatches } = params;
+  const { event, account, log, sendWithRetry, consumeQuoteRef, prefix } =
+    resolveReplyModeRuntime(params);
 
   // Split images into public URLs vs. Base64 payloads.
   const httpImageUrls: string[] = [];
@@ -772,26 +788,17 @@ async function sendMarkdownReply(
 }
 
 /** Send in plain-text mode. */
-async function sendPlainTextReply(
-  textWithoutImages: string,
-  imageUrls: string[],
-  mdMatches: RegExpMatchArray[],
-  bareUrlMatches: RegExpMatchArray[],
-  event: DeliverEventContext,
-  actx: DeliverAccountContext,
-  sendWithRetry: SendWithRetryFn,
-  consumeQuoteRef: ConsumeQuoteRefFn,
-): Promise<void> {
-  const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
+async function sendPlainTextReply(params: ReplyModeParams): Promise<void> {
+  const { event, account, log, sendWithRetry, consumeQuoteRef, prefix } =
+    resolveReplyModeRuntime(params);
 
   const imgMediaTarget = resolveQQBotMediaTargetContext(event, account, prefix);
 
-  let result = textWithoutImages;
-  for (const m of mdMatches) {
+  let result = params.textWithoutImages;
+  for (const m of params.mdMatches) {
     result = result.replace(m[0], "").trim();
   }
-  for (const m of bareUrlMatches) {
+  for (const m of params.bareUrlMatches) {
     result = result.replace(m[0], "").trim();
   }
 
@@ -801,7 +808,7 @@ async function sendPlainTextReply(
   }
 
   try {
-    for (const imageUrl of imageUrls) {
+    for (const imageUrl of params.imageUrls) {
       await sendQQBotPhotoWithLogging({
         target: imgMediaTarget,
         imageUrl,

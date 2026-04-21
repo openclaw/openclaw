@@ -40,23 +40,6 @@ const isBuildRelevantSourcePath = (relativePath) => {
   return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
 };
 
-export const isBuildRelevantRunNodePath = (repoPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
 const isRestartRelevantExtensionPath = (relativePath) => {
   const normalizedPath = normalizePath(relativePath);
   if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
@@ -65,7 +48,7 @@ const isRestartRelevantExtensionPath = (relativePath) => {
   return isBuildRelevantSourcePath(normalizedPath);
 };
 
-export const isRestartRelevantRunNodePath = (repoPath) => {
+const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
   if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
     return false;
@@ -77,10 +60,16 @@ export const isRestartRelevantRunNodePath = (repoPath) => {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
   if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
+    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
+
+export const isBuildRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
+
+export const isRestartRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -89,6 +78,11 @@ const statMtime = (filePath, fsImpl = fs) => {
     return null;
   }
 };
+
+const resolvePrivateQaRequiredDistEntries = (distRoot) => [
+  path.join(distRoot, "plugin-sdk", "qa-lab.js"),
+  path.join(distRoot, "plugin-sdk", "qa-runtime.js"),
+];
 
 const isExcludedSource = (filePath, sourceRoot, sourceRootName) => {
   const relativePath = normalizePath(path.relative(sourceRoot, filePath));
@@ -210,8 +204,9 @@ export const resolveBuildRequirement = (deps) => {
   }
   if (
     deps.env.OPENCLAW_BUILD_PRIVATE_QA === "1" &&
-    ((deps.privateQaDistEntry && statMtime(deps.privateQaDistEntry, deps.fs) == null) ||
-      (deps.privateQaBundledCliEntry && statMtime(deps.privateQaBundledCliEntry, deps.fs) == null))
+    (deps.privateQaRequiredDistEntries ?? resolvePrivateQaRequiredDistEntries(deps.distRoot)).some(
+      (entry) => statMtime(entry, deps.fs) == null,
+    )
   ) {
     return { shouldBuild: true, reason: "missing_private_qa_dist" };
   }
@@ -277,11 +272,77 @@ const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
 
 const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
 
+const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
+const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
+const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
+const DEFAULT_BUILD_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_BUILD_LOCK_POLL_MS = 100;
+const DEFAULT_BUILD_LOCK_STALE_MS = 10 * 60 * 1000;
+
+const parsePositiveIntegerEnv = (env, name, fallback) => {
+  const raw = env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const resolveRunNodeOutputLogPath = (deps) => {
+  const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
+  if (!outputLog) {
+    return null;
+  }
+  return path.resolve(deps.cwd, outputLog);
+};
+
+const createRunNodeOutputTee = (deps) => {
+  const outputLogPath = resolveRunNodeOutputLogPath(deps);
+  if (!outputLogPath) {
+    return null;
+  }
+  deps.fs.mkdirSync(path.dirname(outputLogPath), { recursive: true });
+  const stream = deps.fs.createWriteStream(outputLogPath, {
+    flags: "a",
+    mode: 0o600,
+  });
+  let streamError = null;
+  stream.on("error", (error) => {
+    streamError = error;
+  });
+  deps.env[RUN_NODE_OUTPUT_LOG_ENV] = outputLogPath;
+  return {
+    outputLogPath,
+    write(chunk) {
+      if (!streamError) {
+        stream.write(chunk);
+      }
+    },
+    async close() {
+      if (streamError) {
+        throw streamError;
+      }
+      await new Promise((resolve, reject) => {
+        stream.once("error", reject);
+        stream.end(resolve);
+      });
+      if (streamError) {
+        throw streamError;
+      }
+    },
+  };
+};
+
 const logRunner = (message, deps) => {
   if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
     return;
   }
-  deps.stderr.write(`[openclaw] ${message}\n`);
+  const line = `[openclaw] ${message}\n`;
+  deps.stderr.write(line);
+  deps.outputTee?.write(line);
 };
 
 const waitForSpawnedProcess = async (childProcess, deps) => {
@@ -331,25 +392,148 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
   }
 };
 
-const runOpenClaw = async (deps) => {
-  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
-    cwd: deps.cwd,
-    env: deps.env,
-    stdio: "inherit",
-  });
-  const res = await waitForSpawnedProcess(nodeProcess, deps);
+const getInterruptedSpawnExitCode = (res) => {
   if (res.exitSignal) {
     return getSignalExitCode(res.exitSignal);
   }
   if (res.forwardedSignal) {
     return getSignalExitCode(res.forwardedSignal);
   }
+  return null;
+};
+
+const runOpenClaw = async (deps) => {
+  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
+    cwd: deps.cwd,
+    env: deps.env,
+    stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+  });
+  pipeSpawnedOutput(nodeProcess, deps);
+  const res = await waitForSpawnedProcess(nodeProcess, deps);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res);
+  if (interruptedExitCode !== null) {
+    return interruptedExitCode;
+  }
   return res.exitCode ?? 1;
 };
 
-const syncRuntimeArtifacts = (deps) => {
+const pipeSpawnedOutput = (childProcess, deps) => {
+  if (!deps.outputTee) {
+    return;
+  }
+  childProcess.stdout?.on("data", (chunk) => {
+    deps.stdout.write(chunk);
+    deps.outputTee.write(chunk);
+  });
+  childProcess.stderr?.on("data", (chunk) => {
+    deps.stderr.write(chunk);
+    deps.outputTee.write(chunk);
+  });
+};
+
+const closeRunNodeOutputTee = async (deps, exitCode) => {
+  if (!deps.outputTee) {
+    return exitCode;
+  }
   try {
-    deps.runRuntimePostBuild({ cwd: deps.cwd });
+    await deps.outputTee.close();
+  } catch (error) {
+    deps.stderr.write(
+      `[openclaw] Failed to write output log: ${error?.message ?? "unknown error"}\n`,
+    );
+    return exitCode === 0 ? 1 : exitCode;
+  }
+  return exitCode;
+};
+
+const removeStaleBuildLock = (deps, lockDir, staleMs) => {
+  try {
+    const stats = deps.fs.statSync(lockDir);
+    if (Date.now() - stats.mtimeMs < staleMs) {
+      return false;
+    }
+    deps.fs.rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const acquireRunNodeBuildLock = async (deps) => {
+  const lockRoot = path.join(deps.cwd, ".artifacts");
+  const lockDir = path.join(lockRoot, "run-node-build.lock");
+  const timeoutMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_TIMEOUT_ENV,
+    DEFAULT_BUILD_LOCK_TIMEOUT_MS,
+  );
+  const pollMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_POLL_ENV,
+    DEFAULT_BUILD_LOCK_POLL_MS,
+  );
+  const staleMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_STALE_ENV,
+    DEFAULT_BUILD_LOCK_STALE_MS,
+  );
+  const startedAt = Date.now();
+  let loggedWait = false;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      deps.fs.mkdirSync(lockRoot, { recursive: true });
+      deps.fs.mkdirSync(lockDir);
+      try {
+        deps.fs.writeFileSync(
+          path.join(lockDir, "owner.json"),
+          `${JSON.stringify(
+            {
+              pid: deps.process.pid,
+              startedAt: new Date().toISOString(),
+              args: deps.args,
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+      } catch {
+        // Owner metadata is diagnostic only; the directory itself is the lock.
+      }
+      return () => {
+        deps.fs.rmSync(lockDir, { recursive: true, force: true });
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      if (removeStaleBuildLock(deps, lockDir, staleMs)) {
+        continue;
+      }
+      if (!loggedWait) {
+        logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
+        loggedWait = true;
+      }
+      await sleep(pollMs);
+    }
+  }
+
+  throw new Error(`timed out waiting for ${path.relative(deps.cwd, lockDir)}`);
+};
+
+const withRunNodeBuildLock = async (deps, callback) => {
+  const release = await acquireRunNodeBuildLock(deps);
+  try {
+    return await callback();
+  } finally {
+    release();
+  }
+};
+
+const syncRuntimeArtifacts = async (deps) => {
+  try {
+    await deps.runRuntimePostBuild({ cwd: deps.cwd });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -381,6 +565,7 @@ export async function runNodeMain(params = {}) {
     spawnSync: params.spawnSync ?? spawnSync,
     fs: params.fs ?? fs,
     stderr: params.stderr ?? process.stderr,
+    stdout: params.stdout ?? process.stdout,
     process: params.process ?? process,
     execPath: params.execPath ?? process.execPath,
     cwd: params.cwd ?? process.cwd(),
@@ -397,48 +582,72 @@ export async function runNodeMain(params = {}) {
     path: path.join(deps.cwd, sourceRoot),
   }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
-  deps.privateQaDistEntry = path.join(deps.distRoot, "plugin-sdk", "qa-lab.js");
-  deps.privateQaBundledCliEntry = path.join(deps.distRoot, "extensions", "qa-lab", "cli.js");
+  deps.privateQaRequiredDistEntries = resolvePrivateQaRequiredDistEntries(deps.distRoot);
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
   }
+  deps.outputTee = createRunNodeOutputTee(deps);
 
-  const buildRequirement = resolveBuildRequirement(deps);
-  if (!buildRequirement.shouldBuild) {
-    if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
-      return 1;
+  try {
+    let exitCode = 1;
+    const buildRequirement = resolveBuildRequirement(deps);
+    if (!buildRequirement.shouldBuild) {
+      if (!shouldSkipCleanWatchRuntimeSync(deps)) {
+        const synced = await withRunNodeBuildLock(
+          deps,
+          async () => await syncRuntimeArtifacts(deps),
+        );
+        if (!synced) {
+          return await closeRunNodeOutputTee(deps, 1);
+        }
+      }
+      exitCode = await runOpenClaw(deps);
+      return await closeRunNodeOutputTee(deps, exitCode);
     }
-    return await runOpenClaw(deps);
-  }
 
-  logRunner(
-    `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
-    deps,
-  );
-  const buildCmd = deps.execPath;
-  const buildArgs = compilerArgs;
-  const build = deps.spawn(buildCmd, buildArgs, {
-    cwd: deps.cwd,
-    env: deps.env,
-    stdio: "inherit",
-  });
+    const buildExitCode = await withRunNodeBuildLock(deps, async () => {
+      const lockedBuildRequirement = resolveBuildRequirement(deps);
+      if (!lockedBuildRequirement.shouldBuild) {
+        return (await syncRuntimeArtifacts(deps)) ? 0 : 1;
+      }
 
-  const buildRes = await waitForSpawnedProcess(build, deps);
-  if (buildRes.exitSignal) {
-    return getSignalExitCode(buildRes.exitSignal);
+      logRunner(
+        `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
+        deps,
+      );
+      const buildCmd = deps.execPath;
+      const buildArgs = compilerArgs;
+      const build = deps.spawn(buildCmd, buildArgs, {
+        cwd: deps.cwd,
+        env: deps.env,
+        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+      });
+      pipeSpawnedOutput(build, deps);
+
+      const buildRes = await waitForSpawnedProcess(build, deps);
+      const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
+      if (interruptedExitCode !== null) {
+        return interruptedExitCode;
+      }
+      if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
+        return buildRes.exitCode;
+      }
+      if (!(await syncRuntimeArtifacts(deps))) {
+        return 1;
+      }
+      writeBuildStamp(deps);
+      return 0;
+    });
+    if (buildExitCode !== 0) {
+      return await closeRunNodeOutputTee(deps, buildExitCode);
+    }
+    exitCode = await runOpenClaw(deps);
+    return await closeRunNodeOutputTee(deps, exitCode);
+  } catch (error) {
+    await closeRunNodeOutputTee(deps, 1);
+    throw error;
   }
-  if (buildRes.forwardedSignal) {
-    return getSignalExitCode(buildRes.forwardedSignal);
-  }
-  if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
-    return buildRes.exitCode;
-  }
-  if (!syncRuntimeArtifacts(deps)) {
-    return 1;
-  }
-  writeBuildStamp(deps);
-  return await runOpenClaw(deps);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
