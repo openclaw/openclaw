@@ -2,7 +2,6 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
-import { appendControlUiAuthToken } from "../control-ui-auth.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -646,9 +645,16 @@ function renderAvatar(
 
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
+      if (authToken?.trim() && assistantAvatar.startsWith("/")) {
+        return html`<img
+          class="chat-avatar ${className} chat-avatar--logo"
+          src="${agentLogoUrl(basePath ?? "")}"
+          alt="${assistantName}"
+        />`;
+      }
       return html`<img
         class="chat-avatar ${className}"
-        src="${appendControlUiAuthToken(assistantAvatar, authToken)}"
+        src="${assistantAvatar}"
         alt="${assistantName}"
       />`;
     }

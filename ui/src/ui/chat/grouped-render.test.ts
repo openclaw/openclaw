@@ -144,7 +144,7 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
-  it("appends the gateway token to assistant avatar routes", () => {
+  it("falls back to the logo while authenticated avatar routes are loading", () => {
     const container = document.createElement("div");
     renderAssistantMessage(
       container,
@@ -159,7 +159,7 @@ describe("grouped chat rendering", () => {
     );
 
     const img = container.querySelector("img.chat-avatar");
-    expect(img?.getAttribute("src")).toBe("/avatar/main?token=session-token");
+    expect(img?.getAttribute("src")).toBe("/openclaw-logo.svg");
   });
 
   it("positions delete confirm by message side", () => {

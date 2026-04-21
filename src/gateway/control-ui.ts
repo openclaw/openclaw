@@ -211,6 +211,20 @@ function resolveAssistantMediaAuthToken(req: IncomingMessage): string | undefine
   }
 }
 
+function resolveControlUiReadAuthToken(
+  req: IncomingMessage,
+  opts?: { allowQueryToken?: boolean },
+): string | undefined {
+  const bearer = getBearerToken(req);
+  if (bearer) {
+    return bearer;
+  }
+  if (!opts?.allowQueryToken) {
+    return undefined;
+  }
+  return resolveAssistantMediaAuthToken(req);
+}
+
 async function authorizeControlUiReadRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -219,13 +233,16 @@ async function authorizeControlUiReadRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    allowQueryToken?: boolean;
   },
 ): Promise<boolean> {
   if (!opts?.auth) {
     return true;
   }
 
-  const token = resolveAssistantMediaAuthToken(req);
+  const token = resolveControlUiReadAuthToken(req, {
+    allowQueryToken: opts.allowQueryToken,
+  });
   const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -358,6 +375,7 @@ export async function handleControlUiAssistantMediaRequest(
       trustedProxies: opts?.trustedProxies,
       allowRealIpFallback: opts?.allowRealIpFallback,
       rateLimiter: opts?.rateLimiter,
+      allowQueryToken: true,
     }))
   ) {
     return true;

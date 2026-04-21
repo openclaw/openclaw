@@ -543,9 +543,12 @@ describe("handleControlUiHttpRequest", () => {
       await fs.writeFile(avatarPath, "avatar-bytes\n");
 
       const { res, handled } = await runAvatarRequest({
-        url: "/avatar/main?token=test-token",
+        url: "/avatar/main",
         method: "GET",
         auth: { mode: "token", token: "test-token", allowTailscale: false },
+        headers: {
+          authorization: "Bearer test-token",
+        },
         resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
       });
 
@@ -558,9 +561,12 @@ describe("handleControlUiHttpRequest", () => {
 
   it("returns avatar metadata when auth is enabled and the token is valid", async () => {
     const { res, end, handled } = await runAvatarRequest({
-      url: "/avatar/main?meta=1&token=test-token",
+      url: "/avatar/main?meta=1",
       method: "GET",
       auth: { mode: "token", token: "test-token", allowTailscale: false },
+      headers: {
+        authorization: "Bearer test-token",
+      },
       resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
     });
 
