@@ -284,8 +284,8 @@ function cloneMemoryPublicArtifact(
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const listArtifacts = activeMemoryCapability?.capability.publicArtifacts?.listArtifacts;
-  const artifacts = (await listArtifacts?.(params)) ?? [];
+  const provider = activeMemoryCapability?.capability.publicArtifacts;
+  const artifacts = (await provider?.listArtifacts(params)) ?? [];
   return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
     const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
     if (workspaceOrder !== 0) {
