@@ -1,6 +1,16 @@
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import { collectTelegramSecurityAuditFindings } from "./security-audit.js";
+
+const resolveTelegramDmPolicy = createScopedDmSecurityResolver<ResolvedTelegramAccount>({
+  channelKey: "telegram",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
+});
 
 const collectTelegramSecurityWarnings =
   createAllowlistProviderRouteAllowlistWarningCollector<ResolvedTelegramAccount>({
@@ -24,13 +34,7 @@ const collectTelegramSecurityWarnings =
   });
 
 export const telegramSecurityAdapter = {
-  dm: {
-    channelKey: "telegram",
-    resolvePolicy: (account: ResolvedTelegramAccount) => account.config.dmPolicy,
-    resolveAllowFrom: (account: ResolvedTelegramAccount) => account.config.allowFrom,
-    policyPathSuffix: "dmPolicy",
-    normalizeEntry: (raw: string) => raw.replace(/^(telegram|tg):/i, ""),
-  },
+  resolveDmPolicy: resolveTelegramDmPolicy,
   collectWarnings: collectTelegramSecurityWarnings,
   collectAuditFindings: collectTelegramSecurityAuditFindings,
-};
+} satisfies NonNullable<ChannelPlugin<ResolvedTelegramAccount>["security"]>;

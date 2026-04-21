@@ -135,7 +135,7 @@ export function listReadOnlyChannelPluginsForConfig(
         workspaceDir,
         env,
         cache: options.cache,
-        includePersistedAuthState: options.includePersistedAuthState,
+        includePersistedAuthState: options.includePersistedAuthState ?? false,
         manifestRecords: externalManifestRecords,
       }),
     ),
