@@ -56,6 +56,7 @@ describe("handleControlUiHttpRequest", () => {
     auth?: ResolvedGatewayAuth;
     basePath?: string;
     remoteAddress?: string;
+    headers?: IncomingMessage["headers"];
     rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
@@ -63,6 +64,7 @@ describe("handleControlUiHttpRequest", () => {
       {
         url: params.url,
         method: params.method,
+        headers: params.headers ?? {},
         socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
       } as IncomingMessage,
       res,
@@ -595,6 +597,10 @@ describe("handleControlUiHttpRequest", () => {
           method: "GET",
           rootPath: tmp,
           auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+          headers: {
+            host: "127.0.0.1:18789",
+            origin: "http://127.0.0.1:18789",
+          },
         });
         expect(handled).toBe(true);
         const parsed = parseBootstrapPayload(end);
@@ -612,6 +618,45 @@ describe("handleControlUiHttpRequest", () => {
           rootPath: tmp,
           auth: { mode: "token", token: "loopback-token", allowTailscale: false },
           remoteAddress: "203.0.113.10",
+        });
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.gatewayToken).toBeUndefined();
+      },
+    });
+  });
+
+  it("does not include the gateway token when the host header is not loopback", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { end, handled } = runControlUiRequest({
+          url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+          method: "GET",
+          rootPath: tmp,
+          auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+          headers: {
+            host: "attacker.example:18789",
+          },
+        });
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.gatewayToken).toBeUndefined();
+      },
+    });
+  });
+
+  it("does not include the gateway token when the origin is not loopback", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { end, handled } = runControlUiRequest({
+          url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+          method: "GET",
+          rootPath: tmp,
+          auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+          headers: {
+            host: "127.0.0.1:18789",
+            origin: "https://attacker.example",
+          },
         });
         expect(handled).toBe(true);
         const parsed = parseBootstrapPayload(end);

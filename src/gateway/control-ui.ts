@@ -44,10 +44,12 @@ import {
 import { sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
+  getHeader,
   resolveHttpBrowserOriginPolicy,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { isLoopbackHost, resolveHostName } from "./net.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -147,6 +149,24 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(JSON.stringify(body));
+}
+
+function hasTrustedLoopbackBootstrapOrigin(req: IncomingMessage): boolean {
+  const requestHost = resolveHostName(getHeader(req, "host"));
+  if (!requestHost || !isLoopbackHost(requestHost)) {
+    return false;
+  }
+
+  const origin = getHeader(req, "origin")?.trim();
+  if (!origin || origin === "null") {
+    return true;
+  }
+
+  try {
+    return isLoopbackHost(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
 }
 
 function respondControlUiAssetsUnavailable(
@@ -684,7 +704,8 @@ export async function handleControlUiHttpRequest(
       opts?.auth?.mode === "token" &&
       typeof opts.auth.token === "string" &&
       opts.auth.token.trim().length > 0 &&
-      isLocalDirectRequest(req)
+      isLocalDirectRequest(req) &&
+      hasTrustedLoopbackBootstrapOrigin(req)
         ? opts.auth.token.trim()
         : undefined;
     const avatarValue = resolveAssistantAvatarUrl({
