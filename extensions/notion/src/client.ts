@@ -109,13 +109,15 @@ export class NotionApiClient {
   }
 
   async search(query: string, kind?: string, pageSize?: number, cursor?: string) {
-    const params = new URLSearchParams();
-    params.append('query', query);
-    if (kind) {params.append('filter', JSON.stringify({ property: 'object', value: kind }));}
-    if (pageSize) {params.append('page_size', String(pageSize));}
-    if (cursor) {params.append('start_cursor', cursor);}
+    const body: Record<string, unknown> = { query };
+    if (kind) body.filter = { property: 'object', value: kind };
+    if (pageSize) body.page_size = pageSize;
+    if (cursor) body.start_cursor = cursor;
     
-    return this.request(`/search?${params.toString()}`);
+    return this.request('/search', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   }
 
   async fetchPage(pageId: string, includeBlocks?: boolean) {
@@ -165,17 +167,23 @@ export class NotionApiClient {
 
   async updatePage(pageId: string, properties?: unknown, appendContent?: unknown[], icon?: unknown, cover?: unknown, eraseContent?: boolean, archive?: boolean, restore?: boolean) {
     const body: Record<string, unknown> = {};
-    if (properties) {body.properties = properties;}
-    if (appendContent) {body.children = appendContent;}
-    if (icon) {body.icon = icon;}
-    if (cover) {body.cover = cover;}
-    if (archive) {body.archived = true;}
-    if (restore) {body.archived = false;}
+    if (properties) body.properties = properties;
+    if (icon) body.icon = icon;
+    if (cover) body.cover = cover;
+    if (archive) body.archived = true;
+    if (restore) body.archived = false;
     
-    return this.request(`/pages/${pageId}`, {
+    const pageResult = await this.request(`/pages/${pageId}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
+
+    if (!pageResult.ok || !appendContent) {
+      return pageResult;
+    }
+
+    // Append blocks via separate endpoint
+    return this.appendBlockChildren(pageId, appendContent);
   }
 
   async createDataSource(parentDatabaseId: string, title: string, description?: string, properties?: unknown, icon?: unknown) {
@@ -227,12 +235,12 @@ export class NotionApiClient {
     return this.request(`/comments?block_id=${blockId}&${params.toString()}`);
   }
 
-  async createComment(blockId: string, richText: unknown[], parentId?: string, parentType: 'page_id' | 'block_id' = 'block_id') {
+  async createComment(blockId: string, richText: unknown[], parentId?: string) {
     const body: Record<string, unknown> = {
-      parent: { type: parentType, [parentType]: blockId },
+      parent: { type: blockId.startsWith('page') ? 'page_id' : 'block_id', [blockId.startsWith('page') ? 'page_id' : 'block_id']: blockId },
       rich_text: richText,
     };
-    if (parentId) body.parent_id = parentId;
+    if (parentId) {body.parent_id = parentId;}
     
     return this.request('/comments', {
       method: 'POST',

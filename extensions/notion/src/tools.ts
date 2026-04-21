@@ -610,6 +610,7 @@ const notionPlugin = definePluginEntry({
             blockId: { type: "string" },
             richText: { type: "array" },
             parentId: { type: "string" },
+            parentType: { type: "string", enum: ["page_id", "block_id"] },
           },
           required: ["blockId", "richText"],
         },
