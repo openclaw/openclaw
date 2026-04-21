@@ -216,6 +216,29 @@ describe("resolveDeliveryTarget", () => {
     expect(result.to).toBe("room-allowed");
   });
 
+  it("applies allowFrom rerouting to dry-run delivery previews", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-preview",
+      lastChannel: "alpha",
+      lastTo: "room-denied",
+    });
+    setStoredAlphaAllowFrom(["room-allowed"]);
+
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const result = await resolveDeliveryTarget(
+      cfg,
+      AGENT_ID,
+      {
+        channel: "last",
+        to: undefined,
+      },
+      { dryRun: true },
+    );
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
+  });
+
   it("keeps explicit delivery target unchanged", async () => {
     setLastSessionEntry({
       sessionId: "sess-w2",
