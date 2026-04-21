@@ -145,6 +145,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   const pendingHeredocs: HeredocSpec[] = [];
   let inHeredocBody = false;
   let heredocLine = "";
+  let unquotedHeredocLogicalLine = "";
 
   const pushPart = () => {
     const trimmed = buf.trim();
@@ -184,6 +185,19 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     return false;
   };
 
+  const stripUnquotedHeredocLineContinuation = (
+    line: string,
+  ): { line: string; continues: boolean } => {
+    let trailingSlashes = 0;
+    for (let i = line.length - 1; i >= 0 && line[i] === "\\"; i -= 1) {
+      trailingSlashes += 1;
+    }
+    if (trailingSlashes % 2 === 1) {
+      return { line: line.slice(0, -1), continues: true };
+    }
+    return { line, continues: false };
+  };
+
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
     const next = command[i + 1];
@@ -193,10 +207,23 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
         const current = pendingHeredocs[0];
         if (current) {
           const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-          if (line === current.delimiter) {
-            pendingHeredocs.shift();
-          } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
-            return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
+          if (current.quoted) {
+            if (line === current.delimiter) {
+              pendingHeredocs.shift();
+            }
+          } else {
+            const continued = stripUnquotedHeredocLineContinuation(line);
+            if (!unquotedHeredocLogicalLine && !continued.continues && line === current.delimiter) {
+              pendingHeredocs.shift();
+            } else {
+              unquotedHeredocLogicalLine += continued.line;
+              if (!continued.continues) {
+                if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalLine)) {
+                  return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
+                }
+                unquotedHeredocLogicalLine = "";
+              }
+            }
           }
         }
         heredocLine = "";
@@ -332,7 +359,11 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   if (inHeredocBody && pendingHeredocs.length > 0) {
     const current = pendingHeredocs[0];
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-    if (line === current.delimiter) {
+    if (
+      current.quoted
+        ? line === current.delimiter
+        : !unquotedHeredocLogicalLine && line === current.delimiter
+    ) {
       pendingHeredocs.shift();
       if (pendingHeredocs.length === 0) {
         inHeredocBody = false;
