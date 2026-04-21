@@ -63,7 +63,7 @@ function redactGatewayUrlSecretsInText(text: string): string {
   });
 }
 
-function formatChannelsStatusJsonError(err: unknown): string {
+function formatChannelsStatusError(err: unknown): string {
   return redactGatewayUrlSecretsInText(formatErrorMessage(err));
 }
 
@@ -211,7 +211,8 @@ export async function channelsStatusCommand(
     }
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
-    runtime.error(`Gateway not reachable: ${String(err)}`);
+    const safeError = formatChannelsStatusError(err);
+    runtime.error(`Gateway not reachable: ${safeError}`);
     const cfg = await requireValidConfigSnapshot(runtime);
     if (!cfg) {
       return;
@@ -228,7 +229,7 @@ export async function channelsStatusCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, {
         gatewayReachable: false,
-        error: formatChannelsStatusJsonError(err),
+        error: safeError,
         configOnly: true,
         config: {
           path: snapshot.path,

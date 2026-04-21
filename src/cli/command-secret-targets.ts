@@ -81,8 +81,9 @@ function isScopedChannelSecretTargetEntry(params: {
     pathPattern?: string;
     refPathPattern?: string;
   };
+  pluginChannelId: string;
 }): boolean {
-  const channelId = /^channels\.([^.]+)\./.exec(params.entry.id)?.[1];
+  const channelId = normalizeOptionalString(params.pluginChannelId);
   if (!channelId) {
     return false;
   }
@@ -107,7 +108,7 @@ function getConfiguredChannelSecretTargetIds(
     includePersistedAuthState: false,
   })) {
     for (const entry of plugin.secrets?.secretTargetRegistryEntries ?? []) {
-      if (isScopedChannelSecretTargetEntry({ entry })) {
+      if (isScopedChannelSecretTargetEntry({ entry, pluginChannelId: plugin.id })) {
         targetIds.add(entry.id);
       }
     }

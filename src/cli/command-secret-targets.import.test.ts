@@ -71,11 +71,22 @@ describe("command secret targets module import", () => {
               includeInConfigure: true,
               includeInAudit: true,
             },
+            {
+              id: "channels.discord.token",
+              targetType: "channels.discord.token",
+              configFile: "openclaw.json",
+              pathPattern: "channels.discord.token",
+              secretShape: "secret_input",
+              expectedResolvedValue: "string",
+              includeInPlan: true,
+              includeInConfigure: true,
+              includeInAudit: true,
+            },
           ],
         },
       },
       {
-        id: "external-chat-plugin",
+        id: "external-chat",
         secrets: {
           secretTargetRegistryEntries: [
             {
@@ -112,6 +123,7 @@ describe("command secret targets module import", () => {
 
     expect(targets.has("channels.external-chat.token")).toBe(true);
     expect(targets.has("channels.telegram.botToken")).toBe(true);
+    expect(targets.has("channels.discord.token")).toBe(false);
     expect(targets.has("channels.telegram.gatewayToken")).toBe(false);
     expect(targets.has("channels.telegram.gatewayTokenRef")).toBe(false);
     expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);

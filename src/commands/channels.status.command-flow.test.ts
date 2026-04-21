@@ -266,7 +266,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       effectiveConfig: { secretResolved: true, channels: {} },
       diagnostics: [],
     });
-    const { runtime, logs } = createRuntimeCapture();
+    const { runtime, logs, errors } = createRuntimeCapture();
 
     await channelsStatusCommand({ json: true, probe: false }, runtime as never);
 
@@ -278,6 +278,8 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       }),
     );
     const payload = JSON.parse(logs.at(-1) ?? "{}");
+    expect(errors.join("\n")).not.toContain("user:pass");
+    expect(errors.join("\n")).not.toContain("secret-token");
     expect(payload.error).toContain("Gateway target:");
     expect(payload.error).not.toContain("user:pass");
     expect(payload.error).not.toContain("secret-token");
