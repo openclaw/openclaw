@@ -20,6 +20,8 @@ const runtimeModuleId = new URL("../src/runtime.js", import.meta.url).pathname;
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+const loadedMonitorModules = new Set<MonitorModule>();
+
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
   deleteWebhookMock: AsyncUnknownMock;
@@ -87,7 +89,11 @@ async function importMonitorModule(params: {
     vi.doUnmock(apiModuleId);
     vi.doUnmock(runtimeModuleId);
   }
-  return (await import(`${monitorModuleUrl}?t=${params.cacheBust}-${Date.now()}`)) as MonitorModule;
+  const module = (await import(
+    `${monitorModuleUrl}?t=${params.cacheBust}-${Date.now()}`
+  )) as MonitorModule;
+  loadedMonitorModules.add(module);
+  return module;
 }
 
 async function importSecretInputModule(cacheBust: string): Promise<SecretInputModule> {
@@ -103,9 +109,13 @@ async function importWebhookModule(cacheBust: string): Promise<WebhookModule> {
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
   (await importWebhookModule("reset-webhook")).clearZaloWebhookSecurityStateForTest();
+  for (const module of loadedMonitorModules) {
+    module.__testing.clearHostedMediaRouteRefsForTest();
+  }
   (
     await importMonitorModule({ cacheBust: "reset-monitor", mocked: false })
   ).__testing.clearHostedMediaRouteRefsForTest();
+  loadedMonitorModules.clear();
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 

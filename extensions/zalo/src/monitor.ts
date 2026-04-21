@@ -267,6 +267,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 
     try {
       const response = await getUpdates(token, { timeout: pollTimeout }, fetcher);
+      if (isStopped() || abortSignal.aborted) {
+        return undefined;
+      }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
         await processUpdate({
@@ -801,6 +804,11 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       handler();
     }
   };
+  const stopOnAbort = () => {
+    stop();
+  };
+
+  abortSignal.addEventListener("abort", stopOnAbort, { once: true });
 
   runtime.log?.(
     `[${account.accountId}] Zalo provider init mode=${mode} mediaMaxMb=${String(effectiveMediaMaxMb)}`,
@@ -952,6 +960,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     );
     throw err;
   } finally {
+    abortSignal.removeEventListener("abort", stopOnAbort);
     await cleanupWebhook?.();
     stop();
     runtime.log?.(`[${account.accountId}] Zalo provider stopped mode=${mode}`);
