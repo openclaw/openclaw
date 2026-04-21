@@ -10,20 +10,23 @@ title: "Thinking Levels"
 ## What it does
 
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
-- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive`
+- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive | max`
   - minimal → “think”
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
   - xhigh → “ultrathink+” (GPT-5.2 + Codex models and Anthropic Claude Opus 4.7 effort)
   - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock and Anthropic Claude Opus 4.7)
+  - max → provider max reasoning (currently Anthropic Claude Opus 4.7)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
-  - `highest`, `max` map to `high`.
+  - `highest` maps to `high`.
 - Provider notes:
   - `adaptive` is only advertised in native command menus and pickers for providers/models that declare adaptive thinking support. It remains accepted as a typed directive for compatibility with existing configs and aliases.
+  - `max` is only advertised in native command menus and pickers for providers/models that declare max thinking support. Existing stored `max` settings are remapped to the largest supported level for the selected model when the model does not support `max`.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.7 does not default to adaptive thinking. Its API effort default remains provider-owned unless you explicitly set a thinking level.
   - Anthropic Claude Opus 4.7 maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus 4.7 effort setting.
+  - Anthropic Claude Opus 4.7 also exposes `/think max`; it maps to the same provider-owned max effort path.
   - OpenAI GPT models map `/think` through model-specific Responses API effort support. `/think off` sends `reasoning.effort: "none"` only when the target model supports it; otherwise OpenClaw omits the disabled reasoning payload instead of sending an unsupported value.
   - MiniMax (`minimax/*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from MiniMax's non-native Anthropic stream format.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
@@ -112,6 +115,6 @@ title: "Thinking Levels"
 - The picker stays provider-aware:
   - most providers show `off | minimal | low | medium | high`
   - Anthropic/Bedrock Claude 4.6 shows `off | minimal | low | medium | high | adaptive`
-  - Anthropic Claude Opus 4.7 shows `off | minimal | low | medium | high | xhigh | adaptive`
+  - Anthropic Claude Opus 4.7 shows `off | minimal | low | medium | high | xhigh | adaptive | max`
   - Z.AI shows binary `off | on`
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.

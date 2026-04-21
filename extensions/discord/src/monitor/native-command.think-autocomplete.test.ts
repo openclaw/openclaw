@@ -37,6 +37,7 @@ const providerThinkingMocks = vi.hoisted(() => ({
   resolveProviderAdaptiveThinking: vi.fn(),
   resolveProviderBinaryThinking: vi.fn(),
   resolveProviderDefaultThinkingLevel: vi.fn(),
+  resolveProviderMaxThinking: vi.fn(),
   resolveProviderXHighThinking: vi.fn(),
 }));
 const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
@@ -131,6 +132,7 @@ async function loadDiscordThinkAutocompleteModulesForTest() {
     resolveProviderAdaptiveThinking: providerThinkingMocks.resolveProviderAdaptiveThinking,
     resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
     resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderMaxThinking: providerThinkingMocks.resolveProviderMaxThinking,
     resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
   }));
   const commandAuth = await import("openclaw/plugin-sdk/command-auth");
@@ -147,6 +149,7 @@ describe("discord native /think autocomplete", () => {
     providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderAdaptiveThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderMaxThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
         ? true
@@ -177,6 +180,10 @@ describe("discord native /think autocomplete", () => {
     providerThinkingMocks.resolveProviderAdaptiveThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReset();
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderMaxThinking.mockReset();
+    providerThinkingMocks.resolveProviderMaxThinking.mockImplementation(({ provider, context }) =>
+      provider === "anthropic" && context.modelId === "claude-opus-4-7" ? true : undefined,
+    );
     providerThinkingMocks.resolveProviderXHighThinking.mockReset();
     providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
@@ -263,7 +270,63 @@ describe("discord native /think autocomplete", () => {
     });
     const values = choices.map((choice) => choice.value);
     expect(values).toContain("xhigh");
+    expect(values).not.toContain("max");
     expect(values).not.toContain("adaptive");
+  });
+
+  it("includes max only for provider-advertised models", async () => {
+    fs.writeFileSync(
+      STORE_PATH,
+      JSON.stringify({
+        [SESSION_KEY]: {
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-7",
+        },
+      }),
+      "utf8",
+    );
+    const cfg = createConfig();
+    resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
+    const interaction = {
+      options: {
+        getFocused: () => ({ value: "ma" }),
+      },
+      respond: async (_choices: Array<{ name: string; value: string }>) => {},
+      rawData: {
+        member: { roles: [] },
+      },
+      channel: { id: "C1", type: ChannelType.GuildText },
+      user: { id: "U1" },
+      guild: { id: "G1" },
+      client: {},
+    } as unknown as AutocompleteInteraction & {
+      respond: (choices: Array<{ name: string; value: string }>) => Promise<void>;
+    };
+
+    const context = await resolveDiscordNativeChoiceContext({
+      interaction,
+      cfg,
+      accountId: "default",
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const command = findCommandByNativeName("think", "discord");
+    const levelArg = command?.args?.find((entry) => entry.name === "level");
+    expect(command).toBeTruthy();
+    expect(levelArg).toBeTruthy();
+    if (!command || !levelArg) {
+      return;
+    }
+
+    const choices = resolveCommandArgChoices({
+      command,
+      arg: levelArg,
+      cfg,
+      provider: context?.provider,
+      model: context?.model,
+    });
+    const values = choices.map((choice) => choice.value);
+    expect(values).toContain("max");
   });
 
   it("falls back when a configured binding is unavailable", async () => {

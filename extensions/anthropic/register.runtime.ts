@@ -495,6 +495,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
     supportsAdaptiveThinking: ({ modelId }) => supportsAnthropicAdaptiveThinking(modelId),
+    supportsMaxThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
       isAnthropicOpus47Model(modelId)
