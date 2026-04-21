@@ -138,4 +138,54 @@ describe("Zalo polling media replies", () => {
 
     expect(registry.httpRoutes).toHaveLength(0);
   });
+
+  it("re-registers the hosted media route after the active registry swaps", async () => {
+    const firstRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(firstRegistry);
+    getUpdatesMock.mockImplementation(() => new Promise(() => {}));
+
+    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const firstAbort = new AbortController();
+    const firstRuntime = createRuntimeEnv();
+    const { account, config } = createLifecycleMonitorSetup({
+      accountId: "acct-zalo-polling-media",
+      dmPolicy: "open",
+      webhookUrl: "https://example.com/hooks/zalo",
+    });
+    const firstRun = monitorZaloProvider({
+      token: "zalo-token",
+      account,
+      config,
+      runtime: firstRuntime,
+      abortSignal: firstAbort.signal,
+    });
+
+    const secondRegistry = createEmptyPluginRegistry();
+    const secondAbort = new AbortController();
+    const secondRuntime = createRuntimeEnv();
+    let secondRun: Promise<void> | undefined;
+
+    try {
+      await vi.waitFor(() => expect(firstRegistry.httpRoutes).toHaveLength(1));
+
+      setActivePluginRegistry(secondRegistry);
+      secondRun = monitorZaloProvider({
+        token: "zalo-token",
+        account,
+        config,
+        runtime: secondRuntime,
+        abortSignal: secondAbort.signal,
+      });
+
+      await vi.waitFor(() => expect(secondRegistry.httpRoutes).toHaveLength(1));
+    } finally {
+      firstAbort.abort();
+      secondAbort.abort();
+      await firstRun;
+      await secondRun;
+    }
+
+    expect(firstRegistry.httpRoutes).toHaveLength(0);
+    expect(secondRegistry.httpRoutes).toHaveLength(0);
+  });
 });

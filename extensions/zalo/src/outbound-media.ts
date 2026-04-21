@@ -140,16 +140,21 @@ export async function prepareHostedZaloMediaUrl(params: {
   const publicBaseUrl = new URL(params.webhookUrl).origin;
 
   await writeFile(resolveHostedZaloMediaBufferPath(id), media.buffer, { mode: 0o600 });
-  await writeFile(
-    resolveHostedZaloMediaMetadataPath(id),
-    JSON.stringify({
-      routePath,
-      token,
-      contentType: media.contentType,
-      expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
-    } satisfies HostedZaloMediaMetadata),
-    { encoding: "utf8", mode: 0o600 },
-  );
+  try {
+    await writeFile(
+      resolveHostedZaloMediaMetadataPath(id),
+      JSON.stringify({
+        routePath,
+        token,
+        contentType: media.contentType,
+        expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
+      } satisfies HostedZaloMediaMetadata),
+      { encoding: "utf8", mode: 0o600 },
+    );
+  } catch (error) {
+    await deleteHostedZaloMediaEntry(id);
+    throw error;
+  }
 
   return `${publicBaseUrl}${routePath}${id}?token=${token}`;
 }

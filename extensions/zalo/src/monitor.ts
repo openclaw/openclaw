@@ -101,23 +101,6 @@ function registerSharedHostedMediaRoute(params: {
   accountId: string;
   log?: (message: string) => void;
 }): () => void {
-  const existing = hostedMediaRouteRefs.get(params.path);
-  if (existing) {
-    existing.count += 1;
-    return () => {
-      const current = hostedMediaRouteRefs.get(params.path);
-      if (!current) {
-        return;
-      }
-      if (current.count > 1) {
-        current.count -= 1;
-        return;
-      }
-      hostedMediaRouteRefs.delete(params.path);
-      current.unregister();
-    };
-  }
-
   const unregister = registerPluginHttpRoute({
     auth: "plugin",
     match: "prefix",
@@ -136,6 +119,25 @@ function registerSharedHostedMediaRoute(params: {
       }
     },
   });
+
+  const existing = hostedMediaRouteRefs.get(params.path);
+  if (existing) {
+    existing.count += 1;
+    existing.unregister = unregister;
+    return () => {
+      const current = hostedMediaRouteRefs.get(params.path);
+      if (!current) {
+        return;
+      }
+      if (current.count > 1) {
+        current.count -= 1;
+        return;
+      }
+      hostedMediaRouteRefs.delete(params.path);
+      current.unregister();
+    };
+  }
+
   hostedMediaRouteRefs.set(params.path, { count: 1, unregister });
   return () => {
     const current = hostedMediaRouteRefs.get(params.path);
