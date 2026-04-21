@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -14,10 +15,20 @@ import {
 
 export { ABLITERATION_DEFAULT_MODEL_REF };
 
+function findExistingProviderKey(
+  providers: Record<string, ModelProviderConfig>,
+  providerId: string,
+): string | undefined {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  return Object.keys(providers).find((key) => normalizeProviderId(key) === normalizedProviderId);
+}
+
 function applyAbliterationProviderConfigInternal(cfg: OpenClawConfig): OpenClawConfig {
   const providerId = "abliteration";
   const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProvider = providers[providerId];
+  const existingProviderKey = findExistingProviderKey(providers, providerId);
+  const existingProvider =
+    existingProviderKey !== undefined ? providers[existingProviderKey] : undefined;
   const existingModels = existingProvider?.models ?? [];
   const catalogModels = ABLITERATION_MODEL_CATALOG.map(buildAbliterationModelDefinition);
   const mergedModels =
@@ -32,6 +43,9 @@ function applyAbliterationProviderConfigInternal(cfg: OpenClawConfig): OpenClawC
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
     typeof existingApiKey === "string" ? existingApiKey.trim() : existingApiKey;
+  if (existingProviderKey && existingProviderKey !== providerId) {
+    delete providers[existingProviderKey];
+  }
 
   providers[providerId] = {
     ...existingProviderRest,

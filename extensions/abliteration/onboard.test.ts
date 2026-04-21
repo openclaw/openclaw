@@ -63,4 +63,47 @@ describe("abliteration onboard", () => {
 
     expect(next.models?.providers?.abliteration?.apiKey).toEqual(apiKey);
   });
+
+  it("rewrites normalized variant provider keys in place", () => {
+    const next = applyAbliterationProviderConfig({
+      models: {
+        providers: {
+          Abliteration: {
+            api: "openai-completions",
+            baseUrl: "https://legacy.abliteration.ai/v1",
+            apiKey: "  test-key  ",
+            models: [
+              {
+                id: "old-model",
+                name: "Old Model",
+                reasoning: false,
+                input: ["text"],
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                },
+                contextWindow: 4096,
+                maxTokens: 1024,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(next.models?.providers?.Abliteration).toBeUndefined();
+    expect(Object.keys(next.models?.providers ?? {})).toEqual(["abliteration"]);
+    expect(next.models?.providers?.abliteration).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.abliteration.ai/v1",
+      authHeader: true,
+      apiKey: "test-key",
+    });
+    expect(next.models?.providers?.abliteration?.models.map((model) => model.id)).toEqual([
+      "old-model",
+      "abliterated-model",
+    ]);
+  });
 });
