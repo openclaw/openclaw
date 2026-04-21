@@ -234,6 +234,27 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(hiddenEntry?.exposure?.includeInAvailableSkillsPrompt).toBe(false);
   });
 
+  it("discovers skills nested under workspace skill subdirectories", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "coze", "koze-retrieval"),
+      name: "koze-retrieval",
+      description: "Nested retrieval skill",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "catalog", "coze", "deeper-skill"),
+      name: "deeper-skill",
+      description: "Deeply nested skill",
+    });
+
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir);
+
+    expect(entries.map((entry) => entry.skill.name).sort()).toEqual([
+      "deeper-skill",
+      "koze-retrieval",
+    ]);
+  });
+
   it("applies agent skill filters and replacement semantics", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeWorkspaceSkills(workspaceDir, [

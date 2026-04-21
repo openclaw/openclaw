@@ -474,31 +474,30 @@ function loadSkillEntries(
         continue;
       }
       const skillMd = path.join(skillDir, "SKILL.md");
-      if (!fs.existsSync(skillMd)) {
-        continue;
-      }
-      const skillMdRealPath = resolveContainedSkillPath({
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
-        candidatePath: skillMd,
-      });
-      if (!skillMdRealPath) {
-        continue;
-      }
-      try {
-        const size = fs.statSync(skillMdRealPath).size;
-        if (size > limits.maxSkillFileBytes) {
-          skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-            skill: name,
-            filePath: skillMd,
-            size,
-            maxSkillFileBytes: limits.maxSkillFileBytes,
-          });
+      if (fs.existsSync(skillMd)) {
+        const skillMdRealPath = resolveContainedSkillPath({
+          source: params.source,
+          rootDir,
+          rootRealPath: baseDirRealPath,
+          candidatePath: skillMd,
+        });
+        if (!skillMdRealPath) {
           continue;
         }
-      } catch {
-        continue;
+        try {
+          const size = fs.statSync(skillMdRealPath).size;
+          if (size > limits.maxSkillFileBytes) {
+            skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
+              skill: name,
+              filePath: skillMd,
+              size,
+              maxSkillFileBytes: limits.maxSkillFileBytes,
+            });
+            continue;
+          }
+        } catch {
+          continue;
+        }
       }
 
       const loaded = loadSkillsFromDirSafe({
