@@ -16,7 +16,7 @@ export type SessionsProps = {
   result: SessionsListResult | null;
   error: string | null;
   activeMinutes: string;
-  limit: string;
+  limit: number;
   includeGlobal: boolean;
   includeUnknown: boolean;
   basePath: string;
@@ -286,6 +286,7 @@ export function renderSessions(props: SessionsProps) {
               })}
           />
         </label>
+
         <label class="field-inline">
           <span>Limit</span>
           <input
@@ -293,7 +294,7 @@ export function renderSessions(props: SessionsProps) {
             min="1"
             step="1"
             style="width: 64px;"
-            .value=${props.limit ?? ''}
+            .value=${props.limit > 0 ? String(props.limit) : ""}
             @input=${(e: Event) => {
               const value = (e.target as HTMLInputElement).value;
               const parsed = Number(value);
@@ -307,6 +308,7 @@ export function renderSessions(props: SessionsProps) {
             }}
           />
         </label>
+
         <label class="field-inline checkbox">
           <input
             type="checkbox"
@@ -321,6 +323,7 @@ export function renderSessions(props: SessionsProps) {
           />
           <span>Global</span>
         </label>
+
         <label class="field-inline checkbox">
           <input
             type="checkbox"
@@ -397,7 +400,8 @@ export function renderSessions(props: SessionsProps) {
                 </th>
                 ${sortHeader("key", "Key", "data-table-key-col")}
                 <th>Label</th>
-                ${sortHeader("kind", "Kind")} ${sortHeader("updated", "Updated")}
+                ${sortHeader("kind", "Kind")}
+                ${sortHeader("updated", "Updated")}
                 ${sortHeader("tokens", "Tokens")}
                 <th>Compaction</th>
                 <th>Thinking</th>
