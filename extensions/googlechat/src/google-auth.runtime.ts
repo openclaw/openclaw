@@ -280,49 +280,50 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     throw new Error("Google Chat service account file path is empty");
   }
 
-  let loadPath = resolvedPath;
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
-    loadPath = await fs.realpath(resolvedPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw new Error("Failed to load Google Chat service account file.", { cause: error });
+    handle = await fs.open(resolvedPath, "r");
+  } catch {
+    throw new Error("Failed to load Google Chat service account file.");
+  }
+
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("Google Chat service account file must be a regular file.");
     }
-  }
+    if (stat.size > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
+      throw new Error(
+        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
+      );
+    }
 
-  let stat: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stat = await fs.stat(loadPath);
-  } catch {
-    throw new Error("Failed to load Google Chat service account file.");
-  }
+    let raw: string;
+    try {
+      raw = await handle.readFile({ encoding: "utf8" });
+    } catch {
+      throw new Error("Failed to load Google Chat service account file.");
+    }
+    if (Buffer.byteLength(raw, "utf8") > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
+      throw new Error(
+        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
+      );
+    }
 
-  if (!stat.isFile()) {
-    throw new Error("Google Chat service account file must be a regular file.");
-  }
-  if (stat.size > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
-    throw new Error(
-      `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
-    );
-  }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("Invalid Google Chat service account JSON.");
+    }
 
-  let raw: string;
-  try {
-    raw = await fs.readFile(loadPath, "utf8");
-  } catch {
-    throw new Error("Failed to load Google Chat service account file.");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Google Chat service account file must contain a JSON object.");
+    }
+    return parsed as Record<string, unknown>;
+  } finally {
+    await handle.close().catch(() => {});
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("Invalid Google Chat service account JSON.");
-  }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Google Chat service account file must contain a JSON object.");
-  }
-  return parsed as Record<string, unknown>;
 }
 
 function sanitizeGoogleAuthInit(init?: RequestInit): RequestInit | undefined {
