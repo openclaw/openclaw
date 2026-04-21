@@ -595,12 +595,12 @@ start_server() {
 }
 
 install_latest_release() {
-  local version_args=()
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    version_args=(--version "$INSTALL_VERSION")
-  fi
   guest_exec curl -fsSL "$INSTALL_URL" -o /tmp/openclaw-install.sh
-  guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh "${version_args[@]}" --no-onboard
+  if [[ -n "$INSTALL_VERSION" ]]; then
+    guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh --version "$INSTALL_VERSION" --no-onboard
+  else
+    guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh --no-onboard
+  fi
   guest_exec openclaw --version
 }
 
