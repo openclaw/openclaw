@@ -20,14 +20,20 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Exec/YOLO: stop rejecting gateway-host exec in `security=full` plus `ask=off` mode via the Python/Node script preflight hardening path, so promptless YOLO exec once again runs direct interpreter stdin and heredoc forms such as `node <<'NODE' ... NODE`.
+- OpenAI Codex: normalize legacy `openai-completions` transport overrides on default OpenAI/Codex and GitHub Copilot-compatible hosts back to the native Codex Responses transport while leaving custom proxies untouched. (#45304, #42194) Thanks @dyss1992 and @DeadlySilent.
+- Anthropic/plugins: scope Anthropic `api: "anthropic-messages"` defaulting to Anthropic-owned providers, so `openai-codex` and other providers without an explicit `api` no longer get rewritten to the wrong transport. Fixes #64534.
 - fix(qqbot): add SSRF guard to direct-upload URL paths in uploadC2CMedia and uploadGroupMedia [AI-assisted]. (#69595) Thanks @pgondhi987.
 - fix(gateway): enforce allowRequestSessionKey gate on template-rendered mapping sessionKeys. (#69381) Thanks @pgondhi987.
+- Browser/Chrome MCP: surface `DevToolsActivePort` attach failures as browser-connectivity errors instead of a generic "waiting for tabs" timeout, and point signed-out fallbacks toward the managed `openclaw` profile.
 - Webchat/images: treat inline image attachments as media for empty-turn gating while still ignoring metadata-only blank turns. (#69474) Thanks @Jaswir.
 - Discord/think: only show `adaptive` in `/think` autocomplete for provider/model pairs that actually support provider-managed adaptive thinking, so GPT/OpenAI models no longer advertise an Anthropic-only option.
 - Thinking: only expose `max` for models that explicitly support provider max reasoning, and remap stored `max` settings to the largest supported thinking mode when users switch to another model.
+- Gateway/usage: bound the cost usage cache with FIFO eviction so date/range lookups cannot grow unbounded. (#68842) Thanks @Feelw00.
 - OpenAI/Responses: resolve `/think` levels against each GPT model's supported reasoning efforts so `/think off` no longer becomes high reasoning or sends unsupported `reasoning.effort: "none"` payloads.
 - Lobster/TaskFlow: allow managed approval resumes to use `approvalId` without a resume token, and persist that id in approval wait state. (#69559) Thanks @kirkluokun.
 - Plugins/startup: install bundled runtime dependencies into each plugin's own runtime directory, reuse source-checkout repair caches after rebuilds, and log only packages that were actually installed so repeated Gateway starts stay quiet once deps are present.
+- Plugins/startup: ignore pnpm's `npm_execpath` when repairing bundled plugin runtime dependencies and skip workspace-only package specs so npm-only install flags or local workspace links do not break packaged plugin startup.
+- MCP: block interpreter-startup env keys such as `NODE_OPTIONS` for stdio servers while preserving ordinary credential and proxy env vars. (#69540) Thanks @drobison00.
 - Setup/TUI: relaunch the setup hatch TUI in a fresh process while preserving the configured gateway target and auth source, so onboarding recovers terminal state cleanly without exposing gateway secrets on command-line args. (#69524) Thanks @shakkernerd.
 - Codex: avoid re-exposing the image-generation tool on native vision turns with inbound images, and keep bare image-model overrides on the configured image provider. (#65061) Thanks @zhulijin1991.
 - Sessions/reset: clear auto-sourced model, provider, and auth-profile overrides on `/new` and `/reset` while preserving explicit user selections, so channel sessions stop staying pinned to runtime fallback choices. (#69419) Thanks @sk7n4k3d.
