@@ -47,6 +47,10 @@ function taskReferenceAt(task: TaskRecord): number {
 }
 
 function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
+  // Skip if createdAt is missing or invalid (0 or negative)
+  if (!task.createdAt || task.createdAt <= 0) {
+    return null;
+  }
   if (task.startedAt && task.startedAt < task.createdAt) {
     return createFinding({
       severity: "warn",
