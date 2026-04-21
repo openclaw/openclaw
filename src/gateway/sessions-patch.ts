@@ -22,6 +22,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 // the env-gated plan-mode debug log is OFF. Lets operators verify
 // "did the gate fire?" without flipping the config flag.
 const planApprovalGateLog = createSubsystemLogger("gateway/plan-approval-gate");
+// PR #68939 follow-up (P2.9 observability fix) — dedicated subsystem
+// logger for the execution-phase nudge scheduling closure. Without
+// this, the scheduler's internal `plan-execution-nudge crons
+// scheduled: count=N` confirmation log had no log sink (the closure
+// didn't pass a `log` param), leaving successful scheduling silent.
+// Live-observed 2026-04-21 smoke test: 6 nudges scheduled cleanly
+// but no observability trail in the gateway log.
+const planExecutionNudgeLog = createSubsystemLogger("gateway/plan-execution-nudge");
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -1089,6 +1097,7 @@ export async function applySessionsPatchToStore(params: {
                 sessionKey: sessionKeyForCron,
                 ...(agentIdForCron ? { agentId: agentIdForCron } : {}),
                 ...(executionCycleId ? { executionCycleId } : {}),
+                log: planExecutionNudgeLog,
               });
               if (scheduled.length === 0) {
                 return;
