@@ -889,6 +889,11 @@
   flex-wrap: wrap;
 }
 
+.chat-controls__agent {
+  min-width: 170px;
+  max-width: 280px;
+}
+
 .chat-controls__model {
   min-width: 170px;
   max-width: 320px;
@@ -919,6 +924,10 @@
   max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-controls__agent select {
+  max-width: 280px;
 }
 
 .chat-controls__model select {
@@ -952,6 +961,7 @@
     max-width: none;
   }
 
+  .chat-controls__agent,
   .chat-controls__model {
     min-width: 140px;
     max-width: none;
