@@ -15,6 +15,10 @@ import type {
   ToolResultFormat,
 } from "../../pi-embedded-subscribe.shared-types.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type {
+  EmbeddedRunLifecycleDecisionMode,
+  EmbeddedRunLifecycleSeam,
+} from "./lifecycle-seam.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
@@ -138,4 +142,8 @@ export type RunEmbeddedPiAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Internal B1 scaffold seam for outer-run lifecycle observation/decision wiring. */
+  lifecycleSeam?: EmbeddedRunLifecycleSeam;
+  /** Internal M14-B decision gate. Defaults to observe_only and does not enable live execution. */
+  lifecycleDecisionMode?: EmbeddedRunLifecycleDecisionMode;
 };

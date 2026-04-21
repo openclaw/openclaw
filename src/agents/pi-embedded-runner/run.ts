@@ -108,11 +108,21 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
 } from "./run/incomplete-turn.js";
+import {
+  createEmbeddedRunLifecycleBaseEvent,
+  createEmbeddedRunLifecycleCorrelationId,
+  resolveEmbeddedRunPassTransitionDecision,
+  type EmbeddedRunLifecycleDecisionMode,
+  type EmbeddedRunPassEndEvent,
+  type EmbeddedRunPassKind,
+  type EmbeddedRunTransitionSource,
+} from "./run/lifecycle-seam.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -130,6 +140,21 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+
+function derivePassEndOutcome(
+  attempt: Pick<EmbeddedRunAttemptResult, "promptError" | "timedOut" | "aborted">,
+): EmbeddedRunPassEndEvent["outcome"] {
+  if (attempt.timedOut) {
+    return "timed_out";
+  }
+  if (attempt.aborted) {
+    return "aborted";
+  }
+  if (attempt.promptError) {
+    return "prompt_error";
+  }
+  return "success";
+}
 
 function buildTraceToolSummary(params: {
   toolMetas: Array<{ toolName: string; meta?: string }>;
@@ -607,8 +632,108 @@ export async function runEmbeddedPiAgent(
         };
         let authRetryPending = false;
         let accumulatedReplayState = createEmbeddedRunReplayState();
+        const lifecycleSeam = params.lifecycleSeam;
+        const lifecycleDecisionMode: EmbeddedRunLifecycleDecisionMode =
+          params.lifecycleDecisionMode ?? "observe_only";
+        const emitPassStart = async (params2: {
+          passIndex: number;
+          passKind: EmbeddedRunPassKind;
+          correlationId: string;
+          provider: string;
+          modelId: string;
+        }) => {
+          if (!lifecycleSeam?.onPassStart) {
+            return;
+          }
+          try {
+            await lifecycleSeam.onPassStart({
+              ...createEmbeddedRunLifecycleBaseEvent({
+                runId: params.runId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                agentId: workspaceResolution.agentId,
+                provider: params2.provider,
+                modelId: params2.modelId,
+                passIndex: params2.passIndex,
+                passKind: params2.passKind,
+                correlationId: params2.correlationId,
+              }),
+              event: "pass_start",
+            });
+          } catch (hookErr) {
+            log.warn(`pass_start lifecycle seam failed: ${formatErrorMessage(hookErr)}`);
+          }
+        };
+        const emitPassEnd = async (params2: {
+          passIndex: number;
+          passKind: EmbeddedRunPassKind;
+          correlationId: string;
+          provider: string;
+          modelId: string;
+          outcome: EmbeddedRunPassEndEvent["outcome"];
+          stopReason?: string;
+        }) => {
+          if (!lifecycleSeam?.onPassEnd) {
+            return;
+          }
+          try {
+            await lifecycleSeam.onPassEnd({
+              ...createEmbeddedRunLifecycleBaseEvent({
+                runId: params.runId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                agentId: workspaceResolution.agentId,
+                provider: params2.provider,
+                modelId: params2.modelId,
+                passIndex: params2.passIndex,
+                passKind: params2.passKind,
+                correlationId: params2.correlationId,
+              }),
+              event: "pass_end",
+              outcome: params2.outcome,
+              ...(params2.stopReason ? { stopReason: params2.stopReason } : {}),
+            });
+          } catch (hookErr) {
+            log.warn(`pass_end lifecycle seam failed: ${formatErrorMessage(hookErr)}`);
+          }
+        };
+        const resolvePassTransitionDecision = async (params2: {
+          passIndex: number;
+          passKind: EmbeddedRunPassKind;
+          correlationId: string;
+          provider: string;
+          modelId: string;
+          source: EmbeddedRunTransitionSource;
+          proposedAction: string;
+          proposedReason?: string | null;
+        }) => {
+          return resolveEmbeddedRunPassTransitionDecision({
+            seam: lifecycleSeam,
+            decisionMode: lifecycleDecisionMode,
+            event: {
+              ...createEmbeddedRunLifecycleBaseEvent({
+                runId: params.runId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                agentId: workspaceResolution.agentId,
+                provider: params2.provider,
+                modelId: params2.modelId,
+                passIndex: params2.passIndex,
+                passKind: params2.passKind,
+                correlationId: params2.correlationId,
+              }),
+              event: "pass_transition_decision",
+              source: params2.source,
+              proposedAction: params2.proposedAction,
+              proposedReason: params2.proposedReason,
+              envelopeOnly: true,
+              decisionEffective: false,
+            },
+          });
+        };
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
+        let lastPassCorrelationId = createEmbeddedRunLifecycleCorrelationId();
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -623,6 +748,17 @@ export async function runEmbeddedPiAgent(
               stage: "retry_limit",
               fallbackConfigured,
               failoverReason: lastRetryFailoverReason,
+            });
+            await resolvePassTransitionDecision({
+              passIndex: runLoopIterations,
+              passKind: "model_call",
+              correlationId: lastPassCorrelationId,
+              provider,
+              modelId,
+              source: "retry_limit",
+              proposedAction: retryLimitDecision.action,
+              proposedReason:
+                "reason" in retryLimitDecision ? retryLimitDecision.reason : undefined,
             });
             return handleRetryLimitExhaustion({
               message,
@@ -644,6 +780,10 @@ export async function runEmbeddedPiAgent(
             });
           }
           runLoopIterations += 1;
+          const passIndex = runLoopIterations;
+          const passKind: EmbeddedRunPassKind = "model_call";
+          const passCorrelationId = createEmbeddedRunLifecycleCorrelationId();
+          lastPassCorrelationId = passCorrelationId;
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -667,6 +807,14 @@ export async function runEmbeddedPiAgent(
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
+
+          await emitPassStart({
+            passIndex,
+            passKind,
+            correlationId: passCorrelationId,
+            provider,
+            modelId,
+          });
 
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
@@ -762,6 +910,16 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+          });
+
+          await emitPassEnd({
+            passIndex,
+            passKind,
+            correlationId: passCorrelationId,
+            provider,
+            modelId,
+            outcome: derivePassEndOutcome(attempt),
+            stopReason: attempt.lastAssistant?.stopReason,
           });
 
           const {
@@ -1365,6 +1523,16 @@ export async function runEmbeddedPiAgent(
                 failoverReason: promptFailoverReason,
               });
               logPromptFailoverDecision("rotate_profile");
+              await resolvePassTransitionDecision({
+                passIndex,
+                passKind,
+                correlationId: passCorrelationId,
+                provider,
+                modelId,
+                source: "prompt",
+                proposedAction: "rotate_profile",
+                proposedReason: promptFailoverReason,
+              });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
             }
@@ -1390,6 +1558,17 @@ export async function runEmbeddedPiAgent(
               thinkLevel = fallbackThinking;
               continue;
             }
+            await resolvePassTransitionDecision({
+              passIndex,
+              passKind,
+              correlationId: passCorrelationId,
+              provider,
+              modelId,
+              source: "prompt",
+              proposedAction: promptFailoverDecision.action,
+              proposedReason:
+                "reason" in promptFailoverDecision ? promptFailoverDecision.reason : undefined,
+            });
             // Throw FailoverError for prompt-side failover reasons when fallbacks
             // are configured so outer model fallback can continue on overload,
             // rate-limit, auth, or billing failures.
@@ -1558,6 +1737,25 @@ export async function runEmbeddedPiAgent(
             advanceAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
+          await resolvePassTransitionDecision({
+            passIndex,
+            passKind,
+            correlationId: passCorrelationId,
+            provider,
+            modelId,
+            source: "assistant",
+            proposedAction:
+              assistantFailoverOutcome.action === "retry"
+                ? "continue"
+                : assistantFailoverOutcome.action === "throw"
+                  ? "halt"
+                  : "noop",
+            proposedReason:
+              assistantFailoverOutcome.action === "retry" ||
+              assistantFailoverOutcome.action === "throw"
+                ? assistantFailoverReason
+                : undefined,
+          });
           if (assistantFailoverOutcome.action === "retry") {
             traceAttempts.push({
               provider: activeErrorContext.provider,
