@@ -543,6 +543,55 @@ describe("createManagedOutgoingImageBlocks", () => {
       );
     }
   });
+
+  it("does not reap older transient records while creating a new managed image", async () => {
+    const staleOriginalPath = path.join(stateDir, "files", "stale-cat.png");
+    const staleAttachmentId = "stale-att";
+    const staleRecordPath = path.join(
+      stateDir,
+      "media",
+      "outgoing",
+      "records",
+      `${staleAttachmentId}.json`,
+    );
+    await fs.mkdir(path.dirname(staleOriginalPath), { recursive: true });
+    await fs.mkdir(path.dirname(staleRecordPath), { recursive: true });
+    await fs.writeFile(staleOriginalPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    await fs.writeFile(
+      staleRecordPath,
+      JSON.stringify(
+        {
+          attachmentId: staleAttachmentId,
+          sessionKey: "agent:main:main",
+          messageId: null,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          retentionClass: "transient",
+          alt: "Stale cat",
+          original: {
+            path: staleOriginalPath,
+            contentType: "image/png",
+            width: 1,
+            height: 1,
+            sizeBytes: Buffer.from(TINY_PNG_BASE64, "base64").byteLength,
+            filename: "stale-cat.png",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+      stateDir,
+    });
+
+    await expect(fs.access(staleRecordPath)).resolves.toBeUndefined();
+    await expect(fs.access(staleOriginalPath)).resolves.toBeUndefined();
+  });
 });
 
 describe("attachManagedOutgoingImagesToMessage", () => {

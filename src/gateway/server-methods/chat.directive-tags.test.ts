@@ -556,6 +556,47 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("does not embed agent audio from arbitrary local paths outside the agent media roots", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-audio-outside-roots-");
+    const rogueDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-rogue-audio-"));
+    const audioPath = path.join(rogueDir, "reply.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    try {
+      await runNonStreamingChatSend({
+        context,
+        respond,
+        idempotencyKey: "idem-agent-audio-outside-roots",
+        expectBroadcast: false,
+      });
+
+      await waitForAssertion(() => {
+        const assistantMediaUpdate = mockState.emittedTranscriptUpdates.find(
+          (update) =>
+            typeof update.message === "object" &&
+            update.message !== null &&
+            (update.message as { idempotencyKey?: unknown }).idempotencyKey ===
+              "idem-agent-audio-outside-roots:assistant-media",
+        );
+        expect(assistantMediaUpdate).toBeUndefined();
+      });
+    } finally {
+      fs.rmSync(rogueDir, { recursive: true, force: true });
+    }
+  });
+
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
     createTranscriptFixture("openclaw-chat-inject-directive-only-");
     const respond = vi.fn();

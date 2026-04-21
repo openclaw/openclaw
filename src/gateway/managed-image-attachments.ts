@@ -649,7 +649,6 @@ export async function createManagedOutgoingImageBlocks(params: {
   }
   const stateDir = params.stateDir ?? resolveStateDir();
   const limits = resolveManagedImageAttachmentLimits(params.limits);
-  await cleanupManagedOutgoingImageRecords({ stateDir });
   const blocks: ManagedImageBlock[] = [];
   for (const [index, mediaUrl] of mediaUrls.entries()) {
     const parsedDataUrl = parseImageDataUrl(mediaUrl);

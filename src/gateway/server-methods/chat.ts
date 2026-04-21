@@ -14,7 +14,10 @@ import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
-import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
+import {
+  appendLocalMediaParentRoots,
+  getAgentScopedMediaLocalRoots,
+} from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -2186,16 +2189,19 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
           return;
         }
-        const mediaSources = [
-          ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-          ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-        ];
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+        const resolvedTranscriptPath = resolveTranscriptPath({
+          sessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+        });
         const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
-          localRoots: getAgentScopedMediaLocalRootsForSources({
-            cfg,
-            agentId,
-            mediaSources,
-          }),
+          localRoots: appendLocalMediaParentRoots(
+            getAgentScopedMediaLocalRoots(cfg, agentId),
+            resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+          ),
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
@@ -2203,8 +2209,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!audioMessage) {
           return;
         }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
         const appended = appendAssistantTranscriptMessage({
           message: audioMessage.transcriptText,
           content: audioMessage.content,
