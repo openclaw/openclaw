@@ -10,6 +10,9 @@ import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { sanitizeLogRecordForSink } from "./redact-sink.js";
+import type { ResolvedRedactOptions } from "./redact.js";
+import { getLoggingRedactionPolicy } from "./redaction-policy.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -158,12 +161,32 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   });
 
   // Silent logging does not write files; skip all filesystem setup in this path.
+  // getSinkRedaction is NOT called here — lazy resolve only triggers on the first
+  // actual file write (below), so silent loggers never pay the config-read cost.
   if (settings.level === "silent") {
     for (const transport of externalTransports) {
       attachExternalTransport(logger, transport);
     }
     return logger;
   }
+
+  // Lazy-cached redaction policy for the file-log transport.
+  //
+  // Lifecycle note (C5 / X5): the cache lives inside the buildLogger closure.
+  // When resetLogger() / setLoggerOverride() is called, loggingState.cachedLogger
+  // is cleared, which causes getLogger() to call buildLogger() again, rebuilding
+  // this closure with a fresh getSinkRedaction(). Any code path that mutates
+  // logging-relevant config MUST call resetLogger() (or setLoggerOverride()) to
+  // ensure the redaction policy is re-resolved on the next log write.
+  // Currently the only known mutation path is: setLoggerOverride() and resetLogger()
+  // in test helpers, and settingsChanged() forcing a rebuild in getLogger().
+  // If new config mutation entry points are added in the future, they MUST also
+  // invalidate the logger cache or this policy will silently go stale.
+  let cachedPolicy: ResolvedRedactOptions | undefined;
+  const getSinkRedaction = (): ResolvedRedactOptions => {
+    cachedPolicy ??= getLoggingRedactionPolicy().resolved;
+    return cachedPolicy;
+  };
 
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
@@ -176,7 +199,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   logger.attachTransport((logObj: LogObj) => {
     try {
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-      const line = JSON.stringify({ ...logObj, time });
+      const sanitizedLogObj = sanitizeLogRecordForSink({ ...logObj, time }, getSinkRedaction());
+      const line = JSON.stringify(sanitizedLogObj);
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
