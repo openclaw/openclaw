@@ -777,6 +777,7 @@ export async function runEmbeddedPiAgent(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             toolsAllow: params.toolsAllow,
             disableMessageTool: params.disableMessageTool,
+            forceMessageTool: params.forceMessageTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,
             bootstrapPromptWarningSignaturesSeen,
