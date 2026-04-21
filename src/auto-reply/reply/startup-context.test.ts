@@ -313,6 +313,47 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).not.toContain("notes flaky");
   });
 
+  it("scans the memory directory once per startup prelude build", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11-late-reset.md"),
+      "utc next",
+      "utf-8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-10.md"), "local today", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-09.md"),
+      "local yesterday",
+      "utf-8",
+    );
+
+    const originalReaddir = fsCore.promises.readdir.bind(fsCore.promises);
+    const readdirSpy = vi
+      .spyOn(fsCore.promises, "readdir")
+      .mockImplementation(async (target, options) => originalReaddir(target, options));
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 2,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      // 2026-04-10 20:30 in America/Chicago, but 2026-04-11 in UTC.
+      nowMs: Date.UTC(2026, 3, 11, 1, 30, 0),
+    });
+
+    expect(prelude).toContain("utc next");
+    expect(prelude).toContain("local today");
+    expect(prelude).toContain("local yesterday");
+    expect(readdirSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("returns null when no daily memory files exist", async () => {
     const workspaceDir = await makeWorkspace();
     const prelude = await buildSessionStartupContextPrelude({
