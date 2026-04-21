@@ -100,7 +100,7 @@ export function getPlatformAdapter(): PlatformAdapter {
   return _adapter;
 }
 
-/** Check whether a platform adapter has been registered. */
+/** Check whether a platform adapter has been registered (or can be created from a factory). */
 export function hasPlatformAdapter(): boolean {
-  return _adapter !== null;
+  return _adapter !== null || _adapterFactory !== null;
 }

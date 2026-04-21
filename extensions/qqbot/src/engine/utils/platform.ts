@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hasPlatformAdapter, getPlatformAdapter } from "../adapter/index.js";
+import { getPlatformAdapter } from "../adapter/index.js";
 import { formatErrorMessage } from "./format.js";
 import { debugLog, debugWarn } from "./log.js";
 
@@ -22,7 +22,6 @@ import { debugLog, debugWarn } from "./log.js";
  * 1. `os.homedir()`
  * 2. `$HOME` or `%USERPROFILE%`
  * 3. PlatformAdapter.getTempDir() as a last resort
- * 4. `os.tmpdir()` if no adapter is registered
  */
 export function getHomeDir(): string {
   try {
@@ -39,10 +38,7 @@ export function getHomeDir(): string {
     return envHome;
   }
 
-  if (hasPlatformAdapter()) {
-    return getPlatformAdapter().getTempDir();
-  }
-  return os.tmpdir();
+  return getPlatformAdapter().getTempDir();
 }
 
 /** Return a path under `~/.openclaw/qqbot`, creating it on demand. */
@@ -100,10 +96,7 @@ export function isWindows(): boolean {
 
 /** Return the preferred temporary directory. */
 export function getTempDir(): string {
-  if (hasPlatformAdapter()) {
-    return getPlatformAdapter().getTempDir();
-  }
-  return os.tmpdir();
+  return getPlatformAdapter().getTempDir();
 }
 
 // ---- ffmpeg detection ----
