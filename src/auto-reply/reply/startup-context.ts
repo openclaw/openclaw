@@ -190,6 +190,39 @@ async function readStartupMemoryFile(params: {
   }
 }
 
+async function listStartupMemoryPathsForDate(params: {
+  workspaceDir: string;
+  stamp: string;
+}): Promise<string[]> {
+  const memoryDir = path.join(params.workspaceDir, "memory");
+  const exactName = `${params.stamp}.md`;
+  const prefix = `${params.stamp}-`;
+
+  try {
+    const entries = await fs.promises.readdir(memoryDir, { withFileTypes: true });
+    const candidates = entries
+      .filter((entry) => {
+        if (!entry.isFile()) {
+          return false;
+        }
+        if (entry.name === exactName) {
+          return true;
+        }
+        return entry.name.startsWith(prefix) && entry.name.endsWith(".md");
+      })
+      .map((entry) => entry.name);
+
+    const sluggedNames = candidates
+      .filter((name) => name !== exactName)
+      .toSorted((left, right) => right.localeCompare(left));
+    return [exactName, ...sluggedNames].filter(
+      (name, index, values) => values.indexOf(name) === index,
+    );
+  } catch {
+    return [exactName];
+  }
+}
+
 export async function buildSessionStartupContextPrelude(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -202,7 +235,13 @@ export async function buildSessionStartupContextPrelude(params: {
   const todayStamp = formatDateStamp(nowMs, timezone);
   for (let offset = 0; offset < limits.dailyMemoryDays; offset += 1) {
     const stamp = shiftDateStampByCalendarDays(todayStamp, offset);
-    dailyPaths.push(`memory/${stamp}.md`);
+    const relativePaths = await listStartupMemoryPathsForDate({
+      workspaceDir: params.workspaceDir,
+      stamp,
+    });
+    for (const relativePath of relativePaths) {
+      dailyPaths.push(`memory/${relativePath}`);
+    }
   }
   const loaded: Array<{ relativePath: string; content: string }> = [];
 

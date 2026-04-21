@@ -47,6 +47,26 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("yesterday notes");
   });
 
+  it("loads date-prefixed session-memory artifacts saved with friendly suffixes", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11-friendly-summary.md"),
+      "saved from reset hook",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "America/Chicago" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11-friendly-summary.md]");
+    expect(prelude).toContain("saved from reset hook");
+  });
+
   it("returns null when no daily memory files exist", async () => {
     const workspaceDir = await makeWorkspace();
     const prelude = await buildSessionStartupContextPrelude({
