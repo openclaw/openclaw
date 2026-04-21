@@ -693,6 +693,7 @@ export async function createManagedOutgoingImageBlocks(params: {
     return [];
   }
   const stateDir = params.stateDir ?? resolveStateDir();
+  const mediaDir = path.join(stateDir, "media");
   const limits = resolveManagedImageAttachmentLimits(params.limits);
   const blocks: ManagedImageBlock[] = [];
   for (const [index, mediaUrl] of mediaUrls.entries()) {
@@ -718,6 +719,7 @@ export async function createManagedOutgoingImageBlocks(params: {
               "outgoing/originals",
               limits.maxBytes,
               `generated-image-${index + 1}`,
+              mediaDir,
             )
           : await (async () => {
               const localMediaPath = resolveLocalMediaPath(mediaUrl);
@@ -729,6 +731,7 @@ export async function createManagedOutgoingImageBlocks(params: {
                 undefined,
                 "outgoing/originals",
                 limits.maxBytes,
+                mediaDir,
               );
             })();
       savedOriginalPath = savedOriginal.path;
@@ -781,6 +784,7 @@ export async function createManagedOutgoingImageBlocks(params: {
           "outgoing/originals",
           limits.maxBytes,
           toRecordFilename(savedOriginal.path) ?? `generated-image-${index + 1}`,
+          mediaDir,
         );
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginal = replacement;

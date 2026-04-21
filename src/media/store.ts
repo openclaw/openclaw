@@ -367,8 +367,9 @@ export async function saveMediaSource(
   headers?: Record<string, string>,
   subdir = "",
   maxBytes = MAX_BYTES,
+  mediaDirOverride?: string,
 ): Promise<SavedMedia> {
-  const baseDir = resolveMediaDir();
+  const baseDir = mediaDirOverride ?? resolveMediaDir();
   const dir = subdir ? path.join(baseDir, subdir) : baseDir;
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await cleanOldMedia(DEFAULT_TTL_MS, { recursive: false });
@@ -410,11 +411,12 @@ export async function saveMediaBuffer(
   subdir = "inbound",
   maxBytes = MAX_BYTES,
   originalFilename?: string,
+  mediaDirOverride?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
   }
-  const dir = path.join(resolveMediaDir(), subdir);
+  const dir = path.join(mediaDirOverride ?? resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
   const headerExt = extensionForMime(normalizeOptionalString(contentType?.split(";")[0]));

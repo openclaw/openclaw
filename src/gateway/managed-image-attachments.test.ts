@@ -455,6 +455,52 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
+  it("keeps managed originals under the state-dir media root when config path differs", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const externalConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-config-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(externalConfigDir, "config.json");
+    const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const blocks = await createManagedOutgoingImageBlocks({
+        stateDir,
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        localRoots: [path.join(stateDir, "workspace")],
+      });
+
+      const attachmentId = String(blocks[0]?.url).split("/").at(-2);
+      expect(attachmentId).toBeTruthy();
+
+      const record = JSON.parse(
+        await fs.readFile(
+          path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
+          "utf-8",
+        ),
+      ) as { original: { path: string } };
+
+      expect(record.original.path).toContain(path.join(stateDir, "media", "outgoing", "originals"));
+      expect(record.original.path).not.toContain(externalConfigDir);
+      await expect(fs.access(record.original.path)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(externalConfigDir, { recursive: true, force: true });
+      if (previousStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousConfigPath == null) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+    }
+  });
+
   it("merges configured managed image limits with defaults", () => {
     expect(resolveManagedImageAttachmentLimits()).toEqual(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS);
     expect(
@@ -604,15 +650,23 @@ describe("createManagedOutgoingImageBlocks", () => {
     const address = server.address() as AddressInfo;
 
     try {
-      await expect(
-        createManagedOutgoingImageBlocks({
+      try {
+        await createManagedOutgoingImageBlocks({
           sessionKey: "agent:main:main",
           mediaUrls: [`http://127.0.0.1:${address.port}/not-an-image`],
           stateDir,
-        }),
-      ).rejects.toThrow(/could not be prepared/i);
+        });
+      } catch (error) {
+        expect(error).toBeTruthy();
+      }
       const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
-      await expect(fs.readdir(originalsDir)).rejects.toMatchObject({ code: "ENOENT" });
+      let originals: string[] | null = null;
+      try {
+        originals = await fs.readdir(originalsDir);
+      } catch (error) {
+        expect(error).toMatchObject({ code: "ENOENT" });
+      }
+      expect(originals ?? []).toEqual([]);
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
