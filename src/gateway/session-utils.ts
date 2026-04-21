@@ -1383,9 +1383,12 @@ export function buildGatewaySessionRow(params: {
       entry,
     }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
   const isEntryFromFallback = entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback;
+  // When the entry is from a fallback run, skip both the stored entry
+  // context tokens and transcript-derived context tokens — both reflect the
+  // fallback model's context window rather than the resolved primary model.
   const contextTokens =
     (!isEntryFromFallback ? resolvePositiveNumber(entry?.contextTokens) : undefined) ??
-    resolvePositiveNumber(transcriptUsage?.contextTokens) ??
+    (!isEntryFromFallback ? resolvePositiveNumber(transcriptUsage?.contextTokens) : undefined) ??
     resolvePositiveNumber(
       resolveContextTokensForModel({
         cfg,
