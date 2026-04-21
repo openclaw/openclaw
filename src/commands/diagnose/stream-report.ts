@@ -107,6 +107,7 @@ export async function streamDiagnosticReport(
           "Start the gateway with: openclaw gateway\n" +
           "Or use: openclaw diagnose --json  to get the raw diagnostic context " +
           "without AI analysis.",
+        { cause: err },
       );
     }
     throw err;

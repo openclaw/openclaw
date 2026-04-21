@@ -31,6 +31,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "diagnose",
+    description: "AI-powered diagnostic analysis of gateway logs and configuration",
+    hasSubcommands: false,
+  },
+  {
     name: "doctor",
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,

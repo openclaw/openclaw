@@ -21,13 +21,7 @@ export async function renderCanvasHtml(markdown: string): Promise<string> {
   return outputPath;
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+
 
 function buildHtmlPage(markdown: string): string {
   // The page includes a minimal Markdown-to-HTML renderer (inline JS) so it

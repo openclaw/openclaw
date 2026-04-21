@@ -23,7 +23,8 @@ interface AssembleOptions {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-const RE_ANSI = /\x1b\[[0-9;]*[mGKHF]/g;
+// eslint-disable-next-line no-control-regex
+const RE_ANSI = /\u001b\[[0-9;]*[mGKHF]/g;
 const RE_IP = /\b(?:\d{1,3}\.){3}\d{1,3}\b/;
 // Suffix-based matching catches botToken, appToken, webhookSecret, accessToken,
 // apiKey, etc. — not just exact key names.
@@ -39,7 +40,9 @@ function stripAnsi(text: string): string {
 }
 
 function redactSecrets(obj: unknown, depth = 0): unknown {
-  if (depth > 10) return obj;
+  if (depth > 10) {
+    return obj;
+  }
   if (Array.isArray(obj)) {
     return obj.map((item) => redactSecrets(item, depth + 1));
   }
@@ -88,7 +91,9 @@ const RE_LOG_LINE_FALLBACK =
 
 function parseLogLine(line: string): ParsedLogEntry | null {
   const trimmed = line.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
 
   // Try JSON parse first (primary format).
   if (trimmed.startsWith("{")) {
@@ -105,7 +110,9 @@ function parseLogLine(line: string): ParsedLogEntry | null {
         subsystem = String(obj["0"] ?? "");
       }
       const message = String(obj["1"] ?? "");
-      if (!level && !message) return null;
+      if (!level && !message) {
+        return null;
+      }
       return { timestamp, level, subsystem, message, raw: trimmed };
     } catch {
       // Fall through to regex.
@@ -114,7 +121,9 @@ function parseLogLine(line: string): ParsedLogEntry | null {
 
   // Fallback: plain-text log format.
   const match = RE_LOG_LINE_FALLBACK.exec(trimmed);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   return {
     timestamp: match[1],
     level: match[2],
@@ -156,7 +165,9 @@ function assembleGatewayLog(maxEntries: number): {
 
     for (const line of lines) {
       const entry = parseLogLine(line);
-      if (!entry) continue;
+      if (!entry) {
+        continue;
+      }
       allParsed.push(entry);
       if (["WARN", "WARNING", "ERROR", "FATAL"].includes(entry.level)) {
         issueEntries.push(entry);
@@ -278,7 +289,7 @@ function assembleAuthSummary(allParsed: ParsedLogEntry[]): {
     }
     section += "\n";
     if (sourceIps.size > 0) {
-      section += `Source IPs: ${[...sourceIps].sort().join(", ")}\n`;
+      section += `Source IPs: ${[...sourceIps].toSorted().join(", ")}\n`;
     }
   }
 

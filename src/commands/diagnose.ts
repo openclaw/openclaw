@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import type { Runtime } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import { assembleDiagnosticContext } from "./diagnose/assemble-context.js";
 import { KNOWN_ISSUES_PROMPT } from "./diagnose/known-issues.js";
@@ -16,7 +15,7 @@ export interface DiagnoseCommandOptions {
 }
 
 export async function diagnoseCommand(
-  runtime: Runtime,
+  runtime: RuntimeEnv,
   opts: DiagnoseCommandOptions,
 ): Promise<void> {
   if (!opts.json) {
