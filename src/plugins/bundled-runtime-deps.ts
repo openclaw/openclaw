@@ -91,6 +91,26 @@ function resolveSourceCheckoutDistPackageRoot(pluginRoot: string): string | null
   return isSourceCheckoutRoot(packageRoot) ? packageRoot : null;
 }
 
+function resolveBundledRuntimeDependencySearchRoots(params: {
+  installRoot: string;
+  pluginRoot: string;
+}): string[] {
+  const roots = new Set<string>([params.installRoot]);
+  const pluginRoot = path.resolve(params.pluginRoot);
+  const extensionsDir = path.dirname(pluginRoot);
+  const buildDir = path.dirname(extensionsDir);
+  if (
+    path.basename(extensionsDir) !== "extensions" ||
+    (path.basename(buildDir) !== "dist" && path.basename(buildDir) !== "dist-runtime")
+  ) {
+    return [...roots];
+  }
+  roots.add(extensionsDir);
+  roots.add(buildDir);
+  roots.add(path.dirname(buildDir));
+  return [...roots];
+}
+
 function createRuntimeDepsCacheKey(pluginId: string, specs: readonly string[]): string {
   return createHash("sha256")
     .update(pluginId)
@@ -119,6 +139,12 @@ function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
 
 function hasAllDependencySentinels(rootDir: string, deps: readonly { name: string }[]): boolean {
   return deps.every((dep) => fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))));
+}
+
+function hasDependencySentinel(searchRoots: readonly string[], dep: { name: string }): boolean {
+  return searchRoots.some((rootDir) =>
+    fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))),
+  );
 }
 
 function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
@@ -185,6 +211,19 @@ function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   delete nextEnv.npm_config_location;
   delete nextEnv.npm_config_prefix;
   return nextEnv;
+}
+
+export function createBundledRuntimeDepsInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...createNestedNpmInstallEnv(env),
+    npm_config_legacy_peer_deps: "true",
+    npm_config_package_lock: "false",
+    npm_config_save: "false",
+  };
+}
+
+export function createBundledRuntimeDepsInstallArgs(missingSpecs: readonly string[]): string[] {
+  return ["install", "--ignore-scripts", ...missingSpecs];
 }
 
 function resolvePathEnvKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
@@ -457,24 +496,15 @@ export function installBundledRuntimeDeps(params: {
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
 }): void {
+  const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
   const npmRunner = resolveBundledRuntimeDepsNpmRunner({
-    env: params.env,
-    npmArgs: [
-      "install",
-      "--prefix",
-      params.installRoot,
-      "--omit=dev",
-      "--no-save",
-      "--package-lock=false",
-      "--ignore-scripts",
-      "--legacy-peer-deps",
-      ...params.missingSpecs,
-    ],
+    env: installEnv,
+    npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
   });
   const result = spawnSync(npmRunner.command, npmRunner.args, {
     cwd: params.installRoot,
     encoding: "utf8",
-    env: createNestedNpmInstallEnv(npmRunner.env ?? params.env),
+    env: npmRunner.env ?? installEnv,
     stdio: "pipe",
     shell: npmRunner.shell ?? false,
   });
@@ -524,11 +554,15 @@ export function ensureBundledPluginRuntimeDeps(params: {
   }
 
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot);
+  const dependencySearchRoots = resolveBundledRuntimeDependencySearchRoots({
+    installRoot,
+    pluginRoot: params.pluginRoot,
+  });
   const dependencySpecs = deps
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
   const missingSpecs = deps
-    .filter((dep) => !fs.existsSync(path.join(installRoot, dependencySentinelPath(dep.name))))
+    .filter((dep) => !hasDependencySentinel(dependencySearchRoots, dep))
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
   if (missingSpecs.length === 0) {
