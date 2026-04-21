@@ -12,6 +12,7 @@ const STARTUP_MEMORY_FILE_MAX_BYTES_CAP = 64 * 1024;
 const STARTUP_MEMORY_FILE_MAX_CHARS_CAP = 10_000;
 const STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP = 50_000;
 const STARTUP_MEMORY_DAILY_DAYS_CAP = 14;
+const STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY = 4;
 
 export function shouldApplyStartupContext(params: {
   cfg?: OpenClawConfig;
@@ -99,9 +100,17 @@ function escapeQuotedStartupMemory(content: string): string {
   return content.replaceAll("```", "\\`\\`\\`");
 }
 
+function sanitizeStartupMemoryLabel(value: string): string {
+  return value
+    .replaceAll(/[\r\n\t]+/g, " ")
+    .replaceAll(/[[\]]/g, "_")
+    .replaceAll(/[^A-Za-z0-9._/\- ]+/g, "_")
+    .trim();
+}
+
 function formatStartupMemoryBlock(relativePath: string, content: string): string {
   return [
-    `[Untrusted daily memory: ${relativePath}]`,
+    `[Untrusted daily memory: ${sanitizeStartupMemoryLabel(relativePath)}]`,
     "BEGIN_QUOTED_NOTES",
     "```text",
     escapeQuotedStartupMemory(content),
@@ -214,10 +223,9 @@ async function listStartupMemoryPathsForDate(params: {
 
     const sluggedNames = candidates
       .filter((name) => name !== exactName)
+      // Reverse lexical order keeps later HHMM-style hook slugs ahead of earlier ones.
       .toSorted((left, right) => right.localeCompare(left));
-    return [exactName, ...sluggedNames].filter(
-      (name, index, values) => values.indexOf(name) === index,
-    );
+    return [exactName, ...sluggedNames.slice(0, STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY)];
   } catch {
     return [exactName];
   }
