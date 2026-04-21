@@ -201,6 +201,12 @@ export function startAcpSpawnParentStreamRelay(params: {
       contextKey,
       deliveryContext: params.deliveryContext,
       trusted: false,
+      stalePolicy:
+        contextKey.endsWith(":error") ||
+        contextKey.endsWith(":timeout") ||
+        contextKey.endsWith(":blocked")
+          ? undefined
+          : "drop-on-session-advance",
     });
     wake();
   };

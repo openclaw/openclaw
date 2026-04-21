@@ -985,6 +985,12 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
+    stalePolicy:
+      task.status === "succeeded" && task.terminalOutcome !== "blocked"
+        ? "drop-on-session-advance"
+        : shouldAutoDeliverTaskStateChange(task)
+          ? "drop-on-session-advance"
+          : undefined,
   });
   requestHeartbeatNow({
     reason: "background-task",

@@ -600,6 +600,50 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
 
+  it("skips stale exec-event notices once the session already advanced", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "none",
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        updatedAt: now + 5_000,
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "-100155462274",
+      });
+      const getReplySpy = vi.fn().mockResolvedValue({ text: "should not run" });
+
+      enqueueSystemEvent("Exec completed (review-run, code 0)", {
+        sessionKey,
+        trusted: false,
+        stalePolicy: "drop-on-session-advance",
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+        },
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: "no-tasks-due" });
+      expect(getReplySpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps Telegram topic routing for isolated scheduled heartbeats", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createLastTargetConfig({ tmpDir, storePath, isolatedSession: true });

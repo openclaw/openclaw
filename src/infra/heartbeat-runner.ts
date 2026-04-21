@@ -105,6 +105,7 @@ import {
 } from "./outbound/targets.js";
 import {
   consumeSystemEventEntries,
+  discardStaleSystemEventEntries,
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
@@ -545,6 +546,7 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
+  discardStaleSystemEventEntries(session.sessionKey, session.entry?.updatedAt);
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
@@ -663,6 +665,10 @@ function resolveHeartbeatRunPrompt(params: {
     .map((event) => event.text);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
+
+  if (params.preflight.isExecEventReason && !hasExecCompletion) {
+    return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
+  }
 
   // If tasks are defined, build a batched prompt with due tasks
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
