@@ -48,7 +48,7 @@ type MockRequestHandler = (
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
   const res = new EventEmitter() as Partial<IncomingMessage>;
   res.statusCode = statusCode;
-  return res as IncomingMessage;
+  return res;
 }
 
 function createMockRequestEmitter(): ClientRequest {
@@ -56,7 +56,7 @@ function createMockRequestEmitter(): ClientRequest {
   req.write = vi.fn() as ClientRequest["write"];
   req.end = vi.fn() as ClientRequest["end"];
   req.destroy = vi.fn() as ClientRequest["destroy"];
-  return req as ClientRequest;
+  return req;
 }
 
 async function settleTimers<T>(promise: Promise<T>): Promise<T> {
@@ -275,6 +275,15 @@ describe("sendFileUrl", () => {
       sendFileUrl("https://nas.example.com/incoming", "https://93.184.216.34/file.png"),
     );
     expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("93.184.216.34");
+    expect(vi.mocked(https.request)).toHaveBeenCalled();
+  });
+
+  it("allows bracketed public IPv6 literal URLs without a hostname allowlist", async () => {
+    mockSuccessResponse();
+    await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://[2001:db8::1]/file.png"),
+    );
+    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("2001:db8::1");
     expect(vi.mocked(https.request)).toHaveBeenCalled();
   });
 });

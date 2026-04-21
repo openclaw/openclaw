@@ -247,7 +247,11 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
 }
 
 function normalizeHostnameForAllowlist(value: string): string {
-  return value.trim().toLowerCase().replace(/\.+$/, "");
+  const normalized = value.trim().toLowerCase().replace(/\.+$/, "");
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    return normalized.slice(1, -1);
+  }
+  return normalized;
 }
 
 async function assertSafeWebhookFileUrl(
@@ -269,7 +273,7 @@ async function assertSafeWebhookFileUrl(
 
   const normalizedHostname = normalizeHostnameForAllowlist(parsed.hostname);
   if (isIP(normalizedHostname) !== 0) {
-    await resolvePinnedHostnameWithPolicy(parsed.hostname);
+    await resolvePinnedHostnameWithPolicy(normalizedHostname);
     return;
   }
 
@@ -292,7 +296,7 @@ async function assertSafeWebhookFileUrl(
     );
   }
 
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+  await resolvePinnedHostnameWithPolicy(normalizedHostname, {
     policy: { hostnameAllowlist: trustedHostnames },
   });
 }
