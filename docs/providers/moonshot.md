@@ -10,7 +10,7 @@ title: "Moonshot AI"
 # Moonshot AI (Kimi)
 
 Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
-provider and set the default model to `moonshot/kimi-k2.5`, or use
+provider and set the default model to `moonshot/kimi-k2.6`, or use
 Kimi Coding with `kimi/kimi-code`.
 
 <Warning>
@@ -23,6 +23,7 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 
 | Model ref                         | Name                   | Reasoning | Input       | Context | Max output |
 | --------------------------------- | ---------------------- | --------- | ----------- | ------- | ---------- |
+| `moonshot/kimi-k2.6`              | Kimi K2.6              | No        | text, image | 262,144 | 262,144    |
 | `moonshot/kimi-k2.5`              | Kimi K2.5              | No        | text, image | 262,144 | 262,144    |
 | `moonshot/kimi-k2-thinking`       | Kimi K2 Thinking       | Yes       | text        | 262,144 | 262,144    |
 | `moonshot/kimi-k2-thinking-turbo` | Kimi K2 Thinking Turbo | Yes       | text        | 262,144 | 262,144    |
@@ -61,7 +62,7 @@ Choose your provider and follow the setup steps.
         {
           agents: {
             defaults: {
-              model: { primary: "moonshot/kimi-k2.5" },
+              model: { primary: "moonshot/kimi-k2.6" },
             },
           },
         }
@@ -81,9 +82,10 @@ Choose your provider and follow the setup steps.
       env: { MOONSHOT_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "moonshot/kimi-k2.5" },
+          model: { primary: "moonshot/kimi-k2.6" },
           models: {
             // moonshot-kimi-k2-aliases:start
+            "moonshot/kimi-k2.6": { alias: "Kimi K2.6" },
             "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
             "moonshot/kimi-k2-thinking": { alias: "Kimi K2 Thinking" },
             "moonshot/kimi-k2-thinking-turbo": { alias: "Kimi K2 Thinking Turbo" },
@@ -101,6 +103,15 @@ Choose your provider and follow the setup steps.
             api: "openai-completions",
             models: [
               // moonshot-kimi-k2-models:start
+              {
+                id: "kimi-k2.6",
+                name: "Kimi K2.6",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
               {
                 id: "kimi-k2.5",
                 name: "Kimi K2.5",
@@ -218,7 +229,7 @@ search.
     | Setting             | Options                                                              |
     | ------------------- | -------------------------------------------------------------------- |
     | API region          | `https://api.moonshot.ai/v1` (international) or `https://api.moonshot.cn/v1` (China) |
-    | Web search model    | Defaults to `kimi-k2.5`                                             |
+    | Web search model    | Defaults to `kimi-k2.6`                                             |
 
   </Step>
 </Steps>
@@ -234,7 +245,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
           webSearch: {
             apiKey: "sk-...", // or use KIMI_API_KEY / MOONSHOT_API_KEY
             baseUrl: "https://api.moonshot.ai/v1",
-            model: "kimi-k2.5",
+            model: "kimi-k2.6",
           },
         },
       },
@@ -266,7 +277,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
       agents: {
         defaults: {
           models: {
-            "moonshot/kimi-k2.5": {
+            "moonshot/kimi-k2.6": {
               params: {
                 thinking: { type: "disabled" },
               },
@@ -288,6 +299,28 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     When Moonshot thinking is enabled, `tool_choice` must be `auto` or `none`. OpenClaw normalizes incompatible `tool_choice` values to `auto` for compatibility.
     </Warning>
 
+    Kimi K2.6 also accepts an optional `thinking.keep` field that controls
+    multi-turn retention of `reasoning_content`. Set it to `"all"` to keep full
+    reasoning across turns; omit it (or leave it `null`) to use the server
+    default strategy. OpenClaw only forwards `thinking.keep` for
+    `moonshot/kimi-k2.6` and strips it from other models.
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "moonshot/kimi-k2.6": {
+              params: {
+                thinking: { type: "enabled", keep: "all" },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
   </Accordion>
 
   <Accordion title="Streaming usage compatibility">
@@ -306,7 +339,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     | Kimi Coding| `kimi/`          | Kimi Coding endpoint          | `KIMI_API_KEY`      |
     | Web search | N/A              | Same as Moonshot API region   | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
 
-    - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.5`.
+    - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.6`.
     - Override pricing and context metadata in `models.providers` if needed.
     - If Moonshot publishes different context limits for a model, adjust `contextWindow` accordingly.
 
