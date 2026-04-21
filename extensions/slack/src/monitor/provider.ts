@@ -239,6 +239,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
+    tolerateUnresolvedSecrets: true,
   });
 
   if (!account.enabled) {

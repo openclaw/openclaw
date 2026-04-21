@@ -511,8 +511,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const appToken = account.appToken?.trim();
         ctx.log?.info(`[${account.accountId}] starting provider`);
         return (await loadSlackMonitorModule()).monitorSlackProvider({
-          botToken: botToken ?? "",
-          appToken: appToken ?? "",
+          botToken: typeof botToken === "string" && botToken.length > 0 ? botToken : undefined,
+          appToken: typeof appToken === "string" && appToken.length > 0 ? appToken : undefined,
           accountId: account.accountId,
           config: ctx.cfg,
           runtime: ctx.runtime,

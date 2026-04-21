@@ -316,4 +316,42 @@ describe("resolveSlackAccount tolerateUnresolvedSecrets", () => {
       }
     }
   });
+
+  it("tolerateUnresolvedSecrets: top-level exec SecretRef with undefined explicit token does not throw", () => {
+    // Regression test for #69820. When the gateway runtime passes
+    // botToken=undefined to monitorSlackProvider (instead of ""), and the
+    // account config holds a SecretRef, resolveSlackBotToken must NOT throw.
+    //
+    // The two-part fix:
+    // 1. channel.ts startAccount now passes `undefined` instead of `""` so
+    //    that opts.botToken ?? account.botToken picks up the resolved string.
+    // 2. monitorSlackProvider calls resolveSlackAccount with
+    //    tolerateUnresolvedSecrets:true so account.botToken is undefined (not a
+    //    SecretRef object) when unresolved; combined with fix #1 the ?? then
+    //    falls through to the env fallback token correctly.
+    //
+    // This test directly exercises the resolveSlackBotToken path to ensure
+    // resolveSlackAccount(tolerateUnresolvedSecrets:true) with a SecretRef
+    // + no explicit token does NOT throw.
+    const cfgWithBotSecretRef = {
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              botToken: { source: "exec", provider: "default", id: "slack_bot_token" },
+              allowFrom: ["U001"],
+            } as never,
+          },
+        },
+      },
+    };
+    // Must NOT throw even though cfg has an unresolved SecretRef and no env token.
+    expect(() =>
+      resolveSlackAccount({
+        cfg: cfgWithBotSecretRef as unknown as OpenClawConfig,
+        accountId: "default",
+        tolerateUnresolvedSecrets: true,
+      }),
+    ).not.toThrow();
+  });
 });
