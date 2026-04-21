@@ -569,8 +569,6 @@ export async function uploadC2CMedia(
     throw new Error("uploadC2CMedia: url or fileData is required");
   }
 
-  const validatedUrl = url ? await assertDirectUploadUrlAllowed(url) : undefined;
-
   if (fileData) {
     const contentHash = computeFileHash(fileData);
     const cachedInfo = getCachedFileInfo(contentHash, "c2c", openid, fileType);
@@ -580,8 +578,8 @@ export async function uploadC2CMedia(
   }
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
-  if (validatedUrl) {
-    body.url = validatedUrl;
+  if (url) {
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }
@@ -624,8 +622,6 @@ export async function uploadGroupMedia(
     throw new Error("uploadGroupMedia: url or fileData is required");
   }
 
-  const validatedUrl = url ? await assertDirectUploadUrlAllowed(url) : undefined;
-
   if (fileData) {
     const contentHash = computeFileHash(fileData);
     const cachedInfo = getCachedFileInfo(contentHash, "group", groupOpenid, fileType);
@@ -635,8 +631,8 @@ export async function uploadGroupMedia(
   }
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
-  if (validatedUrl) {
-    body.url = validatedUrl;
+  if (url) {
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }

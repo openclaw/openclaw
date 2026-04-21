@@ -16,10 +16,12 @@ vi.mock("./utils/debug-log.js", () => ({
 }));
 
 import { MediaFileType, uploadC2CMedia, uploadGroupMedia } from "./api.js";
+import { clearUploadCache, computeFileHash, setCachedFileInfo } from "./utils/upload-cache.js";
 
 describe("qqbot direct upload SSRF guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearUploadCache();
     ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
       hostname: "cdn.qpic.cn",
       addresses: ["203.0.113.10"],
@@ -97,5 +99,55 @@ describe("qqbot direct upload SSRF guard", () => {
       }),
     });
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips URL validation on c2c cache hits when fileData is reused", async () => {
+    const fileData = "cached-file-data";
+    setCachedFileInfo(
+      computeFileHash(fileData),
+      "c2c",
+      "user-1",
+      MediaFileType.IMAGE,
+      "cached-info",
+      "cached-uuid",
+      3600,
+    );
+
+    const result = await uploadC2CMedia(
+      "access-token",
+      "user-1",
+      MediaFileType.IMAGE,
+      "https://example.com/stale.png",
+      fileData,
+    );
+
+    expect(result).toEqual({ file_uuid: "", file_info: "cached-info", ttl: 0 });
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("skips URL validation on group cache hits when fileData is reused", async () => {
+    const fileData = "cached-group-file-data";
+    setCachedFileInfo(
+      computeFileHash(fileData),
+      "group",
+      "group-1",
+      MediaFileType.FILE,
+      "cached-group-info",
+      "cached-group-uuid",
+      3600,
+    );
+
+    const result = await uploadGroupMedia(
+      "access-token",
+      "group-1",
+      MediaFileType.FILE,
+      "https://example.com/stale.txt",
+      fileData,
+    );
+
+    expect(result).toEqual({ file_uuid: "", file_info: "cached-group-info", ttl: 0 });
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });
