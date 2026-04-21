@@ -1726,6 +1726,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           delete entryToUpdate.inputTokens;
           delete entryToUpdate.outputTokens;
+          delete entryToUpdate.cacheRead;
+          delete entryToUpdate.cacheWrite;
           if (
             typeof result.result?.tokensAfter === "number" &&
             Number.isFinite(result.result.tokensAfter) &&

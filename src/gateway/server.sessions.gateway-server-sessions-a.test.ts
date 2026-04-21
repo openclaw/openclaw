@@ -1710,6 +1710,8 @@ describe("gateway server sessions", () => {
           totalTokens: 999,
           totalTokensFresh: false,
           estimatedCostUsd: 0.25,
+          cacheRead: 12,
+          cacheWrite: 8,
         },
       },
     });
@@ -1727,12 +1729,21 @@ describe("gateway server sessions", () => {
     expect(compacted.ok).toBe(true);
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
-      { compactionCount?: number; totalTokens?: number; totalTokensFresh?: boolean; estimatedCostUsd?: number }
+      {
+        compactionCount?: number;
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+        estimatedCostUsd?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+      }
     >;
     expect(store["agent:main:main"]?.compactionCount).toBe(1);
     expect(store["agent:main:main"]?.totalTokens).toBe(0);
     expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
     expect(store["agent:main:main"]?.estimatedCostUsd).toBe(0);
+    expect(store["agent:main:main"]?.cacheRead).toBeUndefined();
+    expect(store["agent:main:main"]?.cacheWrite).toBeUndefined();
 
     ws.close();
   });
