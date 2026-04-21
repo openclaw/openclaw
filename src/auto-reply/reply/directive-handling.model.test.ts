@@ -680,6 +680,23 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
+  it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      sessionEntry,
+    });
+
+    expect(sessionEntry.thinkingLevel).toBe("medium");
+    expect(persisted.thinkingRemap).toEqual({
+      from: "adaptive",
+      to: "medium",
+      provider: "openai",
+      model: "gpt-4o",
+    });
+  });
+
   it("does not request a live restart when /model mutates an active session", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();
@@ -811,7 +828,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: off, minimal, low, medium, high.");
+    expect(result?.text).toContain("Options: off, minimal, low, medium, adaptive, high.");
   });
 
   it("persists verbose on and off directives", async () => {
