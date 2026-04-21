@@ -4,6 +4,8 @@ export const WRITE_SCOPE = "operator.write" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
 export const PAIRING_SCOPE = "operator.pairing" as const;
 export const TALK_SECRETS_SCOPE = "operator.talk.secrets" as const;
+// Session owner may delete their own session without full admin.
+export const SESSION_SELF_SCOPE = "operator.session.self" as const;
 
 export type OperatorScope =
   | typeof ADMIN_SCOPE
@@ -11,4 +13,5 @@ export type OperatorScope =
   | typeof WRITE_SCOPE
   | typeof APPROVALS_SCOPE
   | typeof PAIRING_SCOPE
-  | typeof TALK_SECRETS_SCOPE;
+  | typeof TALK_SECRETS_SCOPE
+  | typeof SESSION_SELF_SCOPE;

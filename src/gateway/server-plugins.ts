@@ -12,7 +12,7 @@ import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE, SESSION_SELF_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -218,6 +218,7 @@ function resolveRequestedFallbackModelRef(params: {
 
 function createSyntheticOperatorClient(params?: {
   allowModelOverride?: boolean;
+  sessionKey?: string;
   scopes?: string[];
 }): GatewayRequestOptions["client"] {
   return {
@@ -235,6 +236,7 @@ function createSyntheticOperatorClient(params?: {
     },
     internal: {
       allowModelOverride: params?.allowModelOverride === true,
+      ...(params?.sessionKey ? { sessionKey: params.sessionKey } : {}),
     },
   };
 }
@@ -253,6 +255,8 @@ async function dispatchGatewayMethod<T>(
   params: Record<string, unknown>,
   options?: {
     allowSyntheticModelOverride?: boolean;
+    forceSyntheticClient?: boolean;
+    syntheticSessionKey?: string;
     syntheticScopes?: string[];
   },
 ): Promise<T> {
@@ -274,11 +278,13 @@ async function dispatchGatewayMethod<T>(
       params,
     },
     client:
-      scope?.client ??
-      createSyntheticOperatorClient({
-        allowModelOverride: options?.allowSyntheticModelOverride === true,
-        scopes: options?.syntheticScopes,
-      }),
+      options?.forceSyntheticClient === true || !scope?.client
+        ? createSyntheticOperatorClient({
+            allowModelOverride: options?.allowSyntheticModelOverride === true,
+            scopes: options?.syntheticScopes,
+            sessionKey: options?.syntheticSessionKey,
+          })
+        : scope.client,
     isWebchatConnect,
     respond: (ok, payload, error) => {
       if (!result) {
@@ -295,6 +301,10 @@ async function dispatchGatewayMethod<T>(
     throw new Error(result.error?.message ?? `Gateway method "${method}" failed.`);
   }
   return result.payload as T;
+}
+
+function normalizeSessionKey(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
@@ -376,10 +386,26 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod("sessions.delete", {
-        key: params.sessionKey,
-        deleteTranscript: params.deleteTranscript ?? true,
-      });
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const sessionKey = normalizeSessionKey(params.sessionKey);
+      const scopeSessionKey = normalizeSessionKey(scope?.sessionKey);
+      const useSelfScopedDelete =
+        Boolean(sessionKey && scopeSessionKey && sessionKey === scopeSessionKey) &&
+        !hasAdminScope(scope?.client ?? null);
+      await dispatchGatewayMethod(
+        "sessions.delete",
+        {
+          key: params.sessionKey,
+          deleteTranscript: params.deleteTranscript ?? true,
+        },
+        useSelfScopedDelete
+          ? {
+              forceSyntheticClient: true,
+              syntheticScopes: [SESSION_SELF_SCOPE],
+              syntheticSessionKey: sessionKey,
+            }
+          : undefined,
+      );
     },
   };
 }

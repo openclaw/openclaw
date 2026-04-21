@@ -5,6 +5,7 @@ import {
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
   READ_SCOPE,
+  SESSION_SELF_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
@@ -15,6 +16,7 @@ export {
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
   READ_SCOPE,
+  SESSION_SELF_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
@@ -174,6 +176,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.files.set",
   ],
   [TALK_SECRETS_SCOPE]: [],
+  [SESSION_SELF_SCOPE]: ["deleteSession"],
 };
 
 const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
@@ -226,6 +229,16 @@ export function resolveRequiredOperatorScopeForMethod(method: string): OperatorS
   return resolveScopedMethod(method);
 }
 
+const SESSION_DELETE_METHODS = new Set(["deleteSession", "sessions.delete"]);
+
+function normalizeSessionKey(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveTargetSessionKey(params: Record<string, unknown> | undefined): string | undefined {
+  return normalizeSessionKey(params?.key) ?? normalizeSessionKey(params?.sessionKey);
+}
+
 export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
   const requiredScope = resolveRequiredOperatorScopeForMethod(method);
   if (requiredScope) {
@@ -238,11 +251,26 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): Op
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
+  options?: {
+    callerSessionKey?: string;
+    params?: Record<string, unknown>;
+  },
 ): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
   }
+  if (SESSION_DELETE_METHODS.has(method) && scopes.includes(SESSION_SELF_SCOPE)) {
+    const callerSessionKey = normalizeSessionKey(options?.callerSessionKey);
+    const targetSessionKey = resolveTargetSessionKey(options?.params);
+    if (callerSessionKey && targetSessionKey && callerSessionKey === targetSessionKey) {
+      return { allowed: true };
+    }
+    return { allowed: false, missingScope: ADMIN_SCOPE };
+  }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
+  if (requiredScope === SESSION_SELF_SCOPE) {
+    return { allowed: false, missingScope: ADMIN_SCOPE };
+  }
   if (requiredScope === READ_SCOPE) {
     if (scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)) {
       return { allowed: true };

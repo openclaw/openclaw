@@ -12,6 +12,7 @@ vi.mock("../plugins/provider-runtime.js", () => {
 });
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
+import { ollamaSupportsThinking } from "../plugins/provider-model-helpers.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
@@ -19,6 +20,7 @@ import {
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
+import { stripUnsupportedOllamaThinkingPayload } from "./pi-embedded-runner/model.provider-normalization.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -373,6 +375,46 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(true);
     expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(true);
+  });
+});
+
+describe("Ollama thinking compatibility", () => {
+  function sanitizeOllamaPayload(modelId: string): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      model: modelId,
+      thinking: true,
+      reasoning: { effort: "low" },
+      messages: [],
+    };
+    stripUnsupportedOllamaThinkingPayload({
+      provider: "ollama",
+      modelId,
+      payload,
+    });
+    return payload;
+  }
+
+  it.each(["llama3.2:3b", "mistral:7b", "gemma3:4b", "phi4:mini"])(
+    "strips thinking fields for non-thinking Ollama family %s",
+    (modelId) => {
+      expect(ollamaSupportsThinking(modelId)).toBe(false);
+      const payload = sanitizeOllamaPayload(modelId);
+      expect(payload).not.toHaveProperty("thinking");
+      expect(payload).not.toHaveProperty("reasoning");
+    },
+  );
+
+  it.each([
+    "qwen3-thinking:7b",
+    "qwen2.5-thinking:7b",
+    "deepseek-r1:7b",
+    "local-model-thinking",
+    "local-model:thinking",
+  ])("preserves thinking fields for thinking-capable Ollama model %s", (modelId) => {
+    expect(ollamaSupportsThinking(modelId)).toBe(true);
+    const payload = sanitizeOllamaPayload(modelId);
+    expect(payload.thinking).toBe(true);
+    expect(payload.reasoning).toEqual({ effort: "low" });
   });
 });
 

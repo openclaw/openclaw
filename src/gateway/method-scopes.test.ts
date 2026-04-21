@@ -35,6 +35,7 @@ describe("method scope resolution", () => {
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
+    ["deleteSession", ["operator.session.self"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
@@ -127,6 +128,25 @@ describe("operator scope authorization", () => {
 
   it("requires admin for unknown methods", () => {
     expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+  });
+
+  it("authorizes self-scoped session deletion only for the caller session", () => {
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.session.self"], {
+        callerSessionKey: "agent:main:subagent:narrative",
+        params: { key: "agent:main:subagent:narrative" },
+      }),
+    ).toEqual({ allowed: true });
+
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.session.self"], {
+        callerSessionKey: "agent:main:subagent:narrative",
+        params: { key: "agent:main:subagent:other" },
+      }),
+    ).toEqual({
       allowed: false,
       missingScope: "operator.admin",
     });

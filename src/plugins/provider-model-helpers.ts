@@ -11,6 +11,27 @@ export function matchesExactOrPrefix(id: string, values: readonly string[]): boo
   });
 }
 
+export function ollamaSupportsThinking(modelId: string): boolean {
+  const normalizedId = normalizeLowercaseStringOrEmpty(modelId);
+  if (!normalizedId) {
+    return false;
+  }
+  if (
+    /^(llama3(?:[.:_-]|$)|mistral(?:[.:_-]|$)|gemma(?:\d|[.:_-]|$)|phi(?:\d|[.:_-]|$))/u.test(
+      normalizedId,
+    )
+  ) {
+    return false;
+  }
+  if (/^deepseek-r1(?:[.:_-]|$)/u.test(normalizedId)) {
+    return true;
+  }
+  if (/^qwen.*-?thinking(?:[.:_-]|$)/u.test(normalizedId)) {
+    return true;
+  }
+  return normalizedId.includes("-thinking") || normalizedId.includes(":thinking");
+}
+
 export function cloneFirstTemplateModel(params: {
   providerId: string;
   modelId: string;

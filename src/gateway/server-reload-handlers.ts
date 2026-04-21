@@ -21,7 +21,12 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
+import { listTaskRecords, markTaskLostById } from "../tasks/task-registry.js";
+import {
+  getInspectableTaskRegistrySummary,
+  runTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
 import type { ChannelKind } from "./config-reload-plan.js";
@@ -95,6 +100,23 @@ type ManagedGatewayConfigReloaderParams = Omit<
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   clients: Iterable<SharedGatewayAuthClient>;
 };
+
+const DEFAULT_RELOAD_DEFERRAL_MAX_WAIT_MS = 300_000;
+
+function isActiveTaskRecord(task: Pick<TaskRecord, "status">): boolean {
+  return task.status === "queued" || task.status === "running";
+}
+
+function resolveTaskActivityReferenceAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.startedAt ?? task.createdAt;
+}
+
+function resolveReloadDeferralMaxWaitMs(config: OpenClawConfig): number {
+  const configured = config.gateway?.reload?.deferralTimeoutMs;
+  return typeof configured === "number" && Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_RELOAD_DEFERRAL_MAX_WAIT_MS;
+}
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
@@ -182,7 +204,61 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
   let restartPending = false;
 
-  const requestGatewayRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig): boolean => {
+  const runTaskMaintenanceBeforeReloadCount = async () => {
+    try {
+      await runTaskRegistryMaintenance();
+    } catch (err) {
+      params.logReload.warn(
+        `task registry maintenance failed before reload deferral check: ${String(err)}`,
+      );
+    }
+  };
+
+  const forceReapStaleReloadTasks = (maxWaitMs: number): number => {
+    const now = Date.now();
+    const staleAfterMs = maxWaitMs * 2;
+    let reaped = 0;
+    let tasks: TaskRecord[];
+    try {
+      tasks = listTaskRecords();
+    } catch (err) {
+      params.logReload.warn(`task registry force-reap inspection failed: ${String(err)}`);
+      return 0;
+    }
+    const activeTasks = tasks
+      .filter(isActiveTaskRecord)
+      .toSorted((a, b) => a.taskId.localeCompare(b.taskId));
+    for (const task of activeTasks) {
+      const ageMs = Math.max(0, now - resolveTaskActivityReferenceAt(task));
+      if (ageMs < staleAfterMs) {
+        continue;
+      }
+      params.logReload.warn(
+        `force-reaping stale task before reload taskId=${task.taskId} ageMs=${ageMs}`,
+      );
+      try {
+        const updated = markTaskLostById({
+          taskId: task.taskId,
+          endedAt: now,
+          lastEventAt: now,
+          error: "reload-timeout-force-reap",
+        });
+        if (updated?.status === "lost") {
+          reaped += 1;
+        }
+      } catch (err) {
+        params.logReload.warn(
+          `force-reaping stale task before reload failed taskId=${task.taskId}: ${String(err)}`,
+        );
+      }
+    }
+    return reaped;
+  };
+
+  const requestGatewayRestart = async (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+  ): Promise<boolean> => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
@@ -222,6 +298,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
       return details;
     };
+    await runTaskMaintenanceBeforeReloadCount();
     const active = getActiveCounts();
 
     if (active.totalActive > 0) {
@@ -238,19 +315,30 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
       );
 
+      const maxWaitMs = resolveReloadDeferralMaxWaitMs(nextConfig);
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
+        maxWaitMs,
         hooks: {
           onReady: () => {
             restartPending = false;
             params.logReload.info("all operations and replies completed; restarting gateway now");
           },
           onTimeout: (_pending, elapsedMs) => {
-            const remaining = formatActiveDetails(getActiveCounts());
+            const reaped = forceReapStaleReloadTasks(maxWaitMs);
+            const countsAfterReap = getActiveCounts();
             restartPending = false;
+            if (countsAfterReap.totalActive > 0) {
+              const remaining = formatActiveDetails(countsAfterReap);
+              params.logReload.warn(
+                `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,
+              );
+              return;
+            }
             params.logReload.warn(
-              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,
+              reaped > 0
+                ? `restart timeout after ${elapsedMs}ms; stale task registry entries reaped; restarting gateway now`
+                : `restart timeout after ${elapsedMs}ms; no active operations remain; restarting gateway now`,
             );
           },
           onCheckError: (err) => {
@@ -368,7 +456,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         });
         const nextSharedGatewaySessionGeneration =
           params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-        const restartQueued = requestGatewayRestart(plan, nextConfig);
+        const restartQueued = await requestGatewayRestart(plan, nextConfig);
         if (!restartQueued) {
           if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
             activateSecretsRuntimeSnapshot(prepared);

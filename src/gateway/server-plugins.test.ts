@@ -802,6 +802,45 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
+  test("allows request-scoped subagent runtime to delete its own session", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const sessionKey = "agent:main:subagent:narrative";
+    const scope = {
+      context: createTestContext("request-scope-delete-own-session"),
+      sessionKey,
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
+      const auth = methodScopesModule.authorizeOperatorScopesForMethod("sessions.delete", scopes, {
+        callerSessionKey: opts.client?.internal?.sessionKey,
+        params: opts.req.params as Record<string, unknown>,
+      });
+      if (!auth.allowed) {
+        opts.respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `missing scope: ${auth.missingScope}`,
+        });
+        return;
+      }
+      opts.respond(true, {});
+    });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+        runtime.deleteSession({
+          sessionKey,
+          deleteTranscript: true,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.session.self"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+  });
+
   test("allows session deletion when the request scope already has admin", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

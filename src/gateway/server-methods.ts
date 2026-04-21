@@ -38,7 +38,23 @@ import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
-function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
+function normalizeRequestSessionKey(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveRequestScopeSessionKey(req: GatewayRequestOptions["req"]): string | undefined {
+  const params = req.params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return undefined;
+  }
+  return normalizeRequestSessionKey((params as { sessionKey?: unknown }).sessionKey);
+}
+
+function authorizeGatewayMethod(
+  req: GatewayRequestOptions["req"],
+  client: GatewayRequestOptions["client"],
+) {
+  const method = req.method;
   if (!client?.connect) {
     return null;
   }
@@ -60,7 +76,10 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
-  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes);
+  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes, {
+    callerSessionKey: client.internal?.sessionKey,
+    params: (req.params ?? {}) as Record<string, unknown>,
+  });
   if (!scopeAuth.allowed) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
@@ -105,7 +124,7 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
-  const authError = authorizeGatewayMethod(req.method, client);
+  const authError = authorizeGatewayMethod(req, client);
   if (authError) {
     respond(false, undefined, authError);
     return;
@@ -169,5 +188,8 @@ export async function handleGatewayRequest(
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
-  await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
+  await withPluginRuntimeGatewayRequestScope(
+    { context, client, isWebchatConnect, sessionKey: resolveRequestScopeSessionKey(req) },
+    invokeHandler,
+  );
 }
