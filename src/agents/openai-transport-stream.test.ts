@@ -71,20 +71,6 @@ describe("openai transport stream", () => {
         maxTokens: 8192,
       } satisfies Model<"anthropic-messages">),
     ).toBeTypeOf("function");
-    expect(
-      createBoundaryAwareStreamFnForModel({
-        id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro Preview",
-        api: "google-generative-ai",
-        provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"google-generative-ai">),
-    ).toBeTypeOf("function");
   });
 
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
@@ -186,7 +172,7 @@ describe("openai transport stream", () => {
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
 
-  it("prepares a Google simple-completion api alias when transport overrides are attached", () => {
+  it("reports the Google simple-completion api alias without loading provider runtime", () => {
     const model = attachModelProviderRequestTransport(
       {
         id: "gemini-3.1-pro-preview",
@@ -208,17 +194,9 @@ describe("openai transport stream", () => {
       },
     );
 
-    const prepared = prepareTransportAwareSimpleModel(model);
-
     expect(resolveTransportAwareSimpleApi(model.api)).toBe(
       "openclaw-google-generative-ai-transport",
     );
-    expect(prepared).toMatchObject({
-      api: "openclaw-google-generative-ai-transport",
-      provider: "google",
-      id: "gemini-3.1-pro-preview",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
 
   it("keeps github-copilot OpenAI-family models on the shared transport seam", () => {
@@ -535,7 +513,7 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
-  it("defaults OpenAI Responses reasoning effort to high when unset", () => {
+  it("does not infer high reasoning when Pi passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -557,8 +535,8 @@ describe("openai transport stream", () => {
       undefined,
     ) as { reasoning?: unknown; include?: string[] };
 
-    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
-    expect(params.include).toEqual(["reasoning.encrypted_content"]);
+    expect(params.reasoning).toEqual({ effort: "none" });
+    expect(params).not.toHaveProperty("include");
   });
 
   it("uses shared stream reasoning as OpenAI Responses effort", () => {
@@ -586,6 +564,62 @@ describe("openai transport stream", () => {
     ) as { reasoning?: unknown };
 
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+  });
+
+  it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { reasoning?: unknown; include?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "none" });
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("omits disabled OpenAI Responses reasoning when the model does not support none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { reasoning?: unknown; include?: unknown };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
   });
 
   it("maps minimal shared reasoning to low for OpenAI Responses", () => {
@@ -1223,14 +1257,15 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
-  it("enables streaming usage compat for Ollama OpenAI-compat endpoints", () => {
+  it("honors explicit streaming usage compat for configured custom providers", () => {
     const params = buildOpenAICompletionsParams(
       {
-        id: "qwen2.5:7b",
-        name: "Qwen 2.5 7B",
+        id: "custom-model",
+        name: "Custom Model",
         api: "openai-completions",
-        provider: "ollama",
-        baseUrl: "http://127.0.0.1:11434/v1",
+        provider: "custom-cpa",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsUsageInStreaming: true },
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1248,6 +1283,33 @@ describe("openai transport stream", () => {
     };
 
     expect(params.stream_options).toMatchObject({ include_usage: true });
+  });
+
+  it("always includes stream_options.include_usage for non-standard backends like llama-cpp", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "llama-3",
+        name: "Llama 3",
+        api: "openai-completions",
+        provider: "custom-cpa",
+        baseUrl: "http://localhost:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toEqual({ include_usage: true });
   });
 
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
@@ -1288,7 +1350,7 @@ describe("openai transport stream", () => {
 
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
     expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params).not.toHaveProperty("stream_options");
+    expect(params.stream_options).toMatchObject({ include_usage: true });
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
@@ -2016,5 +2078,769 @@ describe("openai transport stream", () => {
       { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
       { type: "thinking", thinking: " Still thinking.", thinkingSignature: "reasoning_details" },
     ]);
+  });
+
+  it("surfaces visible OpenRouter response text from reasoning_details without dropping tools", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-minimax",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "reasoning.text", text: "Need to look something up." },
+                { type: "response.output_text", text: "Working on it." },
+              ],
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":"weather"}' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-minimax",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_calls" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      {
+        type: "thinking",
+        thinking: "Need to look something up.",
+        thinkingSignature: "reasoning_details",
+      },
+      { type: "text", text: "Working on it." },
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "weather" } },
+    ]);
+  });
+
+  it("does not surface ambiguous reasoning_details text without explicit compat opt-in", async () => {
+    const model = {
+      id: "openrouter/x-ai/grok-4",
+      name: "Grok 4",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-grok",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "reasoning.text", text: "Internal thought." },
+                { type: "text", text: "Do not leak this by default." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-grok",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toMatchObject([
+      {
+        type: "thinking",
+        thinking: "Internal thought.",
+        thinkingSignature: "reasoning_details",
+      },
+    ]);
+  });
+
+  it("preserves reasoning_details item order when visible text and thinking are interleaved", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-minimax-order",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "response.output_text", text: "Visible first." },
+                { type: "reasoning.text", text: " Hidden second." },
+                { type: "response.text", text: " Visible third." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toMatchObject([
+      { type: "text", text: "Visible first." },
+      {
+        type: "thinking",
+        thinking: " Hidden second.",
+        thinkingSignature: "reasoning_details",
+      },
+      { type: "text", text: " Visible third." },
+    ]);
+  });
+
+  it("does not duplicate fallback reasoning fields when reasoning_details already provided thinking", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-fallback-dup",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "reasoning.text", text: "Primary reasoning." }],
+              reasoning: "Duplicate fallback reasoning.",
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toMatchObject([
+      {
+        type: "thinking",
+        thinking: "Primary reasoning.",
+        thinkingSignature: "reasoning_details",
+      },
+    ]);
+  });
+
+  it("keeps fallback thinking when reasoning_details only carries visible text", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-visible-fallback",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "response.output_text", text: "Visible answer." }],
+              reasoning: "Hidden fallback reasoning.",
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toMatchObject([
+      { type: "text", text: "Visible answer." },
+      {
+        type: "thinking",
+        thinking: "Hidden fallback reasoning.",
+        thinkingSignature: "reasoning",
+      },
+    ]);
+  });
+
+  it("keeps a streaming tool call intact when visible reasoning text arrives mid-call", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-tool-split",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-tool-split",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "response.output_text", text: "Working on it." }],
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { arguments: '"weather"}' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-tool-split",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_calls" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "weather" } },
+      { type: "text", text: "Working on it." },
+    ]);
+  });
+
+  it("keeps a streaming tool call intact when visible reasoning text arrives between chunks", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-tool-split-gap",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-tool-split-gap",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "response.output_text", text: "Working on it." }],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-tool-split-gap",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { arguments: '"weather"}' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-tool-split-gap",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_calls" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "weather" } },
+      { type: "text", text: "Working on it." },
+    ]);
+  });
+
+  it("fails fast when post-tool-call buffering grows beyond the safety cap", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+    const oversizedText = "x".repeat(300_000);
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-tool-buffer-cap",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-tool-buffer-cap",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: oversizedText,
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await expect(
+      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
+    ).rejects.toThrow("Exceeded post-tool-call delta buffer limit");
+  });
+
+  it("fails fast when streaming tool-call arguments grow beyond the safety cap", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+    const oversizedArgs = `"${"x".repeat(300_000)}"}`;
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-tool-arg-cap",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: `{${oversizedArgs}` },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await expect(
+      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
+    ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });

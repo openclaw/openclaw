@@ -90,6 +90,12 @@ type TelegramNativeReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
 };
+type TelegramResolvedGroupConfig = {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+  promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  promptTopicConfig?: TelegramTopicConfig;
+};
 
 type TelegramCommandAuthResult = {
   chatId: number;
@@ -98,7 +104,7 @@ type TelegramCommandAuthResult = {
   resolvedThreadId?: number;
   senderId: string;
   senderUsername: string;
-  groupConfig?: TelegramGroupConfig;
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   promptTopicConfig?: TelegramTopicConfig;
@@ -189,12 +195,7 @@ export type RegisterTelegramHandlerParams = {
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => {
-    groupConfig?: TelegramGroupConfig;
-    topicConfig?: TelegramTopicConfig;
-    promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-    promptTopicConfig?: TelegramTopicConfig;
-  };
+  ) => TelegramResolvedGroupConfig;
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   processMessage: (
     ctx: TelegramContext,
@@ -247,12 +248,7 @@ export type RegisterTelegramNativeCommandsParams = {
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => {
-    groupConfig?: TelegramGroupConfig;
-    topicConfig?: TelegramTopicConfig;
-    promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-    promptTopicConfig?: TelegramTopicConfig;
-  };
+  ) => TelegramResolvedGroupConfig;
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   telegramDeps?: TelegramNativeCommandDeps;
   opts: { token: string };
@@ -272,12 +268,7 @@ async function resolveTelegramCommandAuth(params: {
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => {
-    groupConfig?: TelegramGroupConfig;
-    topicConfig?: TelegramTopicConfig;
-    promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-    promptTopicConfig?: TelegramTopicConfig;
-  };
+  ) => TelegramResolvedGroupConfig;
   requireAuth: boolean;
 }): Promise<TelegramCommandAuthResult | null> {
   const {
@@ -341,7 +332,8 @@ async function resolveTelegramCommandAuth(params: {
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? telegramCfg.dmPolicy ?? "pairing")
       : (telegramCfg.dmPolicy ?? "pairing");
-  const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
+  const requireTopic =
+    !isGroup && groupConfig && "requireTopic" in groupConfig ? groupConfig.requireTopic : undefined;
   if (!isGroup && requireTopic === true && dmThreadId == null) {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
@@ -704,9 +696,11 @@ export const registerTelegramNativeCommands = ({
     return { chatId, threadSpec, route, mediaLocalRoots, tableMode, chunkMode };
   };
   const buildCommandDeliveryBaseOptions = (params: {
+    cfg: OpenClawConfig;
     chatId: string | number;
     accountId: string;
     sessionKeyForInternalHooks?: string;
+    policySessionKey?: string;
     mirrorIsGroup?: boolean;
     mirrorGroupId?: string;
     mediaLocalRoots?: readonly string[];
@@ -715,9 +709,11 @@ export const registerTelegramNativeCommands = ({
     chunkMode: TelegramChunkMode;
     linkPreview?: boolean;
   }) => ({
+    cfg: params.cfg,
     chatId: String(params.chatId),
     accountId: params.accountId,
     sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+    policySessionKey: params.policySessionKey,
     mirrorIsGroup: params.mirrorIsGroup,
     mirrorGroupId: params.mirrorGroupId,
     token: opts.token,
@@ -876,9 +872,11 @@ export const registerTelegramNativeCommands = ({
             targetSessionKey: sessionKey,
           });
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
+          cfg: executionCfg,
           chatId,
           accountId: route.accountId,
           sessionKeyForInternalHooks: commandSessionKey,
+          policySessionKey: commandTargetSessionKey,
           mirrorIsGroup: isGroup,
           mirrorGroupId: isGroup ? String(chatId) : undefined,
           mediaLocalRoots,
@@ -1061,9 +1059,11 @@ export const registerTelegramNativeCommands = ({
         }
         const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
+          cfg: runtimeCfg,
           chatId,
           accountId: route.accountId,
           sessionKeyForInternalHooks: route.sessionKey,
+          policySessionKey: route.sessionKey,
           mirrorIsGroup: isGroup,
           mirrorGroupId: isGroup ? String(chatId) : undefined,
           mediaLocalRoots,
