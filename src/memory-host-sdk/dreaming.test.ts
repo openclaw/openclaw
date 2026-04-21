@@ -18,6 +18,7 @@ import {
   resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  validateMemoryDreamingFrequency,
 } from "./dreaming.js";
 
 describe("memory dreaming host helpers", () => {
@@ -129,6 +130,39 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.light.cron).toBe("15 */8 * * *");
     expect(resolved.phases.deep.cron).toBe("15 */8 * * *");
     expect(resolved.phases.rem.cron).toBe("15 */8 * * *");
+  });
+
+  it("validates dreaming frequency with the configured timezone", () => {
+    expect(validateMemoryDreamingFrequency("15 */8 * * *", "UTC")).toEqual({ valid: true });
+
+    const invalid = validateMemoryDreamingFrequency("TZ=UTC 15 */8 * * *", "UTC");
+    expect(invalid).toMatchObject({
+      valid: false,
+      reason: "inline-timezone",
+      error: expect.stringMatching(/\S/),
+    });
+
+    const invalidTimezone = validateMemoryDreamingFrequency("15 */8 * * *", "Not/Real");
+    expect(invalidTimezone).toMatchObject({
+      valid: false,
+      reason: "timezone",
+      error: expect.stringMatching(/\S/),
+    });
+
+    // An invalid IANA timezone combined with an inline-TZ cron expression
+    // must still report `reason: "timezone"`. The classification comes from
+    // which validation step rejected the input, not from regex-matching the
+    // error message — that tag order keeps callers from rendering a misleading
+    // inline-timezone hint when the real fix is the configured timezone.
+    const invalidTimezoneWithInline = validateMemoryDreamingFrequency(
+      "TZ=UTC 15 */8 * * *",
+      "Not/Real",
+    );
+    expect(invalidTimezoneWithInline).toMatchObject({
+      valid: false,
+      reason: "timezone",
+      error: expect.stringMatching(/\S/),
+    });
   });
 
   it("dedupes shared workspaces across all configured agents", () => {

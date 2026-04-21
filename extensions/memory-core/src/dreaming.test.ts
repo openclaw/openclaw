@@ -500,6 +500,188 @@ describe("short-term dreaming cron reconciliation", () => {
     });
   });
 
+  it("logs invalid dreaming frequency and skips cron writes", async () => {
+    const managedJob: CronJobLike = {
+      id: "job-managed",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const harness = createCronHarness([managedJob]);
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: "TZ=UTC 0 3 * * *",
+        timezone: "UTC",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.addCalls).toHaveLength(0);
+    expect(harness.updateCalls).toHaveLength(0);
+    expect(harness.jobs).toEqual([managedJob]);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^memory-core: dreaming\.frequency contains invalid cron expression: .+ Timezone must be set via dreaming\.timezone, not inline in the expression\.$/,
+      ),
+    );
+  });
+
+  it("points users at dreaming.timezone when the IANA zone is invalid", async () => {
+    // A bare "invalid cron expression" message would send users auditing
+    // dreaming.frequency when the actual broken key is dreaming.timezone.
+    const harness = createCronHarness();
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        timezone: "Not/Real",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.addCalls).toHaveLength(0);
+    expect(harness.updateCalls).toHaveLength(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^memory-core: dreaming\.timezone contains an invalid IANA timezone: .+\.$/,
+      ),
+    );
+    // The frequency-focused wording would be misleading here — the broken key
+    // is the timezone, not the cron expression.
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.not.stringContaining("invalid cron expression"),
+    );
+    expect(logger.error).toHaveBeenCalledWith(expect.not.stringMatching(/\.\./));
+  });
+
+  it("does not show timezone guidance for plain invalid dreaming frequency", async () => {
+    const harness = createCronHarness();
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: "not a cron",
+        timezone: "UTC",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.addCalls).toHaveLength(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.not.stringContaining("Timezone must be set via dreaming.timezone"),
+    );
+    // Regression guard for the follow-up lint: if the upstream validator error
+    // already ends with a period, the reconciler must not append a second one
+    // before the optional timezone hint.
+    expect(logger.error).toHaveBeenCalledWith(expect.not.stringMatching(/\.\./));
+  });
+
+  it("preserves legacy phase jobs and duplicate managed jobs when frequency is invalid", async () => {
+    // Any of these jobs could be the schedule that is actually keeping
+    // dreaming alive for the user — including a duplicate newer than the
+    // oldest managed job, or a legacy phase job that has not yet been
+    // migrated. On invalid config we must not prune or migrate them, because
+    // the replacement write path will never happen. The safe behavior is to
+    // leave every existing job untouched and surface the config error so the
+    // user can fix it; cleanup retries on the next reconcile with a valid
+    // config.
+    const managedPrimary: CronJobLike = {
+      id: "job-primary",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const managedDuplicate: CronJobLike = {
+      ...managedPrimary,
+      id: "job-duplicate",
+      createdAtMs: 20,
+    };
+    const legacyLightJob: CronJobLike = {
+      id: "job-light",
+      name: "Memory Light Dreaming",
+      description: "[managed-by=memory-core.dreaming.light] legacy",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 */6 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
+      createdAtMs: 8,
+    };
+    const harness = createCronHarness([managedPrimary, managedDuplicate, legacyLightJob]);
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: "not a cron",
+        timezone: "UTC",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.removeCalls).toEqual([]);
+    expect(harness.addCalls).toHaveLength(0);
+    expect(harness.updateCalls).toHaveLength(0);
+    // Every pre-existing job — primary, duplicate, and legacy — must remain so
+    // whichever one is the live schedule keeps firing.
+    expect(harness.jobs.map((entry) => entry.id)).toEqual([
+      "job-primary",
+      "job-duplicate",
+      "job-light",
+    ]);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("memory-core: dreaming.frequency contains invalid cron expression:"),
+    );
+  });
+
   it("removes managed dreaming jobs when disabled", async () => {
     const managedJob: CronJobLike = {
       id: "job-managed",
@@ -1408,6 +1590,116 @@ describe("short-term dreaming trigger", () => {
       logger,
     });
     expect(result).toBeUndefined();
+  });
+
+  it("skips dreaming promotion when timezone config is invalid", async () => {
+    // Reconcile preserves the last-known-good cron on invalid config, but the
+    // runtime execution path reads `params.config.timezone` fresh every fire.
+    // If we do not also gate execution on validation, a cron still firing
+    // under the old tz would write reports day-stamped under host-local time
+    // because `formatMemoryDreamingDay` silently falls back when the tz is
+    // invalid. Gating here keeps scheduling and execution consistent.
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-invalid-config-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        timezone: "Not/Real",
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming invalid config",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "memory-core: dreaming promotion skipped because dreaming.timezone is invalid.",
+    );
+    // Nothing should have been written to MEMORY.md — execution must be
+    // skipped entirely when the config is invalid, not just partially.
+    const memoryText = await fs
+      .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+      .catch((err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") {
+          return "";
+        }
+        throw err;
+      });
+    expect(memoryText).toBe("");
+  });
+
+  it("runs dreaming promotion when preserved cron fires with parse-only frequency error", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-invalid-frequency-run-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: "not a cron",
+        timezone: "UTC",
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("dreaming promotion skipped because dreaming"),
+    );
+    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memoryText).toContain("Move backups to S3 Glacier.");
   });
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {

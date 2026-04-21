@@ -1,4 +1,5 @@
 import path from "node:path";
+import { Cron } from "croner";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -136,6 +137,10 @@ export type MemoryDreamingWorkspace = {
   agentIds: string[];
 };
 
+export type MemoryDreamingFrequencyValidationResult =
+  | { valid: true }
+  | { valid: false; error: string; reason: "inline-timezone" | "parse" | "timezone" };
+
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
   "daily",
   "sessions",
@@ -156,6 +161,91 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function formatValidationError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return "unknown error";
+}
+
+function containsInlineCronTimezone(frequency: string): boolean {
+  return /(?:^|\s)(?:TZ|CRON_TZ)=\S+/.test(frequency);
+}
+
+export function validateMemoryDreamingFrequency(
+  frequency: string,
+  timezone?: string,
+): MemoryDreamingFrequencyValidationResult {
+  // Validate the timezone first so an unknown IANA zone is tagged as a
+  // timezone failure even when the cron expression itself is also malformed
+  // (e.g. carries an inline TZ=... prefix). Croner is lazy about timezone
+  // validation, so force a dependency-free IANA check via Intl before we
+  // hand the value off.
+  const resolvedTimezone =
+    normalizeTrimmedString(timezone) ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: resolvedTimezone }).format(0);
+  } catch (error) {
+    return {
+      valid: false,
+      error: formatValidationError(error),
+      reason: "timezone",
+    };
+  }
+
+  // Inline TZ=/CRON_TZ= prefixes are not supported here; surface them as a
+  // distinct reason so callers can render a targeted configuration hint
+  // instead of a generic parse error.
+  if (containsInlineCronTimezone(frequency)) {
+    let inlineCron: Cron | undefined;
+    try {
+      inlineCron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
+      inlineCron.nextRun(new Date());
+    } catch (error) {
+      return {
+        valid: false,
+        error: formatValidationError(error),
+        reason: "inline-timezone",
+      };
+    } finally {
+      // Croner only registers a timer when a callback is passed to the
+      // constructor (see `schedule()` in croner), so this validator-only
+      // usage should not leak timers today. Still stop defensively so intent
+      // is explicit and any future Croner change cannot silently start
+      // accumulating handles in this hot reconcile path.
+      inlineCron?.stop();
+    }
+    // Croner accepted it, but the inline prefix is still ambiguous for our
+    // managed job shape. Reject with a stable placeholder message.
+    return {
+      valid: false,
+      error: "inline timezone prefixes are not supported in dreaming.frequency",
+      reason: "inline-timezone",
+    };
+  }
+
+  let parseCron: Cron | undefined;
+  try {
+    parseCron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
+    parseCron.nextRun(new Date());
+    return { valid: true };
+  } catch (error) {
+    return {
+      valid: false,
+      error: formatValidationError(error),
+      reason: "parse",
+    };
+  } finally {
+    // Symmetric with the inline-timezone branch above — stop the
+    // validator-only instance so we never rely on Croner's current
+    // callback-gated scheduling behavior to avoid leaking timers.
+    parseCron?.stop();
+  }
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {

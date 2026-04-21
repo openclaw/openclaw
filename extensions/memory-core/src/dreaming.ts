@@ -10,6 +10,7 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  validateMemoryDreamingFrequency,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
@@ -114,6 +115,7 @@ export type ShortTermPromotionDreamingConfig = {
 type ReconcileResult =
   | { status: "unavailable"; removed: number }
   | { status: "disabled"; removed: number }
+  | { status: "invalid"; removed: number }
   | { status: "added"; removed: number }
   | { status: "updated"; removed: number }
   | { status: "noop"; removed: number };
@@ -434,21 +436,57 @@ export async function reconcileShortTermDreamingCronJob(params: {
     return { status: "disabled", removed };
   }
 
+  // Validate the configured frequency/timezone BEFORE touching any existing
+  // jobs. If the config is broken we must not delete legacy phase jobs or
+  // prune duplicate managed jobs: one of those might be the schedule that is
+  // actually keeping dreaming alive for the user. Leaving everything in place
+  // on "invalid" preserves the last-known-good schedule until the config is
+  // fixed.
+  const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
+  if (!validation.valid) {
+    // Strip any trailing period on the upstream error so the "." we append
+    // here never doubles up.
+    const errorText = validation.error.replace(/\.+$/, "");
+    // Branch the log message on reason so users see the actual broken config
+    // key. A bare "invalid cron expression" message attributed to
+    // dreaming.frequency would send them auditing their cron when the real
+    // fix is dreaming.timezone.
+    let logMessage: string;
+    if (validation.reason === "timezone") {
+      logMessage = `memory-core: dreaming.timezone contains an invalid IANA timezone: ${errorText}.`;
+    } else if (validation.reason === "inline-timezone") {
+      logMessage = `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}. Timezone must be set via dreaming.timezone, not inline in the expression.`;
+    } else {
+      logMessage = `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}.`;
+    }
+    params.logger.error(logMessage);
+    return { status: "invalid", removed: 0 };
+  }
+
+  const sortedManaged = sortManagedJobs(managed);
+  const [primary, ...duplicates] = sortedManaged;
   const desired = buildManagedDreamingCronJob(params.config);
-  if (managed.length === 0) {
+
+  if (!primary) {
+    // Write the new managed job BEFORE clearing legacy phase jobs so that a
+    // transient failure in `cron.add` leaves the legacy schedule in place as
+    // the fallback. If we migrated legacy first and then `cron.add` threw, the
+    // user would be left with no dreaming schedule at all.
     await cron.add(desired);
-    const migratedLegacy = await migrateLegacyPhaseDreamingCronJobs({
+    params.logger.info("memory-core: created managed dreaming cron job.");
+    const migrated = await migrateLegacyPhaseDreamingCronJobs({
       cron,
       legacyJobs: legacyPhaseJobs,
       logger: params.logger,
       mode: "enabled",
     });
-    params.logger.info("memory-core: created managed dreaming cron job.");
-    return { status: "added", removed: migratedLegacy };
+    return { status: "added", removed: migrated };
   }
 
-  const [primary, ...duplicates] = sortManagedJobs(managed);
-  let removed = await migrateLegacyPhaseDreamingCronJobs({
+  // We already have a managed primary. It is now safe to migrate legacy phase
+  // jobs and prune duplicate managed jobs — the primary continues to own the
+  // schedule while we clean up around it.
+  let cleanupRemoved = await migrateLegacyPhaseDreamingCronJobs({
     cron,
     legacyJobs: legacyPhaseJobs,
     logger: params.logger,
@@ -458,7 +496,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
     try {
       const result = await cron.remove(duplicate.id);
       if (result.removed === true) {
-        removed += 1;
+        cleanupRemoved += 1;
       }
     } catch (err) {
       params.logger.warn(
@@ -469,15 +507,15 @@ export async function reconcileShortTermDreamingCronJob(params: {
 
   const patch = buildManagedDreamingPatch(primary, desired);
   if (!patch) {
-    if (removed > 0) {
+    if (cleanupRemoved > 0) {
       params.logger.info("memory-core: pruned duplicate managed dreaming cron jobs.");
     }
-    return { status: "noop", removed };
+    return { status: "noop", removed: cleanupRemoved };
   }
 
   await cron.update(primary.id, patch);
   params.logger.info("memory-core: updated managed dreaming cron job.");
-  return { status: "updated", removed };
+  return { status: "updated", removed: cleanupRemoved };
 }
 
 export async function runShortTermDreamingPromotionIfTriggered(params: {
@@ -497,6 +535,18 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   }
   if (!params.config.enabled) {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
+  }
+
+  // Reconcile leaves the last-known-good cron entry in place when config is
+  // invalid. Keep letting that preserved schedule execute for frequency parse
+  // mistakes, but block an invalid configured timezone because the runtime path
+  // reads it fresh and would silently fall back to host-local day stamps.
+  const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
+  if (!validation.valid && validation.reason === "timezone") {
+    params.logger.warn(
+      "memory-core: dreaming promotion skipped because dreaming.timezone is invalid.",
+    );
+    return { handled: true, reason: "memory-core: short-term dreaming invalid config" };
   }
 
   const recencyHalfLifeDays =
