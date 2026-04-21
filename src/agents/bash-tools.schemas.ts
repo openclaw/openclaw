@@ -31,16 +31,14 @@ export const execSchema = Type.Object({
       description: "Exec host/target (auto|sandbox|gateway|node).",
     }),
   ),
-  security: Type.Optional(
-    Type.String({
-      description: "Exec security mode (deny|allowlist|full).",
-    }),
-  ),
-  ask: Type.Optional(
-    Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
-    }),
-  ),
+  // NOTE: `security` and `ask` are intentionally NOT model-visible.
+  // Exec security tier and ask-mode are trust-boundary decisions that must be
+  // resolved from agent config only (agents[].tools.exec.security /
+  // top-level tools.exec.security / security-v2.defaultSecurity). Allowing the
+  // model to pick a per-call `security`/`ask` value let models with a strong
+  // "allowlist"-prior silently downgrade `configured="full"` to
+  // `effective="allowlist"` and trigger `exec denied: allowlist miss` on
+  // legitimate commands. See GH issue / linked PR for the smoking-gun case.
   node: Type.Optional(
     Type.String({
       description: "Node id/name for host=node.",
