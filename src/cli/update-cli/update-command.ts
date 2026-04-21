@@ -929,6 +929,39 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     });
   }
 
+  // ── Early-exit: already on the target version ─────────────────────────
+  // Skip the full update when the installed version matches the registry
+  // target.  This avoids 2-3+ minutes of npm install, native-module
+  // recompilation, and doctor checks on a no-op — and prevents OOM
+  // conditions on resource-constrained systems (see #69412).
+  const alreadyUpToDate =
+    updateInstallKind !== "git" &&
+    !switchToGit &&
+    !switchToPackage &&
+    !explicitTag &&
+    currentVersion != null &&
+    targetVersion != null &&
+    compareSemverStrings(currentVersion, targetVersion) === 0 &&
+    // A channel switch still needs a config write even when versions match.
+    (!requestedChannel || requestedChannel === storedChannel);
+
+  if (alreadyUpToDate && !opts.dryRun) {
+    if (opts.json) {
+      defaultRuntime.writeJson({
+        status: "up-to-date",
+        version: currentVersion,
+        channel,
+        root,
+      });
+    } else {
+      defaultRuntime.log(
+        theme.success(`Already on ${currentVersion} (${channel}). Nothing to update.`),
+      );
+    }
+    defaultRuntime.exit(0);
+    return;
+  }
+
   if (opts.dryRun) {
     let mode: UpdateRunResult["mode"] = "unknown";
     if (updateInstallKind === "git") {
@@ -963,6 +996,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     );
 
     const notes: string[] = [];
+    if (alreadyUpToDate) {
+      notes.push(
+        `Already on ${currentVersion} (${channel}). A real run would exit early with no install.`,
+      );
+    }
     if (opts.tag && updateInstallKind === "git") {
       notes.push("--tag applies to npm installs only; git updates ignore it.");
     }

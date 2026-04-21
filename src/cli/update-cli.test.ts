@@ -744,6 +744,46 @@ describe("update-cli", () => {
     );
   });
 
+  it("skips the package install when already on the target version (#69412)", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    readPackageName.mockResolvedValue("openclaw");
+    readPackageVersion.mockResolvedValue("2026.4.15");
+    resolveGlobalManager.mockResolvedValue("npm");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.15",
+    });
+
+    await updateCommand({});
+
+    // Should NOT invoke npm install or doctor checks.
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    // Should exit cleanly.
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    // Should print the "already on" message.
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("Already on 2026.4.15");
+  });
+
+  it("does NOT skip the install when --tag is explicitly provided even if version matches", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    readPackageName.mockResolvedValue("openclaw");
+    readPackageVersion.mockResolvedValue("2026.4.15");
+    resolveGlobalManager.mockResolvedValue("npm");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.15",
+    });
+
+    await updateCommand({ tag: "latest" });
+
+    // With --tag, the install should proceed even when versions match.
+    expect(runCommandWithTimeout).toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "explicit dist-tag",
