@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { __testing, validateConfigObjectRaw } from "./validation.js";
 
@@ -15,6 +15,15 @@ function mapFirstIssue(
   expect(issue).toBeDefined();
   return __testing.mapZodIssueToConfigIssue(issue);
 }
+
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorLegacyConfigRules: () => [],
+    applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+  };
+});
 
 describe("config validation allowed-values metadata", () => {
   it("adds allowed values for invalid union paths", () => {

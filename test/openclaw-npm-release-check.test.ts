@@ -256,10 +256,18 @@ describe("resolveNpmCommandInvocation", () => {
   });
 
   it("uses the platform npm command when npm_execpath is missing", () => {
-    expect(resolveNpmCommandInvocation({ platform: "win32" })).toEqual({
-      command: "npm.cmd",
-      args: [],
-    });
+    const savedNpmExecPath = process.env.npm_execpath;
+    delete process.env.npm_execpath;
+    try {
+      expect(resolveNpmCommandInvocation({ platform: "win32" })).toEqual({
+        command: "npm.cmd",
+        args: [],
+      });
+    } finally {
+      if (savedNpmExecPath !== undefined) {
+        process.env.npm_execpath = savedNpmExecPath;
+      }
+    }
   });
 });
 

@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorLegacyConfigRules: () => [],
+    applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+  };
+});
+
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
