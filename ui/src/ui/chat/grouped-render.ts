@@ -784,11 +784,14 @@ function resolveManagedImageUrl(
   if (!rawUrl) {
     return null;
   }
-  const absoluteBaseUrl = new URL(
-    opts.basePath ?? window.location.href,
-    window.location.href,
-  ).toString();
-  const safeUrl = resolveSafeExternalUrl(rawUrl, absoluteBaseUrl, {
+  const mountedBaseHref = opts.basePath
+    ? new URL(
+        opts.basePath.endsWith("/") ? opts.basePath : `${opts.basePath}/`,
+        window.location.href,
+      ).toString()
+    : null;
+  const baseHref = mountedBaseHref ?? window.location.href;
+  const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, {
     allowDataImage: opts.allowDataImage ?? true,
   });
   if (!safeUrl || safeUrl.startsWith("data:") || safeUrl.startsWith("blob:")) {
@@ -799,7 +802,14 @@ function resolveManagedImageUrl(
     if (parsed.origin !== window.location.origin) {
       return null;
     }
-    if (!parsed.pathname.startsWith("/api/chat/media/outgoing/")) {
+    const allowedPathPrefixes = ["/api/chat/media/outgoing/"];
+    if (mountedBaseHref) {
+      const mountedBasePath = new URL(mountedBaseHref).pathname.replace(/\/+$/, "");
+      if (mountedBasePath) {
+        allowedPathPrefixes.push(`${mountedBasePath}/api/chat/media/outgoing/`);
+      }
+    }
+    if (!allowedPathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
       return null;
     }
     return parsed.toString();

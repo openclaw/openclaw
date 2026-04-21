@@ -1951,7 +1951,7 @@ describe("chat view", () => {
       {
         id: "assistant-managed-preview-a",
         role: "assistant",
-        content: [{ type: "image", url: "/api/chat/media/outgoing/img-a/full" }],
+        content: [{ type: "image", url: "api/chat/media/outgoing/img-a/full" }],
         timestamp: Date.now(),
       },
     ]);
@@ -1969,7 +1969,7 @@ describe("chat view", () => {
           {
             id: "assistant-managed-preview-b",
             role: "assistant",
-            content: [{ type: "image", url: "/api/chat/media/outgoing/img-b/full" }],
+            content: [{ type: "image", url: "api/chat/media/outgoing/img-b/full" }],
             timestamp: Date.now(),
           },
         ]);

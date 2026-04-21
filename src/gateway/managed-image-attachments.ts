@@ -409,7 +409,7 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
   let deletedRecordCount = 0;
   let deletedFileCount = 0;
   let retainedCount = 0;
-  const referencedPaths = new Set<string>();
+  const retainedReferencedPaths = new Set<string>();
   for (const name of names) {
     if (!name.endsWith(".json")) {
       continue;
@@ -427,10 +427,10 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       deletedRecordCount += 1;
       continue;
     }
-    if (record.original?.path) {
-      referencedPaths.add(record.original.path);
-    }
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
+      if (record.original?.path) {
+        retainedReferencedPaths.add(record.original.path);
+      }
       retainedCount += 1;
       continue;
     }
@@ -452,11 +452,17 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       deletedRecordCount += 1;
       deletedFileCount += await deleteManagedImageRecordArtifacts(record, stateDir);
     } else {
+      if (record.original?.path) {
+        retainedReferencedPaths.add(record.original.path);
+      }
       retainedCount += 1;
     }
   }
 
-  deletedFileCount += await deleteOrphanManagedImageFiles({ stateDir, referencedPaths });
+  deletedFileCount += await deleteOrphanManagedImageFiles({
+    stateDir,
+    referencedPaths: retainedReferencedPaths,
+  });
 
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
