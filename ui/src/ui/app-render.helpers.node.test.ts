@@ -392,62 +392,28 @@ describe("isCronSessionKey", () => {
 });
 
 describe("resolveSessionOptionGroups", () => {
-  it("prefers grouped session labels over display names", () => {
-    const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+  it("hides subagent sessions from the chat session picker", () => {
+    const sessionKey = "agent:alpha:main";
     const labels = labelsForSessionOptions({
       sessionKey,
       sessions: [
+        row({ key: sessionKey, label: "alpha / webchat" }),
         row({
-          key: sessionKey,
+          key: "agent:alpha:subagent:4f2146de-887b-4176-9abe-91140082959b",
           label: "cron-config-check",
-          displayName: "webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+          displayName: "Subagent: cron-config-check",
+        }),
+        row({
+          key: "agent:alpha:subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+          label: "other-subagent",
         }),
       ],
     });
 
-    expect(labels).toContain("Subagent: cron-config-check");
-    expect(labels).not.toContain(sessionKey);
-    expect(labels).not.toContain(
-      "subagent:4f2146de-887b-4176-9abe-91140082959b · webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
-    );
-  });
-
-  it("keeps scoped fallbacks for active grouped sessions without useful row metadata", () => {
-    const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
-
-    expect(labelsForSessionOptions({ sessionKey })).toContain(
-      "subagent:4f2146de-887b-4176-9abe-91140082959b",
-    );
-    expect(
-      labelsForSessionOptions({
-        sessionKey,
-        sessions: [row({ key: sessionKey })],
-      }),
-    ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
-  });
-
-  it("disambiguates duplicate grouped labels with scoped suffixes", () => {
-    const labels = labelsForSessionOptions({
-      sessionKey: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
-      sessions: [
-        row({
-          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
-          label: "cron-config-check",
-        }),
-        row({
-          key: "agent:main:subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
-          label: "cron-config-check",
-        }),
-      ],
-    });
-
-    expect(labels).toContain(
-      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
-    );
-    expect(labels).toContain(
-      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
-    );
+    expect(labels).toContain("alpha / webchat");
     expect(labels).not.toContain("Subagent: cron-config-check");
+    expect(labels).not.toContain("other-subagent");
+    expect(labels.every((label) => !label.includes("Subagent:"))).toBe(true);
   });
 
   it("uses agent group labels to keep duplicate main sessions unique", () => {
