@@ -6,6 +6,7 @@ export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export {
   formatThinkingLevels,
   formatXHighModelHint,
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
   supportsXHighThinking,

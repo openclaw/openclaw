@@ -42,9 +42,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
-  `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
-  `supportsAdaptiveThinking`, `supportsMaxThinking`,
-  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  `augmentModelCatalog`, `resolveThinkingProfile`, `isBinaryThinking`,
+  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
+  `applyConfigDefaults`, `isModernModelRef`,
   `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, and
   `onModelSelected`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
@@ -132,12 +132,11 @@ Typical split:
   vendor-owned error for direct resolution failures
 - `augmentModelCatalog`: provider appends synthetic/final catalog rows after
   discovery and config merging
-- `isBinaryThinking`: provider owns binary on/off thinking UX
-- `supportsXHighThinking`: provider opts selected models into `xhigh`
-- `supportsAdaptiveThinking`: provider opts selected models into `adaptive`
-- `supportsMaxThinking`: provider opts selected models into `max`
-- `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
-  model family
+- `resolveThinkingProfile`: provider owns the exact `/think` level set,
+  optional display labels, and default level for a selected model
+- `isBinaryThinking`: compatibility hook for binary on/off thinking UX
+- `supportsXHighThinking`: compatibility hook for selected `xhigh` models
+- `resolveDefaultThinkingLevel`: compatibility hook for default `/think` policy
 - `applyConfigDefaults`: provider applies provider-specific global defaults
   during config materialization based on auth mode, env, or model family
 - `isModernModelRef`: provider owns live/smoke preferred-model matching
