@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import ipaddr from "ipaddr.js";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { fetchRemoteMedia, MEDIA_MAX_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const MEDIA_PROXY_SEGMENT = "__openclaw-media";
 const HOSTED_MEDIA_TTL_MS = 10 * 60 * 1000;
 const MAX_HOSTED_MEDIA_ENTRIES = 128;
+const HOSTED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
 
 type SynologyHostedMedia = Awaited<ReturnType<typeof fetchRemoteMedia>> & {
   accountId: string;
@@ -208,6 +209,7 @@ async function hostSynologyMediaUrl(params: {
   cleanupExpiredHostedMedia();
   const media = await fetchRemoteMedia({
     url: params.sourceUrl,
+    maxBytes: HOSTED_MEDIA_MAX_BYTES,
   }).catch(() => null);
   if (!media) {
     return null;

@@ -4,6 +4,7 @@ import type { ResolvedSynologyChatAccount } from "./types.js";
 const fetchRemoteMediaMock = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  MEDIA_MAX_BYTES: 5 * 1024 * 1024,
   fetchRemoteMedia: fetchRemoteMediaMock,
 }));
 
@@ -61,6 +62,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
       /^https:\/\/gateway\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
     );
     expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
+      maxBytes: 5 * 1024 * 1024,
       url: "https://example.com/file.png",
     });
   });
