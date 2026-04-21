@@ -152,6 +152,7 @@ const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
 const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
+const CRON_DELIVERY_PAD = 42;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
@@ -224,7 +225,101 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
+export type CronDeliveryPreview = {
+  label: string;
+  detail: string;
+};
+
+function formatTarget(channel?: string, to?: string | null): string {
+  if (!channel) {
+    return "last";
+  }
+  if (to) {
+    return `${channel}:${to}`;
+  }
+  return channel;
+}
+
+function formatDeliveryDetail(params: {
+  requestedChannel?: string;
+  resolved: boolean;
+  sessionKey?: string;
+  error?: string;
+}): string {
+  if (params.requestedChannel === "last" || !params.requestedChannel) {
+    if (!params.resolved) {
+      return params.error
+        ? `last -> no route, will fail-closed: ${params.error}`
+        : "last -> no route, will fail-closed";
+    }
+    return params.sessionKey
+      ? `resolved from last, session ${params.sessionKey}`
+      : "resolved from last, main session";
+  }
+  return params.resolved ? "explicit" : (params.error ?? "unresolved");
+}
+
+export async function resolveCronDeliveryPreview(job: CronJob): Promise<CronDeliveryPreview> {
+  const { resolveCronDeliveryPlan } = await import("../../cron/delivery-plan.js");
+  const plan = resolveCronDeliveryPlan(job);
+  if (!plan.requested && plan.mode === "none" && !job.delivery) {
+    return { label: "not requested", detail: "not requested" };
+  }
+  if (plan.mode === "webhook") {
+    const target = plan.to ? `webhook:${plan.to}` : "webhook";
+    return { label: target, detail: plan.to ? "webhook" : "webhook target missing" };
+  }
+
+  const requestedChannel = plan.channel ?? "last";
+  const [{ loadConfig }, { resolveDefaultAgentId }, { resolveDeliveryTarget }] = await Promise.all([
+    import("../../config/config.js"),
+    import("../../agents/agent-scope-config.js"),
+    import("../../cron/isolated-agent/delivery-target.js"),
+  ]);
+  const cfg = loadConfig();
+  const agentId = job.agentId?.trim() || resolveDefaultAgentId(cfg);
+  const resolved = await resolveDeliveryTarget(cfg, agentId, {
+    channel: requestedChannel,
+    to: plan.to,
+    threadId: plan.threadId,
+    accountId: plan.accountId,
+    sessionKey: job.sessionKey,
+  });
+  if (!resolved.ok) {
+    return {
+      label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
+      detail: formatDeliveryDetail({
+        requestedChannel,
+        resolved: false,
+        sessionKey: job.sessionKey,
+        error: resolved.error.message,
+      }),
+    };
+  }
+  return {
+    label: `${plan.mode} -> ${formatTarget(resolved.channel, resolved.to)}`,
+    detail: formatDeliveryDetail({
+      requestedChannel,
+      resolved: true,
+      sessionKey: job.sessionKey,
+    }),
+  };
+}
+
+export async function resolveCronDeliveryPreviews(
+  jobs: CronJob[],
+): Promise<Map<string, CronDeliveryPreview>> {
+  const entries = await Promise.all(
+    jobs.map(async (job) => [job.id, await resolveCronDeliveryPreview(job)] as const),
+  );
+  return new Map(entries);
+}
+
+export function printCronList(
+  jobs: CronJob[],
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
+) {
   if (jobs.length === 0) {
     runtime.log("No cron jobs.");
     return;
@@ -239,6 +334,7 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
     pad("Last", CRON_LAST_PAD),
     pad("Status", CRON_STATUS_PAD),
     pad("Target", CRON_TARGET_PAD),
+    pad("Delivery", CRON_DELIVERY_PAD),
     pad("Agent ID", CRON_AGENT_PAD),
     pad("Model", CRON_MODEL_PAD),
   ].join(" ");
@@ -261,6 +357,11 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
+    const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
+    const deliveryLabel = pad(
+      truncate(deliveryPreview?.label ?? "-", CRON_DELIVERY_PAD),
+      CRON_DELIVERY_PAD,
+    );
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
@@ -302,6 +403,9 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
       colorize(rich, theme.muted, lastLabel),
       coloredStatus,
       coloredTarget,
+      deliveryPreview
+        ? colorize(rich, theme.info, deliveryLabel)
+        : colorize(rich, theme.muted, deliveryLabel),
       coloredAgent,
       job.payload.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
@@ -310,4 +414,19 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
 
     runtime.log(line.trimEnd());
   }
+}
+
+export async function printCronShow(job: CronJob, runtime: RuntimeEnv = defaultRuntime) {
+  const preview = await resolveCronDeliveryPreview(job);
+  runtime.log(`id: ${job.id}`);
+  runtime.log(`name: ${job.name}`);
+  runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
+  runtime.log(`schedule: ${formatSchedule(job.schedule)}`);
+  runtime.log(`session: ${job.sessionTarget ?? "-"}`);
+  runtime.log(`agent: ${job.agentId ?? "-"}`);
+  runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);
+  runtime.log(`delivery: ${preview.label} (${preview.detail})`);
+  runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
+  runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
+  runtime.log(`status: ${formatStatus(job)}`);
 }

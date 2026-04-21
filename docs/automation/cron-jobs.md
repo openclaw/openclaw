@@ -25,6 +25,7 @@ openclaw cron add \
 
 # Check your jobs
 openclaw cron list
+openclaw cron show <job-id>
 
 # See run history
 openclaw cron runs --id <job-id>
@@ -315,6 +316,9 @@ gog gmail watch start \
 ```bash
 # List all jobs
 openclaw cron list
+
+# Show one job, including resolved delivery route
+openclaw cron show <jobId>
 
 # Edit a job
 openclaw cron edit <jobId> --message "Updated prompt" --model "opus"

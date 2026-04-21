@@ -1,7 +1,23 @@
 import type { Command } from "commander";
+import type { CronJob } from "../../cron/types.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { handleCronCliError, printCronJson, warnIfCronSchedulerDisabled } from "./shared.js";
+import {
+  handleCronCliError,
+  printCronJson,
+  printCronShow,
+  warnIfCronSchedulerDisabled,
+} from "./shared.js";
+
+function findCronJobForShow(jobs: CronJob[], idOrName: string): CronJob | undefined {
+  const needle = normalizeLowercaseStringOrEmpty(idOrName);
+  return jobs.find(
+    (job) =>
+      normalizeLowercaseStringOrEmpty(job.id) === needle ||
+      normalizeLowercaseStringOrEmpty(job.name) === needle,
+  );
+}
 
 function registerCronToggleCommand(params: {
   cron: Command;
@@ -60,6 +76,31 @@ export function registerCronSimpleCommands(cron: Command) {
     description: "Disable a cron job",
     enabled: false,
   });
+
+  addGatewayClientOptions(
+    cron
+      .command("show")
+      .description("Show a cron job")
+      .argument("<id>", "Job id or exact name")
+      .option("--json", "Output JSON", false)
+      .action(async (id, opts) => {
+        try {
+          const res = await callGatewayFromCli("cron.list", opts, { includeDisabled: true });
+          const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
+          const job = findCronJobForShow(jobs, String(id));
+          if (!job) {
+            throw new Error(`cron job not found: ${String(id)}`);
+          }
+          if (opts.json) {
+            printCronJson(job);
+            return;
+          }
+          await printCronShow(job, defaultRuntime);
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
 
   addGatewayClientOptions(
     cron
