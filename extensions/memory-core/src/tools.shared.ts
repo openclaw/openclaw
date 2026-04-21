@@ -43,6 +43,7 @@ export const MemoryGetSchema = Type.Object({
 export function resolveMemoryToolContext(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  senderId?: string;
 }) {
   const cfg = options.config;
   if (!cfg) {
@@ -55,12 +56,13 @@ export function resolveMemoryToolContext(options: {
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;
   }
-  return { cfg, agentId };
+  return { cfg, agentId, userId: options.senderId };
 }
 
 export async function getMemoryManagerContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  userId?: string;
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
@@ -75,6 +77,7 @@ export async function getMemoryManagerContext(params: {
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  userId?: string;
   purpose?: "default" | "status";
 }): Promise<
   | {
@@ -88,6 +91,7 @@ export async function getMemoryManagerContextWithPurpose(params: {
   const { manager, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
+    userId: params.userId,
     purpose: params.purpose,
   });
   return manager ? { manager } : { error };
@@ -97,12 +101,17 @@ export function createMemoryTool(params: {
   options: {
     config?: OpenClawConfig;
     agentSessionKey?: string;
+    senderId?: string;
   };
   label: string;
   name: string;
   description: string;
   parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
-  execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
+  execute: (ctx: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    userId?: string;
+  }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
   if (!ctx) {

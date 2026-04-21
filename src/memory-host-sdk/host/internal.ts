@@ -72,7 +72,7 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   return Array.from(new Set(resolved));
 }
 
-export function isMemoryPath(relPath: string): boolean {
+export function isMemoryPath(relPath: string, userId?: string): boolean {
   const normalized = normalizeRelPath(relPath);
   if (!normalized) {
     return false;
@@ -80,7 +80,25 @@ export function isMemoryPath(relPath: string): boolean {
   if (normalized === "MEMORY.md" || normalized === "memory.md" || normalized === "DREAMS.md") {
     return true;
   }
-  return normalized.startsWith("memory/");
+  if (!normalized.startsWith("memory/")) {
+    return false;
+  }
+  if (userId) {
+    const userPrefix = `memory/${userId}/`;
+    if (normalized.startsWith(userPrefix)) {
+      return true;
+    }
+    const afterMemory = normalized.slice("memory/".length);
+    if (afterMemory.length === 0) {
+      return true;
+    }
+    const slashIndex = afterMemory.indexOf("/");
+    if (slashIndex === -1) {
+      return afterMemory.endsWith(".md") || afterMemory.endsWith(".MD");
+    }
+    return false;
+  }
+  return true;
 }
 
 function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodalSettings): boolean {
@@ -113,10 +131,28 @@ async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimod
   }
 }
 
+async function walkRootFiles(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || entry.isDirectory()) {
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    const full = path.join(dir, entry.name);
+    if (!isAllowedMemoryFilePath(full, multimodal)) {
+      continue;
+    }
+    files.push(full);
+  }
+}
+
 export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
+  userId?: string,
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -141,7 +177,18 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      if (userId) {
+        const userMemoryDir = path.join(memoryDir, userId);
+        try {
+          const userDirStat = await fs.lstat(userMemoryDir);
+          if (!userDirStat.isSymbolicLink() && userDirStat.isDirectory()) {
+            await walkDir(userMemoryDir, result, multimodal);
+          }
+        } catch {}
+        await walkRootFiles(memoryDir, result, multimodal);
+      } else {
+        await walkDir(memoryDir, result);
+      }
     }
   } catch {}
 

@@ -44,6 +44,7 @@ export default definePluginEntry({
         createMemorySearchTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
+          senderId: ctx.requesterSenderId,
         }),
       { names: ["memory_search"] },
     );
@@ -53,6 +54,7 @@ export default definePluginEntry({
         createMemoryGetTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
+          senderId: ctx.requesterSenderId,
         }),
       { names: ["memory_get"] },
     );
