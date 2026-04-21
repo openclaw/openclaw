@@ -219,6 +219,45 @@ describe("discord route resolution helpers", () => {
     ).toMatchObject({ agentId: "eng", sessionKey: "agent:eng:discord:channel:c1" });
   });
 
+  it("wasBotMentioned activates mentionAgentId binding re-route", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "worker" }, { id: "cos" }],
+      },
+      bindings: [
+        {
+          agentId: "worker",
+          mentionAgentId: "cos",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "c1" },
+          },
+        },
+      ],
+    };
+    expect(
+      resolveDiscordConversationRoute({
+        cfg,
+        accountId: "default",
+        peer: { kind: "channel", id: "c1" },
+        wasBotMentioned: true,
+      }),
+    ).toMatchObject({ agentId: "cos", isMentionRoute: true });
+  });
+
+  it("wasBotMentioned without mentionAgentId does not change routing", () => {
+    const cfg = buildWorkerBindingConfig({ kind: "channel", id: "c1" });
+    expect(
+      resolveDiscordConversationRoute({
+        cfg,
+        accountId: "default",
+        peer: { kind: "channel", id: "c1" },
+        wasBotMentioned: true,
+      }),
+    ).toMatchObject({ agentId: "worker" });
+  });
+
   it("composes route building with effective-route overrides", () => {
     const cfg = buildWorkerBindingConfig({ kind: "direct", id: "user-1" });
 

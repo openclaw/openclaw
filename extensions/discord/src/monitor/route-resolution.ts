@@ -29,6 +29,7 @@ export function resolveDiscordConversationRoute(params: {
   peer: RoutePeer;
   parentConversationId?: string | null;
   mentionedRoleAgentId?: string;
+  wasBotMentioned?: boolean;
 }): ResolvedAgentRoute {
   return resolveAgentRoute({
     cfg: params.cfg,
@@ -41,6 +42,7 @@ export function resolveDiscordConversationRoute(params: {
       ? { kind: "channel", id: params.parentConversationId }
       : undefined,
     mentionedRoleAgentId: params.mentionedRoleAgentId,
+    wasBotMentioned: params.wasBotMentioned,
   });
 }
 
