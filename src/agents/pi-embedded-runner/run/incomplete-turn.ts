@@ -241,35 +241,7 @@ export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
     return false;
   }
   const assistant = message as AgentMessage;
-  if (assessLastAssistantMessage(assistant) === "incomplete-text") {
-    return true;
-  }
-  if ((assistant as { provider?: unknown }).provider !== "ollama") {
-    return false;
-  }
-  const content = (assistant as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  let hasThinking = false;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    if ((block as { type?: unknown }).type === "thinking") {
-      hasThinking = true;
-      continue;
-    }
-    if ((block as { type?: unknown }).type !== "text") {
-      return false;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text === "string" && text.trim().length === 0) {
-      continue;
-    }
-    return false;
-  }
-  return hasThinking;
+  return assessLastAssistantMessage(assistant) === "incomplete-text";
 }
 
 function isEmptyResponseAssistantTurn(params: {
@@ -332,7 +304,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
+    !shouldApplyIncompleteTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
     })
@@ -367,7 +339,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
+    !shouldApplyIncompleteTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
     })
@@ -387,13 +359,23 @@ export function resolveEmptyResponseRetryInstruction(params: {
   return EMPTY_RESPONSE_RETRY_INSTRUCTION;
 }
 
-function shouldApplyPlanningOnlyRetryGuard(params: {
+function shouldApplyIncompleteTurnRetryGuard(params: {
   provider?: string;
   modelId?: string;
 }): boolean {
   if (normalizeLowercaseStringOrEmpty(params.provider ?? "") === "ollama") {
     return true;
   }
+  return isStrictAgenticSupportedProviderModel({
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+}
+
+function shouldApplyPlanningOnlyRetryGuard(params: {
+  provider?: string;
+  modelId?: string;
+}): boolean {
   return isStrictAgenticSupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,

@@ -670,6 +670,27 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(instruction).toContain("Do not recap or restate the plan");
   });
 
+  it("does not apply planning-only or ack fast paths to Ollama runs", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:26b",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+    const ackInstruction = resolveAckExecutionFastPathInstruction({
+      provider: "ollama",
+      modelId: "gemma4:26b",
+      prompt: "go ahead",
+    });
+
+    expect(retryInstruction).toBeNull();
+    expect(ackInstruction).toBeNull();
+  });
+
   it("extracts structured steps from planning-only narration", () => {
     expect(
       extractPlanningOnlyPlanDetails(
@@ -819,10 +840,11 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
-  it("retries reasoning-only Ollama turns without visible text", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+  it("retries unsigned-thinking Ollama turns via the empty-response path", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "ollama",
       modelId: "gemma4:26b",
+      payloadCount: 0,
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -842,7 +864,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       }),
     });
 
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
   it("retries generic empty Ollama turns without visible text", () => {
