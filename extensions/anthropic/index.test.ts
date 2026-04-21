@@ -225,53 +225,31 @@ describe("anthropic provider replay hooks", () => {
       reasoning: true,
     });
     expect(
-      provider.resolveDefaultThinkingLevel?.({
+      provider.resolveThinkingProfile?.({
         provider: "anthropic",
         modelId: "claude-opus-4-7",
       } as never),
-    ).toBe("off");
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+      defaultLevel: "off",
+    });
     expect(
-      provider.resolveDefaultThinkingLevel?.({
+      provider.resolveThinkingProfile?.({
         provider: "anthropic",
         modelId: "claude-opus-4-6",
       } as never),
-    ).toBe("adaptive");
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "adaptive" }]),
+      defaultLevel: "adaptive",
+    });
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "anthropic",
-        modelId: "claude-opus-4-7",
-      } as never),
-    ).toBe(true);
-    expect(
-      provider.supportsXHighThinking?.({
-        provider: "anthropic",
-        modelId: "claude-opus-4-6",
-      } as never),
+      provider
+        .resolveThinkingProfile?.({
+          provider: "anthropic",
+          modelId: "claude-opus-4-6",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
     ).toBe(false);
-    expect(
-      provider.supportsMaxThinking?.({
-        provider: "anthropic",
-        modelId: "claude-opus-4-7",
-      } as never),
-    ).toBe(true);
-    expect(
-      provider.supportsMaxThinking?.({
-        provider: "anthropic",
-        modelId: "claude-opus-4-6",
-      } as never),
-    ).toBe(false);
-    expect(
-      provider.supportsAdaptiveThinking?.({
-        provider: "anthropic",
-        modelId: "claude-opus-4-7",
-      } as never),
-    ).toBe(true);
-    expect(
-      provider.supportsAdaptiveThinking?.({
-        provider: "anthropic",
-        modelId: "claude-opus-4-6",
-      } as never),
-    ).toBe(true);
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {
