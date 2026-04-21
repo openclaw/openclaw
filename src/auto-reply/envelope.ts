@@ -214,7 +214,7 @@ export function formatInboundEnvelope(params: {
   const body =
     isDirect && params.fromMe
       ? `(self): ${params.body}`
-      : !isDirect && resolvedSender
+      : resolvedSender
         ? `${resolvedSender}: ${params.body}`
         : params.body;
   return formatAgentEnvelope({
