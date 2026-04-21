@@ -15,7 +15,10 @@ export function assertNotRoot(env: NodeJS.ProcessEnv = process.env): void {
   if (process.getuid() !== 0) {
     return;
   }
-  if (env.OPENCLAW_ALLOW_ROOT === "1" || env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {
+  if (
+    env.OPENCLAW_ALLOW_ROOT === "1" ||
+    (env.OPENCLAW_CLI_CONTAINER_BYPASS === "1" && env.OPENCLAW_CONTAINER_HINT)
+  ) {
     return;
   }
   process.stderr.write(

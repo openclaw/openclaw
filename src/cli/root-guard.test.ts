@@ -32,10 +32,16 @@ describe("assertNotRoot", () => {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
-  it("does not exit when uid is 0 and OPENCLAW_CLI_CONTAINER_BYPASS=1", () => {
+  it("does not exit when uid is 0 and OPENCLAW_CLI_CONTAINER_BYPASS=1 with container hint", () => {
+    process.getuid = () => 0;
+    assertNotRoot({ OPENCLAW_CLI_CONTAINER_BYPASS: "1", OPENCLAW_CONTAINER_HINT: "my-container" });
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("exits when uid is 0 and OPENCLAW_CLI_CONTAINER_BYPASS=1 without container hint", () => {
     process.getuid = () => 0;
     assertNotRoot({ OPENCLAW_CLI_CONTAINER_BYPASS: "1" });
-    expect(exitSpy).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it("does not exit when uid is non-zero", () => {
