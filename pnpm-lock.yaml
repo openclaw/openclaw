@@ -911,6 +911,9 @@ importers:
 
   extensions/notion:
     dependencies:
+      '@notionhq/client':
+        specifier: ^5.12.0
+        version: 5.19.0
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
@@ -2966,6 +2969,10 @@ packages:
   '@nolyfill/domexception@1.0.28':
     resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
     engines: {node: '>=12.4.0'}
+
+  '@notionhq/client@5.19.0':
+    resolution: {integrity: sha512-9R93Yt6/OB3MP5h29WhnvIBWYVq4mzxOYn9oh0Ut642NWxOTTouv7vkwKnMj5LGAYTlot0fhmL8OK5Su5zEzCw==}
+    engines: {node: '>=18'}
 
   '@opentelemetry/api-logs@0.215.0':
     resolution: {integrity: sha512-xrFlqhdhUyO8wSRn6DjE0145/HPWSJ5Nm0C7vWua6TdL/FSEAZvEyvdsa9CRXuxo9ebb7j/NEPhEcO62IJ0qUA==}
@@ -9981,6 +9988,8 @@ snapshots:
       fastq: 1.20.1
 
   '@nolyfill/domexception@1.0.28': {}
+
+  '@notionhq/client@5.19.0': {}
 
   '@opentelemetry/api-logs@0.215.0':
     dependencies:
