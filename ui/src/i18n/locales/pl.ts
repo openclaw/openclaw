@@ -670,6 +670,7 @@ export const pl: TranslationMap = {
   },
   languages: {
     en: "Angielski (English)",
+    vi: "Tiếng Việt (Vietnamese)",
     zhCN: "简体中文 (chiński uproszczony)",
     zhTW: "繁體中文 (chiński tradycyjny)",
     ptBR: "Português (brazylijski portugalski)",

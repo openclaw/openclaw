@@ -12,6 +12,7 @@ import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
 import { tr } from "../locales/tr.ts";
 import { uk } from "../locales/uk.ts";
+import { vi as viLocale } from "../locales/vi.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
@@ -70,6 +71,11 @@ describe("i18n", () => {
     expect(translate.t("common.health")).toBe("健康状况");
   });
 
+  it("loads Vietnamese translations on demand", async () => {
+    await translate.i18n.setLocale("vi");
+    expect(translate.t("common.health")).toBe("Tình trạng");
+  });
+
   it("loads saved non-English locale on startup", async () => {
     vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
@@ -110,6 +116,7 @@ describe("i18n", () => {
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
     expect((tr.common as { version?: string }).version).toBeTruthy();
     expect((uk.common as { version?: string }).version).toBeTruthy();
+    expect((viLocale.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
   });
@@ -127,6 +134,7 @@ describe("i18n", () => {
       pt_BR,
       tr,
       uk,
+      vi: viLocale,
       zh_CN,
       zh_TW,
     })) {

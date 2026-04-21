@@ -665,6 +665,7 @@ export const id: TranslationMap = {
   },
   languages: {
     en: "Inggris",
+    vi: "Tiếng Việt (Vietnamese)",
     zhCN: "简体中文 (Tionghoa Sederhana)",
     zhTW: "繁體中文 (Tionghoa Tradisional)",
     ptBR: "Português (Portugis Brasil)",

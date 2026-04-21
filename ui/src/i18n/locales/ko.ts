@@ -661,6 +661,7 @@ export const ko: TranslationMap = {
   },
   languages: {
     en: "영어",
+    vi: "Tiếng Việt (Vietnamese)",
     zhCN: "简体中文 (중국어 간체)",
     zhTW: "繁體中文 (중국어 번체)",
     ptBR: "Português (브라질 포르투갈어)",
