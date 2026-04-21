@@ -90,6 +90,37 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("utc dated reset hook notes");
   });
 
+  it("keeps merged local and UTC startup dates within dailyMemoryDays", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-10.md"),
+      "utc yesterday",
+      "utf-8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "local today", "utf-8");
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "Asia/Tokyo",
+            startupContext: {
+              dailyMemoryDays: 1,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      // 2026-04-11 00:30 in Asia/Tokyo, but still 2026-04-10 in UTC.
+      nowMs: Date.UTC(2026, 3, 10, 15, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+    expect(prelude).toContain("local today");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+    expect(prelude).not.toContain("utc yesterday");
+  });
+
   it("prioritizes the newer UTC-dated artifact before older local-day files when startup context is truncated", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(
