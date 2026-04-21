@@ -811,7 +811,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: off, minimal, low, medium, high, adaptive.");
+    expect(result?.text).toContain("Options: off, minimal, low, medium, high.");
   });
 
   it("persists verbose on and off directives", async () => {

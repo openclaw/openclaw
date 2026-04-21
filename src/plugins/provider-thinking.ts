@@ -8,6 +8,7 @@ type ThinkingProviderPlugin = {
   id: string;
   aliases?: string[];
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  supportsAdaptiveThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
@@ -59,6 +60,12 @@ export function resolveProviderXHighThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
   return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
+}
+
+export function resolveProviderAdaptiveThinking(
+  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
+) {
+  return resolveActiveThinkingProvider(params.provider)?.supportsAdaptiveThinking?.(params.context);
 }
 
 export function resolveProviderDefaultThinkingLevel(
