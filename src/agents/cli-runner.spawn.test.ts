@@ -740,6 +740,183 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("ignores non-JSON stdout lines from Claude live sessions", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            "Claude CLI warning",
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-mixed" }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-mixed",
+              result: "mixed-ok",
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-mixed",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(result.text).toBe("mixed-ok");
+  });
+
+  it("fails Claude live turns on is_error results", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-error" }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-error",
+              is_error: true,
+              result: "Credit balance is too low",
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-error",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message: "Credit balance is too low",
+    });
+  });
+
+  it("does not cancel the Claude live process on request abort", async () => {
+    const abortController = new AbortController();
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let writeCount = 0;
+    const cancel = vi.fn();
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        writeCount += 1;
+        if (writeCount === 2) {
+          stdoutListener?.(
+            [
+              JSON.stringify({ type: "system", subtype: "init", session_id: "live-abort" }),
+              JSON.stringify({
+                type: "result",
+                session_id: "live-abort",
+                result: "second-ok",
+              }),
+            ].join("\n") + "\n",
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+
+    const firstContext = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-abort-1",
+      backend: {
+        liveSession: "claude-stdio",
+      },
+    });
+    firstContext.params.abortSignal = abortController.signal;
+    const first = executePreparedCliRun(firstContext);
+
+    await vi.waitFor(() => {
+      expect(writeCount).toBe(1);
+    });
+    abortController.abort();
+
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancel).not.toHaveBeenCalled();
+    stdoutListener?.(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "live-abort" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "live-abort",
+          result: "discarded",
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const second = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-abort-2",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(second.text).toBe("second-ok");
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
   it("restarts Claude live sessions when selected skills change", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-skills-"));
     const weatherDir = path.join(workspaceDir, "skills", "weather");
