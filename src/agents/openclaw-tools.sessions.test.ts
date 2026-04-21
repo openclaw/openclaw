@@ -200,10 +200,15 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_list", "label").type).toBe("string");
+    expect(schemaProp("sessions_list", "agentId").type).toBe("string");
+    expect(schemaProp("sessions_list", "search").type).toBe("string");
+    expect(schemaProp("sessions_list", "includeDerivedTitles").type).toBe("boolean");
+    expect(schemaProp("sessions_list", "includeLastMessage").type).toBe("boolean");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
   });
 
-  it("sessions_list filters kinds and includes messages", async () => {
+  it("sessions_list forwards mailbox filters and includes messages", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -216,6 +221,8 @@ describe("sessions tools", () => {
               sessionId: "s-main",
               updatedAt: 10,
               lastChannel: "whatsapp",
+              derivedTitle: "Main mailbox",
+              lastMessagePreview: "Latest assistant update",
             },
             {
               key: "discord:group:dev",
@@ -229,6 +236,8 @@ describe("sessions tools", () => {
               runtimeMs: 42,
               estimatedCostUsd: 0.0042,
               childSessions: ["agent:main:subagent:worker"],
+              derivedTitle: "Dev room",
+              lastMessagePreview: "Need review on the patch",
             },
             {
               key: "agent:main:dashboard:child",
@@ -275,11 +284,36 @@ describe("sessions tools", () => {
       throw new Error("missing sessions_list tool");
     }
 
-    const result = await tool.execute("call1", { messageLimit: 1 });
+    const result = await tool.execute("call1", {
+      agentId: "main",
+      label: "mailbox",
+      search: "review",
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      messageLimit: 1,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        activeMinutes: undefined,
+        agentId: "main",
+        includeDerivedTitles: true,
+        includeGlobal: true,
+        includeLastMessage: true,
+        includeUnknown: true,
+        label: "mailbox",
+        limit: undefined,
+        search: "review",
+        spawnedBy: undefined,
+      },
+    });
     const details = result.details as {
       sessions?: Array<{
         key?: string;
+        agentId?: string;
         channel?: string;
+        derivedTitle?: string;
+        lastMessagePreview?: string;
         spawnedBy?: string;
         status?: string;
         startedAt?: number;
@@ -292,7 +326,10 @@ describe("sessions tools", () => {
     };
     expect(details.sessions).toHaveLength(5);
     const main = details.sessions?.find((s) => s.key === "main");
+    expect(main?.agentId).toBe("main");
     expect(main?.channel).toBe("whatsapp");
+    expect(main?.derivedTitle).toBe("Main mailbox");
+    expect(main?.lastMessagePreview).toBe("Latest assistant update");
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
@@ -302,6 +339,8 @@ describe("sessions tools", () => {
     expect(group?.runtimeMs).toBe(42);
     expect(group?.estimatedCostUsd).toBe(0.0042);
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
+    expect(group?.derivedTitle).toBe("Dev room");
+    expect(group?.lastMessagePreview).toBe("Need review on the patch");
 
     const dashboardChild = details.sessions?.find((s) => s.key === "agent:main:dashboard:child");
     expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");

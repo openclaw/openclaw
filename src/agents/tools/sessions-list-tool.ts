@@ -15,7 +15,7 @@ import {
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam } from "./common.js";
+import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -35,6 +35,11 @@ const SessionsListToolSchema = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1 })),
   activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
+  label: Type.Optional(Type.String({ minLength: 1 })),
+  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  search: Type.Optional(Type.String({ minLength: 1 })),
+  includeDerivedTitles: Type.Optional(Type.Boolean()),
+  includeLastMessage: Type.Optional(Type.Boolean()),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -97,6 +102,11 @@ export function createSessionsListTool(opts?: {
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
+      const label = readStringParam(params, "label");
+      const agentId = readStringParam(params, "agentId");
+      const search = readStringParam(params, "search");
+      const includeDerivedTitles = params.includeDerivedTitles === true;
+      const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
 
       const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
@@ -104,6 +114,11 @@ export function createSessionsListTool(opts?: {
         params: {
           limit,
           activeMinutes,
+          label,
+          agentId,
+          search,
+          includeDerivedTitles,
+          includeLastMessage,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
           spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
@@ -215,6 +230,7 @@ export function createSessionsListTool(opts?: {
 
         const row: SessionListRow = {
           key: displayKey,
+          agentId: resolveAgentIdFromSessionKey(key),
           kind,
           channel: derivedChannel,
           origin:
@@ -235,6 +251,8 @@ export function createSessionsListTool(opts?: {
               : undefined,
           label: readStringValue(entry.label),
           displayName: readStringValue(entry.displayName),
+          derivedTitle: readStringValue(entry.derivedTitle),
+          lastMessagePreview: readStringValue(entry.lastMessagePreview),
           parentSessionKey:
             typeof entry.parentSessionKey === "string"
               ? resolveDisplaySessionKey({
