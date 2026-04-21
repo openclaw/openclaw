@@ -25,6 +25,7 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
+import { listThinkingLevelLabels, resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -1389,6 +1390,11 @@ export function buildGatewaySessionRow(params: {
     }
   }
 
+  const rowModelProvider = selectedModel?.provider ?? modelProvider;
+  const rowModel = selectedModel?.model ?? model;
+  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
+  const thinkingModel = rowModel ?? DEFAULT_MODEL;
+
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
@@ -1413,6 +1419,11 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
+    thinkingOptions: listThinkingLevelLabels(thinkingProvider, thinkingModel),
+    thinkingDefault: resolveThinkingDefaultForModel({
+      provider: thinkingProvider,
+      model: thinkingModel,
+    }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -1431,8 +1442,8 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: normalizeUsageDisplay(entry?.responseUsage ?? cfg.agents?.defaults?.responseUsage),
-    modelProvider: selectedModel?.provider ?? modelProvider,
-    model: selectedModel?.model ?? model,
+    modelProvider: rowModelProvider,
+    model: rowModel,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,

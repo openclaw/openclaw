@@ -139,8 +139,7 @@ function resolveThinkingTargetModel(state: AppViewState): {
 }
 
 function buildThinkingOptions(
-  provider: string | null,
-  model: string | null,
+  labels: readonly string[],
   currentOverride: string,
 ): ChatThinkingSelectOption[] {
   const seen = new Set<string>();
@@ -160,9 +159,9 @@ function buildThinkingOptions(
     );
   };
 
-  for (const label of listThinkingLevelLabels(provider, model)) {
+  for (const label of labels) {
     const normalized = normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label);
-    addOption(normalized);
+    addOption(normalized, label);
   }
   if (currentOverride) {
     addOption(currentOverride);
@@ -178,18 +177,22 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
   const { provider, model } = resolveThinkingTargetModel(state);
+  const labels =
+    activeRow?.thinkingOptions ??
+    (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
   const defaultLevel =
-    provider && model
+    activeRow?.thinkingDefault ??
+    (provider && model
       ? resolveThinkingDefaultForModel({
           provider,
           model,
           catalog: state.chatModelCatalog ?? [],
         })
-      : "off";
+      : "off");
   return {
     currentOverride,
     defaultLabel: `Default (${defaultLevel})`,
-    options: buildThinkingOptions(provider, model, currentOverride),
+    options: buildThinkingOptions(labels, currentOverride),
   };
 }
 
