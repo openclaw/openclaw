@@ -204,11 +204,11 @@ The bundled `openai` plugin registers video generation through the `video_genera
 See [Video Generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
-## Personality overlay
+## GPT-5 prompt contribution
 
 OpenClaw adds an OpenAI-specific GPT-5 prompt contribution for `openai/*` and `openai-codex/*` GPT-5-family runs. It lives in the bundled OpenAI plugin, applies to model ids such as `gpt-5`, `gpt-5.2`, `gpt-5.4`, and `gpt-5.4-mini`, and does not apply to older GPT-4.x models.
 
-The GPT-5 contribution adds concise output shape, tool-call, and execution-bias guidance by default. The friendly interaction-style layer is configurable.
+The GPT-5 contribution adds concise output shape, tool-call, and execution-bias guidance by default. That guidance is always enabled for matching GPT-5 models. The friendly interaction-style layer is separate and configurable.
 
 | Value                  | Effect                                      |
 | ---------------------- | ------------------------------------------- |
