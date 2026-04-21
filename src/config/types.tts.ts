@@ -40,15 +40,6 @@ export type TtsConfig = {
   modelOverrides?: TtsModelOverrideConfig;
   /** Provider-specific TTS settings keyed by speech provider id. */
   providers?: TtsProviderConfigMap;
-  /** Google Gemini TTS configuration. */
-  gemini?: {
-    /** Voice name (e.g. Kore, Puck, Charon, Fenrir, Leda, Orus, Aoede, Zephyr). */
-    voice?: string;
-    /** Audio profile instructions to prepend to the text. */
-    audioProfile?: string;
-    /** Name of the speaker to use in the profile prompt. */
-    speakerName?: string;
-  };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
