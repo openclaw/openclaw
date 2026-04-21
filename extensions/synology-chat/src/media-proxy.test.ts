@@ -71,6 +71,24 @@ describe("resolveSynologyWebhookFileUrl", () => {
     });
   });
 
+  it("lazily seeds a configured public origin for outbound-only hostname media", async () => {
+    const resolved = await resolveSynologyWebhookFileUrl({
+      account: {
+        ...testAccount,
+        publicOrigin: "https://gateway-config.example.com",
+      },
+      sourceUrl: "https://example.com/file.png",
+    });
+
+    expect(resolved).toMatch(
+      /^https:\/\/gateway-config\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
+    );
+    expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
+      maxBytes: 5 * 1024 * 1024,
+      url: "https://example.com/file.png",
+    });
+  });
+
   it("uses OPENCLAW_GATEWAY_URL to bootstrap hostname-backed media before the first inbound webhook", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.com/ws");
     registerSynologyHostedMediaTransport(testAccount);

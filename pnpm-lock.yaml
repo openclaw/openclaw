@@ -1129,6 +1129,9 @@ importers:
 
   extensions/synology-chat:
     dependencies:
+      ipaddr.js:
+        specifier: ^2.3.0
+        version: 2.3.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6

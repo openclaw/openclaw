@@ -23,6 +23,21 @@ type SynologyMediaProxyState = {
 const hostedMedia = new Map<string, SynologyHostedMedia>();
 const mediaProxyStateByAccountId = new Map<string, SynologyMediaProxyState>();
 
+function getOrCreateMediaProxyState(account: ResolvedSynologyChatAccount): SynologyMediaProxyState {
+  const existingState = mediaProxyStateByAccountId.get(account.accountId);
+  if (existingState) {
+    return existingState;
+  }
+
+  const state: SynologyMediaProxyState = {
+    publicOrigin:
+      normalizeSynologyPublicOrigin(account.publicOrigin) ??
+      normalizeSynologyPublicOrigin(process.env.OPENCLAW_GATEWAY_URL),
+  };
+  mediaProxyStateByAccountId.set(account.accountId, state);
+  return state;
+}
+
 function normalizeHostname(hostname: string): string {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
 }
@@ -155,13 +170,9 @@ export function getSynologyHostedMediaPathPrefix(account: ResolvedSynologyChatAc
 }
 
 export function registerSynologyHostedMediaTransport(account: ResolvedSynologyChatAccount): void {
-  const previousOrigin = mediaProxyStateByAccountId.get(account.accountId)?.publicOrigin;
-  mediaProxyStateByAccountId.set(account.accountId, {
-    publicOrigin:
-      previousOrigin ??
-      normalizeSynologyPublicOrigin(account.publicOrigin) ??
-      normalizeSynologyPublicOrigin(process.env.OPENCLAW_GATEWAY_URL),
-  });
+  const state = getOrCreateMediaProxyState(account);
+  state.publicOrigin ||= normalizeSynologyPublicOrigin(account.publicOrigin);
+  state.publicOrigin ||= normalizeSynologyPublicOrigin(process.env.OPENCLAW_GATEWAY_URL);
 }
 
 export function unregisterSynologyHostedMediaTransport(account: ResolvedSynologyChatAccount): void {
@@ -245,7 +256,7 @@ export async function resolveSynologyWebhookFileUrl(params: {
     return null;
   }
 
-  const transportState = mediaProxyStateByAccountId.get(params.account.accountId);
+  const transportState = getOrCreateMediaProxyState(params.account);
   if (transportState?.publicOrigin) {
     return await hostSynologyMediaUrl({
       account: params.account,
