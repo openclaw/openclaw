@@ -70,10 +70,10 @@ const notionPlugin = definePluginEntry({
     },
   },
   register(api) {
-    const config = api.pluginConfig as { safety?: { writeApprovalMode?: string } } || {};
+    const config = (api.pluginConfig as { safety?: { writeApprovalMode?: string } }) || {};
 
     const notionClient = new NotionApiClient({
-      baseUrl: 'https://api.notion.com/v1',
+      baseUrl: "https://api.notion.com/v1",
       token: resolveNotionToken(),
     });
 
@@ -113,7 +113,7 @@ const notionPlugin = definePluginEntry({
             params.query as string,
             params.kind as string,
             params.pageSize as number,
-            params.cursor as string
+            params.cursor as string,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -128,7 +128,8 @@ const notionPlugin = definePluginEntry({
       () => ({
         name: "notion_fetch",
         label: "Notion Fetch",
-        description: "Fetch a Notion page or data source by UUID or URL, optionally including page blocks.",
+        description:
+          "Fetch a Notion page or data source by UUID or URL, optionally including page blocks.",
         parameters: {
           type: "object",
           properties: {
@@ -143,7 +144,10 @@ const notionPlugin = definePluginEntry({
         async execute(params) {
           const result = await notionClient.fetchPage(
             params.target as string,
-            params.includeBlocks as boolean
+            params.targetType as "auto" | "page" | "data_source" | undefined,
+            params.includeBlocks as boolean,
+            params.blockPageSize as number,
+            params.blockCursor as string,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -176,7 +180,7 @@ const notionPlugin = definePluginEntry({
             params.filter,
             params.sorts,
             params.pageSize as number,
-            params.cursor as string
+            params.cursor as string,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -191,7 +195,8 @@ const notionPlugin = definePluginEntry({
       () => ({
         name: "notion_create_page",
         label: "Notion Create Page",
-        description: "Create a page in a Notion page or data source using typed property and block payloads.",
+        description:
+          "Create a page in a Notion page or data source using typed property and block payloads.",
         parameters: {
           type: "object",
           properties: {
@@ -216,7 +221,7 @@ const notionPlugin = definePluginEntry({
             params.properties,
             params.content,
             params.icon,
-            params.cover
+            params.cover,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -231,7 +236,8 @@ const notionPlugin = definePluginEntry({
       () => ({
         name: "notion_update_page",
         label: "Notion Update Page",
-        description: "Update page properties, trash state, or content append/erase behavior for a Notion page.",
+        description:
+          "Update page properties, trash state, or content append/erase behavior for a Notion page.",
         parameters: {
           type: "object",
           properties: {
@@ -255,7 +261,7 @@ const notionPlugin = definePluginEntry({
             params.cover,
             params.eraseContent as boolean,
             params.archive as boolean,
-            params.restore as boolean
+            params.restore as boolean,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -276,7 +282,6 @@ const notionPlugin = definePluginEntry({
           properties: {
             parentDatabaseId: { type: "string" },
             title: { type: "string" },
-            description: { type: "string" },
             properties: { type: "object" },
             icon: { type: "object" },
           },
@@ -286,9 +291,8 @@ const notionPlugin = definePluginEntry({
           const result = await notionClient.createDataSource(
             params.parentDatabaseId as string,
             params.title as string,
-            params.description as string,
             params.properties,
-            params.icon
+            params.icon,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -303,13 +307,13 @@ const notionPlugin = definePluginEntry({
       () => ({
         name: "notion_update_data_source",
         label: "Notion Update Data Source",
-        description: "Rename or extend a Notion data source schema, move it to another database, or change trash state.",
+        description:
+          "Rename or extend a Notion data source schema, move it to another database, or change trash state.",
         parameters: {
           type: "object",
           properties: {
             dataSourceId: { type: "string" },
             title: { type: "string" },
-            description: { type: "string" },
             addProperties: { type: "object" },
             renameProperties: {
               type: "array",
@@ -331,12 +335,11 @@ const notionPlugin = definePluginEntry({
           const result = await notionClient.updateDataSource(
             params.dataSourceId as string,
             params.title as string,
-            params.description as string,
             params.addProperties,
             params.renameProperties,
             params.parentDatabaseId as string,
             params.inTrash as boolean,
-            params.icon
+            params.icon,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -388,7 +391,7 @@ const notionPlugin = definePluginEntry({
           const result = await notionClient.getBlockChildren(
             params.blockId as string,
             params.pageSize as number,
-            params.cursor as string
+            params.cursor as string,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -418,7 +421,7 @@ const notionPlugin = definePluginEntry({
         async execute(params) {
           const result = await notionClient.appendBlockChildren(
             params.blockId as string,
-            params.children as unknown[]
+            params.children as unknown[],
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -443,10 +446,7 @@ const notionPlugin = definePluginEntry({
           required: ["blockId", "block"],
         },
         async execute(params) {
-          const result = await notionClient.updateBlock(
-            params.blockId as string,
-            params.block
-          );
+          const result = await notionClient.updateBlock(params.blockId as string, params.block);
           if (!result.ok) {
             throw mapNotionError(result.error);
           }
@@ -588,7 +588,7 @@ const notionPlugin = definePluginEntry({
           const result = await notionClient.getComments(
             params.blockId as string,
             params.pageSize as number,
-            params.cursor as string
+            params.cursor as string,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -603,23 +603,28 @@ const notionPlugin = definePluginEntry({
       () => ({
         name: "notion_create_comment",
         label: "Notion Create Comment",
-        description: "Create a comment on a block or page. This is a write operation.",
+        description:
+          "Create a comment on a block, page, or existing discussion thread. This is a write operation.",
         parameters: {
           type: "object",
           properties: {
             blockId: { type: "string" },
             richText: { type: "array" },
+            discussionId: { type: "string" },
             parentId: { type: "string" },
             parentType: { type: "string", enum: ["page_id", "block_id"] },
           },
-          required: ["blockId", "richText"],
+          required: ["richText"],
         },
         async execute(params) {
-          const result = await notionClient.createComment(
-            params.blockId as string,
-            params.richText as unknown[],
-            params.parentId as string
-          );
+          const result = await notionClient.createComment({
+            richText: params.richText as unknown[],
+            targetId: params.blockId as string | undefined,
+            parentType: params.parentType as "page_id" | "block_id" | undefined,
+            discussionId:
+              (params.discussionId as string | undefined) ??
+              (params.parentId as string | undefined),
+          });
           if (!result.ok) {
             throw mapNotionError(result.error);
           }
@@ -645,7 +650,7 @@ const notionPlugin = definePluginEntry({
         async execute(params) {
           const result = await notionClient.updateComment(
             params.commentId as string,
-            params.richText as unknown[]
+            params.richText as unknown[],
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -679,7 +684,7 @@ const notionPlugin = definePluginEntry({
             params.filter,
             params.sort,
             params.pageSize as number,
-            params.cursor as string
+            params.cursor as string,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
