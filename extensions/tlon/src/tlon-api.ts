@@ -285,6 +285,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         },
         auditContext: "tlon-memex-upload",
         capture: false,
+        maxRedirects: 0,
       });
       release = guarded.release;
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");

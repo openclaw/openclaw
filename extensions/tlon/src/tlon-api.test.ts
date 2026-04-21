@@ -122,6 +122,7 @@ describe("uploadFile memex upload hardening", () => {
       }),
       auditContext: "tlon-memex-upload",
       capture: false,
+      maxRedirects: 0,
     });
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
@@ -145,6 +146,7 @@ describe("uploadFile memex upload hardening", () => {
         url: "https://uploads.tlon.network/put",
         auditContext: "tlon-memex-upload",
         capture: false,
+        maxRedirects: 0,
       }),
     );
     expect(mockRelease).not.toHaveBeenCalled();
@@ -184,14 +186,10 @@ describe("uploadFile memex upload hardening", () => {
     expect(mockRelease).not.toHaveBeenCalled();
   });
 
-  it("rejects redirected Memex upload targets outside the hosted Tlon domain allowlist", async () => {
+  it("disables redirects for Memex upload targets", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
-    mockGuardedFetch.mockResolvedValueOnce({
-      response: new Response(null, { status: 200 }),
-      finalUrl: "https://eviltlon.network/upload",
-      release: mockRelease,
-    });
+    mockGuardedFetch.mockRejectedValueOnce(new Error("Too many redirects (limit: 0)"));
 
     await expect(
       uploadFile({
@@ -199,32 +197,17 @@ describe("uploadFile memex upload hardening", () => {
         fileName: "avatar.png",
         contentType: "image/png",
       }),
-    ).rejects.toThrow("Memex final upload URL must target a trusted hosted Tlon domain");
+    ).rejects.toThrow("Too many redirects (limit: 0)");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockGuardedFetch).toHaveBeenCalledOnce();
-    expect(mockRelease).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects redirected Memex upload targets with a non-standard port", async () => {
-    const fetchMock = vi.mocked(globalThis.fetch);
-    fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
-    mockGuardedFetch.mockResolvedValueOnce({
-      response: new Response(null, { status: 200 }),
-      finalUrl: "https://uploads.tlon.network:8443/put",
-      release: mockRelease,
-    });
-
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
+    expect(mockGuardedFetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://uploads.tlon.network/put",
+        auditContext: "tlon-memex-upload",
+        capture: false,
+        maxRedirects: 0,
       }),
-    ).rejects.toThrow("Memex final upload URL must not specify a non-standard port");
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockGuardedFetch).toHaveBeenCalledOnce();
-    expect(mockRelease).toHaveBeenCalledTimes(1);
+    );
+    expect(mockRelease).not.toHaveBeenCalled();
   });
 });
