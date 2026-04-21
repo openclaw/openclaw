@@ -190,4 +190,68 @@ describe("brave web search provider", () => {
     const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
     expect(requestUrl.searchParams.get("country")).toBe("ALL");
   });
+
+  it("sends X-Subscription-Token header for web search mode (not apikey query param)", async () => {
+    const TEST_KEY = "test-brave-api-key-123";
+    vi.stubEnv("BRAVE_API_KEY", TEST_KEY);
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { apiKey: TEST_KEY, brave: { apiKey: TEST_KEY } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "openclaw ai news" });
+
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(0);
+    const [, init] = mockFetch.mock.calls[0] as [unknown, RequestInit];
+    expect(init.headers).toBeDefined();
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-Subscription-Token"]).toBe(TEST_KEY);
+    // Ensure apikey is NOT sent as a URL query parameter (Brave API no longer supports it)
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.searchParams.has("apikey")).toBe(false);
+  });
+
+  it("sends X-Subscription-Token header for llm-context mode (not apikey query param)", async () => {
+    const TEST_KEY = "test-brave-llm-key-456";
+    vi.stubEnv("BRAVE_API_KEY", TEST_KEY);
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => ({ grounding: { generic: [] } }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { apiKey: TEST_KEY, brave: { apiKey: TEST_KEY, mode: "llm-context" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "what is openclaw" });
+
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(0);
+    const [, init] = mockFetch.mock.calls[0] as [unknown, RequestInit];
+    expect(init.headers).toBeDefined();
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-Subscription-Token"]).toBe(TEST_KEY);
+    // Ensure apikey is NOT sent as a URL query parameter
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.searchParams.has("apikey")).toBe(false);
+  });
 });
