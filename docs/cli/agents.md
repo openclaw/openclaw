@@ -159,6 +159,8 @@ Each agent workspace can include an `IDENTITY.md` at the workspace root:
 - `set-identity --from-identity` reads from the workspace root (or an explicit `--identity-file`)
 
 Avatar paths resolve relative to the workspace root.
+Local avatar image files must be 2 MB or smaller; larger files are not served as
+agent avatars.
 
 ## Set identity
 
