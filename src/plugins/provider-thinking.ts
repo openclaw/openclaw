@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -50,7 +49,7 @@ function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlug
   if (activeProvider) {
     return activeProvider;
   }
-  return resolveProviderRuntimePlugin({ provider: providerId });
+  return undefined;
 }
 
 type ThinkingHookParams<TContext> = {
