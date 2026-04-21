@@ -189,4 +189,30 @@ describe("resolveChatActivityState", () => {
     expect(activity.kind).toBe("awaiting_approval");
     expect(activity.label).toBe("Waiting for approval");
   });
+
+  it("keeps approval-blocked work visible while reconnecting after disconnect", () => {
+    const activity = resolveChatActivityState({
+      now: 55_000,
+      connected: false,
+      sending: false,
+      runId: null,
+      stream: null,
+      activeToolCallCount: 0,
+      reconnectPendingAt: null,
+      lastActivityAt: 53_000,
+      lastToolActivityAt: null,
+      lastTerminalAt: null,
+      lastTerminalKind: null,
+      sessionStatus: undefined,
+      sessionEndedAt: undefined,
+      currentSessionApproval: {
+        kind: "exec",
+        count: 1,
+        createdAtMs: 54_000,
+      },
+    });
+
+    expect(activity.kind).toBe("reconnecting");
+    expect(activity.summaryKind).toBe("in_progress");
+  });
 });
