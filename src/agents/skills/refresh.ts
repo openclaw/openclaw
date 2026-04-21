@@ -140,6 +140,10 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     ignored: DEFAULT_SKILLS_WATCH_IGNORED,
   });
 
+  // Seed a non-zero version so that persisted sessions with a stale
+  // version-0 snapshot detect a change after gateway restart (#69715).
+  bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+
   const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
 
   const schedule = (changedPath?: string) => {

@@ -142,9 +142,9 @@ export async function ensureSkillSnapshot(params: {
       agentId: sessionAgentId,
     }),
   });
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const shouldRefreshSnapshot =
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
