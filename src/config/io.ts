@@ -1618,7 +1618,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
     const nextBytes = Buffer.byteLength(json, "utf-8");
     const previousStat = snapshot.exists
-      ? await deps.fs.promises.stat(configPath).catch(() => null)
+      ? await deps.fs.promises.stat(writePath).catch(() => null)
       : null;
     const hasMetaBefore = hasConfigMeta(snapshot.parsed);
     const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
