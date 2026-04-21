@@ -22,6 +22,22 @@ import { edgeTTS, inferEdgeExtension } from "./tts.js";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const VOICE_NOTE_EDGE_OUTPUT_FORMAT = "ogg-48khz-16bit-mono-opus";
+
+function resolveMicrosoftOutputFormat(params: {
+  configuredFormat: string;
+  outputFormatConfigured: boolean;
+  overrideFormat: string | undefined;
+  target: "audio-file" | "voice-note";
+}): string {
+  if (params.overrideFormat) {
+    return params.overrideFormat;
+  }
+  if (params.outputFormatConfigured) {
+    return params.configuredFormat;
+  }
+  return params.target === "voice-note" ? VOICE_NOTE_EDGE_OUTPUT_FORMAT : params.configuredFormat;
+}
 
 type MicrosoftProviderConfig = {
   enabled: boolean;
@@ -230,8 +246,12 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       const overrideVoice = trimToUndefined(req.providerOverrides?.voice);
       let voice = overrideVoice ?? config.voice;
       let lang = config.lang;
-      let outputFormat =
-        trimToUndefined(req.providerOverrides?.outputFormat) ?? config.outputFormat;
+      let outputFormat = resolveMicrosoftOutputFormat({
+        configuredFormat: config.outputFormat,
+        outputFormatConfigured: config.outputFormatConfigured,
+        overrideFormat: trimToUndefined(req.providerOverrides?.outputFormat),
+        target: req.target,
+      });
       const fallbackOutputFormat =
         outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 

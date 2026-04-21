@@ -303,7 +303,7 @@ Then run:
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).
-- `providers.microsoft.outputFormat`: Microsoft output format (e.g. `audio-24khz-48kbitrate-mono-mp3`).
+- `providers.microsoft.outputFormat`: Microsoft output format (e.g. `audio-24khz-48kbitrate-mono-mp3`). When omitted, OpenClaw selects per channel: `ogg-48khz-16bit-mono-opus` for native voice-note channels and `audio-24khz-48kbitrate-mono-mp3` otherwise.
   - See Microsoft Speech output formats for valid values; not all formats are supported by the bundled Edge-backed transport.
 - `providers.microsoft.rate` / `providers.microsoft.pitch` / `providers.microsoft.volume`: percent strings (e.g. `+10%`, `-5%`).
 - `providers.microsoft.saveSubtitles`: write JSON subtitles alongside the audio file.
@@ -397,12 +397,12 @@ These override `messages.tts.*` for that host.
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate). Voice-note format not natively supported; use OpenAI or ElevenLabs for guaranteed Opus voice messages.
 - **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments and returns PCM directly for Talk/telephony. Native Opus voice-note format is not supported by this path.
-- **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
+- **Microsoft**: defaults to `ogg-48khz-16bit-mono-opus` for voice-note channels (Feishu/Matrix/Telegram/WhatsApp/Discord) and `audio-24khz-48kbitrate-mono-mp3` for other channels. Set `microsoft.outputFormat` to pin a single format.
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
-  - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
-    guaranteed Opus voice messages.
-  - If the configured Microsoft output format fails, OpenClaw retries with MP3.
+  - Telegram `sendVoice` accepts OGG/MP3/M4A; WhatsApp requires OGG/Opus for
+    native voice-note playback, which the default now provides.
+  - If the selected Microsoft output format fails, OpenClaw retries with MP3.
 
 OpenAI/ElevenLabs output formats are fixed per channel (see above).
 

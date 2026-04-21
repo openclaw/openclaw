@@ -247,4 +247,71 @@ describe("buildMicrosoftSpeechProvider", () => {
       }),
     );
   });
+
+  it("uses ogg/opus output for voice-note targets when no format is configured", async () => {
+    const provider = buildMicrosoftSpeechProvider();
+    const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
+      writeFileSync(outputPath, Buffer.from([0x4f, 0x67, 0x67, 0x53]));
+    });
+
+    const result = await provider.synthesize({
+      text: "Hello WhatsApp voice note",
+      cfg: TEST_CFG,
+      providerConfig: {
+        enabled: true,
+        voice: "en-US-MichelleNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        outputFormatConfigured: false,
+        saveSubtitles: false,
+      },
+      providerOverrides: {},
+      timeoutMs: 1000,
+      target: "voice-note",
+    });
+
+    expect(edgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          outputFormat: "ogg-48khz-16bit-mono-opus",
+        }),
+      }),
+    );
+    expect(result.outputFormat).toBe("ogg-48khz-16bit-mono-opus");
+    expect(result.fileExtension).toBe(".ogg");
+    expect(result.voiceCompatible).toBe(true);
+  });
+
+  it("preserves an explicitly configured mp3 outputFormat for voice-note targets", async () => {
+    const provider = buildMicrosoftSpeechProvider();
+    const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
+      writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    });
+
+    const result = await provider.synthesize({
+      text: "Hello voice note",
+      cfg: TEST_CFG,
+      providerConfig: {
+        enabled: true,
+        voice: "en-US-MichelleNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        outputFormatConfigured: true,
+        saveSubtitles: false,
+      },
+      providerOverrides: {},
+      timeoutMs: 1000,
+      target: "voice-note",
+    });
+
+    expect(edgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        }),
+      }),
+    );
+    expect(result.outputFormat).toBe("audio-24khz-48kbitrate-mono-mp3");
+    expect(result.fileExtension).toBe(".mp3");
+  });
 });
