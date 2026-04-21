@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHint, ConfigUiHints } from "../types.ts";
 
@@ -118,7 +119,9 @@ const SENSITIVE_PATTERNS = [
 
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
-export const REDACTED_PLACEHOLDER = "[redacted - click reveal to view]";
+export function redactedPlaceholder(): string {
+  return t("dashboard.config.form.redactedPlaceholder");
+}
 
 function isEnvVarPlaceholder(value: string): boolean {
   return ENV_VAR_PLACEHOLDER_PATTERN.test(value.trim());

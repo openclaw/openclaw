@@ -3,6 +3,8 @@ import { t } from "../../i18n/index.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+import { translateConfigMetadataText } from "./config-form.metadata.ts";
+import { humanize } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form.ts";
 
 type ChannelConfigFormProps = {
@@ -74,7 +76,9 @@ function renderExtraChannelFields(value: Record<string, unknown>) {
       ${entries.map(
         ([field, raw]) => html`
           <div>
-            <span class="label">${field}</span>
+            <span class="label"
+              >${translateConfigMetadataText(humanize(field)) ?? humanize(field)}</span
+            >
             <span>${formatChannelExtraValue(raw)}</span>
           </div>
         `,
@@ -87,11 +91,15 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const analysis = analyzeConfigSchema(props.schema);
   const normalized = analysis.schema;
   if (!normalized) {
-    return html` <div class="callout danger">Schema unavailable. Use Raw.</div> `;
+    return html`
+      <div class="callout danger">${t("dashboard.config.form.schemaUnavailableUseRaw")}</div>
+    `;
   }
   const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
   if (!node) {
-    return html` <div class="callout danger">Channel config schema unavailable.</div> `;
+    return html`
+      <div class="callout danger">${t("dashboard.config.form.channelSchemaUnavailable")}</div>
+    `;
   }
   const configValue = props.configValue ?? {};
   const value = resolveChannelValue(configValue, props.channelId);
@@ -118,7 +126,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
   return html`
     <div style="margin-top: 16px;">
       ${props.configSchemaLoading
-        ? html` <div class="muted">Loading config schema…</div> `
+        ? html` <div class="muted">${t("dashboard.config.form.loadingSchema")}</div> `
         : renderChannelConfigForm({
             channelId,
             configValue: props.configForm,
@@ -133,7 +141,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
           ?disabled=${disabled || !props.configFormDirty}
           @click=${() => props.onConfigSave()}
         >
-          ${props.configSaving ? "Saving…" : "Save"}
+          ${props.configSaving ? t("common.saving") : t("common.save")}
         </button>
         <button class="btn" ?disabled=${disabled} @click=${() => props.onConfigReload()}>
           ${t("common.reload")}

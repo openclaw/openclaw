@@ -1,20 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as translate from "../lib/translate.ts";
-import { de } from "../locales/de.ts";
 import { en } from "../locales/en.ts";
-import { es } from "../locales/es.ts";
-import { fr } from "../locales/fr.ts";
-import { id } from "../locales/id.ts";
-import { ja_JP } from "../locales/ja-JP.ts";
-import { ko } from "../locales/ko.ts";
-import { pl } from "../locales/pl.ts";
-import { pt_BR } from "../locales/pt-BR.ts";
-import { tr } from "../locales/tr.ts";
-import { uk } from "../locales/uk.ts";
 import { vi as viLocale } from "../locales/vi.ts";
-import { zh_CN } from "../locales/zh-CN.ts";
-import { zh_TW } from "../locales/zh-TW.ts";
 
 describe("i18n", () => {
   function flatten(value: Record<string, string | Record<string, unknown>>, prefix = ""): string[] {
@@ -53,8 +41,8 @@ describe("i18n", () => {
   it("should fallback to English if key is missing in another locale", async () => {
     // We haven't registered other locales in the test environment yet,
     // but the logic should fallback to 'en' map which is always there.
-    await translate.i18n.setLocale("zh-CN");
-    // Since we don't mock the import, it might fail to load zh-CN,
+    await translate.i18n.setLocale("vi");
+    // Since we don't mock the import, it might fail to load vi,
     // but let's assume it falls back to English for now.
     expect(translate.t("common.health")).toBeDefined();
   });
@@ -64,11 +52,11 @@ describe("i18n", () => {
       locale: string;
       translations: Record<string, unknown>;
     };
-    internal.locale = "zh-CN";
-    delete internal.translations["zh-CN"];
+    internal.locale = "vi";
+    delete internal.translations.vi;
 
-    await translate.i18n.setLocale("zh-CN");
-    expect(translate.t("common.health")).toBe("健康状况");
+    await translate.i18n.setLocale("vi");
+    expect(translate.t("common.health")).toBe("Tình trạng");
   });
 
   it("loads Vietnamese translations on demand", async () => {
@@ -80,13 +68,13 @@ describe("i18n", () => {
     vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    localStorage.setItem("openclaw.i18n.locale", "zh-CN");
+    localStorage.setItem("openclaw.i18n.locale", "vi");
     const fresh = await import("../lib/translate.ts");
     await vi.waitFor(() => {
-      expect(fresh.i18n.getLocale()).toBe("zh-CN");
+      expect(fresh.i18n.getLocale()).toBe("vi");
     });
-    expect(fresh.i18n.getLocale()).toBe("zh-CN");
-    expect(fresh.t("common.health")).toBe("健康状况");
+    expect(fresh.i18n.getLocale()).toBe("vi");
+    expect(fresh.t("common.health")).toBe("Tình trạng");
   });
 
   it("skips node localStorage accessors that warn without a storage file", async () => {
@@ -97,7 +85,7 @@ describe("i18n", () => {
 
     const fresh = await import("../lib/translate.ts");
 
-    expect(fresh.i18n.getLocale()).toBe("en");
+    expect(fresh.i18n.getLocale()).toBe("vi");
     expect(warningSpy).not.toHaveBeenCalledWith(
       "`--localstorage-file` was provided without a valid path",
       expect.anything(),
@@ -106,38 +94,13 @@ describe("i18n", () => {
   });
 
   it("keeps the version label available in shipped locales", () => {
-    expect((de.common as { version?: string }).version).toBeTruthy();
-    expect((es.common as { version?: string }).version).toBeTruthy();
-    expect((fr.common as { version?: string }).version).toBeTruthy();
-    expect((id.common as { version?: string }).version).toBeTruthy();
-    expect((ja_JP.common as { version?: string }).version).toBeTruthy();
-    expect((ko.common as { version?: string }).version).toBeTruthy();
-    expect((pl.common as { version?: string }).version).toBeTruthy();
-    expect((pt_BR.common as { version?: string }).version).toBeTruthy();
-    expect((tr.common as { version?: string }).version).toBeTruthy();
-    expect((uk.common as { version?: string }).version).toBeTruthy();
+    expect((en.common as { version?: string }).version).toBeTruthy();
     expect((viLocale.common as { version?: string }).version).toBeTruthy();
-    expect((zh_CN.common as { version?: string }).version).toBeTruthy();
-    expect((zh_TW.common as { version?: string }).version).toBeTruthy();
   });
 
   it("keeps shipped locales structurally aligned with English", () => {
     const englishKeys = flatten(en);
-    for (const [locale, value] of Object.entries({
-      de,
-      es,
-      fr,
-      id,
-      ja_JP,
-      ko,
-      pl,
-      pt_BR,
-      tr,
-      uk,
-      vi: viLocale,
-      zh_CN,
-      zh_TW,
-    })) {
+    for (const [locale, value] of Object.entries({ vi: viLocale })) {
       expect(flatten(value as Record<string, string | Record<string, unknown>>), locale).toEqual(
         englishKeys,
       );

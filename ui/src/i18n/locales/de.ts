@@ -671,7 +671,7 @@ export const de: TranslationMap = {
   },
   languages: {
     en: "Englisch",
-    vi: "Tiếng Việt (Vietnamese)",
+    vi: "Tiếng Việt (Vietnamesisch)",
     zhCN: "简体中文 (Vereinfachtes Chinesisch)",
     zhTW: "繁體中文 (Traditionelles Chinesisch)",
     ptBR: "Português (Brasilianisches Portugiesisch)",

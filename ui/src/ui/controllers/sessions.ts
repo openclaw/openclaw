@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
@@ -303,7 +304,7 @@ export async function branchSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.branch",
-    "Create a new child session from this pre-compaction checkpoint?",
+    t("dashboard.sessions.confirm.branch"),
   );
   return result?.key ?? null;
 }
@@ -318,6 +319,6 @@ export async function restoreSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.restore",
-    "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
+    t("dashboard.sessions.confirm.restore"),
   );
 }

@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { t } from "../../i18n/index.ts";
 import { renderCopyButton } from "../chat/copy-as-markdown.ts";
 
 async function copyCommand(command: string) {
@@ -15,8 +16,8 @@ export function renderConnectCommand(command: string) {
       class="login-gate__command"
       role="button"
       tabindex="0"
-      title="Copy command"
-      aria-label=${`Copy command: ${command}`}
+      title=${t("connectCommand.copyTitle")}
+      aria-label=${t("connectCommand.copyAria", { command })}
       @click=${async (e: Event) => {
         if ((e.target as HTMLElement | null)?.closest(".chat-copy-btn")) {
           return;
@@ -32,7 +33,7 @@ export function renderConnectCommand(command: string) {
       }}
     >
       <code>${command}</code>
-      ${renderCopyButton(command, "Copy command")}
+      ${renderCopyButton(command, t("connectCommand.copyTitle"))}
     </div>
   `;
 }

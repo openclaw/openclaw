@@ -273,6 +273,17 @@
     flex-wrap: nowrap;
   }
 
+  .topbar-locale {
+    padding: 2px;
+  }
+
+  .topbar-locale__btn {
+    min-width: 34px;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+
   .topbar-search {
     min-width: 0;
     flex: 1;

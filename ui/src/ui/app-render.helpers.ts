@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
-import { t } from "../i18n/index.ts";
+import { repeat } from "lit/directives/repeat.js";
+import { SUPPORTED_LOCALES, i18n, isSupportedLocale, t, type Locale } from "../i18n/index.ts";
 import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -548,6 +549,54 @@ const THEME_MODE_OPTIONS: ThemeModeOption[] = [
   { id: "light", label: "Light", short: "LIGHT" },
   { id: "dark", label: "Dark", short: "DARK" },
 ];
+type QuickLocaleOption = { id: Extract<Locale, "en" | "vi">; short: string };
+const QUICK_LOCALE_OPTIONS: QuickLocaleOption[] = [
+  { id: "en", short: "EN" },
+  { id: "vi", short: "VI" },
+];
+
+function resolveSelectedLocale(state: AppViewState): Locale {
+  return isSupportedLocale(state.settings.locale) ? state.settings.locale : i18n.getLocale();
+}
+
+function applyLocale(state: AppViewState, locale: Locale) {
+  if (!SUPPORTED_LOCALES.includes(locale)) {
+    return;
+  }
+  if (resolveSelectedLocale(state) === locale) {
+    return;
+  }
+  void i18n.setLocale(locale);
+  state.applySettings({
+    ...state.settings,
+    locale,
+  });
+}
+
+export function renderTopbarLanguageToggle(state: AppViewState) {
+  const currentLocale = resolveSelectedLocale(state);
+  return html`
+    <div class="topbar-locale" role="group" aria-label=${t("overview.access.language")}>
+      ${QUICK_LOCALE_OPTIONS.map(
+        (opt) => html`
+          <button
+            type="button"
+            class="topbar-locale__btn ${opt.id === currentLocale
+              ? "topbar-locale__btn--active"
+              : ""}"
+            data-locale=${opt.id}
+            title=${t(`languages.${opt.id}`)}
+            aria-label=${`${t("overview.access.language")}: ${t(`languages.${opt.id}`)}`}
+            aria-pressed=${opt.id === currentLocale}
+            @click=${() => applyLocale(state, opt.id)}
+          >
+            ${opt.short}
+          </button>
+        `,
+      )}
+    </div>
+  `;
+}
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
   const modeIcon = (mode: ThemeMode) => {

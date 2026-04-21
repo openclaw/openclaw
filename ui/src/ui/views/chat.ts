@@ -1,6 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
@@ -23,7 +25,6 @@ import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
 import {
-  CATEGORY_LABELS,
   SLASH_COMMANDS,
   getHiddenCommandCount,
   getSlashCommandCompletions,
@@ -189,6 +190,281 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
 
+function syncToolCardExpansionState(
+  sessionKey: string,
+  items: Array<ChatItem | MessageGroup>,
+  autoExpandToolCalls: boolean,
+) {
+  const expanded = getExpandedToolCards(sessionKey);
+  const initialized = getInitializedToolCards(sessionKey);
+  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
+  const currentToolCardIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const entry of item.messages) {
+      const cards = extractToolCards(entry.message, entry.key);
+      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
+        currentToolCardIds.add(disclosureId);
+        if (initialized.has(disclosureId)) {
+          continue;
+        }
+        expanded.set(disclosureId, autoExpandToolCalls);
+        initialized.add(disclosureId);
+      }
+      const messageRecord = entry.message as Record<string, unknown>;
+      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
+      const normalizedRole = normalizeRoleForGrouping(role);
+      const isToolMessage =
+        isToolResultMessage(entry.message) ||
+        normalizedRole === "tool" ||
+        role.toLowerCase() === "toolresult" ||
+        role.toLowerCase() === "tool_result" ||
+        typeof messageRecord.toolCallId === "string" ||
+        typeof messageRecord.tool_call_id === "string";
+      if (!isToolMessage) {
+        continue;
+      }
+      const disclosureId = `toolmsg:${entry.key}`;
+      currentToolCardIds.add(disclosureId);
+      if (initialized.has(disclosureId)) {
+        continue;
+      }
+      expanded.set(disclosureId, autoExpandToolCalls);
+      initialized.add(disclosureId);
+    }
+  }
+  if (autoExpandToolCalls && !previousAutoExpand) {
+    for (const toolCardId of currentToolCardIds) {
+      expanded.set(toolCardId, true);
+    }
+  }
+  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
+}
+
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  if (status.phase === "active") {
+    return html`
+      <div
+        class="compaction-indicator compaction-indicator--active"
+        role="status"
+        aria-live="polite"
+      >
+        ${icons.loader} ${t("chat.compaction.active")}
+      </div>
+    `;
+  }
+  if (status.phase === "retrying") {
+    return html`
+      <div
+        class="compaction-indicator compaction-indicator--active"
+        role="status"
+        aria-live="polite"
+      >
+        ${icons.loader} ${t("chat.compaction.retrying")}
+      </div>
+    `;
+  }
+  if (status.phase === "complete" && status.completedAt) {
+    const elapsed = Date.now() - status.completedAt;
+    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
+      return html`
+        <div
+          class="compaction-indicator compaction-indicator--complete"
+          role="status"
+          aria-live="polite"
+        >
+          ${icons.check} ${t("chat.compaction.complete")}
+        </div>
+      `;
+    }
+  }
+  return nothing;
+}
+
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const phase = status.phase ?? "active";
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
+    return nothing;
+  }
+  const details = [
+    t("chat.fallback.selected", { value: status.selected }),
+    phase === "cleared"
+      ? t("chat.fallback.activeDetail", { value: status.selected })
+      : t("chat.fallback.activeDetail", { value: status.active }),
+    phase === "cleared" && status.previous
+      ? t("chat.fallback.previous", { value: status.previous })
+      : null,
+    status.reason ? t("chat.fallback.reason", { value: status.reason }) : null,
+    status.attempts.length > 0
+      ? t("chat.fallback.attempts", { value: status.attempts.slice(0, 3).join(" | ") })
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  const message =
+    phase === "cleared"
+      ? t("chat.fallback.cleared", { value: status.selected })
+      : t("chat.fallback.active", { value: status.active });
+  const className =
+    phase === "cleared"
+      ? "compaction-indicator compaction-indicator--fallback-cleared"
+      : "compaction-indicator compaction-indicator--fallback";
+  const icon = phase === "cleared" ? icons.check : icons.brain;
+  return html`
+    <div class=${className} role="status" aria-live="polite" title=${details}>
+      ${icon} ${message}
+    </div>
+  `;
+}
+
+function renderSideResult(
+  sideResult: ChatSideResult | null | undefined,
+  onDismiss?: () => void,
+): TemplateResult | typeof nothing {
+  if (!sideResult) {
+    return nothing;
+  }
+  return html`
+    <section
+      class=${`chat-side-result ${sideResult.isError ? "chat-side-result--error" : ""}`}
+      role="status"
+      aria-live="polite"
+      aria-label=${t("chat.sideResult.ariaLabel")}
+    >
+      <div class="chat-side-result__header">
+        <div class="chat-side-result__label-row">
+          <span class="chat-side-result__label">BTW</span>
+          <span class="chat-side-result__meta">${t("chat.sideResult.meta")}</span>
+        </div>
+        <button
+          class="btn chat-side-result__dismiss"
+          type="button"
+          aria-label=${t("chat.sideResult.dismissAria")}
+          title=${t("chat.sideResult.dismissTitle")}
+          @click=${() => onDismiss?.()}
+        >
+          ${icons.x}
+        </button>
+      </div>
+      <div class="chat-side-result__question">${sideResult.question}</div>
+      <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>
+        ${unsafeHTML(toSanitizedMarkdownHtml(sideResult.text))}
+      </div>
+    </section>
+  `;
+}
+
+/**
+ * Compact notice when context usage reaches 85%+.
+ * Progressively shifts from amber (85%) to red (90%+).
+ */
+/** Parse a 6-digit CSS hex color string to [r, g, b] integer components. */
+function parseHexRgb(hex: string): [number, number, number] | null {
+  const h = hex.trim().replace(/^#/, "");
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
+    return null;
+  }
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+let cachedThemeNoticeColors: {
+  warnHex: string;
+  dangerHex: string;
+  warnRgb: [number, number, number];
+  dangerRgb: [number, number, number];
+} | null = null;
+
+function getThemeNoticeColors() {
+  if (cachedThemeNoticeColors) {
+    return cachedThemeNoticeColors;
+  }
+  const rootStyle = getComputedStyle(document.documentElement);
+  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
+  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
+  cachedThemeNoticeColors = {
+    warnHex,
+    dangerHex,
+    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
+    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
+  };
+  return cachedThemeNoticeColors;
+}
+
+function renderContextNotice(
+  session: GatewaySessionRow | undefined,
+  defaultContextTokens: number | null,
+) {
+  if (session?.totalTokensFresh === false) {
+    return nothing;
+  }
+  const used = session?.totalTokens ?? 0;
+  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
+  if (!used || !limit) {
+    return nothing;
+  }
+  const ratio = used / limit;
+  if (ratio < 0.85) {
+    return nothing;
+  }
+  const pct = Math.min(Math.round(ratio * 100), 100);
+  // Read theme semantic tokens so color tracks the active theme (Dash, dark, light …)
+  const { warnRgb, dangerRgb } = getThemeNoticeColors();
+  const [wr, wg, wb] = warnRgb;
+  const [dr, dg, db] = dangerRgb;
+  // Blend from --warn at 85% usage to --danger at 95%+ usage
+  const mix = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
+  const r = Math.round(wr + (dr - wr) * mix);
+  const g = Math.round(wg + (dg - wg) * mix);
+  const b = Math.round(wb + (db - wb) * mix);
+  const color = `rgb(${r}, ${g}, ${b})`;
+  const bgOpacity = 0.08 + 0.08 * mix;
+  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+  return html`
+    <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
+      <svg
+        class="context-notice__icon"
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <span>${t("chat.contextNotice.used", { percent: String(pct) })}</span>
+      <span class="context-notice__detail"
+        >${formatTokensCompact(used)} / ${formatTokensCompact(limit)}</span
+      >
+    </div>
+  `;
+}
+
+/** Format token count compactly (e.g. 128000 → "128k"). */
+function formatTokensCompact(n: number): string {
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (n >= 1_000) {
+    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return String(n);
+}
+
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -299,11 +575,11 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
       ${attachments.map(
         (att) => html`
           <div class="chat-attachment-thumb">
-            <img src=${att.dataUrl} alt="Attachment preview" />
+            <img src=${att.dataUrl} alt=${t("chat.composer.attachmentPreviewAlt")} />
             <button
               class="chat-attachment-remove"
               type="button"
-              aria-label="Remove attachment"
+              aria-label=${t("chat.composer.removeAttachment")}
               @click=${() => {
                 const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
                 props.onAttachmentsChange?.(next);
@@ -456,15 +732,31 @@ function exportMarkdown(props: ChatProps): void {
   exportChatMarkdown(props.messages, props.assistantName);
 }
 
-const WELCOME_SUGGESTIONS = [
-  "What can you do?",
-  "Summarize my recent sessions",
-  "Help me configure a channel",
-  "Check system health",
-];
+function getWelcomeSuggestions(): string[] {
+  return [
+    t("chat.welcome.suggestions.capabilities"),
+    t("chat.welcome.suggestions.recentSessions"),
+    t("chat.welcome.suggestions.configureChannel"),
+    t("chat.welcome.suggestions.systemHealth"),
+  ];
+}
+
+function resolveSlashCategoryLabel(category: SlashCommandCategory): string {
+  switch (category) {
+    case "session":
+      return t("chat.slash.categories.session");
+    case "model":
+      return t("chat.slash.categories.model");
+    case "agents":
+      return t("chat.slash.categories.agents");
+    case "tools":
+    default:
+      return t("chat.slash.categories.tools");
+  }
+}
 
 function renderWelcomeState(props: ChatProps): TemplateResult {
-  const name = props.assistantName || "Assistant";
+  const name = props.assistantName || t("chat.defaultAssistantName");
   const avatar = resolveAgentAvatarUrl({
     identity: {
       avatar: props.assistantAvatar ?? undefined,
@@ -472,6 +764,7 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
     },
   });
   const logoUrl = agentLogoUrl(props.basePath ?? "");
+  const suggestions = getWelcomeSuggestions();
 
   return html`
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
@@ -487,11 +780,15 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
           </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
-        <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
+        <span class="agent-chat__badge"
+          ><img src=${logoUrl} alt="" /> ${t("chat.welcome.ready")}</span
+        >
       </div>
-      <p class="agent-chat__hint">Type a message below &middot; <kbd>/</kbd> for commands</p>
+      <p class="agent-chat__hint">
+        ${t("chat.welcome.hintStart")} &middot; <kbd>/</kbd> ${t("chat.welcome.hintEnd")}
+      </p>
       <div class="agent-chat__suggestions">
-        ${WELCOME_SUGGESTIONS.map(
+        ${suggestions.map(
           (text) => html`
             <button
               type="button"
@@ -519,8 +816,8 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
       ${icons.search}
       <input
         type="text"
-        placeholder="Search messages..."
-        aria-label="Search messages"
+        placeholder=${t("chat.search.placeholder")}
+        aria-label=${t("chat.search.ariaLabel")}
         .value=${vs.searchQuery}
         @input=${(e: Event) => {
           vs.searchQuery = (e.target as HTMLInputElement).value;
@@ -529,7 +826,7 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
       />
       <button
         class="btn btn--ghost"
-        aria-label="Close search"
+        aria-label=${t("chat.search.close")}
         @click=${() => {
           vs.searchOpen = false;
           vs.searchQuery = "";
@@ -570,7 +867,7 @@ function renderPinnedSection(
           requestUpdate();
         }}
       >
-        ${icons.bookmark} ${entries.length} pinned
+        ${icons.bookmark} ${t("chat.pinned.toggle", { count: String(entries.length) })}
         <span class="collapse-chevron ${vs.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
           >${icons.chevronDown}</span
         >
@@ -582,7 +879,7 @@ function renderPinnedSection(
                 ({ index, text, role }) => html`
                   <div class="agent-chat__pinned-item">
                     <span class="agent-chat__pinned-role"
-                      >${role === "user" ? "You" : "Assistant"}</span
+                      >${role === "user" ? t("chat.pinned.you") : t("chat.pinned.assistant")}</span
                     >
                     <span class="agent-chat__pinned-text"
                       >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
@@ -593,7 +890,7 @@ function renderPinnedSection(
                         pinned.unpin(index);
                         requestUpdate();
                       }}
-                      title="Unpin"
+                      title=${t("chat.pinned.unpin")}
                     >
                       ${icons.x}
                     </button>
@@ -618,7 +915,7 @@ function renderSlashMenu(
   // Arg-picker mode: show options for the selected command
   if (vs.slashMenuMode === "args" && vs.slashMenuCommand && vs.slashMenuArgItems.length > 0) {
     return html`
-      <div class="slash-menu" role="listbox" aria-label="Command arguments">
+      <div class="slash-menu" role="listbox" aria-label=${t("chat.slash.argumentsAria")}>
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
             /${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}
@@ -644,9 +941,7 @@ function renderSlashMenu(
             `,
           )}
         </div>
-        <div class="slash-menu-footer">
-          <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> run <kbd>Esc</kbd> close
-        </div>
+        <div class="slash-menu-footer">${t("chat.slash.footerArgs")}</div>
       </div>
     `;
   }
@@ -675,7 +970,7 @@ function renderSlashMenu(
   for (const [cat, entries] of grouped) {
     sections.push(html`
       <div class="slash-menu-group">
-        <div class="slash-menu-group__label">${CATEGORY_LABELS[cat]}</div>
+        <div class="slash-menu-group__label">${resolveSlashCategoryLabel(cat)}</div>
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
@@ -695,9 +990,11 @@ function renderSlashMenu(
               ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
               <span class="slash-menu-desc">${cmd.description}</span>
               ${cmd.argOptions?.length
-                ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
+                ? html`<span class="slash-menu-badge"
+                    >${t("chat.slash.optionCount", { count: String(cmd.argOptions.length) })}</span
+                  >`
                 : cmd.executeLocal && !cmd.args
-                  ? html` <span class="slash-menu-badge">instant</span> `
+                  ? html` <span class="slash-menu-badge">${t("chat.slash.instant")}</span> `
                   : nothing}
             </div>
           `,
@@ -709,24 +1006,9 @@ function renderSlashMenu(
   const hiddenCount = vs.slashMenuExpanded ? 0 : getHiddenCommandCount();
 
   return html`
-    <div class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div class="slash-menu" role="listbox" aria-label=${t("chat.slash.commandsAria")}>
       ${sections}
-      ${hiddenCount > 0
-        ? html`<button
-            class="slash-menu-show-more"
-            @click=${(e: Event) => {
-              e.preventDefault();
-              e.stopPropagation();
-              vs.slashMenuExpanded = true;
-              updateSlashMenu(props.draft, requestUpdate);
-            }}
-          >
-            Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
-          </button>`
-        : nothing}
-      <div class="slash-menu-footer">
-        <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
-      </div>
+      <div class="slash-menu-footer">${t("chat.slash.footerCommands")}</div>
     </div>
   `;
 }
@@ -756,9 +1038,11 @@ export function renderChat(props: ChatProps) {
 
   const placeholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
-    : "Connect to the gateway to start chatting...";
+      ? t("chat.composer.placeholderWithAttachments")
+      : t("chat.composer.placeholderConnected", {
+          name: props.assistantName || t("chat.genericAgentName"),
+        })
+    : t("chat.composer.placeholderDisconnected");
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const getDraft = props.getDraft ?? (() => props.draft);
@@ -811,7 +1095,7 @@ export function renderChat(props: ChatProps) {
       <div class="chat-thread-inner">
         ${props.loading
           ? html`
-              <div class="chat-loading-skeleton" aria-label="Loading chat">
+              <div class="chat-loading-skeleton" aria-label=${t("chat.composer.loadingAria")}>
                 <div class="chat-line assistant">
                   <div class="chat-msg">
                     <div class="chat-bubble">
@@ -850,7 +1134,7 @@ export function renderChat(props: ChatProps) {
           : nothing}
         ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
         ${isEmpty && vs.searchOpen
-          ? html` <div class="agent-chat__empty">No matching messages</div> `
+          ? html` <div class="agent-chat__empty">${t("chat.search.noMatching")}</div> `
           : nothing}
         ${repeat(
           chatItems,
@@ -1056,8 +1340,8 @@ export function renderChat(props: ChatProps) {
               class="chat-focus-exit"
               type="button"
               @click=${props.onToggleFocusMode}
-              aria-label="Exit focus mode"
-              title="Exit focus mode"
+              aria-label=${t("chat.composer.exitFocusMode")}
+              title=${t("chat.composer.exitFocusMode")}
             >
               ${icons.x}
             </button>
@@ -1112,19 +1396,25 @@ export function renderChat(props: ChatProps) {
       ${props.queue.length
         ? html`
             <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
+              <div class="chat-queue__title">
+                ${t("chat.composer.queueTitle", { count: String(props.queue.length) })}
+              </div>
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
                     <div class="chat-queue__item">
                       <div class="chat-queue__text">
                         ${item.text ||
-                        (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                        (item.attachments?.length
+                          ? t("chat.composer.queuedImage", {
+                              count: String(item.attachments.length),
+                            })
+                          : "")}
                       </div>
                       <button
                         class="btn chat-queue__remove"
                         type="button"
-                        aria-label="Remove queued message"
+                        aria-label=${t("chat.composer.removeQueuedMessage")}
                         @click=${() => props.onQueueRemove(item.id)}
                       >
                         ${icons.x}
@@ -1143,7 +1433,7 @@ export function renderChat(props: ChatProps) {
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
-              ${icons.arrowDown} New messages
+              ${icons.arrowDown} ${t("chat.composer.newMessages")}
             </button>
           `
         : nothing}
@@ -1172,7 +1462,7 @@ export function renderChat(props: ChatProps) {
           @keydown=${handleKeyDown}
           @input=${handleInput}
           @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${vs.sttRecording ? "Listening..." : placeholder}
+          placeholder=${vs.sttRecording ? t("chat.composer.listening") : placeholder}
           rows="1"
         ></textarea>
 
@@ -1183,8 +1473,8 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title="Attach file"
-              aria-label="Attach file"
+              title=${t("chat.composer.attachFile")}
+              aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1236,7 +1526,9 @@ export function renderChat(props: ChatProps) {
                         }
                       }
                     }}
-                    title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    title=${vs.sttRecording
+                      ? t("chat.composer.stopRecording")
+                      : t("chat.composer.voiceInput")}
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}
@@ -1246,21 +1538,263 @@ export function renderChat(props: ChatProps) {
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
-          ${renderChatRunControls({
-            canAbort,
-            connected: props.connected,
-            draft: props.draft,
-            hasMessages: props.messages.length > 0,
-            isBusy,
-            sending: props.sending,
-            onAbort: props.onAbort,
-            onExport: () => exportMarkdown(props),
-            onNewSession: props.onNewSession,
-            onSend: props.onSend,
-            onStoreDraft: (draft) => inputHistory.push(draft),
-          })}
+          <div class="agent-chat__toolbar-right">
+            ${nothing /* search hidden for now */}
+            ${canAbort
+              ? nothing
+              : html`
+                  <button
+                    class="btn btn--ghost"
+                    @click=${props.onNewSession}
+                    title=${t("chat.composer.newSession")}
+                    aria-label=${t("chat.composer.newSession")}
+                  >
+                    ${icons.plus}
+                  </button>
+                `}
+            <button
+              class="btn btn--ghost"
+              @click=${() => exportMarkdown(props)}
+              title=${t("chat.composer.export")}
+              aria-label=${t("chat.composer.exportAria")}
+              ?disabled=${props.messages.length === 0}
+            >
+              ${icons.download}
+            </button>
+
+            ${canAbort
+              ? html`
+                  <button
+                    class="chat-send-btn chat-send-btn--stop"
+                    @click=${props.onAbort}
+                    title=${t("chat.composer.stop")}
+                    aria-label=${t("chat.composer.stopGenerating")}
+                  >
+                    ${icons.stop}
+                  </button>
+                `
+              : html`
+                  <button
+                    class="chat-send-btn"
+                    @click=${() => {
+                      if (props.draft.trim()) {
+                        inputHistory.push(props.draft);
+                      }
+                      props.onSend();
+                    }}
+                    ?disabled=${!props.connected || props.sending}
+                    title=${isBusy ? t("chat.composer.queue") : t("chat.composer.send")}
+                    aria-label=${isBusy
+                      ? t("chat.composer.queueMessage")
+                      : t("chat.composer.sendMessage")}
+                  >
+                    ${icons.send}
+                  </button>
+                `}
+          </div>
         </div>
       </div>
     </section>
   `;
+}
+
+const CHAT_HISTORY_RENDER_LIMIT = 200;
+
+function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
+  const result: Array<ChatItem | MessageGroup> = [];
+  let currentGroup: MessageGroup | null = null;
+
+  for (const item of items) {
+    if (item.kind !== "message") {
+      if (currentGroup) {
+        result.push(currentGroup);
+        currentGroup = null;
+      }
+      result.push(item);
+      continue;
+    }
+
+    const normalized = normalizeMessage(item.message);
+    const role = normalizeRoleForGrouping(normalized.role);
+    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
+    const timestamp = normalized.timestamp || Date.now();
+
+    if (
+      !currentGroup ||
+      currentGroup.role !== role ||
+      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+    ) {
+      if (currentGroup) {
+        result.push(currentGroup);
+      }
+      currentGroup = {
+        kind: "group",
+        key: `group:${role}:${item.key}`,
+        role,
+        senderLabel,
+        messages: [{ message: item.message, key: item.key }],
+        timestamp,
+        isStreaming: false,
+      };
+    } else {
+      currentGroup.messages.push({ message: item.message, key: item.key });
+    }
+  }
+
+  if (currentGroup) {
+    result.push(currentGroup);
+  }
+  return result;
+}
+
+function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
+  const items: ChatItem[] = [];
+  const history = Array.isArray(props.messages) ? props.messages : [];
+  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
+  if (historyStart > 0) {
+    items.push({
+      kind: "message",
+      key: "chat:history:notice",
+      message: {
+        role: "system",
+        content: t("chat.historyNotice", {
+          limit: String(CHAT_HISTORY_RENDER_LIMIT),
+          hidden: String(historyStart),
+        }),
+        timestamp: Date.now(),
+      },
+    });
+  }
+  for (let i = historyStart; i < history.length; i++) {
+    const msg = history[i];
+    const normalized = normalizeMessage(msg);
+    const raw = msg as Record<string, unknown>;
+    const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    if (marker && marker.kind === "compaction") {
+      items.push({
+        kind: "divider",
+        key:
+          typeof marker.id === "string"
+            ? `divider:compaction:${marker.id}`
+            : `divider:compaction:${normalized.timestamp}:${i}`,
+        label: t("chat.compaction.divider"),
+        timestamp: normalized.timestamp ?? Date.now(),
+      });
+      continue;
+    }
+
+    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    // Apply search filter if active
+    if (vs.searchOpen && vs.searchQuery.trim() && !messageMatchesSearchQuery(msg, vs.searchQuery)) {
+      continue;
+    }
+
+    items.push({
+      kind: "message",
+      key: messageKey(msg, i),
+      message: msg,
+    });
+  }
+  const liftedCanvasSources = tools
+    .map((tool) => extractChatMessagePreview(tool))
+    .filter((entry) => Boolean(entry)) as Array<{
+    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+    text: string | null;
+    timestamp: number | null;
+  }>;
+  for (const liftedCanvasSource of liftedCanvasSources) {
+    const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
+    if (assistantIndex == null) {
+      continue;
+    }
+    const item = items[assistantIndex];
+    if (!item || item.kind !== "message") {
+      continue;
+    }
+    items[assistantIndex] = {
+      ...item,
+      message: appendCanvasBlockToAssistantMessage(
+        item.message as Record<string, unknown>,
+        liftedCanvasSource.preview,
+        liftedCanvasSource.text,
+      ),
+    };
+  }
+  // Interleave stream segments and tool cards in order. Each segment
+  // contains text that was streaming before the corresponding tool started.
+  // This ensures correct visual ordering: text → tool → text → tool → ...
+  const segments = props.streamSegments ?? [];
+  const maxLen = Math.max(segments.length, tools.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < segments.length && segments[i].text.trim().length > 0) {
+      items.push({
+        kind: "stream" as const,
+        key: `stream-seg:${props.sessionKey}:${i}`,
+        text: segments[i].text,
+        startedAt: segments[i].ts,
+      });
+    }
+    if (i < tools.length && props.showToolCalls) {
+      items.push({
+        kind: "message",
+        key: messageKey(tools[i], i + history.length),
+        message: tools[i],
+      });
+    }
+  }
+
+  if (props.stream !== null) {
+    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
+    if (props.stream.trim().length > 0) {
+      items.push({
+        kind: "stream",
+        key,
+        text: props.stream,
+        startedAt: props.streamStartedAt ?? Date.now(),
+      });
+    } else {
+      items.push({ kind: "reading-indicator", key });
+    }
+  }
+
+  return groupMessages(items);
+}
+
+function messageKey(message: unknown, index: number): string {
+  const m = message as Record<string, unknown>;
+  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
+  if (toolCallId) {
+    const role = typeof m.role === "string" ? m.role : "unknown";
+    const id = typeof m.id === "string" ? m.id : "";
+    if (id) {
+      return `tool:${role}:${toolCallId}:${id}`;
+    }
+    const messageId = typeof m.messageId === "string" ? m.messageId : "";
+    if (messageId) {
+      return `tool:${role}:${toolCallId}:${messageId}`;
+    }
+    const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
+    if (timestamp != null) {
+      return `tool:${role}:${toolCallId}:${timestamp}:${index}`;
+    }
+    return `tool:${role}:${toolCallId}:${index}`;
+  }
+  const id = typeof m.id === "string" ? m.id : "";
+  if (id) {
+    return `msg:${id}`;
+  }
+  const messageId = typeof m.messageId === "string" ? m.messageId : "";
+  if (messageId) {
+    return `msg:${messageId}`;
+  }
+  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
+  const role = typeof m.role === "string" ? m.role : "unknown";
+  if (timestamp != null) {
+    return `msg:${role}:${timestamp}:${index}`;
+  }
+  return `msg:${role}:${index}`;
 }

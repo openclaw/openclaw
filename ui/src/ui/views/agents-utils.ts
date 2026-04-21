@@ -4,6 +4,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
@@ -123,19 +124,36 @@ export const PROFILE_OPTIONS = [
   { id: "full", label: "Full" },
 ] as const;
 
+function translateKnownValue(key: string, fallback: string): string {
+  const value = t(key);
+  return value === key ? fallback : value;
+}
+
+export function localizeToolGroupLabel(id: string, fallback: string): string {
+  return translateKnownValue(`agentTools.catalog.groups.${id}`, fallback);
+}
+
+export function localizeToolDescription(id: string, fallback: string): string {
+  return translateKnownValue(`agentTools.catalog.descriptions.${id}`, fallback);
+}
+
+export function localizeToolProfileLabel(id: string, fallback: string): string {
+  return translateKnownValue(`agentTools.catalog.profiles.${id}`, fallback);
+}
+
 export function resolveToolSections(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): AgentToolSection[] {
   if (toolsCatalogResult?.groups?.length) {
     return toolsCatalogResult.groups.map((group) => ({
       id: group.id,
-      label: group.label,
+      label: localizeToolGroupLabel(group.id, group.label),
       source: group.source,
       pluginId: group.pluginId,
       tools: group.tools.map((tool) => ({
         id: tool.id,
         label: tool.label,
-        description: tool.description,
+        description: localizeToolDescription(tool.id, tool.description),
         source: tool.source,
         pluginId: tool.pluginId,
         optional: tool.optional,
@@ -150,9 +168,15 @@ export function resolveToolProfileOptions(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): readonly ToolCatalogProfile[] | typeof PROFILE_OPTIONS {
   if (toolsCatalogResult?.profiles?.length) {
-    return toolsCatalogResult.profiles;
+    return toolsCatalogResult.profiles.map((profile) => ({
+      ...profile,
+      label: localizeToolProfileLabel(profile.id, profile.label),
+    }));
   }
-  return PROFILE_OPTIONS;
+  return PROFILE_OPTIONS.map((profile) => ({
+    ...profile,
+    label: localizeToolProfileLabel(profile.id, profile.label),
+  }));
 }
 
 type ToolPolicy = {
@@ -273,7 +297,7 @@ export function resolveAgentEmoji(
 }
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
-  return defaultId && agentId === defaultId ? "default" : null;
+  return defaultId && agentId === defaultId ? t("dashboard.agent.defaultSuffix") : null;
 }
 
 export function agentAvatarHue(id: string): number {

@@ -65,17 +65,8 @@ export type SessionsProps = {
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
-const VERBOSE_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "off", label: "off (explicit)" },
-  { value: "on", label: "on" },
-  { value: "full", label: "full" },
-] as const;
-const FAST_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "on", label: "on" },
-  { value: "off", label: "off" },
-] as const;
+const VERBOSE_LEVELS = ["", "off", "on", "full"] as const;
+const FAST_LEVELS = ["", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
@@ -108,19 +99,6 @@ function withCurrentOption(options: readonly string[], current: string): string[
   return [...options, current];
 }
 
-function withCurrentLabeledOption(
-  options: readonly { value: string; label: string }[],
-  current: string,
-): Array<{ value: string; label: string }> {
-  if (!current) {
-    return [...options];
-  }
-  if (options.some((option) => option.value === current)) {
-    return [...options];
-  }
-  return [...options, { value: current, label: `${current} (custom)` }];
-}
-
 function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
   if (!isBinary) {
     return value;
@@ -142,6 +120,69 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
     return "low";
   }
   return value;
+}
+
+function formatSessionOptionLabel(
+  value: string,
+  context: "thinking" | "fast" | "verbose" | "reasoning",
+): string {
+  if (!value) {
+    return t("dashboard.sessions.options.inherit");
+  }
+  switch (value) {
+    case "off":
+      return context === "verbose"
+        ? t("dashboard.sessions.options.offExplicit")
+        : t("dashboard.sessions.options.off");
+    case "on":
+      return t("dashboard.sessions.options.on");
+    case "full":
+      return t("dashboard.sessions.options.full");
+    case "stream":
+      return t("dashboard.sessions.options.stream");
+    case "minimal":
+      return t("dashboard.sessions.options.minimal");
+    case "low":
+      return t("dashboard.sessions.options.low");
+    case "medium":
+      return t("dashboard.sessions.options.medium");
+    case "high":
+      return t("dashboard.sessions.options.high");
+    case "xhigh":
+      return t("dashboard.sessions.options.xhigh");
+    default:
+      return t("dashboard.sessions.options.custom", { value });
+  }
+}
+
+function formatSessionKind(kind: string): string {
+  switch (kind) {
+    case "direct":
+      return t("dashboard.sessions.kind.direct");
+    case "group":
+      return t("dashboard.sessions.kind.group");
+    case "global":
+      return t("dashboard.sessions.kind.global");
+    case "unknown":
+      return t("dashboard.sessions.kind.unknown");
+    default:
+      return kind;
+  }
+}
+
+function formatCheckpointCount(count: number): string {
+  if (count <= 0) {
+    return t("dashboard.sessions.checkpoints.none");
+  }
+  return count === 1
+    ? t("dashboard.sessions.checkpoints.single", { count: "1" })
+    : t("dashboard.sessions.checkpoints.plural", { count: String(count) });
+}
+
+function formatRowCount(count: number): string {
+  return count === 1
+    ? t("dashboard.sessions.pagination.row", { count: String(count) })
+    : t("dashboard.sessions.pagination.rows", { count: String(count) });
 }
 
 function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
@@ -198,13 +239,13 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 function formatCheckpointReason(reason: SessionCompactionCheckpoint["reason"]): string {
   switch (reason) {
     case "manual":
-      return "manual";
+      return t("dashboard.sessions.reasons.manual");
     case "auto-threshold":
-      return "auto-threshold";
+      return t("dashboard.sessions.reasons.autoThreshold");
     case "overflow-retry":
-      return "overflow retry";
+      return t("dashboard.sessions.reasons.overflowRetry");
     case "timeout-retry":
-      return "timeout retry";
+      return t("dashboard.sessions.reasons.timeoutRetry");
     default:
       return reason;
   }
@@ -217,12 +258,17 @@ function formatCheckpointDelta(checkpoint: SessionCompactionCheckpoint): string 
     Number.isFinite(checkpoint.tokensBefore) &&
     Number.isFinite(checkpoint.tokensAfter)
   ) {
-    return `${checkpoint.tokensBefore.toLocaleString()} → ${checkpoint.tokensAfter.toLocaleString()} tokens`;
+    return t("dashboard.sessions.checkpoints.delta", {
+      before: checkpoint.tokensBefore.toLocaleString(),
+      after: checkpoint.tokensAfter.toLocaleString(),
+    });
   }
   if (typeof checkpoint.tokensBefore === "number" && Number.isFinite(checkpoint.tokensBefore)) {
-    return `${checkpoint.tokensBefore.toLocaleString()} tokens before`;
+    return t("dashboard.sessions.checkpoints.beforeOnly", {
+      count: checkpoint.tokensBefore.toLocaleString(),
+    });
   }
-  return "token delta unavailable";
+  return t("dashboard.sessions.checkpoints.deltaUnavailable");
 }
 
 export function renderSessions(props: SessionsProps) {
@@ -258,11 +304,11 @@ export function renderSessions(props: SessionsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
         <div>
-          <div class="card-title">Sessions</div>
+          <div class="card-title">${t("dashboard.sessions.title")}</div>
           <div class="card-sub">
             ${props.result
-              ? `Store: ${props.result.path}`
-              : "Active session keys and per-session overrides."}
+              ? t("dashboard.sessions.store", { path: props.result.path })
+              : t("dashboard.sessions.subtitle")}
           </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -272,10 +318,10 @@ export function renderSessions(props: SessionsProps) {
 
       <div class="filters" style="margin-bottom: 12px;">
         <label class="field-inline">
-          <span>Active</span>
+          <span>${t("dashboard.sessions.filters.active")}</span>
           <input
             style="width: 72px;"
-            placeholder="min"
+            placeholder=${t("dashboard.sessions.filters.activePlaceholder")}
             .value=${props.activeMinutes}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -287,7 +333,7 @@ export function renderSessions(props: SessionsProps) {
           />
         </label>
         <label class="field-inline">
-          <span>Limit</span>
+          <span>${t("dashboard.sessions.filters.limit")}</span>
           <input
             style="width: 64px;"
             .value=${props.limit}
@@ -312,7 +358,7 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: props.includeUnknown,
               })}
           />
-          <span>Global</span>
+          <span>${t("dashboard.sessions.filters.global")}</span>
         </label>
         <label class="field-inline checkbox">
           <input
@@ -326,7 +372,7 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: (e.target as HTMLInputElement).checked,
               })}
           />
-          <span>Unknown</span>
+          <span>${t("dashboard.sessions.filters.unknown")}</span>
         </label>
       </div>
 
@@ -339,7 +385,7 @@ export function renderSessions(props: SessionsProps) {
           <div class="data-table-search">
             <input
               type="text"
-              placeholder="Filter by key, label, kind…"
+              placeholder=${t("dashboard.sessions.searchPlaceholder")}
               .value=${props.searchQuery}
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
@@ -349,7 +395,11 @@ export function renderSessions(props: SessionsProps) {
         ${props.selectedKeys.size > 0
           ? html`
               <div class="data-table-bulk-bar">
-                <span>${props.selectedKeys.size} selected</span>
+                <span>
+                  ${t("dashboard.sessions.selectedCount", {
+                    count: String(props.selectedKeys.size),
+                  })}
+                </span>
                 <button class="btn btn--sm" @click=${props.onDeselectAll}>
                   ${t("common.unselect")}
                 </button>
@@ -358,7 +408,7 @@ export function renderSessions(props: SessionsProps) {
                   ?disabled=${props.loading}
                   @click=${props.onDeleteSelected}
                 >
-                  ${icons.trash} Delete
+                  ${icons.trash} ${t("dashboard.sessions.delete")}
                 </button>
               </div>
             `
@@ -384,19 +434,20 @@ export function renderSessions(props: SessionsProps) {
                             props.onSelectPage(paginated.map((r) => r.key));
                           }
                         }}
-                        aria-label="Select all on page"
+                        aria-label=${t("dashboard.sessions.selectAllOnPage")}
                       />`
                     : nothing}
                 </th>
-                ${sortHeader("key", "Key", "data-table-key-col")}
-                <th>Label</th>
-                ${sortHeader("kind", "Kind")} ${sortHeader("updated", "Updated")}
-                ${sortHeader("tokens", "Tokens")}
-                <th>Compaction</th>
-                <th>Thinking</th>
-                <th>Fast</th>
-                <th>Verbose</th>
-                <th>Reasoning</th>
+                ${sortHeader("key", t("dashboard.sessions.columns.key"), "data-table-key-col")}
+                <th>${t("dashboard.sessions.columns.label")}</th>
+                ${sortHeader("kind", t("dashboard.sessions.columns.kind"))}
+                ${sortHeader("updated", t("dashboard.sessions.columns.updated"))}
+                ${sortHeader("tokens", t("dashboard.sessions.columns.tokens"))}
+                <th>${t("dashboard.sessions.columns.compaction")}</th>
+                <th>${t("dashboard.sessions.columns.thinking")}</th>
+                <th>${t("dashboard.sessions.columns.fast")}</th>
+                <th>${t("dashboard.sessions.columns.verbose")}</th>
+                <th>${t("dashboard.sessions.columns.reasoning")}</th>
               </tr>
             </thead>
             <tbody>
@@ -407,7 +458,7 @@ export function renderSessions(props: SessionsProps) {
                         colspan="11"
                         style="text-align: center; padding: 48px 16px; color: var(--muted)"
                       >
-                        No sessions found.
+                        ${t("dashboard.sessions.empty")}
                       </td>
                     </tr>
                   `
@@ -421,7 +472,7 @@ export function renderSessions(props: SessionsProps) {
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
                   ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
-                  of ${totalRows} row${totalRows === 1 ? "" : "s"}
+                  ${t("dashboard.sessions.pagination.of")} ${formatRowCount(totalRows)}
                 </div>
                 <div class="data-table-pagination__controls">
                   <select
@@ -430,16 +481,21 @@ export function renderSessions(props: SessionsProps) {
                     @change=${(e: Event) =>
                       props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
                   >
-                    ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
+                    ${PAGE_SIZES.map(
+                      (s) =>
+                        html`<option value=${s}>
+                          ${t("dashboard.sessions.pagination.perPage", { count: String(s) })}
+                        </option>`,
+                    )}
                   </select>
                   <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
-                    Previous
+                    ${t("dashboard.sessions.pagination.previous")}
                   </button>
                   <button
                     ?disabled=${page >= totalPages - 1}
                     @click=${() => props.onPageChange(page + 1)}
                   >
-                    Next
+                    ${t("dashboard.sessions.pagination.next")}
                   </button>
                 </div>
               </div>
@@ -457,9 +513,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
   const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row.modelProvider), thinking);
   const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
-  const fastLevels = withCurrentLabeledOption(FAST_LEVELS, fastMode);
+  const fastLevels = withCurrentOption(FAST_LEVELS, fastMode);
   const verbose = row.verboseLevel ?? "";
-  const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
+  const verboseLevels = withCurrentOption(VERBOSE_LEVELS, verbose);
   const reasoning = row.reasoningLevel ?? "";
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
   const latestCheckpoint = row.latestCompactionCheckpoint;
@@ -492,7 +548,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           type="checkbox"
           .checked=${props.selectedKeys.has(row.key)}
           @change=${() => props.onToggleSelect(row.key)}
-          aria-label="Select session"
+          aria-label=${t("dashboard.sessions.selectSession")}
         />
       </td>
       <td class="data-table-key-col">
@@ -529,7 +585,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <input
           .value=${row.label ?? ""}
           ?disabled=${props.loading}
-          placeholder="(optional)"
+          placeholder=${t("dashboard.sessions.labelPlaceholder")}
           style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
           @change=${(e: Event) => {
             const value = normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
@@ -538,16 +594,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         />
       </td>
       <td>
-        <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+        <span class="data-table-badge ${badgeClass}">${formatSessionKind(row.kind)}</span>
       </td>
       <td>${updated}</td>
       <td>${formatSessionTokens(row)}</td>
       <td>
         <div style="display: grid; gap: 6px;">
           <span class="muted" style="font-size: 12px;">
-            ${checkpointCount > 0
-              ? `${checkpointCount} checkpoint${checkpointCount === 1 ? "" : "s"}`
-              : "none"}
+            ${formatCheckpointCount(checkpointCount)}
           </span>
           ${latestCheckpoint
             ? html`
@@ -562,7 +616,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             ?disabled=${props.checkpointLoadingKey === row.key}
             @click=${() => props.onToggleCheckpointDetails(row.key)}
           >
-            ${isExpanded ? "Hide checkpoints" : "Show checkpoints"}
+            ${isExpanded
+              ? t("dashboard.sessions.checkpoints.hide")
+              : t("dashboard.sessions.checkpoints.show")}
           </button>
         </div>
       </td>
@@ -580,7 +636,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           ${thinkLevels.map(
             (level) =>
               html`<option value=${level} ?selected=${thinking === level}>
-                ${level || "inherit"}
+                ${formatSessionOptionLabel(level, "thinking")}
               </option>`,
           )}
         </select>
@@ -596,8 +652,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         >
           ${fastLevels.map(
             (level) =>
-              html`<option value=${level.value} ?selected=${fastMode === level.value}>
-                ${level.label}
+              html`<option value=${level} ?selected=${fastMode === level}>
+                ${formatSessionOptionLabel(level, "fast")}
               </option>`,
           )}
         </select>
@@ -613,8 +669,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         >
           ${verboseLevels.map(
             (level) =>
-              html`<option value=${level.value} ?selected=${verbose === level.value}>
-                ${level.label}
+              html`<option value=${level} ?selected=${verbose === level}>
+                ${formatSessionOptionLabel(level, "verbose")}
               </option>`,
           )}
         </select>
@@ -631,7 +687,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           ${reasoningLevels.map(
             (level) =>
               html`<option value=${level} ?selected=${reasoning === level}>
-                ${level || "inherit"}
+                ${formatSessionOptionLabel(level, "reasoning")}
               </option>`,
           )}
         </select>
@@ -645,13 +701,15 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                 style="padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface-2, rgba(127, 127, 127, 0.05));"
               >
                 ${props.checkpointLoadingKey === row.key
-                  ? html`<div class="muted">Loading checkpoints…</div>`
+                  ? html`<div class="muted">${t("dashboard.sessions.checkpoints.loading")}</div>`
                   : checkpointError
                     ? html`<div class="callout danger">${checkpointError}</div>`
                     : checkpointItems.length === 0
-                      ? html`<div class="muted">
-                          No compaction checkpoints recorded for this session.
-                        </div>`
+                      ? html`
+                          <div class="muted">
+                            ${t("dashboard.sessions.checkpoints.noneRecorded")}
+                          </div>
+                        `
                       : html`
                           <div style="display: grid; gap: 10px;">
                             ${checkpointItems.map(
@@ -674,7 +732,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                     ? html`<div style="white-space: pre-wrap;">
                                         ${checkpoint.summary}
                                       </div>`
-                                    : html`<div class="muted">No summary captured.</div>`}
+                                    : html`
+                                        <div class="muted">
+                                          ${t("dashboard.sessions.checkpoints.noSummary")}
+                                        </div>
+                                      `}
                                   <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                                     <button
                                       class="btn btn--sm"
@@ -686,7 +748,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                           checkpoint.checkpointId,
                                         )}
                                     >
-                                      Branch from checkpoint
+                                      ${t("dashboard.sessions.checkpoints.branch")}
                                     </button>
                                     <button
                                       class="btn btn--sm"
@@ -695,7 +757,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                       @click=${() =>
                                         props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
                                     >
-                                      Restore
+                                      ${t("dashboard.sessions.checkpoints.restore")}
                                     </button>
                                   </div>
                                 </div>

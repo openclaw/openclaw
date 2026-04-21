@@ -20,7 +20,7 @@ export function renderSignalCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "Signal",
-    subtitle: "signal-cli status and channel configuration.",
+    subtitle: t("channels.cards.signalSubtitle"),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

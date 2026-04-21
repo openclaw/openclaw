@@ -14,6 +14,7 @@ import {
   renderChatControls,
   renderChatMobileToggle,
   renderChatSessionSelect,
+  renderTopbarLanguageToggle,
   renderTab,
   resolveAssistantAttachmentAuthToken,
   renderSidebarConnectionStatus,
@@ -1066,7 +1067,7 @@ export function renderApp(state: AppViewState) {
             state.communicationsActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
-          navRootLabel: "Communication",
+          navRootLabel: t("tabs.communications"),
           includeSections: [...COMMUNICATION_SECTION_KEYS],
         });
       case "appearance":
@@ -1099,7 +1100,7 @@ export function renderApp(state: AppViewState) {
             state.automationActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.automationActiveSubsection = section),
-          navRootLabel: "Automation",
+          navRootLabel: t("tabs.automation"),
           includeSections: [...AUTOMATION_SECTION_KEYS],
         });
       case "infrastructure":
@@ -1115,7 +1116,7 @@ export function renderApp(state: AppViewState) {
             state.infrastructureActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
-          navRootLabel: "Infrastructure",
+          navRootLabel: t("tabs.infrastructure"),
           includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
         });
       case "aiAgents":
@@ -1131,7 +1132,7 @@ export function renderApp(state: AppViewState) {
             state.aiAgentsActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
-          navRootLabel: "AI & Agents",
+          navRootLabel: t("tabs.aiAgents"),
           includeSections: [...AI_AGENTS_SECTION_KEYS],
         });
       default:
@@ -1245,15 +1246,15 @@ export function renderApp(state: AppViewState) {
               @click=${() => {
                 state.paletteOpen = !state.paletteOpen;
               }}
-              title="Search or jump to… (⌘K)"
-              aria-label="Open command palette"
+              title="${t("commandPalette.launchTitle")}"
+              aria-label="${t("commandPalette.openAria")}"
             >
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
             <div class="topbar-status">
               ${isChat ? renderChatMobileToggle(state) : nothing}
-              ${renderTopbarThemeModeToggle(state)}
+              ${renderTopbarLanguageToggle(state)} ${renderTopbarThemeModeToggle(state)}
             </div>
           </div>
         </div>
@@ -1340,7 +1341,7 @@ export function renderApp(state: AppViewState) {
                   href="https://docs.openclaw.ai"
                   target=${EXTERNAL_LINK_TARGET}
                   rel=${buildExternalLinkRel()}
-                  title="${t("common.docs")} (opens in new tab)"
+                  title="${t("common.docs")} (${t("common.opensInNewTab")})"
                 >
                   <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
                   ${!navCollapsed
@@ -1377,20 +1378,23 @@ export function renderApp(state: AppViewState) {
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
           ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion} (running
-              v${state.updateAvailable.currentVersion}).
+              <strong>${t("updateBanner.available")}</strong>
+              ${t("updateBanner.version", {
+                latest: state.updateAvailable.latestVersion,
+                current: state.updateAvailable.currentVersion,
+              })}
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
               >
-                ${state.updateRunning ? "Updating…" : "Update now"}
+                ${state.updateRunning ? t("updateBanner.updating") : t("updateBanner.updateNow")}
               </button>
               <button
                 class="update-banner__close"
                 type="button"
-                title="Dismiss"
-                aria-label="Dismiss update banner"
+                title=${t("updateBanner.dismiss")}
+                aria-label=${t("updateBanner.dismissAria")}
                 @click=${() => {
                   dismissUpdateBanner(state.updateAvailable);
                   state.updateAvailable = null;

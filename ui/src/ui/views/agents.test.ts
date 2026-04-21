@@ -1,5 +1,6 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
 
 function createSkill() {
@@ -122,6 +123,14 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  afterEach(async () => {
+    await i18n.setLocale("vi");
+  });
+
   it("shows the skills count only for the selected agent's report", async () => {
     const container = document.createElement("div");
     render(

@@ -652,7 +652,7 @@ export const zh_CN: TranslationMap = {
   },
   languages: {
     en: "英语",
-    vi: "Tiếng Việt (Vietnamese)",
+    vi: "越南语 (Vietnamese)",
     zhCN: "简体中文 (简体中文)",
     zhTW: "繁體中文 (繁体中文)",
     ptBR: "Português (巴西葡萄牙语)",

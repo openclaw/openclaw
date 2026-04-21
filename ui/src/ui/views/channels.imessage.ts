@@ -20,7 +20,7 @@ export function renderIMessageCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "iMessage",
-    subtitle: "macOS bridge status and channel configuration.",
+    subtitle: t("channels.cards.iMessageSubtitle"),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

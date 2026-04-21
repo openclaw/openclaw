@@ -9,126 +9,35 @@ type LazyLocaleRegistration = {
 };
 
 export const DEFAULT_LOCALE: Locale = "en";
+export const DEFAULT_APP_LOCALE: Locale = "vi";
 
-const LAZY_LOCALES: readonly LazyLocale[] = [
-  "vi",
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-];
+const LAZY_LOCALES: readonly LazyLocale[] = new Set(["vi"]);
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   vi: {
     exportName: "vi",
     loader: () => import("../locales/vi.ts"),
   },
-  "zh-CN": {
-    exportName: "zh_CN",
-    loader: () => import("../locales/zh-CN.ts"),
-  },
-  "zh-TW": {
-    exportName: "zh_TW",
-    loader: () => import("../locales/zh-TW.ts"),
-  },
-  "pt-BR": {
-    exportName: "pt_BR",
-    loader: () => import("../locales/pt-BR.ts"),
-  },
-  de: {
-    exportName: "de",
-    loader: () => import("../locales/de.ts"),
-  },
-  es: {
-    exportName: "es",
-    loader: () => import("../locales/es.ts"),
-  },
-  "ja-JP": {
-    exportName: "ja_JP",
-    loader: () => import("../locales/ja-JP.ts"),
-  },
-  ko: {
-    exportName: "ko",
-    loader: () => import("../locales/ko.ts"),
-  },
-  fr: {
-    exportName: "fr",
-    loader: () => import("../locales/fr.ts"),
-  },
-  tr: {
-    exportName: "tr",
-    loader: () => import("../locales/tr.ts"),
-  },
-  uk: {
-    exportName: "uk",
-    loader: () => import("../locales/uk.ts"),
-  },
-  id: {
-    exportName: "id",
-    loader: () => import("../locales/id.ts"),
-  },
-  pl: {
-    exportName: "pl",
-    loader: () => import("../locales/pl.ts"),
-  },
 };
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_APP_LOCALE, DEFAULT_LOCALE];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
 }
 
 function isLazyLocale(locale: Locale): locale is LazyLocale {
-  return LAZY_LOCALES.includes(locale as LazyLocale);
+  return LAZY_LOCALES.has(locale as LazyLocale);
 }
 
 export function resolveNavigatorLocale(navLang: string): Locale {
-  if (navLang.startsWith("zh")) {
-    return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
-  }
-  if (navLang.startsWith("pt")) {
-    return "pt-BR";
-  }
   if (navLang.startsWith("vi")) {
     return "vi";
   }
-  if (navLang.startsWith("de")) {
-    return "de";
+  if (navLang.startsWith("en")) {
+    return "en";
   }
-  if (navLang.startsWith("es")) {
-    return "es";
-  }
-  if (navLang.startsWith("ja")) {
-    return "ja-JP";
-  }
-  if (navLang.startsWith("ko")) {
-    return "ko";
-  }
-  if (navLang.startsWith("fr")) {
-    return "fr";
-  }
-  if (navLang.startsWith("tr")) {
-    return "tr";
-  }
-  if (navLang.startsWith("uk")) {
-    return "uk";
-  }
-  if (navLang.startsWith("id")) {
-    return "id";
-  }
-  if (navLang.startsWith("pl")) {
-    return "pl";
-  }
-  return DEFAULT_LOCALE;
+  return DEFAULT_APP_LOCALE;
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {

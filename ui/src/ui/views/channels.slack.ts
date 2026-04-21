@@ -20,7 +20,7 @@ export function renderSlackCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "Slack",
-    subtitle: "Socket mode status and channel configuration.",
+    subtitle: t("channels.cards.slackSubtitle"),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

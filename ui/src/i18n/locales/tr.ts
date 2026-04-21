@@ -670,7 +670,7 @@ export const tr: TranslationMap = {
   },
   languages: {
     en: "İngilizce",
-    vi: "Tiếng Việt (Vietnamese)",
+    vi: "Vietnamca (Vietnamese)",
     zhCN: "简体中文 (Basitleştirilmiş Çince)",
     zhTW: "繁體中文 (Geleneksel Çince)",
     ptBR: "Português (Brezilya Portekizcesi)",

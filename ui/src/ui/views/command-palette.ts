@@ -14,86 +14,79 @@ type PaletteItem = {
   description?: string;
 };
 
-function buildSlashPaletteItems(): PaletteItem[] {
-  return SLASH_COMMANDS.map((command) => ({
-    id: `slash:${command.name}`,
-    label: `/${command.name}`,
-    icon: command.icon ?? "terminal",
-    category: "search",
-    action: `/${command.name}`,
-    description: command.description,
-  }));
-}
-
-function getPaletteBaseItems(): PaletteItem[] {
+function buildPaletteItems(): PaletteItem[] {
   return [
+    ...SLASH_COMMANDS.map((command) => ({
+      id: `slash:${command.name}`,
+      label: `/${command.name}`,
+      icon: command.icon ?? "terminal",
+      category: "search" as const,
+      action: `/${command.name}`,
+      description: command.description,
+    })),
     {
       id: "nav-overview",
-      label: "Overview",
+      label: t("tabs.overview"),
       icon: "barChart",
       category: "navigation",
       action: "nav:overview",
     },
     {
       id: "nav-sessions",
-      label: "Sessions",
+      label: t("tabs.sessions"),
       icon: "fileText",
       category: "navigation",
       action: "nav:sessions",
     },
     {
       id: "nav-cron",
-      label: "Scheduled",
+      label: t("tabs.cron"),
       icon: "scrollText",
       category: "navigation",
       action: "nav:cron",
     },
     {
       id: "nav-skills",
-      label: "Skills",
+      label: t("tabs.skills"),
       icon: "zap",
       category: "navigation",
       action: "nav:skills",
     },
     {
       id: "nav-config",
-      label: "Settings",
+      label: t("tabs.config"),
       icon: "settings",
       category: "navigation",
       action: "nav:config",
     },
     {
       id: "nav-agents",
-      label: "Agents",
+      label: t("tabs.agents"),
       icon: "folder",
       category: "navigation",
       action: "nav:agents",
     },
     {
       id: "skill-shell",
-      label: "Shell Command",
+      label: t("commandPalette.skills.shell.label"),
       icon: "monitor",
       category: "skills",
       action: "/skill shell",
-      description: "Run shell",
+      description: t("commandPalette.skills.shell.description"),
     },
     {
       id: "skill-debug",
-      label: "Debug Mode",
+      label: t("commandPalette.skills.debug.label"),
       icon: "bug",
       category: "skills",
       action: "/verbose full",
-      description: "Toggle debug",
+      description: t("commandPalette.skills.debug.description"),
     },
   ];
 }
 
-function getPaletteItemsInternal(): PaletteItem[] {
-  return [...buildSlashPaletteItems(), ...getPaletteBaseItems()];
-}
-
 export function getPaletteItems(): readonly PaletteItem[] {
-  return getPaletteItemsInternal();
+  return buildPaletteItems();
 }
 
 export type CommandPaletteProps = {
@@ -108,7 +101,7 @@ export type CommandPaletteProps = {
 };
 
 function filteredItems(query: string): PaletteItem[] {
-  const items = getPaletteItemsInternal();
+  const items = buildPaletteItems();
   if (!query) {
     return items;
   }
@@ -190,11 +183,18 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
   }
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  search: "Search",
-  navigation: "Navigation",
-  skills: "Skills",
-};
+function getCategoryLabel(category: string) {
+  switch (category) {
+    case "search":
+      return t("commandPalette.categories.search");
+    case "navigation":
+      return t("commandPalette.categories.navigation");
+    case "skills":
+      return t("commandPalette.categories.skills");
+    default:
+      return category;
+  }
+}
 
 function focusInput(el: Element | undefined) {
   if (el) {
@@ -244,9 +244,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
-                  <div class="cmd-palette__group-label">
-                    ${CATEGORY_LABELS[category] ?? category}
-                  </div>
+                  <div class="cmd-palette__group-label">${getCategoryLabel(category)}</div>
                   ${groupedItems.map((item) => {
                     const globalIndex = items.indexOf(item);
                     const isActive = globalIndex === props.activeIndex;
@@ -273,9 +271,9 @@ export function renderCommandPalette(props: CommandPaletteProps) {
               )}
         </div>
         <div class="cmd-palette__footer">
-          <span><kbd>↑↓</kbd> navigate</span>
-          <span><kbd>↵</kbd> select</span>
-          <span><kbd>esc</kbd> close</span>
+          <span><kbd>↑↓</kbd> ${t("commandPalette.footer.navigate")}</span>
+          <span><kbd>↵</kbd> ${t("commandPalette.footer.select")}</span>
+          <span><kbd>esc</kbd> ${t("commandPalette.footer.close")}</span>
         </div>
       </div>
     </div>

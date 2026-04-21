@@ -10,6 +10,28 @@ import {
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
+function formatTelegramProbeSummary(
+  probe:
+    | { ok?: boolean; status?: string | number | null; error?: string | null }
+    | null
+    | undefined,
+) {
+  if (!probe) {
+    return nothing;
+  }
+  const details = [
+    probe.status !== null && probe.status !== undefined && String(probe.status).trim().length > 0
+      ? t("channels.telegramProbeStatus", { value: String(probe.status) })
+      : null,
+    probe.error ? t("channels.telegramProbeError", { value: probe.error }) : null,
+  ].filter((value): value is string => Boolean(value));
+  return html`<div class="callout" style="margin-top: 12px;">
+    ${probe.ok ? t("common.probeOk") : t("common.probeFailed")}${details.length
+      ? html` · ${details.join(" · ")}`
+      : nothing}
+  </div>`;
+}
+
 export function renderTelegramCard(params: {
   props: ChannelsProps;
   telegram?: TelegramStatus;
@@ -59,7 +81,7 @@ export function renderTelegramCard(params: {
     return html`
       <div class="card">
         <div class="card-title">Telegram</div>
-        <div class="card-sub">Bot status and channel configuration.</div>
+        <div class="card-sub">${t("channels.cards.telegramSubtitle")}</div>
         ${accountCountLabel}
 
         <div class="account-card-list">
@@ -69,12 +91,7 @@ export function renderTelegramCard(params: {
         ${telegram?.lastError
           ? html`<div class="callout danger" style="margin-top: 12px;">${telegram.lastError}</div>`
           : nothing}
-        ${telegram?.probe
-          ? html`<div class="callout" style="margin-top: 12px;">
-              ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-              ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
-            </div>`
-          : nothing}
+        ${formatTelegramProbeSummary(telegram?.probe)}
         ${renderChannelConfigSection({ channelId: "telegram", props })}
 
         <div class="row" style="margin-top: 12px;">
@@ -86,7 +103,7 @@ export function renderTelegramCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "Telegram",
-    subtitle: "Bot status and channel configuration.",
+    subtitle: t("channels.cards.telegramSubtitle"),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },
@@ -106,12 +123,7 @@ export function renderTelegramCard(params: {
       },
     ],
     lastError: telegram?.lastError,
-    secondaryCallout: telegram?.probe
-      ? html`<div class="callout" style="margin-top: 12px;">
-          ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-          ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
-        </div>`
-      : nothing,
+    secondaryCallout: formatTelegramProbeSummary(telegram?.probe),
     configSection: renderChannelConfigSection({ channelId: "telegram", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
       <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>

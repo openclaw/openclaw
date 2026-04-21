@@ -1,5 +1,6 @@
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { analyzeConfigSchema, renderConfigForm } from "./views/config-form.ts";
 
 const rootSchema = {
@@ -35,6 +36,89 @@ const rootSchema = {
 const rootAnalysis = analyzeConfigSchema(rootSchema);
 
 describe("config form renderer", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  it("localizes config metadata deeply in Vietnamese", async () => {
+    await i18n.setLocale("vi");
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        agents: {
+          type: "object",
+          properties: {
+            defaults: {
+              type: "string",
+              title: "Agent Defaults",
+              description: "Voice and speech settings",
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "agents.defaults": {
+            placeholder: "Primary Model",
+          },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Mặc định tác nhân");
+    expect(container.textContent).toContain("Cài đặt thoại và giọng nói");
+    const input = container.querySelector<HTMLInputElement>(
+      "#config-section-agents input.cfg-input",
+    );
+    expect(input?.placeholder).toBe("Mô hình chính");
+  });
+
+  it("matches translated metadata when searching in Vietnamese", async () => {
+    await i18n.setLocale("vi");
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        agents: {
+          type: "object",
+          properties: {
+            defaults: {
+              type: "string",
+              title: "Agent Defaults",
+              description: "Voice and speech settings",
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        searchQuery: "thoại",
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Mặc định tác nhân");
+    expect(container.textContent).not.toContain('Không có cài đặt nào khớp "thoại"');
+  });
+
   it("renders inputs and patches values", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

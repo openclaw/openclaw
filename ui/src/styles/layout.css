@@ -260,6 +260,53 @@
   background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
 }
 
+.topbar-locale {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+}
+
+.topbar-locale__btn {
+  min-width: 38px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.topbar-locale__btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.topbar-locale__btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.topbar-locale__btn--active {
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
 .topbar-theme-mode__btn {
   width: 30px;
   height: 30px;

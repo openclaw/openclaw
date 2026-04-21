@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { renderNodes, type NodesProps } from "./nodes.ts";
 
 function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
@@ -46,11 +47,37 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
   };
 }
 
-function renderNodesText(overrides: Partial<NodesProps>): string {
-  const container = document.createElement("div");
-  render(renderNodes(baseProps(overrides)), container);
-  return container.textContent ?? "";
-}
+describe("nodes devices pending rendering", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  afterEach(async () => {
+    await i18n.setLocale("vi");
+  });
+
+  it("shows pending role and scopes from effective pending auth", () => {
+    const container = document.createElement("div");
+    render(
+      renderNodes(
+        baseProps({
+          devicesList: {
+            pending: [
+              {
+                requestId: "req-1",
+                deviceId: "device-1",
+                displayName: "Device One",
+                role: "operator",
+                scopes: ["operator.admin", "operator.read"],
+                ts: Date.now(),
+              },
+            ],
+            paired: [],
+          },
+        }),
+      ),
+      container,
+    );
 
 describe("nodes devices pending rendering", () => {
   it("shows requested and approved access for a scope upgrade", () => {

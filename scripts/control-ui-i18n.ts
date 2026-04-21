@@ -85,18 +85,6 @@ const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
-  { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
-  { locale: "zh-TW", fileName: "zh-TW.ts", exportName: "zh_TW", languageKey: "zhTW" },
-  { locale: "pt-BR", fileName: "pt-BR.ts", exportName: "pt_BR", languageKey: "ptBR" },
-  { locale: "de", fileName: "de.ts", exportName: "de", languageKey: "de" },
-  { locale: "es", fileName: "es.ts", exportName: "es", languageKey: "es" },
-  { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
-  { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
-  { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
-  { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
-  { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
-  { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
-  { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -173,6 +161,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Simplified Chinese";
     case "zh-TW":
       return "Traditional Chinese";
+    case "vi":
+      return "Vietnamese";
     case "pt-BR":
       return "Brazilian Portuguese";
     case "ja-JP":
