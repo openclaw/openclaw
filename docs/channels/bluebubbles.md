@@ -217,6 +217,54 @@ Per-group configuration:
 - Uses `allowFrom` and `groupAllowFrom` to determine command authorization.
 - Authorized senders can run control commands even without mentioning in groups.
 
+### Per-group system prompt
+
+Each entry under `channels.bluebubbles.groups.*` accepts an optional `systemPrompt` string. The value is injected into the agent's system prompt on every turn that handles a message in that group, so you can set per-group persona or behavioral rules without editing agent prompts:
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      groups: {
+        "iMessage;-;chat123": {
+          systemPrompt: "Keep responses under 3 sentences. Mirror the group's casual tone.",
+        },
+      },
+    },
+  },
+}
+```
+
+The key matches whatever BlueBubbles reports as `chatGuid` / `chatIdentifier` / numeric `chatId` for the group, and a `"*"` wildcard entry provides a default for every group without an exact match (same pattern used by `requireMention` and per-group tool policies). Exact matches always win over the wildcard. DMs ignore this field; use agent-level or account-level prompt customization instead.
+
+#### Worked example: threaded replies and tapback reactions (Private API)
+
+With the BlueBubbles Private API enabled, inbound messages arrive with short message IDs (for example `[[reply_to:5]]`) and the agent can call `action=reply` to thread into a specific message or `action=react` to drop a tapback. A per-group `systemPrompt` is a reliable way to keep the agent choosing the right tool:
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      groups: {
+        "iMessage;+;chat-family": {
+          systemPrompt: [
+            "When replying in this group, always call action=reply with the",
+            "[[reply_to:N]] messageId from context so your response threads",
+            "under the triggering message. Never send a new unlinked message.",
+            "",
+            "For short acknowledgements ('ok', 'got it', 'on it'), use",
+            "action=react with an appropriate tapback emoji (❤️, 👍, 😂, ‼️, ❓)",
+            "instead of sending a text reply.",
+          ].join(" "),
+        },
+      },
+    },
+  },
+}
+```
+
+Tapback reactions and threaded replies both require the BlueBubbles Private API; see [Advanced actions](#advanced-actions) and [Message IDs](#message-ids-short-vs-full) for the underlying mechanics.
+
 ## ACP conversation bindings
 
 BlueBubbles chats can be turned into durable ACP workspaces without changing the transport layer.
