@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import type { WizardPrompter } from "./prompts.js";
 import {
+  configurePluginConfig,
   discoverConfigurablePlugins,
   discoverUnconfiguredPlugins,
   setupPluginConfig,
@@ -457,5 +458,90 @@ describe("setupPluginConfig", () => {
       },
     });
     expect(multiselect).not.toHaveBeenCalled();
+  });
+  it("excludes denied plugins from quickstart personalization", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("miya", {
+            "personaLite.profileName": { label: "Profile", quickstart: true },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const multiselect = vi.fn(async () => ["miya"]);
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          deny: ["miya"],
+        },
+      },
+      workspaceDir: "/tmp",
+      prompter: {
+        intro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        select: vi.fn() as unknown as WizardPrompter["select"],
+        multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+        text: vi.fn() as unknown as WizardPrompter["text"],
+        confirm: vi.fn() as unknown as WizardPrompter["confirm"],
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+      surface: "quickstart",
+    });
+
+    expect(result).toEqual({
+      plugins: {
+        deny: ["miya"],
+      },
+    });
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("excludes denied plugins from configure selection too", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("miya", {
+            "personaLite.profileName": { label: "Profile", quickstart: true },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const note = vi.fn(async () => {});
+    const select = vi.fn(async () => {
+      throw new Error("select should not run for denied plugins");
+    });
+
+    const result = await configurePluginConfig({
+      config: {
+        plugins: {
+          deny: ["miya"],
+        },
+      },
+      workspaceDir: "/tmp",
+      prompter: {
+        intro: vi.fn(async () => {}),
+        note,
+        outro: vi.fn(async () => {}),
+        select: select as unknown as WizardPrompter["select"],
+        multiselect: vi.fn() as unknown as WizardPrompter["multiselect"],
+        text: vi.fn() as unknown as WizardPrompter["text"],
+        confirm: vi.fn() as unknown as WizardPrompter["confirm"],
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result).toEqual({
+      plugins: {
+        deny: ["miya"],
+      },
+    });
+    expect(note).toHaveBeenCalledWith("No plugins with configurable fields found.", "Plugins");
+    expect(select).not.toHaveBeenCalled();
   });
 });

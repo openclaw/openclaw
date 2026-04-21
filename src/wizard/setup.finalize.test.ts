@@ -516,10 +516,6 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {
-    waitForGatewayReachable.mockResolvedValue({
-      ok: false,
-      detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
-    });
     probeGatewayReachable.mockResolvedValue({
       ok: false,
       detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
@@ -552,6 +548,8 @@ describe("finalizeSetupWizard", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalledWith("health failed");
+    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(probeGatewayReachable).toHaveBeenCalledTimes(1);
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Setup was run without Gateway service install"),
       "Gateway",
@@ -588,6 +586,56 @@ describe("finalizeSetupWizard", () => {
 
     expect(waitForGatewayReachable).toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
+  });
+
+  it("uses resolved gateway passwords for daemon health checks", async () => {
+    resolveSetupSecretInputString.mockResolvedValueOnce("resolved-health-password");
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "password",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "password",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        password: "resolved-health-password",
+        token: undefined,
+        deadlineMs: 15_000,
+      }),
+    );
+    expect(probeGatewayReachable).not.toHaveBeenCalled();
   });
 
   it("does not show a Codex native search summary when web search is globally disabled", async () => {
