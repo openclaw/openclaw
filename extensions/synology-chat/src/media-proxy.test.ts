@@ -120,6 +120,23 @@ describe("resolveSynologyWebhookFileUrl", () => {
     );
   });
 
+  it("ignores learned private origins and keeps the previous safe hosted-media origin", async () => {
+    registerSynologyHostedMediaTransport({
+      ...testAccount,
+      publicOrigin: "https://gateway-config.example.com",
+    });
+    rememberSynologyHostedMediaOrigin(testAccount, "http://127.0.0.1:3000");
+
+    const resolved = await resolveSynologyWebhookFileUrl({
+      account: testAccount,
+      sourceUrl: "https://example.com/file.png",
+    });
+
+    expect(resolved).toMatch(
+      /^https:\/\/gateway-config\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
+    );
+  });
+
   it("uses the last forwarded host and proto values when deriving the public origin", () => {
     const origin = deriveSynologyPublicOrigin({
       headers: {
@@ -130,5 +147,17 @@ describe("resolveSynologyWebhookFileUrl", () => {
     } as never);
 
     expect(origin).toBe("https://openclaw.example.com");
+  });
+
+  it("rejects learned private origins derived from webhook headers", () => {
+    const origin = deriveSynologyPublicOrigin({
+      headers: {
+        "x-forwarded-host": "127.0.0.1:3000",
+        "x-forwarded-proto": "https",
+      },
+      socket: {},
+    } as never);
+
+    expect(origin).toBeUndefined();
   });
 });

@@ -181,7 +181,11 @@ export function rememberSynologyHostedMediaOrigin(
   if (!state) {
     return;
   }
-  state.publicOrigin = origin;
+  const normalizedOrigin = normalizeSynologyPublicOrigin(origin);
+  if (!normalizedOrigin) {
+    return;
+  }
+  state.publicOrigin = normalizedOrigin;
 }
 
 export function deriveSynologyPublicOrigin(req: IncomingMessage): string | undefined {
@@ -200,7 +204,7 @@ export function deriveSynologyPublicOrigin(req: IncomingMessage): string | undef
   }
 
   try {
-    return new URL(`${proto}://${host}`).origin;
+    return normalizeSynologyPublicOrigin(new URL(`${proto}://${host}`).origin);
   } catch {
     return undefined;
   }
