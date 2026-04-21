@@ -219,6 +219,7 @@ export function resolveAcpxPluginConfig(params: {
   return {
     cwd,
     stateDir,
+    probeAgent: normalized.probeAgent,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
