@@ -559,12 +559,13 @@ static void inst_force_refresh(void) {
     if (!req_id_pair) {
         instances_request_context_free(pair_ctx);
         inst_pairing_fetch_in_flight = FALSE;
+        if (inst_remote_status_label) gtk_label_set_text(GTK_LABEL(inst_remote_status_label), "");
     }
 }
 
-/* ── Local instance refresh (public, no RPC) ─────────────────────── */
+/* ── Local instance refresh (local-only, no RPC) ─────────────────── */
 
-void section_instances_refresh_local(void) {
+static void section_instances_refresh_local(void) {
     if (!inst_hostname_label) return;
 
     AppState current = state_get_current();
@@ -716,6 +717,7 @@ static GtkWidget* instances_build(void) {
 }
 
 static void instances_refresh(void) {
+    section_instances_refresh_local();
     if (!inst_remote_box || inst_nodes_fetch_in_flight) return;
     if (!section_is_stale(&inst_last_fetch_us)) return;
     if (!gateway_rpc_is_ready()) {

@@ -1,3 +1,15 @@
+/*
+ * product_state.c
+ *
+ * Persisted product intent storage for the OpenClaw Linux Companion App.
+ *
+ * Owns loading, migration, and persistence of user/product decisions that
+ * outlive a single runtime session, such as connection mode selection and
+ * onboarding completion version.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
 #include "product_state.h"
 
 #include <errno.h>

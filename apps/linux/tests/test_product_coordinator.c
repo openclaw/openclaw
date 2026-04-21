@@ -1,3 +1,14 @@
+/*
+ * test_product_coordinator.c
+ *
+ * Focused coverage for Linux companion product coordination policy.
+ *
+ * Verifies startup presentation, onboarding routing, and connection-mode
+ * policy decisions using headless stubs for runtime dependencies.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
 #include "../src/product_coordinator.h"
 
 #include "../src/display_model.h"
