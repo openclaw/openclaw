@@ -170,6 +170,10 @@ async function resolveSlackSendContext(params: {
   const send =
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
+  // params.cfg is the scoped channel-dispatch config; channel credentials are
+  // expected to be resolved here (not a raw loadConfig() snapshot). Strict mode
+  // is intentional so boot-time misconfigurations surface loudly. See #68237
+  // for the companion tolerant-mode path in sendMessageSlack itself.
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = getTokenForOperation(account, "write");
   const botToken = account.botToken?.trim();
@@ -333,6 +337,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     },
     messaging: {
       normalizeTarget: normalizeSlackMessagingTarget,
+      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
+        const parent = parentConversationId?.trim();
+        const child = conversationId.trim();
+        return parent && parent !== child
+          ? { to: `channel:${parent}`, threadId: child }
+          : { to: normalizeSlackMessagingTarget(`channel:${child}`) };
+      },
       resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
       parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
@@ -379,10 +390,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     }),
     resolver: {
       resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
-        const toResolvedTarget = <
-          T extends { input: string; resolved: boolean; id?: string; name?: string },
-        >(
-          entry: T,
+        const toResolvedTarget = (
+          entry: { input: string; resolved: boolean; id?: string; name?: string },
           note?: string,
         ) => ({
           input: entry.input,

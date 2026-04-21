@@ -4,22 +4,37 @@ import { channelsStatusCommand } from "./channels/status.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
-const callGateway = vi.fn();
-const resolveCommandSecretRefsViaGateway = vi.fn();
-const requireValidConfigSnapshot = vi.fn();
-const listChannelPlugins = vi.fn();
-const withProgress = vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run());
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  resolveCommandConfigWithSecrets: vi.fn(),
+  readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
+  requireValidConfigSnapshot: vi.fn(),
+  listChannelPlugins: vi.fn(),
+  withProgress: vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run()),
+}));
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts),
+  callGateway: (opts: unknown) => mocks.callGateway(opts),
 }));
 
-vi.mock("../cli/command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway: (opts: unknown) => resolveCommandSecretRefsViaGateway(opts),
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: async (opts: {
+    runtime?: { log: (message: string) => void };
+  }) => {
+    const result = await mocks.resolveCommandConfigWithSecrets(opts);
+    for (const entry of result?.diagnostics ?? []) {
+      opts.runtime?.log(`[secrets] ${entry}`);
+    }
+    return result;
+  },
 }));
 
-vi.mock("./shared.js", () => ({
-  requireValidConfigSnapshot: (runtime: unknown) => requireValidConfigSnapshot(runtime),
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
+}));
+
+vi.mock("./channels/shared.js", () => ({
+  requireValidConfigSnapshot: (runtime: unknown) => mocks.requireValidConfigSnapshot(runtime),
   formatChannelAccountLabel: ({
     channel,
     accountId,
@@ -28,17 +43,103 @@ vi.mock("./shared.js", () => ({
     accountId: string;
     name?: string;
   }) => `${channel} ${accountId}`,
+  appendEnabledConfiguredLinkedBits: (bits: string[], account: Record<string, unknown>) => {
+    if (typeof account.enabled === "boolean") {
+      bits.push(account.enabled ? "enabled" : "disabled");
+    }
+    if (account.configured === true) {
+      bits.push("configured");
+      if (Object.values(account).includes("configured_unavailable")) {
+        bits.push("secret unavailable in this command path");
+      }
+    }
+  },
+  appendModeBit: (bits: string[], account: Record<string, unknown>) => {
+    if (typeof account.mode === "string" && account.mode.length > 0) {
+      bits.push(`mode:${account.mode}`);
+    }
+  },
+  appendTokenSourceBits: (bits: string[], account: Record<string, unknown>) => {
+    if (account.tokenSource === "config") {
+      const unavailable = account.tokenStatus === "configured_unavailable" ? " (unavailable)" : "";
+      bits.push(`token:config${unavailable}`);
+    }
+  },
+  appendBaseUrlBit: (bits: string[], account: Record<string, unknown>) => {
+    if (typeof account.baseUrl === "string" && account.baseUrl) {
+      bits.push(`url:${account.baseUrl}`);
+    }
+  },
+  buildChannelAccountLine: (channel: string, account: Record<string, unknown>, bits: string[]) => {
+    const accountId = typeof account.accountId === "string" ? account.accountId : "default";
+    return `- ${channel} ${accountId}: ${bits.join(", ")}`;
+  },
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () => listChannelPlugins(),
+  listChannelPlugins: () => mocks.listChannelPlugins(),
   getChannelPlugin: (channel: string) =>
-    (listChannelPlugins() as Array<{ id: string }>).find((plugin) => plugin.id === channel),
+    (mocks.listChannelPlugins() as Array<{ id: string }>).find((plugin) => plugin.id === channel),
+}));
+
+vi.mock("../channels/account-snapshot-fields.js", () => ({
+  hasConfiguredUnavailableCredentialStatus: (account: Record<string, unknown>) =>
+    Object.values(account).includes("configured_unavailable"),
+  hasResolvedCredentialValue: (account: Record<string, unknown>) =>
+    ["token", "botToken", "appToken", "signingSecret"].some(
+      (key) => typeof account[key] === "string" && account[key].length > 0,
+    ),
+}));
+
+vi.mock("../channels/plugins/status.js", () => ({
+  buildReadOnlySourceChannelAccountSnapshot: async ({
+    plugin,
+    cfg,
+    accountId,
+  }: {
+    plugin: ReturnType<typeof createTokenOnlyPlugin>;
+    cfg: { secretResolved?: boolean };
+    accountId: string;
+  }) => ({
+    accountId,
+    ...plugin.config.inspectAccount(cfg),
+  }),
+  buildChannelAccountSnapshot: async ({
+    plugin,
+    cfg,
+    accountId,
+  }: {
+    plugin: ReturnType<typeof createTokenOnlyPlugin>;
+    cfg: { secretResolved?: boolean };
+    accountId: string;
+  }) => ({
+    accountId,
+    ...plugin.config.resolveAccount(cfg),
+  }),
+}));
+
+vi.mock("../cli/command-secret-targets.js", () => ({
+  getChannelsCommandSecretTargetIds: () => [],
+}));
+
+vi.mock("../infra/channels-status-issues.js", () => ({
+  collectChannelStatusIssues: () => [],
 }));
 
 vi.mock("../cli/progress.js", () => ({
-  withProgress: (opts: unknown, run: () => Promise<unknown>) => withProgress(opts, run),
+  withProgress: (opts: unknown, run: () => Promise<unknown>) => mocks.withProgress(opts, run),
 }));
+
+function createTokenAccountSnapshot(cfg: { secretResolved?: boolean }) {
+  return {
+    name: "Primary",
+    enabled: true,
+    configured: true,
+    token: cfg.secretResolved ? "resolved-discord-token" : "",
+    tokenSource: "config",
+    tokenStatus: cfg.secretResolved ? "available" : "configured_unavailable",
+  };
+}
 
 function createTokenOnlyPlugin() {
   return {
@@ -54,42 +155,8 @@ function createTokenOnlyPlugin() {
     config: {
       listAccountIds: () => ["default"],
       defaultAccountId: resolveDefaultAccountId,
-      inspectAccount: (cfg: { secretResolved?: boolean }) =>
-        cfg.secretResolved
-          ? {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "resolved-discord-token",
-              tokenSource: "config",
-              tokenStatus: "available",
-            }
-          : {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "",
-              tokenSource: "config",
-              tokenStatus: "configured_unavailable",
-            },
-      resolveAccount: (cfg: { secretResolved?: boolean }) =>
-        cfg.secretResolved
-          ? {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "resolved-discord-token",
-              tokenSource: "config",
-              tokenStatus: "available",
-            }
-          : {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "",
-              tokenSource: "config",
-              tokenStatus: "configured_unavailable",
-            },
+      inspectAccount: createTokenAccountSnapshot,
+      resolveAccount: createTokenAccountSnapshot,
       isConfigured: () => true,
       isEnabled: () => true,
     },
@@ -112,31 +179,31 @@ function createRuntimeCapture() {
 
 describe("channelsStatusCommand SecretRef fallback flow", () => {
   beforeEach(() => {
-    callGateway.mockReset();
-    resolveCommandSecretRefsViaGateway.mockReset();
-    requireValidConfigSnapshot.mockReset();
-    listChannelPlugins.mockReset();
-    withProgress.mockClear();
-    listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
+    mocks.callGateway.mockReset();
+    mocks.resolveCommandConfigWithSecrets.mockReset();
+    mocks.readConfigFileSnapshot.mockClear();
+    mocks.requireValidConfigSnapshot.mockReset();
+    mocks.listChannelPlugins.mockReset();
+    mocks.withProgress.mockClear();
+    mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
 
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {
-    callGateway.mockRejectedValue(new Error("gateway closed"));
-    requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
-    resolveCommandSecretRefsViaGateway.mockResolvedValue({
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { secretResolved: false, channels: {} },
+      effectiveConfig: { secretResolved: false, channels: {} },
       diagnostics: [
         "channels status: channels.discord.token is unavailable in this command path; continuing with degraded read-only config.",
       ],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: true,
     });
     const { runtime, logs, errors } = createRuntimeCapture();
 
     await channelsStatusCommand({ probe: false }, runtime as never);
 
     expect(errors.some((line) => line.includes("Gateway not reachable"))).toBe(true);
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
       expect.objectContaining({
         commandName: "channels status",
         mode: "read_only_status",
@@ -153,13 +220,12 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
   });
 
   it("prefers resolved snapshots when command-local SecretRef resolution succeeds", async () => {
-    callGateway.mockRejectedValue(new Error("gateway closed"));
-    requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
-    resolveCommandSecretRefsViaGateway.mockResolvedValue({
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { secretResolved: true, channels: {} },
+      effectiveConfig: { secretResolved: true, channels: {} },
       diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
     });
     const { runtime, logs } = createRuntimeCapture();
 

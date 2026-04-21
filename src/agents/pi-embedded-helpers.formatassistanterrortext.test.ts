@@ -167,21 +167,38 @@ describe("formatAssistantErrorText", () => {
     expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
   });
 
-  it("falls back to generic copy for HTML quota pages", () => {
+  it("returns upstream HTML copy for HTML quota pages", () => {
     const msg = makeAssistantError(
       "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 
-  it("falls back to generic copy for prefixed HTML rate-limit pages", () => {
+  it("returns upstream HTML copy for prefixed 521 HTML rate-limit pages", () => {
     const msg = makeAssistantError(
       "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+    );
+  });
+
+  it("does not misdiagnose standalone Cloudflare challenge HTML as DNS", () => {
+    const msg = makeAssistantError(`<!DOCTYPE html>
+<html>
+  <head>
+    <title>Just a moment...</title>
+    <link rel="dns-prefetch" href="//chatgpt.com">
+  </head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 
@@ -227,6 +244,22 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
+  it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
+    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+    );
+  });
+
+  it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
+    const msg = makeAssistantError(
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
     );
   });
 
@@ -337,6 +370,21 @@ describe("formatRawAssistantErrorForUi", () => {
 
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
+    );
+  });
+
+  it("formats standalone Cloudflare challenge HTML into a clean provider error", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Just a moment...</title></head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`;
+
+    expect(formatRawAssistantErrorForUi(htmlError)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 });

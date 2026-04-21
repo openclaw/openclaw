@@ -167,7 +167,7 @@ surfaces:
 - `openclaw/plugin-sdk/messaging-targets` for target parsing/matching
 - `openclaw/plugin-sdk/outbound-media` and
   `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
-  identity/send delegates
+  identity/send delegates and payload planning
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
@@ -185,7 +185,9 @@ Keep inbound mention handling split in two layers:
 - plugin-owned evidence gathering
 - shared policy evaluation
 
-Use `openclaw/plugin-sdk/channel-inbound` for the shared layer.
+Use `openclaw/plugin-sdk/channel-mention-gating` for mention-policy decisions.
+Use `openclaw/plugin-sdk/channel-inbound` only when you need the broader inbound
+helper barrel.
 
 Good fit for plugin-local logic:
 
@@ -254,6 +256,11 @@ bundled channel plugins that already depend on runtime injection:
 - `matchesMentionWithExplicit`
 - `implicitMentionKindWhen`
 - `resolveInboundMentionDecision`
+
+If you only need `implicitMentionKindWhen` and
+`resolveInboundMentionDecision`, import from
+`openclaw/plugin-sdk/channel-mention-gating` to avoid loading unrelated inbound
+runtime helpers.
 
 The older `resolveMentionGating*` helpers remain on
 `openclaw/plugin-sdk/channel-inbound` as compatibility exports only. New code

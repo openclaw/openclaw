@@ -9,17 +9,14 @@ type JsonSchemaObject = {
 };
 
 export function cloneSchema<T>(value: T): T {
-  if (typeof structuredClone === "function") {
-    return structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
+  return structuredClone(value);
 }
 
-export function asSchemaObject<T extends object>(value: unknown): T | null {
+export function asSchemaObject(value: unknown): object | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  return value as T;
+  return value;
 }
 
 export function schemaHasChildren(schema: JsonSchemaObject): boolean {

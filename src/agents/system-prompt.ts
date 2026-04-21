@@ -10,6 +10,11 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { BootstrapMode } from "./bootstrap-mode.js";
+import {
+  buildFullBootstrapPromptLines,
+  buildLimitedBootstrapPromptLines,
+} from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
@@ -181,6 +186,34 @@ function buildMemorySection(params: {
   });
 }
 
+export function buildAgentUserPromptPrefix(params: {
+  bootstrapMode?: BootstrapMode;
+}): string | undefined {
+  if (!params.bootstrapMode || params.bootstrapMode === "none") {
+    return undefined;
+  }
+  if (params.bootstrapMode === "limited") {
+    return [
+      "[Bootstrap pending]",
+      ...buildLimitedBootstrapPromptLines({
+        introLine:
+          "Bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
+        nextStepLine:
+          "Typical next steps include switching to a primary interactive run with normal workspace access or having the user complete the canonical BOOTSTRAP.md deletion afterward.",
+      }),
+    ].join("\n");
+  }
+  return [
+    "[Bootstrap pending]",
+    ...buildFullBootstrapPromptLines({
+      readLine:
+        "Please read BOOTSTRAP.md from the workspace and follow it before replying normally.",
+      firstReplyLine:
+        "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
+    }),
+  ].join("\n");
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -269,10 +302,13 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   }
   return [
     "## Execution Bias",
-    "If the user asks you to do the work, start doing it in the same turn.",
-    "Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.",
-    "Commentary-only turns are incomplete when tools are available and the next action is clear.",
-    "If the work will take multiple steps or a while to finish, send one short progress update before or while acting.",
+    "- Actionable request: act in this turn.",
+    "- Non-final turn: use tools to advance, or ask for the one missing decision that blocks safe progress.",
+    "- Continue until done or genuinely blocked; do not finish with a plan/promise when tools can move it forward.",
+    "- Weak/empty tool result: vary query, path, command, or source before concluding.",
+    "- Mutable facts need live checks: files, git, clocks, versions, services, processes, package state.",
+    "- Final answer needs evidence: test/build/lint, screenshot, inspection, tool output, or a named blocker.",
+    "- Longer work: brief progress update, then keep going; use background work or sub-agents when they fit.",
     "",
   ];
 }

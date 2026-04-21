@@ -9,12 +9,17 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { downloadBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  fetchBlueBubblesMessageAttachments,
+} from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
   claimBlueBubblesInboundMessage,
+  commitBlueBubblesCoalescedMessageIds,
   resolveBlueBubblesInboundDedupeKey,
 } from "./inbound-dedupe.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
@@ -66,7 +71,7 @@ import type {
 } from "./monitor-shared.js";
 import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-contact-names.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
-import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import { normalizeBlueBubblesReactionInputStrict, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -76,7 +81,6 @@ import {
   isAllowedBlueBubblesSender,
   normalizeBlueBubblesHandle,
 } from "./targets.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
@@ -105,10 +109,6 @@ function normalizeSnippet(value: string): string {
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
-
-function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined) {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
-}
 
 function extractBlueBubblesChatGuid(chat: BlueBubblesChatRecord): string | undefined {
   const candidates = [chat.chatGuid, chat.guid, chat.chat_guid];
@@ -158,25 +158,22 @@ async function queryBlueBubblesChats(params: {
   limit: number;
   allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesChatRecord[]> {
-  const url = buildBlueBubblesApiUrl({
+  const client = createBlueBubblesClientFromParts({
     baseUrl: params.baseUrl,
-    path: "/api/v1/chat/query",
     password: params.password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs,
   });
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        limit: params.limit,
-        offset: params.offset,
-        with: ["participants"],
-      }),
+  const res = await client.request({
+    method: "POST",
+    path: "/api/v1/chat/query",
+    body: {
+      limit: params.limit,
+      offset: params.offset,
+      with: ["participants"],
     },
-    params.timeoutMs,
-    blueBubblesPolicy(params.allowPrivateNetwork),
-  );
+    timeoutMs: params.timeoutMs,
+  });
   if (!res.ok) {
     return [];
   }
@@ -397,7 +394,7 @@ function resolveBlueBubblesAckReaction(params: {
     return null;
   }
   try {
-    normalizeBlueBubblesReactionInput(raw);
+    normalizeBlueBubblesReactionInputStrict(raw);
     return raw;
   } catch {
     const key = normalizeLowercaseStringOrEmpty(raw);
@@ -670,6 +667,32 @@ export async function processMessage(
           `inbound-dedupe: finalize failed for key=${sanitizeForLog(dedupeKey ?? "")}: ${sanitizeForLog(finalizeError)}`,
         );
       }
+      // When the debouncer coalesced multiple source webhook events into this
+      // single processed message, every source messageId must reach dedupe so
+      // a later MessagePoller replay of any individual source event is
+      // recognized as a duplicate. The primary is already finalized above;
+      // commit the rest here (best-effort, per-id).
+      const secondaryIds = (message.coalescedMessageIds ?? []).filter((id) => id !== dedupeKey);
+      if (secondaryIds.length > 0) {
+        try {
+          await commitBlueBubblesCoalescedMessageIds({
+            messageIds: secondaryIds,
+            accountId: account.accountId,
+            onDiskError: (error) =>
+              logVerbose(
+                core,
+                runtime,
+                `inbound-dedupe: coalesced secondary commit disk error: ${sanitizeForLog(error)}`,
+              ),
+          });
+        } catch (secondaryError) {
+          logVerbose(
+            core,
+            runtime,
+            `inbound-dedupe: coalesced secondary commit failed for primary=${sanitizeForLog(dedupeKey ?? "")}: ${sanitizeForLog(secondaryError)}`,
+          );
+        }
+      }
     }
   }
 }
@@ -692,8 +715,52 @@ async function processMessageAfterDedupe(
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
 
   const text = message.text.trim();
-  const attachments = message.attachments ?? [];
-  const placeholder = buildMessagePlaceholder(message);
+  let attachments = message.attachments ?? [];
+  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+  const password = normalizeSecretInputString(account.config.password);
+
+  // BlueBubbles may fire the webhook before attachment indexing is complete,
+  // so the initial `attachments` array can be empty for messages that actually
+  // have media. When the message text is empty (image-only) or this is an
+  // `updated-message` event, wait briefly and re-fetch from the BB API as a
+  // fallback for cases where BB doesn't send a follow-up webhook. (#65430, #67437)
+  // This must run before the !rawBody guard below, otherwise image-only messages
+  // with empty attachments are dropped before the retry can fire.
+  const retryMessageId = message.messageId?.trim();
+  const shouldRetryAttachments =
+    attachments.length === 0 &&
+    retryMessageId &&
+    baseUrl &&
+    password &&
+    (text.length === 0 || message.eventType === "updated-message");
+  if (shouldRetryAttachments) {
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      const fetched = await fetchBlueBubblesMessageAttachments(retryMessageId, {
+        baseUrl,
+        password,
+        timeoutMs: 10_000,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      });
+      if (fetched.length > 0) {
+        logVerbose(
+          core,
+          runtime,
+          `attachment retry found ${fetched.length} attachment(s) for msgId=${message.messageId}`,
+        );
+        attachments = fetched;
+      }
+    } catch (err) {
+      logVerbose(
+        core,
+        runtime,
+        `attachment retry failed for msgId=${message.messageId}: ${String(err)}`,
+      );
+    }
+  }
+
+  // Recompute placeholder from resolved attachments (may have been updated by retry).
+  const placeholder = buildMessagePlaceholder({ ...message, attachments });
   // Check if text is a tapback pattern (e.g., 'Loved "hello"') and transform to emoji format
   // For tapbacks, we'll append [[reply_to:N]] at the end; for regular messages, prepend it
   const tapbackContext = resolveTapbackContext(message);
@@ -1018,9 +1085,6 @@ async function processMessageAfterDedupe(
     logVerbose(core, runtime, `bluebubbles: skipping group message (no mention)`);
     return;
   }
-
-  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
-  const password = normalizeSecretInputString(account.config.password);
 
   if (isGroup && !message.participants?.length && baseUrl && password) {
     try {
@@ -1500,6 +1564,14 @@ async function processMessageAfterDedupe(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
+    // Exact group match wins over the "*" wildcard fallback, matching the
+    // pattern used by resolveChannelGroupRequireMention/toolsPolicy.
+    GroupSystemPrompt: isGroup
+      ? normalizeOptionalString(
+          account.config.groups?.[peerId]?.systemPrompt ??
+            account.config.groups?.["*"]?.systemPrompt,
+        )
+      : undefined,
   });
 
   let sentMessage = false;

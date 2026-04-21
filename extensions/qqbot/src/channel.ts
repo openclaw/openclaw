@@ -1,51 +1,34 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { initApiConfig } from "./api.js";
-import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./channel-config-shared.js";
-import { qqbotChannelConfigSchema } from "./config-schema.js";
+import { qqbotBasePluginFields } from "./channel-base.js";
 import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
 import { getQQBotRuntime } from "./runtime.js";
-import { qqbotSetupWizard } from "./setup-surface.js";
 // Re-export text helpers so existing consumers of channel.ts are unaffected.
 // The canonical definition lives in text-utils.ts to avoid a circular
 // dependency: channel.ts → (dynamic) gateway.ts → outbound-deliver.ts → channel.ts.
 export { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
+type QQBotOutboundModule = typeof import("./outbound.js");
+
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
 let _gatewayModulePromise: Promise<typeof import("./gateway.js")> | undefined;
+let _outboundModulePromise: Promise<QQBotOutboundModule> | undefined;
+
 function loadGatewayModule(): Promise<typeof import("./gateway.js")> {
   _gatewayModulePromise ??= import("./gateway.js");
   return _gatewayModulePromise;
 }
 
-export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
-  id: "qqbot",
-  setupWizard: qqbotSetupWizard,
-  meta: {
-    ...qqbotMeta,
-  },
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    reactions: false,
-    threads: false,
-    /**
-     * blockStreaming=true means the channel supports block streaming.
-     * The framework collects streamed blocks and sends them through deliver().
-     */
-    blockStreaming: true,
-  },
-  reload: { configPrefixes: ["channels.qqbot"] },
-  configSchema: qqbotChannelConfigSchema,
+function loadOutboundModule(): Promise<QQBotOutboundModule> {
+  _outboundModulePromise ??= import("./outbound.js");
+  return _outboundModulePromise;
+}
 
-  config: {
-    ...qqbotConfigAdapter,
-  },
-  setup: {
-    ...qqbotSetupAdapterShared,
-  },
+export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
+  ...qqbotBasePluginFields,
   messaging: {
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: (target: string): string | undefined => {
@@ -91,7 +74,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     textChunkLimit: 5000,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const { sendText } = await import("./outbound.js");
+      const { sendText } = await loadOutboundModule();
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendText({ to, text, accountId, replyToId, account });
       return {
@@ -102,7 +85,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const { sendMedia } = await import("./outbound.js");
+      const { sendMedia } = await loadOutboundModule();
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendMedia({
         to,

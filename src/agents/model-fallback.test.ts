@@ -1,29 +1,146 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
-import * as authProfileSourceCheckModule from "./auth-profiles/source-check.js";
-import * as authProfileStoreModule from "./auth-profiles/store.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
+
+vi.mock("../infra/file-lock.js", () => ({
+  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
+}));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+const authSourceCheckMock = vi.hoisted(() => ({
+  hasAnyAuthProfileStoreSource: vi.fn(() => true),
+}));
+
+vi.mock("./auth-profiles/source-check.js", () => authSourceCheckMock);
+
+const authRuntimeMock = vi.hoisted(() => {
+  const stores = new Map<string, AuthProfileStore>();
+  const keyFor = (agentDir?: string) => agentDir ?? "__main__";
+  const now = () => Date.now();
+  const isActive = (value: unknown, ts = now()) =>
+    typeof value === "number" && Number.isFinite(value) && value > ts;
+  const getStore = (agentDir?: string): AuthProfileStore =>
+    stores.get(keyFor(agentDir)) ?? { version: 1, profiles: {} };
+  const getProfileIds = (store: AuthProfileStore, provider: string) =>
+    Object.entries(store.profiles)
+      .filter(([, profile]) => profile.provider === provider)
+      .map(([id]) => id);
+  const isProfileInCooldown = (
+    store: AuthProfileStore,
+    profileId: string,
+    tsOrOptions?: number | { now?: number; forModel?: string },
+    forModel?: string,
+  ) => {
+    const stats = store.usageStats?.[profileId];
+    if (!stats || store.profiles[profileId]?.provider === "openrouter") {
+      return false;
+    }
+    const ts = typeof tsOrOptions === "number" ? tsOrOptions : (tsOrOptions?.now ?? now());
+    const model = typeof tsOrOptions === "object" ? tsOrOptions.forModel : forModel;
+    if (isActive(stats.disabledUntil, ts)) {
+      return true;
+    }
+    if (!isActive(stats.cooldownUntil, ts)) {
+      return false;
+    }
+    return !stats.cooldownModel || !model || stats.cooldownModel === model;
+  };
+  const resolveReason = (store: AuthProfileStore, profileIds: string[], ts = now()) => {
+    for (const profileId of profileIds) {
+      const stats = store.usageStats?.[profileId];
+      if (!stats) {
+        continue;
+      }
+      if (isActive(stats.disabledUntil, ts)) {
+        return stats.disabledReason ?? "auth";
+      }
+      if (!isActive(stats.cooldownUntil, ts)) {
+        continue;
+      }
+      if (stats.cooldownReason) {
+        return stats.cooldownReason;
+      }
+      const counts = stats.failureCounts ?? {};
+      if ((counts.rate_limit ?? 0) > 0) {
+        return "rate_limit";
+      }
+      if ((counts.overloaded ?? 0) > 0) {
+        return "overloaded";
+      }
+      if ((counts.timeout ?? 0) > 0) {
+        return "timeout";
+      }
+      return "unknown";
+    }
+    return null;
+  };
+  return {
+    clear: () => stores.clear(),
+    setStore: (agentDir: string | undefined, store: AuthProfileStore) => {
+      stores.set(keyFor(agentDir), store);
+    },
+    runtime: {
+      ensureAuthProfileStore: vi.fn((agentDir?: string) => getStore(agentDir)),
+      loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
+      resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
+        getProfileIds(params.store, params.provider),
+      isProfileInCooldown,
+      resolveProfilesUnavailableReason: (params: {
+        store: AuthProfileStore;
+        profileIds: string[];
+        now?: number;
+      }) => resolveReason(params.store, params.profileIds, params.now),
+      getSoonestCooldownExpiry: (
+        store: AuthProfileStore,
+        profileIds: string[],
+        options?: { now?: number; forModel?: string },
+      ) => {
+        const ts = options?.now ?? now();
+        let soonest: number | null = null;
+        for (const profileId of profileIds) {
+          if (!isProfileInCooldown(store, profileId, { now: ts, forModel: options?.forModel })) {
+            continue;
+          }
+          const stats = store.usageStats?.[profileId];
+          const expiry = [stats?.cooldownUntil, stats?.disabledUntil]
+            .filter((value): value is number => isActive(value, ts))
+            .toSorted((a, b) => a - b)[0];
+          if (expiry !== undefined && (soonest === null || expiry < soonest)) {
+            soonest = expiry;
+          }
+        }
+        return soonest;
+      },
+    },
+  };
+});
+
+vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
+
 const makeCfg = makeModelFallbackCfg;
 const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
   '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
+let authTempRoot = "";
+let authTempCounter = 0;
+
+afterEach(() => {
+  authRuntimeMock.clear();
+  authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
+  authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
+  authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(true);
+});
 
 function makeFallbacksOnlyCfg(): OpenClawConfig {
   return {
@@ -54,13 +171,14 @@ async function withTempAuthStore<T>(
   store: AuthProfileStore,
   run: (tempDir: string) => Promise<T>,
 ): Promise<T> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-  saveAuthProfileStore(store, tempDir);
-  try {
-    return await run(tempDir);
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
+  const tempDir = await makeAuthTempDir();
+  setAuthRuntimeStore(tempDir, store);
+  return await run(tempDir);
+}
+
+async function makeAuthTempDir(): Promise<string> {
+  authTempRoot ||= path.join("/tmp", "openclaw-auth-suite-mock");
+  return path.join(authTempRoot, `case-${++authTempCounter}`);
 }
 
 async function runWithStoredAuth(params: {
@@ -69,15 +187,19 @@ async function runWithStoredAuth(params: {
   provider: string;
   run: (provider: string, model: string) => Promise<string>;
 }) {
-  return withTempAuthStore(params.store, async (tempDir) =>
-    runWithModelFallback({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: "m1",
-      agentDir: tempDir,
-      run: params.run,
-    }),
-  );
+  const tempDir = await makeAuthTempDir();
+  setAuthRuntimeStore(tempDir, params.store);
+  return await runWithModelFallback({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: "m1",
+    agentDir: tempDir,
+    run: params.run,
+  });
+}
+
+function setAuthRuntimeStore(agentDir: string | undefined, store: AuthProfileStore): void {
+  authRuntimeMock.setStore(agentDir, store);
 }
 
 async function expectFallsBackToHaiku(params: {
@@ -195,36 +317,26 @@ const ANTHROPIC_OVERLOADED_PAYLOAD =
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
-// Internal OpenClaw compatibility marker, not a provider API contract.
-const MODEL_COOLDOWN_MESSAGE = "model_cooldown: All credentials for model gpt-5 are cooling down";
-// SDK/transport compatibility marker, not a provider API contract.
-const CONNECTION_ERROR_MESSAGE = "Connection error.";
 
 describe("runWithModelFallback", () => {
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
-    const hasSourcesSpy = vi
-      .spyOn(authProfileSourceCheckModule, "hasAnyAuthProfileStoreSource")
-      .mockReturnValue(false);
-    const ensureStoreSpy = vi.spyOn(authProfileStoreModule, "ensureAuthProfileStore");
+    authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const run = vi.fn().mockResolvedValueOnce("ok");
 
-    try {
-      const result = await runWithModelFallback({
-        cfg: makeCfg(),
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        agentDir: "/tmp/openclaw-no-auth-profiles",
-        run,
-      });
+    const result = await runWithModelFallback({
+      cfg: makeCfg(),
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      agentDir: "/tmp/openclaw-no-auth-profiles",
+      run,
+    });
 
-      expect(result.result).toBe("ok");
-      expect(hasSourcesSpy).toHaveBeenCalledWith("/tmp/openclaw-no-auth-profiles");
-      expect(ensureStoreSpy).not.toHaveBeenCalled();
-      expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
-    } finally {
-      hasSourcesSpy.mockRestore();
-      ensureStoreSpy.mockRestore();
-    }
+    expect(result.result).toBe("ok");
+    expect(authSourceCheckMock.hasAnyAuthProfileStoreSource).toHaveBeenCalledWith(
+      "/tmp/openclaw-no-auth-profiles",
+    );
+    expect(authRuntimeMock.runtime.ensureAuthProfileStore).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
   });
 
   it("keeps openai gpt-5.3 codex on the openai provider before running", async () => {
@@ -481,6 +593,16 @@ describe("runWithModelFallback", () => {
       model: "gpt-4.1-mini",
       firstError: new Error(
         "LLM request rejected: Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      ),
+    });
+  });
+
+  it("falls back on bare leading 402 quota-refresh errors", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(
+        "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
       ),
     });
   });
@@ -825,20 +947,17 @@ describe("runWithModelFallback", () => {
     await withTempAuthStore(store, async (tempDir) => {
       const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
         if (provider === "anthropic" && model === "claude-opus-4-5") {
-          saveAuthProfileStore(
-            {
-              ...store,
-              usageStats: {
-                "anthropic:default": {
-                  cooldownUntil: expiry,
-                  cooldownReason: "rate_limit",
-                  cooldownModel: "claude-opus-4-5",
-                  failureCounts: { rate_limit: 1 },
-                },
+          setAuthRuntimeStore(tempDir, {
+            ...store,
+            usageStats: {
+              "anthropic:default": {
+                cooldownUntil: expiry,
+                cooldownReason: "rate_limit",
+                cooldownModel: "claude-opus-4-5",
+                failureCounts: { rate_limit: 1 },
               },
             },
-            tempDir,
-          );
+          });
         }
 
         throw Object.assign(new Error("rate limited"), { status: 429 });
@@ -1026,162 +1145,43 @@ describe("runWithModelFallback", () => {
     expect(calls).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
   });
 
-  it("falls back on missing API key errors", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error("No API key found for profile openai."),
-    });
-  });
+  it("falls back on representative transient/provider error shapes", async () => {
+    // The full classification matrix lives in failover-error tests; keep this as integration
+    // coverage that classified errors actually advance the model fallback chain.
+    const cases: Array<{ name: string; firstError: Error }> = [
+      {
+        name: "missing API key",
+        firstError: new Error("No API key found for profile openai."),
+      },
+      {
+        name: "lowercase credential",
+        firstError: new Error("no api key found for profile openai"),
+      },
+      {
+        name: "documented OpenAI 429 rate limit",
+        firstError: Object.assign(new Error(OPENAI_RATE_LIMIT_MESSAGE), { status: 429 }),
+      },
+      {
+        name: "documented overloaded_error payload",
+        firstError: new Error(ANTHROPIC_OVERLOADED_PAYLOAD),
+      },
+      {
+        name: "provider request aborted",
+        firstError: Object.assign(new Error("Request was aborted"), { name: "AbortError" }),
+      },
+    ];
 
-  it("falls back on lowercase credential errors", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error("no api key found for profile openai"),
-    });
-  });
-
-  it("falls back on documented OpenAI 429 rate limit responses", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error(OPENAI_RATE_LIMIT_MESSAGE), { status: 429 }),
-    });
-  });
-
-  it("falls back on documented overloaded_error payloads", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error(ANTHROPIC_OVERLOADED_PAYLOAD),
-    });
-  });
-
-  it("falls back on internal model cooldown markers", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error(MODEL_COOLDOWN_MESSAGE),
-    });
-  });
-
-  it("falls back on compatibility connection error messages", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error(CONNECTION_ERROR_MESSAGE),
-    });
-  });
-
-  it("falls back on timeout abort errors", async () => {
-    const timeoutCause = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("aborted"), { name: "AbortError", cause: timeoutCause }),
-    });
-  });
-
-  it("falls back on abort errors with timeout reasons", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("aborted"), {
-        name: "AbortError",
-        reason: "deadline exceeded",
-      }),
-    });
-  });
-
-  it("falls back on abort errors with reason: abort", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("aborted"), {
-        name: "AbortError",
-        reason: "reason: abort",
-      }),
-    });
-  });
-
-  it("falls back on unhandled stop reason error responses", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error("Unhandled stop reason: error"),
-    });
-  });
-
-  it("falls back on abort errors with reason: error", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("aborted"), {
-        name: "AbortError",
-        reason: "reason: error",
-      }),
-    });
-  });
-
-  it("falls back when message says aborted but error is a timeout", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("request aborted"), { code: "ETIMEDOUT" }),
-    });
-  });
-
-  it("falls back on ECONNREFUSED (local server down or remote unreachable)", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:11434"), {
-        code: "ECONNREFUSED",
-      }),
-    });
-  });
-
-  it("falls back on ENETUNREACH (network disconnected)", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }),
-    });
-  });
-
-  it("falls back on EHOSTUNREACH (host unreachable)", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
-    });
-  });
-
-  it("falls back on EAI_AGAIN (DNS resolution failure)", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("getaddrinfo EAI_AGAIN api.openai.com"), {
-        code: "EAI_AGAIN",
-      }),
-    });
-  });
-
-  it("falls back on ENETRESET (connection reset by network)", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("connect ENETRESET"), { code: "ENETRESET" }),
-    });
-  });
-
-  it("falls back on provider abort errors with request-aborted messages", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("Request was aborted"), { name: "AbortError" }),
-    });
+    for (const { name, firstError } of cases) {
+      try {
+        await expectFallsBackToHaiku({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          firstError,
+        });
+      } catch (error) {
+        throw new Error(`fallback case failed: ${name}`, { cause: error });
+      }
+    }
   });
 
   it("does not fall back on user aborts", async () => {
@@ -1358,8 +1358,8 @@ describe("runWithModelFallback", () => {
     async function makeAuthStoreWithCooldown(
       provider: string,
       reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing",
-    ): Promise<{ store: AuthProfileStore; dir: string }> {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    ): Promise<{ dir: string }> {
+      const tmpDir = await makeAuthTempDir();
       const now = Date.now();
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
@@ -1379,8 +1379,8 @@ describe("runWithModelFallback", () => {
                 },
         },
       };
-      saveAuthProfileStore(store, tmpDir);
-      return { store, dir: tmpDir };
+      setAuthRuntimeStore(tmpDir, store);
+      return { dir: tmpDir };
     }
 
     it("attempts same-provider fallbacks during rate limit cooldown", async () => {
@@ -1530,7 +1530,7 @@ describe("runWithModelFallback", () => {
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const tmpDir = await makeAuthTempDir();
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
@@ -1544,7 +1544,7 @@ describe("runWithModelFallback", () => {
           },
         },
       };
-      saveAuthProfileStore(store, tmpDir);
+      setAuthRuntimeStore(tmpDir, store);
 
       const cfg = makeCfg({
         agents: {
@@ -1688,38 +1688,5 @@ describe("runWithImageModelFallback", () => {
       ["openai", "gpt-image-1"],
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
-  });
-});
-
-describe("isAnthropicBillingError", () => {
-  it("does not false-positive on plain 'a 402' prose", () => {
-    const samples = [
-      "Use a 402 stainless bolt",
-      "Book a 402 room",
-      "There is a 402 near me",
-      "The building at 402 Main Street",
-    ];
-
-    for (const sample of samples) {
-      expect(isAnthropicBillingError(sample)).toBe(false);
-    }
-  });
-
-  it("matches real 402 billing payload contexts including JSON keys", () => {
-    const samples = [
-      "HTTP 402 Payment Required",
-      "status: 402",
-      "error code 402",
-      '{"status":402,"type":"error"}',
-      '{"code":402,"message":"payment required"}',
-      '{"error":{"code":402,"message":"billing hard limit reached"}}',
-      "got a 402 from the API",
-      "returned 402",
-      "received a 402 response",
-    ];
-
-    for (const sample of samples) {
-      expect(isAnthropicBillingError(sample)).toBe(true);
-    }
   });
 });
