@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
@@ -31,6 +32,7 @@ type ClaudeLiveSession = {
   managedRun: ManagedRun;
   providerId: string;
   modelId: string;
+  noOutputTimeoutMs: number;
   stderr: string;
   stdoutBuffer: string;
   currentTurn: ClaudeLiveTurn | null;
@@ -45,6 +47,10 @@ type ClaudeLiveRunResult = {
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
+
+function sha256(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
 
 export function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
@@ -124,13 +130,33 @@ function buildClaudeLiveFingerprint(params: {
   argv: string[];
   env: Record<string, string>;
 }): string {
+  const normalizeMcpConfigPath = Boolean(params.context.preparedBackend.mcpConfigHash);
+  const skillSnapshot = params.context.params.skillsSnapshot;
+  const skillsFingerprint = skillSnapshot
+    ? sha256(
+        JSON.stringify({
+          promptHash: sha256(skillSnapshot.prompt),
+          skillFilter: skillSnapshot.skillFilter,
+          skills: skillSnapshot.skills,
+          resolvedSkills: (skillSnapshot.resolvedSkills ?? []).map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            filePath: skill.filePath,
+            sourceInfo: skill.sourceInfo,
+          })),
+          version: skillSnapshot.version,
+        }),
+      )
+    : undefined;
+  const normalizePluginDir = Boolean(skillsFingerprint);
   const unstableValueFlags = new Set(
     [
       params.context.preparedBackend.backend.sessionArg,
       "--session-id",
       "--resume",
       "-r",
-      "--mcp-config",
+      normalizeMcpConfigPath ? "--mcp-config" : undefined,
+      normalizePluginDir ? "--plugin-dir" : undefined,
     ].filter((entry): entry is string => typeof entry === "string" && entry.length > 0),
   );
   const stableArgv: string[] = [];
@@ -149,21 +175,22 @@ function buildClaudeLiveFingerprint(params: {
   }
   return JSON.stringify({
     command: params.context.preparedBackend.backend.command,
-    workspaceDir: params.context.workspaceDir,
+    workspaceDirHash: sha256(params.context.workspaceDir),
     provider: params.context.params.provider,
     model: params.context.normalizedModel,
-    systemPrompt: params.context.systemPrompt,
-    authProfileId: params.context.effectiveAuthProfileId,
-    authEpoch: params.context.authEpoch,
+    systemPromptHash: sha256(params.context.systemPrompt),
+    authProfileIdHash: params.context.effectiveAuthProfileId
+      ? sha256(params.context.effectiveAuthProfileId)
+      : undefined,
+    authEpochHash: params.context.authEpoch ? sha256(params.context.authEpoch) : undefined,
     extraSystemPromptHash: params.context.extraSystemPromptHash,
     mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
-    argv: stableArgv.filter(
-      (entry) => !entry.startsWith("--plugin-dir") && !entry.includes("openclaw-claude-skills-"),
-    ),
+    skillsFingerprint,
+    argv: stableArgv,
     env: Object.keys(params.env)
       .toSorted()
       .filter((key) => key.startsWith("OPENCLAW_MCP_"))
-      .map((key) => [key, params.env[key]]),
+      .map((key) => [key, params.env[key] ? sha256(params.env[key]) : ""]),
   });
 }
 
@@ -258,7 +285,7 @@ function createTimeoutError(session: ClaudeLiveSession, message: string): Failov
   });
 }
 
-function resetNoOutputTimer(session: ClaudeLiveSession, noOutputTimeoutMs: number): void {
+function resetNoOutputTimer(session: ClaudeLiveSession): void {
   const turn = session.currentTurn;
   if (!turn) {
     return;
@@ -272,10 +299,10 @@ function resetNoOutputTimer(session: ClaudeLiveSession, noOutputTimeoutMs: numbe
       "abort",
       createTimeoutError(
         session,
-        `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
+        `CLI produced no output for ${Math.round(session.noOutputTimeoutMs / 1000)}s and was terminated.`,
       ),
     );
-  }, noOutputTimeoutMs);
+  }, session.noOutputTimeoutMs);
 }
 
 function parseSessionId(parsed: Record<string, unknown>): string | undefined {
@@ -316,8 +343,8 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   );
 }
 
-function handleClaudeStdout(session: ClaudeLiveSession, chunk: string, noOutputTimeoutMs: number) {
-  resetNoOutputTimer(session, noOutputTimeoutMs);
+function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
+  resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
   const lines = session.stdoutBuffer.split(/\r?\n/g);
   session.stdoutBuffer = lines.pop() ?? "";
@@ -343,16 +370,22 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
     return;
   }
   if (session.stdoutBuffer.trim()) {
-    handleClaudeLiveLine(session, session.stdoutBuffer);
+    try {
+      handleClaudeLiveLine(session, session.stdoutBuffer);
+    } catch (error) {
+      session.stdoutBuffer = "";
+      closeLiveSession(session, "abort", error);
+      return;
+    }
     session.stdoutBuffer = "";
   }
   if (!session.currentTurn) {
     return;
   }
-  const message =
-    extractCliErrorMessage(session.stderr) ??
-    session.stderr.trim() ??
-    (exitCode === 0 ? "Claude CLI exited before completing the turn." : "Claude CLI failed.");
+  const stderr = session.stderr.trim();
+  const fallbackMessage =
+    exitCode === 0 ? "Claude CLI exited before completing the turn." : "Claude CLI failed.";
+  const message = extractCliErrorMessage(stderr) ?? (stderr || fallbackMessage);
   if (exitCode === 0) {
     failTurn(session, new Error(message));
     return;
@@ -421,13 +454,13 @@ async function createClaudeLiveSession(params: {
     captureOutput: false,
     onStdout: (chunk) => {
       if (session) {
-        handleClaudeStdout(session, chunk, params.noOutputTimeoutMs);
+        handleClaudeStdout(session, chunk);
       }
     },
     onStderr: (chunk) => {
       if (session) {
         session.stderr += chunk;
-        resetNoOutputTimer(session, params.noOutputTimeoutMs);
+        resetNoOutputTimer(session);
       }
     },
   });
@@ -437,6 +470,7 @@ async function createClaudeLiveSession(params: {
     managedRun,
     providerId: params.context.params.provider,
     modelId: params.context.modelId,
+    noOutputTimeoutMs: params.noOutputTimeoutMs,
     stderr: "",
     stdoutBuffer: "",
     currentTurn: null,
@@ -554,6 +588,8 @@ export async function runClaudeLiveSessionTurn(params: {
     throw new Error("Claude CLI live session is already handling a turn");
   }
   const liveSession = session;
+  liveSession.noOutputTimeoutMs = params.noOutputTimeoutMs;
+  liveSession.stderr = "";
 
   const outputPromise = new Promise<CliOutput>((resolve, reject) => {
     liveSession.currentTurn = createTurn({

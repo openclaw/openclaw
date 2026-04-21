@@ -331,32 +331,9 @@ export async function executePreparedCliRun(
           timeoutMs: params.timeoutMs,
           useResume,
         });
-        const streamingParser =
-          backend.output === "jsonl"
-            ? createCliJsonlStreamingParser({
-                backend,
-                providerId: context.backendResolved.id,
-                onAssistantDelta: ({ text, delta }) => {
-                  emitAgentEvent({
-                    runId: params.runId,
-                    stream: "assistant",
-                    data: {
-                      text: applyPluginTextReplacements(
-                        text,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                      delta: applyPluginTextReplacements(
-                        delta,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                    },
-                  });
-                },
-              })
-            : null;
-        const supervisor = executeDeps.getProcessSupervisor();
+        const hasJsonlOutput = backend.output === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {
-          if (!streamingParser) {
+          if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
           }
           claudeSkillsPluginCleanupOwned = true;
@@ -396,6 +373,29 @@ export async function executePreparedCliRun(
             ),
           };
         }
+        const streamingParser = hasJsonlOutput
+          ? createCliJsonlStreamingParser({
+              backend,
+              providerId: context.backendResolved.id,
+              onAssistantDelta: ({ text, delta }) => {
+                emitAgentEvent({
+                  runId: params.runId,
+                  stream: "assistant",
+                  data: {
+                    text: applyPluginTextReplacements(
+                      text,
+                      context.backendResolved.textTransforms?.output,
+                    ),
+                    delta: applyPluginTextReplacements(
+                      delta,
+                      context.backendResolved.textTransforms?.output,
+                    ),
+                  },
+                });
+              },
+            })
+          : null;
+        const supervisor = executeDeps.getProcessSupervisor();
         const scopeKey = buildCliSupervisorScopeKey({
           backend,
           backendId: context.backendResolved.id,

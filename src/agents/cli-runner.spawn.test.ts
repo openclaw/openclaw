@@ -35,6 +35,7 @@ function buildPreparedCliRunContext(params: {
   prompt?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   config?: PreparedCliRunContext["params"]["config"];
+  mcpConfigHash?: string;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   workspaceDir?: string;
 }): PreparedCliRunContext {
@@ -91,6 +92,7 @@ function buildPreparedCliRunContext(params: {
     preparedBackend: {
       backend,
       env: {},
+      ...(params.mcpConfigHash ? { mcpConfigHash: params.mcpConfigHash } : {}),
     },
     reusableCliSession: {},
     modelId: params.model,
@@ -687,6 +689,7 @@ describe("runCliAgent spawn path", () => {
             ],
             liveSession: "claude-stdio",
           },
+          mcpConfigHash: "same-mcp-config",
         }),
       );
       const second = await executePreparedCliRun(
@@ -706,6 +709,7 @@ describe("runCliAgent spawn path", () => {
             ],
             liveSession: "claude-stdio",
           },
+          mcpConfigHash: "same-mcp-config",
         }),
       );
 
@@ -733,6 +737,126 @@ describe("runCliAgent spawn path", () => {
       ]);
     } finally {
       stop();
+    }
+  });
+
+  it("restarts Claude live sessions when selected skills change", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-skills-"));
+    const weatherDir = path.join(workspaceDir, "skills", "weather");
+    const gitDir = path.join(workspaceDir, "skills", "git");
+    await fs.mkdir(weatherDir, { recursive: true });
+    await fs.mkdir(gitDir, { recursive: true });
+    await fs.writeFile(path.join(weatherDir, "SKILL.md"), "weather instructions\n", "utf-8");
+    await fs.writeFile(path.join(gitDir, "SKILL.md"), "git instructions\n", "utf-8");
+
+    const cancels: Array<ReturnType<typeof vi.fn>> = [];
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const spawnIndex = supervisorSpawnMock.mock.calls.length;
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      const cancel = vi.fn();
+      cancels.push(cancel);
+      const stdin = {
+        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+          const text = spawnIndex === 1 ? "weather-ok" : "git-ok";
+          input.onStdout?.(
+            [
+              JSON.stringify({ type: "system", subtype: "init", session_id: `live-${spawnIndex}` }),
+              JSON.stringify({
+                type: "result",
+                session_id: `live-${spawnIndex}`,
+                result: text,
+              }),
+            ].join("\n") + "\n",
+          );
+          cb?.();
+        }),
+        end: vi.fn(),
+      };
+      return {
+        runId: `live-run-${spawnIndex}`,
+        pid: 2345 + spawnIndex,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+
+    try {
+      const first = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-skills-1",
+          prompt: "first",
+          workspaceDir,
+          backend: {
+            liveSession: "claude-stdio",
+          },
+          skillsSnapshot: {
+            prompt: "weather",
+            skills: [{ name: "weather" }],
+            resolvedSkills: [
+              {
+                name: "weather",
+                description: "Weather instructions.",
+                filePath: path.join(weatherDir, "SKILL.md"),
+                baseDir: weatherDir,
+                source: "test",
+                sourceInfo: {
+                  path: weatherDir,
+                  source: "test",
+                  scope: "project",
+                  origin: "top-level",
+                  baseDir: weatherDir,
+                },
+                disableModelInvocation: false,
+              },
+            ],
+          },
+        }),
+      );
+      const second = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-skills-2",
+          prompt: "second",
+          workspaceDir,
+          backend: {
+            liveSession: "claude-stdio",
+          },
+          skillsSnapshot: {
+            prompt: "git",
+            skills: [{ name: "git" }],
+            resolvedSkills: [
+              {
+                name: "git",
+                description: "Git instructions.",
+                filePath: path.join(gitDir, "SKILL.md"),
+                baseDir: gitDir,
+                source: "test",
+                sourceInfo: {
+                  path: gitDir,
+                  source: "test",
+                  scope: "project",
+                  origin: "top-level",
+                  baseDir: gitDir,
+                },
+                disableModelInvocation: false,
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(first.text).toBe("weather-ok");
+      expect(second.text).toBe("git-ok");
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+      expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
+      expect(cancels[1]).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
@@ -798,6 +922,111 @@ describe("runCliAgent spawn path", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not surface stale stderr after a later Claude live exit", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let stderrListener: ((chunk: string) => void) | undefined;
+    let resolveExit!: (value: {
+      reason: "exit";
+      exitCode: number;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }) => void;
+    const wait = new Promise<{
+      reason: "exit";
+      exitCode: number;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }>((resolve) => {
+      resolveExit = resolve;
+    });
+    let writeCount = 0;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        writeCount += 1;
+        if (writeCount === 1) {
+          stderrListener?.("stale stderr from first turn");
+          stdoutListener?.(
+            [
+              JSON.stringify({ type: "system", subtype: "init", session_id: "live-stderr" }),
+              JSON.stringify({
+                type: "result",
+                session_id: "live-stderr",
+                result: "first-ok",
+              }),
+            ].join("\n") + "\n",
+          );
+          cb?.();
+          return;
+        }
+        cb?.();
+        resolveExit({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as {
+        onStdout?: (chunk: string) => void;
+        onStderr?: (chunk: string) => void;
+      };
+      stdoutListener = input.onStdout;
+      stderrListener = input.onStderr;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => wait),
+        cancel: vi.fn(),
+      };
+    });
+
+    const first = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-stderr-1",
+        prompt: "first",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+    const second = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-stderr-2",
+        prompt: "second",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(first.text).toBe("first-ok");
+    await expect(second).rejects.toMatchObject({
+      name: "FailoverError",
+      message: "Claude CLI failed.",
+    });
   });
 
   it("surfaces nested Claude stream-json API errors instead of raw event output", async () => {
