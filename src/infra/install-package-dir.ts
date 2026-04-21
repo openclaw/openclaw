@@ -243,9 +243,12 @@ export async function installPackageDir(params: {
       const npmRes = await (async () => {
         try {
           return await runCommandWithTimeout(
-            // Plugins install into isolated directories, so omitting peer deps can strip
-            // runtime requirements that npm would otherwise materialize for the package.
-            ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+            // Plugins install into isolated directories. Omit peer deps so that npm 7+
+            // doesn't auto-install a nested copy of the host openclaw (or other heavy peers)
+            // into the plugin's node_modules — which causes ~800 MB bloat and ~15s startup
+            // tax per CLI invocation from duplicate module resolution / native binding loads.
+            // The host openclaw already satisfies peer deps at runtime via its own resolve path.
+            ["npm", "install", "--omit=dev", "--omit=peer", "--silent", "--ignore-scripts"],
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
