@@ -919,6 +919,41 @@ describe("shouldShortCircuitForMissingUserTail", () => {
       }),
     ).toBe(false);
   });
+
+  it("does not short-circuit when the assistant tail is an empty/aborted stub", () => {
+    // Regression: a previous attempt can leave an empty or aborted assistant
+    // turn in `activeSession.messages` before `dropTrailingEmptyAssistantTurns`
+    // has a chance to strip it. The guard must not treat that stale tail as a
+    // reason to skip the provider call — the downstream pipeline removes it.
+    const emptyAbortedTail = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [], stopReason: "aborted" },
+    ]);
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: emptyAbortedTail,
+        promptText: "",
+        hasImages: false,
+      }),
+    ).toBe(false);
+
+    const thinkingOnlyTail = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "internal" }],
+      },
+    ]);
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: thinkingOnlyTail,
+        promptText: "",
+        hasImages: false,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("heartbeat contamination regression (validateAnthropicTurns)", () => {

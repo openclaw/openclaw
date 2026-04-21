@@ -2200,9 +2200,10 @@ export async function runEmbeddedAttempt(
             // transcript still ends on a non-empty assistant turn AND there is
             // no fresh user input, the outbound request would end on
             // `role: assistant`, which Anthropic rejects as an "assistant
-            // message prefill". Empty/aborted trailing assistants were already
-            // dropped by `dropTrailingEmptyAssistantTurns`, so anything still
-            // present is a fully-formed reply we should not re-submit.
+            // message prefill". `shouldShortCircuitForMissingUserTail` only
+            // fires on non-empty assistant tails; stale empty/aborted tails
+            // from a previous attempt are left for `dropTrailingEmptyAssistantTurns`
+            // to strip downstream and do not trigger a false-positive skip.
             log.warn(
               `anthropic transcript guard: skipping provider call because ` +
                 `the transcript already ends on a non-empty assistant turn ` +
