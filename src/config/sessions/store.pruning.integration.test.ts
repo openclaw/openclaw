@@ -247,15 +247,6 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("loadSessionStore prunes stale entries from oversized stores by default", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          maxEntries: 2,
-          pruneAfter: "7d",
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       stale: makeEntry(now - 31 * DAY_MS),
@@ -264,7 +255,14 @@ describe("Integration: saveSessionStore with pruning", () => {
     };
     await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
-    const loaded = loadSessionStore(storePath, { skipCache: true });
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 2,
+        pruneAfterMs: 7 * DAY_MS,
+      },
+    });
 
     expect(loaded.stale).toBeUndefined();
     expect(loaded.recent).toBeDefined();
@@ -272,15 +270,6 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("loadSessionStore caps oversized stores by default", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          maxEntries: 2,
-          pruneAfter: "365d",
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       oldest: makeEntry(now - 3 * DAY_MS),
@@ -289,7 +278,14 @@ describe("Integration: saveSessionStore with pruning", () => {
     };
     await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
-    const loaded = loadSessionStore(storePath, { skipCache: true });
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 2,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
 
     expect(Object.keys(loaded)).toHaveLength(2);
     expect(loaded.oldest).toBeUndefined();

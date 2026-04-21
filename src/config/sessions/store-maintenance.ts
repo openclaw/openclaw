@@ -4,7 +4,6 @@ import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
-import { loadConfig } from "../config.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import type { SessionEntry } from "./types.js";
 
@@ -149,16 +148,6 @@ export function resolveMaintenanceConfigFromInput(
   };
 }
 
-export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
-  let maintenance: SessionMaintenanceConfig | undefined;
-  try {
-    maintenance = loadConfig().session?.maintenance;
-  } catch {
-    // Config may not be available (e.g. in tests). Use defaults.
-  }
-  return resolveMaintenanceConfigFromInput(maintenance);
-}
-
 /**
  * Remove entries whose `updatedAt` is older than the configured threshold.
  * Entries without `updatedAt` are kept (cannot determine staleness).
@@ -169,7 +158,7 @@ export function pruneStaleEntries(
   overrideMaxAgeMs?: number,
   opts: { log?: boolean; onPruned?: (params: { key: string; entry: SessionEntry }) => void } = {},
 ): number {
-  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfig().pruneAfterMs;
+  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
@@ -278,7 +267,7 @@ export function capEntryCount(
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfig().maxEntries;
+  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
   const keys = Object.keys(store);
   if (keys.length <= maxEntries) {
     return 0;
@@ -323,7 +312,7 @@ export async function rotateSessionFile(
   storePath: string,
   overrideBytes?: number,
 ): Promise<boolean> {
-  const maxBytes = overrideBytes ?? resolveMaintenanceConfig().rotateBytes;
+  const maxBytes = overrideBytes ?? resolveMaintenanceConfigFromInput().rotateBytes;
 
   // Check current file size (file may not exist yet).
   const fileSize = await getSessionFileSize(storePath);
