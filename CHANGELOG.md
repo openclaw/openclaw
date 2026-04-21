@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Channels/preview streaming: stream tool-progress updates into live preview edits for Discord, Slack, and Telegram so in-flight replies show incremental tool state in the same preview message before finalization. (#69611) Thanks @thewilloftheshadow.
 - Ollama/onboard: populate the cloud-only model list from `ollama.com/api/tags` so `openclaw onboard` reflects the live cloud catalog instead of a static three-model seed; cap the discovered list at 500 and fall back to the previous hardcoded suggestions when ollama.com is unreachable or returns no models. (#68463) Thanks @BruceMacD.
 - Matrix/startup: narrow Matrix runtime registration and defer setup/doctor surfaces so cold plugin registration spends about 1.8s less in `setChannelRuntime`. (#69782) Thanks @gumadeiras.
+- QQBot: extract a self-contained `engine/` architecture with QR-code onboarding, native approval handling via `/bot-approve`, per-account isolated resource stacks and multi-account logger, credential backup/restore, shared `~/.openclaw/media` payload root, and unified API/bridge/gateway modules. (#67960) Thanks @cxyhhhhh.
 
 ### Fixes
 
