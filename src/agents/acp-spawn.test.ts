@@ -70,6 +70,7 @@ const hoisted = vi.hoisted(() => {
   const cleanupFailedAcpSpawnMock = vi.fn();
   const createRunningTaskRunMock = vi.fn();
   const countActiveRunsForSessionMock = vi.fn();
+  const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
@@ -95,6 +96,7 @@ const hoisted = vi.hoisted(() => {
     cleanupFailedAcpSpawnMock,
     createRunningTaskRunMock,
     countActiveRunsForSessionMock,
+    getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
     state,
   };
@@ -150,6 +152,7 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
 
 vi.mock("./subagent-registry.js", () => ({
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
+  getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
 }));
 
 vi.mock("../tasks/runtime-internal.js", () => ({
@@ -516,6 +519,7 @@ describe("spawnAcpDirect", () => {
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.createRunningTaskRunMock.mockReset().mockReturnValue(undefined);
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
+    hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
 
     hoisted.callGatewayMock.mockReset();
@@ -853,6 +857,49 @@ describe("spawnAcpDirect", () => {
       {
         runtime: "acp",
         status: "queued",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+    ]);
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        streamTo: "parent",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+  });
+
+  it("does not double-count ACP task rows for active registry-tracked ACP children", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    });
+    hoisted.countActiveRunsForSessionMock.mockReturnValueOnce(1);
+    hoisted.getSubagentRunByChildSessionKeyMock.mockImplementationOnce((childSessionKey: string) =>
+      childSessionKey === "agent:codex:acp:existing-parent-stream"
+        ? {
+            childSessionKey,
+            createdAt: Date.now(),
+          }
+        : null,
+    );
+    hoisted.listTasksForOwnerKeyMock.mockReturnValueOnce([
+      {
+        runtime: "acp",
+        status: "running",
         childSessionKey: "agent:codex:acp:existing-parent-stream",
       },
     ]);

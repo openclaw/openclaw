@@ -86,7 +86,7 @@ import {
   type SessionCapabilityStore,
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { countActiveRunsForSession } from "./subagent-registry.js";
+import { countActiveRunsForSession, getSubagentRunByChildSessionKey } from "./subagent-registry.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -261,9 +261,12 @@ function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): numb
   const activeAcpChildSessionKeys = new Set(
     tasks.flatMap((task) => {
       const childSessionKey = normalizeOptionalString(task.childSessionKey);
+      const trackedRun = childSessionKey ? getSubagentRunByChildSessionKey(childSessionKey) : null;
+      const hasActiveRegistryRun = Boolean(trackedRun && typeof trackedRun.endedAt !== "number");
       return task.runtime === "acp" &&
         isActiveTaskStatus(task.status) &&
         childSessionKey !== undefined &&
+        !hasActiveRegistryRun &&
         !trackedChildSessionKeys.has(childSessionKey)
         ? [childSessionKey]
         : [];
