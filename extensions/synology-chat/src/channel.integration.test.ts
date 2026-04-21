@@ -11,7 +11,8 @@ import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 type _RegisteredRoute = {
   path: string;
   accountId: string;
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  match?: "exact" | "prefix";
+  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean | void>;
 };
 
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
@@ -61,7 +62,7 @@ describe("Synology channel wiring integration", () => {
     const started = plugin.gateway.startAccount(
       makeStartContext(cfg, "alerts", abortController.signal),
     );
-    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
+    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
     expect(firstCall).toBeTruthy();
@@ -71,6 +72,11 @@ describe("Synology channel wiring integration", () => {
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");
+    expect(registerPluginHttpRouteMock.mock.calls[1]?.[0]).toMatchObject({
+      path: "/webhook/synology-alerts/__openclaw-media/",
+      accountId: "alerts",
+      match: "prefix",
+    });
 
     const req = makeReq(
       "POST",
@@ -129,9 +135,13 @@ describe("Synology channel wiring integration", () => {
       makeStartContext(cfg, "beta", betaAbortController.signal),
     );
 
-    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
-    const alphaRoute = registerPluginHttpRouteMock.mock.calls[0]?.[0];
-    const betaRoute = registerPluginHttpRouteMock.mock.calls[1]?.[0];
+    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(4);
+    const alphaRoute = registerPluginHttpRouteMock.mock.calls.find(
+      ([route]) => route.path === "/webhook/synology-alpha" && route.match !== "prefix",
+    )?.[0];
+    const betaRoute = registerPluginHttpRouteMock.mock.calls.find(
+      ([route]) => route.path === "/webhook/synology-beta" && route.match !== "prefix",
+    )?.[0];
     if (!alphaRoute || !betaRoute) {
       throw new Error("Expected both Synology Chat routes to register");
     }

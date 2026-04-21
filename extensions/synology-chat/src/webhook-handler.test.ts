@@ -206,6 +206,29 @@ describe("createWebhookHandler", () => {
     expect(res._status).toBe(400);
   });
 
+  it("records the public OpenClaw origin from authorized webhook requests", async () => {
+    const observePublicOrigin = vi.fn();
+    const handler = createWebhookHandler({
+      account: makeAccount(),
+      deliver: vi.fn().mockResolvedValue(null),
+      log,
+      observePublicOrigin,
+    });
+
+    const req = makeReq("POST", validBody, {
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        host: "openclaw.example.com",
+        "x-forwarded-proto": "https",
+      },
+    });
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(observePublicOrigin).toHaveBeenCalledWith("https://openclaw.example.com");
+  });
+
   it("returns 408 when request body times out", async () => {
     const handler = createWebhookHandler({
       account: makeAccount(),

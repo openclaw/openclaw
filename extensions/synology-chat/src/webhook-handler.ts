@@ -13,6 +13,7 @@ import {
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import * as synologyClient from "./client.js";
+import { deriveSynologyPublicOrigin } from "./media-proxy.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
@@ -349,6 +350,7 @@ export interface WebhookHandlerDeps {
     error: (...args: unknown[]) => void;
   };
   bodyTimeoutMs?: number;
+  observePublicOrigin?: (origin: string) => void;
 }
 
 /**
@@ -629,6 +631,11 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     }
     if (!authorized.ok) {
       return;
+    }
+
+    const publicOrigin = deriveSynologyPublicOrigin(req);
+    if (publicOrigin) {
+      deps.observePublicOrigin?.(publicOrigin);
     }
 
     log?.info(

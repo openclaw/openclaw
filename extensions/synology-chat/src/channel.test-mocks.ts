@@ -6,7 +6,8 @@ import type { ResolvedSynologyChatAccount } from "./types.js";
 export type RegisteredRoute = {
   path: string;
   accountId: string;
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  match?: "exact" | "prefix";
+  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean | void> | boolean | void;
 };
 
 export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () => void> = vi.fn(

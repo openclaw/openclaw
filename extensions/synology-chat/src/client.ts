@@ -5,10 +5,10 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
-import ipaddr from "ipaddr.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
+import { resolveSynologyWebhookFileUrl } from "./media-proxy.js";
+import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
@@ -40,54 +40,6 @@ type ChatWebhookPayload = {
   file_url?: string;
   user_ids?: number[];
 };
-
-function isBlockedSpecialIpLiteral(hostname: string): boolean {
-  const normalizedHostname =
-    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-  if (!ipaddr.isValid(normalizedHostname)) {
-    return false;
-  }
-
-  const parsed = ipaddr.parse(normalizedHostname);
-  if (parsed.kind() === "ipv6") {
-    const ipv6 = parsed as ipaddr.IPv6;
-    if (ipv6.isIPv4MappedAddress()) {
-      return ipv6.toIPv4Address().range() === "unspecified";
-    }
-  }
-
-  return parsed.range() === "unspecified";
-}
-
-function isIpLiteral(hostname: string): boolean {
-  const normalizedHostname =
-    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-  return ipaddr.isValid(normalizedHostname);
-}
-
-function isSafeWebhookFileUrl(fileUrl: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(fileUrl);
-  } catch {
-    return false;
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return false;
-  }
-
-  if (
-    !parsed.hostname ||
-    !isIpLiteral(parsed.hostname) ||
-    isBlockedSpecialIpLiteral(parsed.hostname) ||
-    isPrivateOrLoopbackHost(parsed.hostname)
-  ) {
-    return false;
-  }
-
-  return true;
-}
 
 const ChatUserSchema = z
   .object({
@@ -176,18 +128,21 @@ export async function sendMessage(
  * Send a file URL to Synology Chat.
  */
 export async function sendFileUrl(
-  incomingUrl: string,
+  account: ResolvedSynologyChatAccount,
   fileUrl: string,
   userId?: string | number,
-  allowInsecureSsl = false,
 ): Promise<boolean> {
-  if (!isSafeWebhookFileUrl(fileUrl)) {
+  const resolvedFileUrl = await resolveSynologyWebhookFileUrl({
+    account,
+    sourceUrl: fileUrl,
+  });
+  if (!resolvedFileUrl) {
     return false;
   }
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
+  const body = buildWebhookBody({ file_url: resolvedFileUrl }, userId);
 
   try {
-    const ok = await doPost(incomingUrl, body, allowInsecureSsl);
+    const ok = await doPost(account.incomingUrl, body, account.allowInsecureSsl);
     lastSendTime = Date.now();
     return ok;
   } catch {

@@ -347,12 +347,12 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
 
       sendMedia: async ({ to, mediaUrl, accountId, cfg }: SynologyChannelOutboundContext) => {
         const account = resolveOutboundAccount(cfg ?? {}, accountId);
-        const incomingUrl = requireIncomingUrl(account);
+        requireIncomingUrl(account);
         if (!mediaUrl) {
           throw new Error("No media URL provided");
         }
 
-        const ok = await sendFileUrl(incomingUrl, mediaUrl, to, account.allowInsecureSsl);
+        const ok = await sendFileUrl(account, mediaUrl, to);
         if (!ok) {
           throw new Error("Failed to send media to Synology Chat");
         }
