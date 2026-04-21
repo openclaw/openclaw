@@ -153,4 +153,28 @@ describe("googlechat google auth runtime", () => {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
   });
+
+  it("does not disclose raw credential paths or OS errors when file reads fail", async () => {
+    const missingPath = path.join(os.tmpdir(), "googlechat-auth-missing", "service-account.json");
+
+    await expect(
+      resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: missingPath,
+        enabled: true,
+      }),
+    ).rejects.toThrow("Failed to load Google Chat service account file.");
+
+    await expect(
+      resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: missingPath,
+        enabled: true,
+      }),
+    ).rejects.not.toThrow(/ENOENT|service-account\.json|googlechat-auth-missing/);
+  });
 });
