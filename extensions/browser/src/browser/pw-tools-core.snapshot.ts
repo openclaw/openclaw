@@ -15,6 +15,7 @@ import {
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  storeAriaSnapshotNodes,
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
@@ -55,7 +56,15 @@ export async function snapshotAriaViaPlaywright(opts: {
     nodes?: RawAXNode[];
   };
   const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-  return { nodes: formatAriaSnapshot(nodes, limit) };
+  const formatted = formatAriaSnapshot(nodes, limit);
+  // Store aria nodes so refLocator can resolve ax<number> refs via getByRole.
+  storeAriaSnapshotNodes({
+    page,
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    nodes: formatted.map((n) => ({ ref: n.ref, role: n.role, name: n.name || undefined })),
+  });
+  return { nodes: formatted };
 }
 
 export async function snapshotAiViaPlaywright(opts: {

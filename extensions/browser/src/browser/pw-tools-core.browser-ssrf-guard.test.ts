@@ -23,6 +23,7 @@ const sessionMocks = vi.hoisted(() => ({
     return pageState.locator;
   }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
+  storeAriaSnapshotNodes: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
 }));
 

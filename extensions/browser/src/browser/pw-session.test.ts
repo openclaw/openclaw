@@ -5,6 +5,7 @@ import {
   refLocator,
   rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
+  storeAriaSnapshotNodes,
 } from "./pw-session.js";
 
 function fakePage(): {
@@ -70,6 +71,80 @@ describe("pw-session refLocator", () => {
     refLocator(page, "e1");
 
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
+  });
+
+  it("resolves ax<number> refs from aria snapshots via getByRole", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.ariaSnapshotNodes = [
+      { ref: "ax1", role: "link", name: "Learn more" },
+      { ref: "ax13", role: "link", name: "Example Domain" },
+    ];
+
+    refLocator(page, "ax13");
+
+    expect(mocks.getByRole).toHaveBeenCalledWith("link", { name: "Example Domain", exact: true });
+  });
+
+  it("resolves ax<number> refs without name via getByRole", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.ariaSnapshotNodes = [
+      { ref: "ax7", role: "paragraph" },
+    ];
+
+    refLocator(page, "ax7");
+
+    expect(mocks.getByRole).toHaveBeenCalledWith("paragraph");
+  });
+
+  it("throws for unknown ax<number> ref when aria nodes are stored", () => {
+    const { page } = fakePage();
+    const state = ensurePageState(page);
+    state.ariaSnapshotNodes = [{ ref: "ax1", role: "button", name: "OK" }];
+
+    expect(() => refLocator(page, "ax99")).toThrow('Unknown ref "ax99"');
+  });
+
+  it("throws for ax<number> ref when no aria snapshot has been taken", () => {
+    const { page } = fakePage();
+
+    expect(() => refLocator(page, "ax13")).toThrow('Unknown ref "ax13"');
+  });
+
+  it("resolves ax<number> refs with nth index", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.ariaSnapshotNodes = [
+      { ref: "ax5", role: "button", name: "OK", nth: 1 },
+    ];
+
+    const getByRole = mocks.getByRole as ReturnType<typeof vi.fn>;
+    const locator = { nth: vi.fn(() => ({ ok: true })) };
+    getByRole.mockReturnValue(locator);
+    refLocator(page, "ax5");
+    expect(locator.nth).toHaveBeenCalledWith(1);
+  });
+
+  it("restores ariaSnapshotNodes for a different Page instance (same CDP targetId)", () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const targetId = "t1";
+
+    // Store via a temporary page so it goes into the cross-instance cache.
+    const { page: tmpPage } = fakePage();
+    storeAriaSnapshotNodes({
+      page: tmpPage,
+      cdpUrl,
+      targetId,
+      nodes: [{ ref: "ax1", role: "button", name: "OK" }],
+    });
+
+    // Restore on a fresh page instance.
+    const { page, mocks } = fakePage();
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    refLocator(page, "ax1");
+    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name: "OK", exact: true });
   });
 });
 

@@ -93,6 +93,12 @@ type PageState = {
   roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
   roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
+  /**
+   * Aria snapshot nodes from the last format=aria snapshot.
+   * Stores role/name for each synthetic ax<number> ref so refLocator can
+   * resolve ax refs via getByRole when the snapshot was taken in aria mode.
+   */
+  ariaSnapshotNodes?: Array<{ ref: string; role: string; name?: string; nth?: number }>;
 };
 
 type RoleRefs = NonNullable<PageState["roleRefs"]>;
@@ -100,6 +106,7 @@ type RoleRefsCacheEntry = {
   refs: RoleRefs;
   frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
+  ariaSnapshotNodes?: PageState["ariaSnapshotNodes"];
 };
 
 type ContextState = {
@@ -302,6 +309,33 @@ export function restoreRoleRefsForTarget(opts: {
   state.roleRefs = cached.refs;
   state.roleRefsFrameSelector = cached.frameSelector;
   state.roleRefsMode = cached.mode;
+  if (cached.ariaSnapshotNodes && !state.ariaSnapshotNodes) {
+    state.ariaSnapshotNodes = cached.ariaSnapshotNodes;
+  }
+}
+
+export function storeAriaSnapshotNodes(opts: {
+  page: Page;
+  cdpUrl: string;
+  targetId?: string;
+  nodes: Array<{ ref: string; role: string; name?: string; nth?: number }>;
+}): void {
+  const state = ensurePageState(opts.page);
+  state.ariaSnapshotNodes = opts.nodes;
+  const targetId = normalizeOptionalString(opts.targetId);
+  if (!targetId) {
+    return;
+  }
+  // Also store in the cross-instance cache so restoreRoleRefsForTarget can pick it up.
+  const existing = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
+  if (existing) {
+    existing.ariaSnapshotNodes = opts.nodes;
+  } else {
+    roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+      refs: {},
+      ariaSnapshotNodes: opts.nodes,
+    });
+  }
 }
 
 export function ensurePageState(page: Page): PageState {
@@ -882,6 +916,37 @@ export function refLocator(page: Page, ref: string) {
       ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
       : locAny.getByRole(info.role as never);
     return info.nth !== undefined ? locator.nth(info.nth) : locator;
+  }
+
+  // Handle ax<number> refs from formatAriaSnapshot (format=aria snapshots).
+  // These are synthetic refs built from the AX tree; resolve them via getByRole
+  // using the role/name stored when the aria snapshot was taken.
+  if (/^ax\d+$/.test(normalized)) {
+    const state = pageStates.get(page);
+    if (!state?.ariaSnapshotNodes) {
+      throw new Error(
+        `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
+      );
+    }
+    const node = state.ariaSnapshotNodes.find((n) => n.ref === normalized);
+    if (!node) {
+      throw new Error(
+        `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
+      );
+    }
+    const scope = state.roleRefsFrameSelector
+      ? page.frameLocator(state.roleRefsFrameSelector)
+      : page;
+    const locAny = scope as unknown as {
+      getByRole: (
+        role: never,
+        opts?: { name?: string; exact?: boolean },
+      ) => ReturnType<Page["getByRole"]>;
+    };
+    const locator = node.name
+      ? locAny.getByRole(node.role as never, { name: node.name, exact: true })
+      : locAny.getByRole(node.role as never);
+    return node.nth !== undefined ? locator.nth(node.nth) : locator;
   }
 
   return page.locator(`aria-ref=${normalized}`);
