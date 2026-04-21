@@ -25218,7 +25218,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "acp.fallbacks": {
       label: "ACP Fallback Backends",
       help: "Ordered list of fallback ACP backend ids tried when the primary backend fails with UNAVAILABLE (for example: rate-limit / quota exhausted). Each entry must match a registered ACP runtime plugin backend.",
-      tags: ["advanced"],
+      tags: ["reliability"],
     },
     "acp.defaultAgent": {
       label: "ACP Default Agent",
