@@ -258,7 +258,7 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         "Health check help",
       );
-    } else {
+    } else if (!gatewayProbe.ok) {
       await prompter.note(
         [
           "Gateway not detected yet.",
@@ -360,7 +360,6 @@ export async function finalizeSetupWizard(
 
   let controlUiOpened = false;
   let controlUiOpenHint: string | undefined;
-  let seededInBackground = false;
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 
@@ -465,45 +464,6 @@ export async function finalizeSetupWizard(
   );
 
   await setupWizardShellCompletion({ flow, prompter });
-
-  const shouldOpenControlUi =
-    !opts.skipUi &&
-    gatewayProbe.ok &&
-    settings.authMode === "token" &&
-    Boolean(settings.gatewayToken) &&
-    hatchChoice === null;
-  if (shouldOpenControlUi) {
-    const browserSupport = await detectBrowserOpenSupport();
-    if (browserSupport.ok) {
-      controlUiOpened = await openUrl(authedUrl);
-      if (!controlUiOpened) {
-        controlUiOpenHint = formatControlUiSshHint({
-          port: settings.port,
-          basePath: controlUiBasePath,
-          token: settings.gatewayToken,
-        });
-      }
-    } else {
-      controlUiOpenHint = formatControlUiSshHint({
-        port: settings.port,
-        basePath: controlUiBasePath,
-        token: settings.gatewayToken,
-      });
-    }
-
-    await prompter.note(
-      [
-        `Dashboard link (with token): ${authedUrl}`,
-        controlUiOpened
-          ? "Opened in your browser. Keep that tab to control OpenClaw."
-          : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
-        controlUiOpenHint,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      "Dashboard ready",
-    );
-  }
 
   const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
@@ -625,9 +585,7 @@ export async function finalizeSetupWizard(
   await prompter.outro(
     controlUiOpened
       ? "Onboarding complete. Dashboard opened; keep that tab to control OpenClaw."
-      : seededInBackground
-        ? "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above."
-        : "Onboarding complete. Use the dashboard link above to control OpenClaw.",
+      : "Onboarding complete. Use the dashboard link above to control OpenClaw.",
   );
 
   return { launchedTui };

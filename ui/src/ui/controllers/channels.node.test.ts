@@ -138,7 +138,7 @@ describe("loadChannels", () => {
 
     await lightweightLoad;
     await waitFor(() => requestCalls.length === 2);
-    await waitFor(() => state.channelsLoading === false);
+    await waitFor(() => !state.channelsLoading);
 
     expect(state.channelsSnapshot).toEqual(summarySnapshot);
     expect(state.channelsError).toBe("Error: full refresh failed");

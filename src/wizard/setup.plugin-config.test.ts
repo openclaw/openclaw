@@ -480,7 +480,9 @@ describe("setupPluginConfig", () => {
       },
       workspaceDir: "/tmp",
       prompter: {
+        intro: vi.fn(async () => {}),
         note: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
         select: vi.fn() as unknown as WizardPrompter["select"],
         multiselect: multiselect as unknown as WizardPrompter["multiselect"],
         text: vi.fn() as unknown as WizardPrompter["text"],
