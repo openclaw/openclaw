@@ -272,6 +272,7 @@ describe("handleChatWheelIntent", () => {
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatSmoothInterrupted).toBe(true);
     expect(host.chatScrollFrame).toBe(99);
     expect(host.chatScrollTimeout).not.toBeNull();
   });
@@ -327,6 +328,7 @@ describe("handleChatWheelIntent", () => {
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatSmoothInterrupted).toBe(false);
     expect(host.chatScrollFrame).toBe(99);
     expect(host.chatScrollTimeout).not.toBeNull();
   });
@@ -361,6 +363,7 @@ describe("handleChatWheelIntent", () => {
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatSmoothInterrupted).toBe(true);
     expect(host.chatScrollFrame).toBe(99);
     expect(host.chatScrollTimeout).not.toBeNull();
   });
@@ -395,6 +398,7 @@ describe("handleChatWheelIntent", () => {
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatSmoothInterrupted).toBe(true);
     expect(host.chatScrollFrame).toBe(99);
     expect(host.chatScrollTimeout).not.toBeNull();
   });
