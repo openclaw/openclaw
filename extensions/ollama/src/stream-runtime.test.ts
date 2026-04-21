@@ -547,6 +547,7 @@ async function createOllamaTestStream(params: {
     maxTokens?: number;
     signal?: AbortSignal;
     headers?: Record<string, string>;
+    keepAlive?: string | number;
   };
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
@@ -818,7 +819,36 @@ describe("createOllamaStreamFn", () => {
         };
         expect(requestBody.options.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
-        expect(requestBody.keep_alive).toBeUndefined();
+        expect(requestBody.keep_alive).toBe("15m");
+      },
+    );
+  });
+
+  it("allows overriding keep_alive via stream options", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: { keepAlive: 0 },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const request = getGuardedFetchCall(fetchMock);
+        const requestInit = request.init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+
+        const requestBody = JSON.parse(requestInit.body) as {
+          keep_alive?: unknown;
+        };
+        expect(requestBody.keep_alive).toBe(0);
       },
     );
   });

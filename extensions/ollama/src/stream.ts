@@ -251,6 +251,10 @@ type StreamModelDescriptor = {
   id: string;
 };
 
+type OllamaStreamOptions = {
+  keepAlive?: string | number;
+};
+
 function buildUsageWithNoCost(params: {
   input?: number;
   output?: number;
@@ -643,6 +647,7 @@ export function createOllamaStreamFn(
           stream: true,
           tools: ollamaTools,
           options: ollamaOptions,
+          keep_alive: (options as OllamaStreamOptions | undefined)?.keepAlive ?? "15m",
         });
         options?.onPayload?.(body, model);
         const headers: Record<string, string> = {
