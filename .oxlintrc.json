@@ -107,6 +107,7 @@
         "src/commands/health.ts",
         "src/config/defaults.ts",
         "src/entry.ts",
+        "src/entry.version-fast-path.ts",
         "src/globals.ts",
         "src/index.ts",
         "src/infra/bonjour.ts",
@@ -118,6 +119,8 @@
         "src/logging/console.ts",
         "src/logging/subsystem.ts",
         "src/logging/test-helpers/console-snapshot.ts",
+        "src/plugin-sdk/channel-entry-contract.ts",
+        "src/plugins/plugin-load-profile.ts",
         "src/runtime.ts",
         "src/security/windows-acl.ts",
         "src/terminal/restore.ts"
