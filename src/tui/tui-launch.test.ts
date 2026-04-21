@@ -77,12 +77,14 @@ describe("launchTuiCli", () => {
         "tui",
         "--url",
         "ws://127.0.0.1:18789",
-        "--token",
-        "test-token",
-        "--password",
-        "test-password",
       ],
-      expect.objectContaining({ stdio: "inherit" }),
+      expect.objectContaining({
+        stdio: "inherit",
+        env: expect.objectContaining({
+          OPENCLAW_TUI_LAUNCH_GATEWAY_TOKEN: "test-token",
+          OPENCLAW_TUI_LAUNCH_GATEWAY_PASSWORD: "test-password",
+        }),
+      }),
     );
   });
 
