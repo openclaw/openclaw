@@ -1603,12 +1603,16 @@ export function renderApp(state: AppViewState) {
                   },
                   onSelectPage: (keys) => {
                     const next = new Set(state.sessionsSelectedKeys);
-                    for (const k of keys) next.add(k);
+                    for (const k of keys) {
+                      next.add(k);
+                    }
                     state.sessionsSelectedKeys = next;
                   },
                   onDeselectPage: (keys) => {
                     const next = new Set(state.sessionsSelectedKeys);
-                    for (const k of keys) next.delete(k);
+                    for (const k of keys) {
+                      next.delete(k);
+                    }
                     state.sessionsSelectedKeys = next;
                   },
                   onDeselectAll: () => {
@@ -1619,7 +1623,9 @@ export function renderApp(state: AppViewState) {
                     const deleted = await deleteSessionsAndRefresh(state, keys);
                     if (deleted.length > 0) {
                       const next = new Set(state.sessionsSelectedKeys);
-                      for (const k of deleted) next.delete(k);
+                      for (const k of deleted) {
+                        next.delete(k);
+                      }
                       state.sessionsSelectedKeys = next;
                     }
                   },
