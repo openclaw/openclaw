@@ -213,10 +213,36 @@ describe("uploadFile memex upload hardening", () => {
     expect(mockRelease).not.toHaveBeenCalled();
   });
 
-  it("treats unparseable ship URLs as not hosted instead of falling back to a raw-string suffix match", async () => {
+  it("routes scheme-less hosted ship URLs through the Memex upload path", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     configureClient({
       shipUrl: "foo.tlon.network",
+      shipName: "~zod",
+      verbose: false,
+      getCode: async () => "123456",
+    });
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
+    mockGuardedFetch.mockResolvedValueOnce({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://uploads.tlon.network/put",
+      release: mockRelease,
+    });
+
+    const result = await uploadFile({
+      blob: new Blob(["image-bytes"], { type: "image/png" }),
+      fileName: "avatar.png",
+      contentType: "image/png",
+    });
+
+    expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects truly unparseable ship URLs as not hosted", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    configureClient({
+      shipUrl: "   ",
       shipName: "~zod",
       verbose: false,
       getCode: async () => "123456",
@@ -248,6 +274,26 @@ describe("uploadFile memex upload hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mockGuardedFetch).not.toHaveBeenCalled();
     expect(mockRelease).not.toHaveBeenCalled();
+  });
+
+  it("accepts hosted Memex upload URLs with an explicit :443 port", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network:443/put"));
+    mockGuardedFetch.mockResolvedValueOnce({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://uploads.tlon.network:443/put",
+      release: mockRelease,
+    });
+
+    const result = await uploadFile({
+      blob: new Blob(["image-bytes"], { type: "image/png" }),
+      fileName: "avatar.png",
+      contentType: "image/png",
+    });
+
+    expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 });
 

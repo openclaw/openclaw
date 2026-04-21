@@ -100,11 +100,20 @@ function hostnameMatchesDomainBoundary(hostname: string, domain: string): boolea
 }
 
 function isHostedShipUrl(shipUrl: string): boolean {
+  const hostname = extractShipHostname(shipUrl);
+  return hostname !== null && isHostedTlonHostname(hostname);
+}
+
+function extractShipHostname(shipUrl: string): string | null {
+  const trimmed = shipUrl.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = /^[a-zA-Z][\w+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
-    const { hostname } = new URL(shipUrl);
-    return isHostedTlonHostname(hostname);
+    return new URL(normalized).hostname;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -131,7 +140,7 @@ function assertTrustedMemexUploadUrl(rawUrl: string, label: string): string {
     throw new Error(`${label} must target a trusted hosted Tlon domain`);
   }
 
-  if (parsed.port) {
+  if (parsed.port && parsed.port !== "443") {
     throw new Error(`${label} must not specify a non-standard port`);
   }
 
