@@ -324,23 +324,25 @@ function registerEventHandlers(
     }
   };
 
+  const feishuMessageReceive = createFeishuMessageReceiveHandler({
+    cfg,
+    core: getFeishuRuntime(),
+    accountId,
+    runtime,
+    chatHistories,
+    fireAndForget,
+    handleMessage: handleFeishuMessage,
+    resolveDebounceText: ({ event, botOpenId, botName }) =>
+      parseFeishuMessageEvent(event, botOpenId, botName).content,
+    hasProcessedMessage: hasProcessedFeishuMessage,
+    recordProcessedMessage: recordProcessedFeishuMessage,
+    getBotOpenId: (id) => botOpenIds.get(id),
+    getBotName: (id) => botNames.get(id),
+    resolveSequentialKey: getFeishuSequentialKey,
+  });
+
   eventDispatcher.register({
-    "im.message.receive_v1": createFeishuMessageReceiveHandler({
-      cfg,
-      core: getFeishuRuntime(),
-      accountId,
-      runtime,
-      chatHistories,
-      fireAndForget,
-      handleMessage: handleFeishuMessage,
-      resolveDebounceText: ({ event, botOpenId, botName }) =>
-        parseFeishuMessageEvent(event, botOpenId, botName).content,
-      hasProcessedMessage: hasProcessedFeishuMessage,
-      recordProcessedMessage: recordProcessedFeishuMessage,
-      getBotOpenId: (id) => botOpenIds.get(id),
-      getBotName: (id) => botNames.get(id),
-      resolveSequentialKey: getFeishuSequentialKey,
-    }),
+    "im.message.receive_v1": feishuMessageReceive.handler,
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
     },
@@ -604,7 +606,7 @@ function registerEventHandlers(
     },
   });
 
-  return { unregisterDebouncer: inboundDebouncer.unregister };
+  return { unregisterDebouncer: feishuMessageReceive.unregisterDebouncer };
 }
 
 export type BotOpenIdSource =

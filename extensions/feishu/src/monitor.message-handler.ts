@@ -171,7 +171,10 @@ export function createFeishuMessageReceiveHandler({
   getBotName = () => undefined,
   resolveSequentialKey = ({ accountId, event }) =>
     `feishu:${accountId}:${event.message.chat_id?.trim() || "unknown"}`,
-}: FeishuMessageReceiveHandlerContext): (data: unknown) => Promise<void> {
+}: FeishuMessageReceiveHandlerContext): {
+  handler: (data: unknown) => Promise<void>;
+  unregisterDebouncer: () => void;
+} {
   const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
     cfg,
     channel: "feishu",
@@ -306,7 +309,7 @@ export function createFeishuMessageReceiveHandler({
     },
   });
 
-  return async (data) => {
+  const handler = async (data: unknown) => {
     const event = parseFeishuMessageEventPayload(data);
     if (!event) {
       error(`feishu[${accountId}]: ignoring malformed message event payload`);
@@ -334,4 +337,6 @@ export function createFeishuMessageReceiveHandler({
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
     }
   };
+
+  return { handler, unregisterDebouncer: inboundDebouncer.unregister };
 }
