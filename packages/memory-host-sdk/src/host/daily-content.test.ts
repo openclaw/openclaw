@@ -700,6 +700,38 @@ describe("daily-content", () => {
     ).resolves.toBe(true);
   });
 
+  it("does not probe unrelated local files for foreign absolute-path aliases", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-foreign-"));
+    tmpDirs.push(root);
+    const memoryDir = path.join(root, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memoryDir, "2026-04-19-vendor-pitch.md"),
+      [
+        "# Session: 2026-04-19 10:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: reset-123",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "/old/workspace/memory/2026-04-19-vendor-pitch.md",
+        cache: new Map(),
+        snippet: "ordinary durable note",
+        startLine: 11,
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("does not apply remembered root-memory provenance to nested workspace paths", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-nested-"));
     tmpDirs.push(root);

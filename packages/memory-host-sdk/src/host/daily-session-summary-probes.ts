@@ -46,9 +46,22 @@ function isPathInside(parentPath: string, candidatePath: string): boolean {
 function resolveSessionSummaryProbeInputPath(workspaceDir: string, filePath: string): string {
   const normalizedPath = normalizeSessionSummaryPath(filePath);
   if (isCrossPlatformAbsolutePath(normalizedPath)) {
-    const relativeFromMemory = normalizedPath.match(/(?:^|.*\/)(memory\/.+)$/)?.[1];
-    if (relativeFromMemory) {
-      return normalizeSessionSummaryPath(relativeFromMemory);
+    const normalizedWorkspaceDir = normalizeSessionSummaryPath(path.resolve(workspaceDir));
+    if (
+      normalizedPath === normalizedWorkspaceDir ||
+      normalizedPath.startsWith(`${normalizedWorkspaceDir}/`)
+    ) {
+      const relativePath = normalizeSessionSummaryPath(
+        normalizedPath.slice(normalizedWorkspaceDir.length + 1),
+      );
+      if (
+        !relativePath ||
+        relativePath.startsWith("..") ||
+        isCrossPlatformAbsolutePath(relativePath)
+      ) {
+        return "";
+      }
+      return relativePath;
     }
     return "";
   }
@@ -249,6 +262,28 @@ function resolveRememberedSummaryFileNameForProbePaths(
   return null;
 }
 
+function resolveRememberedSummaryFileNameForInputPath(filePath: string): string | null {
+  const normalizedPath = normalizeSessionSummaryPath(filePath);
+  const parsed = parseDailyMemoryPathInfo(normalizedPath);
+  if (parsed) {
+    if (
+      normalizedPath === parsed.fileName ||
+      (parsed.dir === "memory" && normalizedPath === `memory/${parsed.fileName}`)
+    ) {
+      return parsed.fileName;
+    }
+  }
+  const relativeFromMemory = normalizedPath.match(/(?:^|.*\/)(memory\/[^/]+)$/)?.[1];
+  if (!relativeFromMemory) {
+    return null;
+  }
+  const relativeParsed = parseDailyMemoryPathInfo(relativeFromMemory);
+  if (!relativeParsed || relativeParsed.dir !== "memory") {
+    return null;
+  }
+  return relativeParsed.fileName;
+}
+
 async function refreshRememberedSummaryEntryForMissingProbe(params: {
   workspaceDir: string;
   fileName: string;
@@ -426,16 +461,12 @@ export async function isSessionSummaryDailyMemoryPath(params: {
   allowLegacySemanticSlugTranscriptFallback?: boolean;
 }): Promise<boolean> {
   const normalizedPath = normalizeSessionSummaryPath(params.filePath);
-  const probeInputPath = resolveSessionSummaryProbeInputPath(params.workspaceDir, params.filePath);
-  if (!probeInputPath) {
-    return false;
-  }
   const cached = params.cache.get(normalizedPath);
   if (cached != null) {
     return cached;
   }
   let sawExistingCandidate = false;
-  const probePaths = buildSessionSummaryDailyMemoryProbePaths(params.workspaceDir, probeInputPath);
+  const probePaths = buildSessionSummaryDailyMemoryProbePaths(params.workspaceDir, params.filePath);
   const missingCandidateRelativePaths = new Set<string>();
   for (const candidate of probePaths) {
     const candidateCached = params.cache.get(candidate.relativePath);
@@ -508,7 +539,8 @@ export async function isSessionSummaryDailyMemoryPath(params: {
       recordDependency: params.recordDependency,
     }));
   const rememberedSessionSummaryFileName = !sawExistingCandidate
-    ? resolveRememberedSummaryFileNameForProbePaths(probePaths)
+    ? (resolveRememberedSummaryFileNameForProbePaths(probePaths) ??
+      resolveRememberedSummaryFileNameForInputPath(params.filePath))
     : null;
   const rememberedEntry = rememberedSessionSummaryFileName
     ? await refreshRememberedSummaryEntryForMissingProbe({
