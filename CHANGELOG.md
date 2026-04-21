@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - fix(qqbot): add SSRF guard to direct-upload URL paths in uploadC2CMedia and uploadGroupMedia [AI-assisted]. (#69595) Thanks @pgondhi987.
 - fix(gateway): enforce allowRequestSessionKey gate on template-rendered mapping sessionKeys. (#69381) Thanks @pgondhi987.
 - Webchat/images: treat inline image attachments as media for empty-turn gating while still ignoring metadata-only blank turns. (#69474) Thanks @Jaswir.
+- Discord/think: only show `adaptive` in `/think` autocomplete for provider/model pairs that actually support provider-managed adaptive thinking, so GPT/OpenAI models no longer advertise an Anthropic-only option.
 - OpenAI/Responses: resolve `/think` levels against each GPT model's supported reasoning efforts so `/think off` no longer becomes high reasoning or sends unsupported `reasoning.effort: "none"` payloads.
 - Lobster/TaskFlow: allow managed approval resumes to use `approvalId` without a resume token, and persist that id in approval wait state. (#69559) Thanks @kirkluokun.
 - Plugins/startup: install bundled runtime dependencies into each plugin's own runtime directory, reuse source-checkout repair caches after rebuilds, and log only packages that were actually installed so repeated Gateway starts stay quiet once deps are present.

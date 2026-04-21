@@ -278,6 +278,10 @@ function isAnthropicOpus47Model(modelId: string): boolean {
   );
 }
 
+function supportsAnthropicAdaptiveThinking(modelId: string): boolean {
+  return shouldUseAnthropicAdaptiveThinkingDefault(modelId) || isAnthropicOpus47Model(modelId);
+}
+
 function matchesAnthropicModernModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
@@ -490,6 +494,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
+    supportsAdaptiveThinking: ({ modelId }) => supportsAnthropicAdaptiveThinking(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
       isAnthropicOpus47Model(modelId)
