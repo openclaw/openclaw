@@ -218,7 +218,7 @@ describe("createWebhookHandler", () => {
     const req = makeReq("POST", validBody, {
       headers: {
         "content-type": "application/x-www-form-urlencoded",
-        host: "openclaw.example.com",
+        "x-forwarded-host": "openclaw.example.com",
         "x-forwarded-proto": "https",
       },
     });

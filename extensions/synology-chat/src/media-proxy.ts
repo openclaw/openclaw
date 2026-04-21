@@ -20,6 +20,7 @@ type SynologyHostedMedia = Awaited<ReturnType<typeof fetchRemoteMedia>> & {
 
 type SynologyMediaProxyState = {
   publicOrigin?: string;
+  transportRegistered: boolean;
 };
 
 const hostedMedia = new Map<string, SynologyHostedMedia>();
@@ -35,6 +36,7 @@ function getOrCreateMediaProxyState(account: ResolvedSynologyChatAccount): Synol
     publicOrigin:
       normalizeSynologyPublicOrigin(account.publicOrigin) ??
       normalizeSynologyPublicOrigin(process.env.OPENCLAW_GATEWAY_URL),
+    transportRegistered: false,
   };
   mediaProxyStateByAccountId.set(account.accountId, state);
   return state;
@@ -187,6 +189,7 @@ export function getSynologyHostedMediaPathPrefix(account: ResolvedSynologyChatAc
 
 export function registerSynologyHostedMediaTransport(account: ResolvedSynologyChatAccount): void {
   const state = getOrCreateMediaProxyState(account);
+  state.transportRegistered = true;
   state.publicOrigin ||= normalizeSynologyPublicOrigin(account.publicOrigin);
   state.publicOrigin ||= normalizeSynologyPublicOrigin(process.env.OPENCLAW_GATEWAY_URL);
 }
@@ -216,9 +219,7 @@ export function rememberSynologyHostedMediaOrigin(
 }
 
 export function deriveSynologyPublicOrigin(req: IncomingMessage): string | undefined {
-  const host =
-    resolveForwardedHeaderValue(req.headers["x-forwarded-host"]) ??
-    resolveForwardedHeaderValue(req.headers.host);
+  const host = resolveForwardedHeaderValue(req.headers["x-forwarded-host"]);
   if (!host) {
     return undefined;
   }
@@ -273,7 +274,7 @@ export async function resolveSynologyWebhookFileUrl(params: {
   }
 
   const transportState = getOrCreateMediaProxyState(params.account);
-  if (transportState?.publicOrigin) {
+  if (transportState.transportRegistered && transportState.publicOrigin) {
     return await hostSynologyMediaUrl({
       account: params.account,
       sourceUrl: params.sourceUrl,

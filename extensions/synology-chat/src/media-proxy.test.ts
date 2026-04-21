@@ -72,7 +72,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
     });
   });
 
-  it("lazily seeds a configured public origin for outbound-only hostname media", async () => {
+  it("does not mint hosted-media tokens before the gateway transport is registered", async () => {
     const resolved = await resolveSynologyWebhookFileUrl({
       account: {
         ...testAccount,
@@ -81,13 +81,8 @@ describe("resolveSynologyWebhookFileUrl", () => {
       sourceUrl: "https://example.com/file.png",
     });
 
-    expect(resolved).toMatch(
-      /^https:\/\/gateway-config\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
-    );
-    expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
-      maxBytes: 32 * 1024 * 1024,
-      url: "https://example.com/file.png",
-    });
+    expect(resolved).toBeNull();
+    expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
   });
 
   it("uses OPENCLAW_GATEWAY_URL to bootstrap hostname-backed media before the first inbound webhook", async () => {
@@ -196,6 +191,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
   it("uses the last forwarded host and proto values when deriving the public origin", () => {
     const origin = deriveSynologyPublicOrigin({
       headers: {
+        host: "ignored.example.com",
         "x-forwarded-host": "attacker.example.com, openclaw.example.com",
         "x-forwarded-proto": "http, https",
       },
@@ -203,6 +199,17 @@ describe("resolveSynologyWebhookFileUrl", () => {
     } as never);
 
     expect(origin).toBe("https://openclaw.example.com");
+  });
+
+  it("rejects origin learning when only a raw Host header is present", () => {
+    const origin = deriveSynologyPublicOrigin({
+      headers: {
+        host: "openclaw.example.com",
+      },
+      socket: { encrypted: true },
+    } as never);
+
+    expect(origin).toBeUndefined();
   });
 
   it("rejects learned private origins derived from webhook headers", () => {
