@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/startup: narrow Matrix runtime registration and defer setup/doctor surfaces so cold plugin registration spends about 1.8s less in `setChannelRuntime`. (#69782) Thanks @gumadeiras.
 - QQBot: extract a self-contained `engine/` architecture with QR-code onboarding, native approval handling via `/bot-approve`, per-account isolated resource stacks and multi-account logger, credential backup/restore, shared `~/.openclaw/media` payload root, and unified API/bridge/gateway modules. (#67960) Thanks @cxyhhhhh.
 - Telegram/plugin startup: load Telegram's bundled runtime setter through a narrow sidecar and let built sidecars use native loading before falling back to jiti, cutting the measured setup-runtime registration path by about 14s while preserving runtime API compatibility. (#69786) thanks @gumadeiras.
+- Discord/plugin startup: load Discord's bundled runtime setter through a narrow sidecar so setup-runtime registration avoids the broad runtime barrel while preserving runtime API compatibility. (#69791) thanks @gumadeiras.
 
 ### Fixes
 
