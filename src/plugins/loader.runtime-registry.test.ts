@@ -165,6 +165,63 @@ describe("getCompatibleActivePluginRegistry", () => {
     ).toBeUndefined();
   });
 
+  it("treats core gateway method names as compatibility-shaping input", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      coreGatewayMethodNames: ["sessions.get"],
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(
+      registry,
+      cacheKey,
+      "default",
+      undefined,
+      loadOptions.coreGatewayMethodNames,
+    );
+
+    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        coreGatewayMethodNames: ["sessions.list"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not synthesize over explicit core gateway method names", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayLoadOptions);
+    setActivePluginRegistry(
+      registry,
+      cacheKey,
+      "gateway-bindable",
+      gatewayLoadOptions.workspaceDir,
+      gatewayLoadOptions.coreGatewayMethodNames,
+    );
+
+    expect(__testing.getCompatibleActivePluginRegistry(gatewayLoadOptions)).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: gatewayLoadOptions.config,
+        workspaceDir: gatewayLoadOptions.workspaceDir,
+        runtimeOptions: gatewayLoadOptions.runtimeOptions,
+        coreGatewayMethodNames: ["sessions.get"],
+      }),
+    ).toBeUndefined();
+  });
+
   it("reuses a gateway-bindable active registry when helper loads omit core gateway handlers", () => {
     const registry = createEmptyPluginRegistry();
     const gatewayLoadOptions = {
@@ -199,6 +256,41 @@ describe("getCompatibleActivePluginRegistry", () => {
         runtimeOptions: gatewayLoadOptions.runtimeOptions,
       }),
     ).toBe(registry);
+  });
+
+  it("does not let default-mode helper loads inherit gateway-bindable registries via synthetic handlers", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+        "sessions.list": () => undefined,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayLoadOptions);
+    setActivePluginRegistry(
+      registry,
+      cacheKey,
+      "gateway-bindable",
+      gatewayLoadOptions.workspaceDir,
+      Object.keys(gatewayLoadOptions.coreGatewayHandlers),
+    );
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: gatewayLoadOptions.config,
+        workspaceDir: gatewayLoadOptions.workspaceDir,
+      }),
+    ).toBeUndefined();
   });
 });
 
