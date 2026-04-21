@@ -755,6 +755,73 @@ export function registerPluginsCli(program: Command) {
       defaultRuntime.log(lines.join("\n"));
     });
 
+  plugins
+    .command("clean")
+    .description("Remove stale plugin references from config (plugins.allow and plugins.entries)")
+    .option("--dry-run", "Show what would be removed without writing changes", false)
+    .action(async (opts: { dryRun: boolean }) => {
+      const {
+        scanStalePluginConfig,
+        maybeRepairStalePluginConfig,
+        isStalePluginAutoRepairBlocked,
+      } = await import("../commands/doctor/shared/stale-plugin-config.js");
+
+      const snapshot = await readConfigFileSnapshot();
+      const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+      const hits = scanStalePluginConfig(cfg, process.env);
+
+      if (hits.length === 0) {
+        defaultRuntime.log("No stale plugin references found.");
+        return;
+      }
+
+      const lines: string[] = [];
+      lines.push(
+        theme.warn(
+          `Found ${hits.length} stale plugin reference${hits.length === 1 ? "" : "s"}:`,
+        ),
+      );
+      for (const hit of hits) {
+        lines.push(`  - ${hit.pathLabel}: ${theme.muted(`"${hit.pluginId}"`)}`);
+      }
+
+      if (opts.dryRun) {
+        lines.push("");
+        lines.push(
+          theme.muted("(dry run - no changes written; rerun without --dry-run to apply)"),
+        );
+        defaultRuntime.log(lines.join("\n"));
+        return;
+      }
+
+      if (isStalePluginAutoRepairBlocked(cfg, process.env)) {
+        lines.push("");
+        lines.push(
+          theme.error(
+            "Cannot remove stale references: plugin discovery currently has errors. Fix plugin discovery first, then rerun.",
+          ),
+        );
+        defaultRuntime.log(lines.join("\n"));
+        return;
+      }
+
+      const { config: nextConfig, changes } = maybeRepairStalePluginConfig(cfg, process.env);
+
+      if (changes.length === 0) {
+        defaultRuntime.log("No stale plugin references were removed.");
+        return;
+      }
+
+      await replaceConfigFile({ nextConfig, baseHash: snapshot.hash ?? undefined });
+
+      lines.push("");
+      lines.push(theme.success("Removed:"));
+      for (const change of changes) {
+        lines.push(`  ${change}`);
+      }
+      defaultRuntime.log(lines.join("\n"));
+    });
+
   const marketplace = plugins
     .command("marketplace")
     .description("Inspect Claude-compatible plugin marketplaces");
