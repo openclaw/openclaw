@@ -19,13 +19,16 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { createCronPromptExecutor } = await import("./run-executor.js");
 
-function makeMessageToolPolicyJob(delivery: Record<string, unknown> = { mode: "none" }) {
+function makeMessageToolPolicyJob(
+  delivery: Record<string, unknown> = { mode: "none" },
+  payload: Record<string, unknown> = { kind: "agentTurn", message: "send a message" },
+) {
   return {
     id: "message-tool-policy",
     name: "Message Tool Policy",
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message: "send a message" },
+    payload,
     delivery,
   } as never;
 }
@@ -563,6 +566,29 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
     expect(prompt).not.toContain("note who/where");
+  });
+
+  it("does not prompt for the message tool when toolsAllow excludes it", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "telegram", to: "123" },
+        { kind: "agentTurn", message: "send a message", toolsAllow: ["read"] },
+      ),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toContain("Use the message tool");
+    expect(prompt).toContain("Return your response as plain text");
   });
 
   it("does not append a delivery instruction when delivery is not requested", async () => {
