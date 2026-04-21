@@ -384,6 +384,19 @@ describe("failover-error", () => {
     expect(isTimeoutError(abortWrappedLockError)).toBe(false);
   });
 
+  it("keeps explicit provider failover metadata authoritative over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        code: "RESOURCE_EXHAUSTED",
+        message: "upstream quota pressure",
+        cause: new Error(
+          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
+        ),
+      }),
+    ).toBe("rate_limit");
+  });
+
   it("classifies provider-scoped generic upstream errors for failover", () => {
     expect(
       resolveFailoverReasonFromError({

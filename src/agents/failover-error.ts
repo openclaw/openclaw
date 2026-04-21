@@ -343,12 +343,9 @@ function resolveFailoverClassificationFromErrorInternal(
       reason: err.reason,
     };
   }
-  // Session lock contention is local infrastructure pressure, not a provider failure.
-  if (isSessionLockError(err)) {
-    return null;
-  }
-
   const signal = normalizeErrorSignal(err);
+  const hasExplicitFailoverMetadata =
+    typeof signal.status === "number" || typeof signal.code === "string";
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);
 
@@ -383,7 +380,14 @@ function resolveFailoverClassificationFromErrorInternal(
   }
 
   if (classification) {
+    if (isSessionLockError(err) && !hasExplicitFailoverMetadata) {
+      return null;
+    }
     return classification;
+  }
+
+  if (isSessionLockError(err)) {
+    return null;
   }
 
   if (isTimeoutError(err)) {
