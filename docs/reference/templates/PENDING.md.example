@@ -1,0 +1,69 @@
+# PENDING.md - Durable Commitment Tracking
+
+This is an optional workspace file for tracking durable, user-visible commitments that must survive session resets, compaction, and multi-day execution boundaries.
+
+Use this pattern for:
+- Follow-up tasks that need to run across multiple days
+- Long-running batch jobs that are interrupted by rate limits or timeouts
+- Deadlines or check-ins that need to be monitored automatically
+- Explicit agreements between operator and agent that should outlive individual sessions
+
+## Example Entries
+
+### API Batch Job - Customer Data Export
+- Committed: 2026-04-17
+- Deadline: 2026-04-22
+- Description: Export 1000 records via rate-limited CRM API (100 requests/hour limit)
+- Status: In Progress (800/1000 complete)
+- Notes: Cron job resumes exports at 02:00 UTC daily
+- Last updated: 2026-04-20
+
+### Monthly Security Audit Follow-Up
+- Committed: 2026-04-01
+- Deadline: 2026-04-30
+- Description: Review security audit logs and generate compliance report
+- Status: Not Started
+- Notes: Will be triggered by cron on 2026-04-25
+- Last updated: 2026-04-01
+
+### Unhandled Support Ticket Follow-Up
+- Committed: 2026-04-21
+- Deadline: 2026-04-22
+- Description: Follow up on ticket #1234 where the user reported a sync failure
+- Status: Pending
+- Notes: Will check for user updates every 4 hours via heartbeat
+- Last updated: 2026-04-21
+
+## Recommended Fields (Optional, No Strict Schema)
+- **Task description**: Clear, human-readable summary of the commitment
+- **Committed date**: When the commitment was agreed to
+- **Deadline**: When the task should be completed by (if applicable)
+- **Status**: In Progress / Not Started / Pending / Completed / Blocked
+- **Notes**: Any relevant context, scheduling info, or progress updates
+- **Last updated**: When this entry was last modified
+
+## Integration with HEARTBEAT.md
+You can add a check to your heartbeat configuration to automatically monitor pending commitments:
+```yaml
+tasks:
+  - name: pending-commitment-check
+    interval: 30m
+    prompt: |
+      Read PENDING.md if it exists in the workspace.
+      Check all active items for:
+      1. Overdue deadlines
+      2. Missed checkpoints or status updates
+      3. Blocked tasks that need operator attention
+      
+      If there are actionable items, report them to the user clearly.
+      If nothing needs attention, reply HEARTBEAT_OK.
+```
+
+## When to Use vs Other Mechanisms
+| Mechanism | Use Case |
+|-----------|----------|
+| **PENDING.md** | Durable, user-visible commitments that need to survive session changes |
+| **Background Tasks** | Short-to-medium running execution units that can run in the background |
+| **Cron Jobs** | Scheduled, repeating tasks that run at fixed times |
+| **Standing Orders** | Persistent authorization for the agent to perform certain actions automatically |
+| **HEARTBEAT.md** | Periodic checks and routine maintenance tasks |

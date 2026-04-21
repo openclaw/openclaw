@@ -390,6 +390,30 @@ Behavior:
 
 Task mode is useful when you want one heartbeat file to hold several periodic checks without paying for all of them every tick.
 
+## PENDING.md (optional commitment tracking pattern)
+
+For durable commitments that need to survive session resets and multi-day workflows, you can use the optional `PENDING.md` workspace pattern. This is a plain markdown file where you track explicit agreements, long-running tasks, and deadlines that should outlive individual sessions.
+
+Example use cases:
+- Rate-limited batch jobs that run over multiple days
+- Follow-up tasks that need to be checked periodically
+- Deadlines or commitments made between operator and agent
+- Blocked tasks that need to be revisited later
+
+You can add a PENDING.md check to your HEARTBEAT.md tasks block to automatically monitor for overdue items or actionable tasks:
+```md
+tasks:
+- name: pending-commitment-check
+  interval: 30m
+  prompt: |
+    Read PENDING.md if it exists.
+    Check active items for overdue deadlines or missed checkpoints.
+    Report actionable exceptions to the user.
+    If nothing needs attention, reply HEARTBEAT_OK.
+```
+
+A starter template for PENDING.md is available at [/reference/templates/PENDING.md.example](/reference/templates/PENDING.md.example).
+
 ### Can the agent update HEARTBEAT.md?
 
 Yes — if you ask it to.
