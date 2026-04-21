@@ -64,6 +64,15 @@ describe("DroppedMedia types and helpers", () => {
         sanitizeMediaDisplayName("https://cdn.example.com/path/photo.jpg?token=secret#anchor"),
       ).toBe("photo.jpg");
     });
+
+    it("escapes backticks to prevent code-span breakout", () => {
+      expect(sanitizeMediaDisplayName("/tmp/foo`@everyone")).toBe("foo_@everyone");
+    });
+
+    it("escapes newlines and carriage returns", () => {
+      expect(sanitizeMediaDisplayName("/tmp/file\nname.png")).toBe("file_name.png");
+      expect(sanitizeMediaDisplayName("/tmp/file\r\nname.png")).toBe("file__name.png");
+    });
   });
 
   describe("resolveDroppedMediaCode", () => {
