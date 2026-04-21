@@ -696,37 +696,46 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it("drops downloaded non-image sources without leaving orphaned originals", async () => {
-    const server = http.createServer((_req, res) => {
-      res.statusCode = 200;
-      res.setHeader("content-type", "application/pdf");
-      res.end(Buffer.from("%PDF-1.4\n% test\n"));
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address() as AddressInfo;
+    const pdfPath = path.join(stateDir, "not-an-image.pdf");
+    await fs.writeFile(pdfPath, Buffer.from("%PDF-1.4\n% test\n"));
 
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [pdfPath],
+      stateDir,
+      localRoots: [stateDir],
+    });
+    expect(blocks).toEqual([]);
+    const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
+    let originals: string[] | null = null;
     try {
-      try {
-        await createManagedOutgoingImageBlocks({
-          sessionKey: "agent:main:main",
-          mediaUrls: [`http://127.0.0.1:${address.port}/not-an-image`],
-          stateDir,
-        });
-      } catch (error) {
-        expect(error).toBeTruthy();
-      }
-      const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
-      let originals: string[] | null = null;
-      try {
-        originals = await fs.readdir(originalsDir);
-      } catch (error) {
-        expect(error).toMatchObject({ code: "ENOENT" });
-      }
-      expect(originals ?? []).toEqual([]);
-    } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      originals = await fs.readdir(originalsDir);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "ENOENT" });
     }
+    expect(originals ?? []).toEqual([]);
+  });
+
+  it("skips oversized downloaded non-image sources instead of failing finalization", async () => {
+    const audioPath = path.join(stateDir, "large-audio.mp3");
+    await fs.writeFile(audioPath, Buffer.alloc(2048, 1));
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [audioPath],
+      stateDir,
+      localRoots: [stateDir],
+      limits: { maxBytes: 1024 },
+    });
+    expect(blocks).toEqual([]);
+    const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
+    let originals: string[] | null = null;
+    try {
+      originals = await fs.readdir(originalsDir);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "ENOENT" });
+    }
+    expect(originals ?? []).toEqual([]);
   });
 
   it("does not reap older transient records while creating a new managed image", async () => {

@@ -169,6 +169,15 @@ function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
   const images: ImageBlock[] = [];
+  const seen = new Set<string>();
+  const pushImage = (image: ImageBlock) => {
+    const key = `${image.url}\u0000${image.openUrl ?? ""}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    images.push(image);
+  };
 
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -185,9 +194,9 @@ function extractImages(message: unknown): ImageBlock[] {
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
+          pushImage({ url });
         } else if (typeof b.url === "string") {
-          images.push({
+          pushImage({
             url: b.url,
             openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
             alt: typeof b.alt === "string" ? b.alt : undefined,
@@ -199,12 +208,12 @@ function extractImages(message: unknown): ImageBlock[] {
         // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
+          pushImage({ url: imageUrl.url });
         }
       } else if (b.type === "input_image") {
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
+          pushImage({ url: imageUrl.url });
         }
       }
     }
@@ -216,7 +225,7 @@ function extractImages(message: unknown): ImageBlock[] {
     mediaPath.trim() &&
     isImageLikeLegacyMediaPath(mediaPath, m.MediaType)
   ) {
-    images.push({ url: mediaPath });
+    pushImage({ url: mediaPath });
   }
   const mediaPaths = m.MediaPaths;
   const mediaTypes = Array.isArray(m.MediaTypes) ? m.MediaTypes : [];
@@ -227,7 +236,7 @@ function extractImages(message: unknown): ImageBlock[] {
         candidate.trim() &&
         isImageLikeLegacyMediaPath(candidate, mediaTypes[index])
       ) {
-        images.push({ url: candidate });
+        pushImage({ url: candidate });
       }
     }
   }

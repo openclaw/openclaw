@@ -58,7 +58,6 @@ import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   attachManagedOutgoingImagesToMessage,
-  cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -1712,13 +1711,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       limit?: number;
       maxChars?: number;
     };
-    const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-    await cleanupManagedOutgoingImageRecords({ sessionKey: canonicalKey });
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,

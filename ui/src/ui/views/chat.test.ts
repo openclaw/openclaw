@@ -1763,6 +1763,35 @@ describe("chat view", () => {
     expect(container.innerHTML).not.toContain("/media/not-an-image.mp3");
   });
 
+  it("deduplicates repeated legacy MediaPath and MediaPaths image entries", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "assistant-legacy-media-paths-dedupe",
+              role: "assistant",
+              content: [{ type: "text", text: "duplicate legacy paths" }],
+              MediaPath: "/media/legacy-shared.png",
+              MediaPaths: ["/media/legacy-shared.png", "/media/legacy-other.png"],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const images = Array.from(container.querySelectorAll(".chat-message-images img"));
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "http://localhost:3000/media/legacy-shared.png",
+      "http://localhost:3000/media/legacy-other.png",
+    ]);
+  });
+
   it("keeps legacy image media entries when MediaType and MediaTypes mark them as images", () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const container = document.createElement("div");

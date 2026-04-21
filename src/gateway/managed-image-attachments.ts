@@ -12,7 +12,7 @@ import {
 } from "../media/image-ops.js";
 import { assertLocalMediaAllowed } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-roots.js";
-import { saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
@@ -815,20 +815,20 @@ export async function createManagedOutgoingImageBlocks(params: {
                 mediaUrl,
                 undefined,
                 "outgoing/originals",
-                limits.maxBytes,
+                Math.max(limits.maxBytes, MEDIA_MAX_BYTES),
                 mediaDir,
               );
             })();
       savedOriginalPath = savedOriginal.path;
-      if (savedOriginal.size > limits.maxBytes) {
-        throw createManagedImageAttachmentError(
-          `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
-        );
-      }
       if (!savedOriginal.contentType?.startsWith("image/")) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
         continue;
+      }
+      if (savedOriginal.size > limits.maxBytes) {
+        throw createManagedImageAttachmentError(
+          `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
+        );
       }
 
       let originalBuffer =
