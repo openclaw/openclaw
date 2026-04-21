@@ -2,6 +2,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureAuthProfileStoreForLocalUpdate } from "../agents/auth-profiles/store.js";
@@ -30,6 +31,154 @@ export type PreparedCodexAuthBridge = {
   codexHome: string;
   clearEnv: string[];
 };
+
+export type OAuthCallbackResult = { code: string; state: string };
+
+export function generateOAuthState(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+export function parseOAuthCallbackInput(
+  input: string,
+  messages: {
+    missingState?: string;
+    invalidInput?: string;
+  } = {},
+): OAuthCallbackResult | { error: string } {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return { error: "No input provided" };
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    if (!code) {
+      return { error: "Missing 'code' parameter in URL" };
+    }
+    if (!state) {
+      return { error: messages.missingState ?? "Missing 'state' parameter in URL" };
+    }
+    return { code, state };
+  } catch {
+    return { error: messages.invalidInput ?? "Paste the full redirect URL, not just the code." };
+  }
+}
+
+export async function waitForLocalOAuthCallback(params: {
+  expectedState: string;
+  timeoutMs: number;
+  port: number;
+  callbackPath: string;
+  redirectUri: string;
+  successTitle: string;
+  progressMessage?: string;
+  hostname?: string;
+  onProgress?: (message: string) => void;
+}): Promise<OAuthCallbackResult> {
+  const hostname = params.hostname ?? "localhost";
+  const escapedSuccessTitle = escapeHtmlText(params.successTitle);
+
+  return new Promise<OAuthCallbackResult>((resolve, reject) => {
+    let settled = false;
+    let timeout: NodeJS.Timeout | null = null;
+    const server = createServer((req, res) => {
+      try {
+        const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${params.port}`);
+        if (requestUrl.pathname !== params.callbackPath) {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("Not found");
+          return;
+        }
+
+        const error = requestUrl.searchParams.get("error");
+        const code = requestUrl.searchParams.get("code")?.trim();
+        const state = requestUrl.searchParams.get("state")?.trim();
+
+        if (error) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "text/plain");
+          res.end(`Authentication failed: ${error}`);
+          finish(new Error(`OAuth error: ${error}`));
+          return;
+        }
+
+        if (!code || !state) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("Missing code or state");
+          finish(new Error("Missing OAuth code or state"));
+          return;
+        }
+
+        if (state !== params.expectedState) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("Invalid state");
+          finish(new Error("OAuth state mismatch"));
+          return;
+        }
+
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.end(
+          "<!doctype html><html><head><meta charset='utf-8'/></head>" +
+            `<body><h2>${escapedSuccessTitle}</h2>` +
+            "<p>You can close this window and return to OpenClaw.</p></body></html>",
+        );
+
+        finish(undefined, { code, state });
+      } catch (err) {
+        finish(err instanceof Error ? err : new Error("OAuth callback failed"));
+      }
+    });
+
+    const finish = (err?: Error, result?: OAuthCallbackResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      try {
+        server.close();
+      } catch {
+        // ignore close errors
+      }
+      if (err) {
+        reject(err);
+      } else if (result) {
+        resolve(result);
+      }
+    };
+
+    server.once("error", (err) => {
+      finish(err instanceof Error ? err : new Error("OAuth callback server error"));
+    });
+
+    server.listen(params.port, hostname, () => {
+      params.onProgress?.(
+        params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
+      );
+    });
+
+    timeout = setTimeout(() => {
+      finish(new Error("OAuth callback timeout"));
+    }, params.timeoutMs);
+  });
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 export function isCodexBridgeableOAuthCredential(value: unknown): value is OAuthCredential {
   return Boolean(

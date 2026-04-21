@@ -435,7 +435,7 @@ describe("runCodexAppServerAttempt", () => {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
       modelProvider: "openai",
-      approvalPolicy: "never",
+      approvalPolicy: "on-request",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
       persistExtendedHistory: true,
