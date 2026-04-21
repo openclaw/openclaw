@@ -62,6 +62,12 @@ describe("command-startup-policy", () => {
         jsonOutputMode: false,
       }),
     ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["memory", "status"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
   });
 
   it("matches banner suppression policy", () => {

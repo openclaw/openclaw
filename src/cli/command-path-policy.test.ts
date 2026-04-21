@@ -29,6 +29,16 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("always preloads plugins for memory commands", () => {
+    expect(resolveCliCommandPathPolicy(["memory", "status"])).toEqual({
+      bypassConfigGuard: false,
+      routeConfigGuard: "never",
+      loadPlugins: "always",
+      hideBanner: false,
+      ensureCliPath: true,
+    });
+  });
+
   it("resolves mixed startup-only rules", () => {
     expect(resolveCliCommandPathPolicy(["config", "validate"])).toEqual({
       bypassConfigGuard: true,
