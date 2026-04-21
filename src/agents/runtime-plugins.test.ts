@@ -40,6 +40,7 @@ describe("ensureRuntimePluginsLoaded", () => {
     expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: {} as never,
       workspaceDir: "/tmp/workspace",
+      suppressLoaderInfoLogs: true,
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },

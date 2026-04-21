@@ -1115,6 +1115,81 @@ module.exports = {
     ]);
   });
 
+  it("can suppress loader-owned runtime-deps info logs without muting plugin info logs", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "openai",
+      dir: path.join(bundledDir, "openai"),
+      filename: "index.cjs",
+      body: `module.exports = {
+        id: "openai",
+        register(api) {
+          api.logger.info("plugin registered");
+        },
+      };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/openai",
+          version: "1.0.0",
+          dependencies: {
+            "openai-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "openai",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const infoMessages: string[] = [];
+
+    loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      logger: {
+        info: (message) => infoMessages.push(message),
+        warn: () => undefined,
+        error: () => undefined,
+        debug: () => undefined,
+      },
+      suppressLoaderInfoLogs: true,
+      bundledRuntimeDepsInstaller: ({ installRoot, installSpecs, missingSpecs }) => {
+        for (const spec of installSpecs ?? missingSpecs) {
+          const name = spec.split("@")[0] || spec;
+          fs.mkdirSync(path.join(installRoot, "node_modules", name), { recursive: true });
+          fs.writeFileSync(
+            path.join(installRoot, "node_modules", name, "package.json"),
+            JSON.stringify({ name, version: "1.0.0" }),
+            "utf-8",
+          );
+        }
+      },
+    });
+
+    expect(infoMessages).toEqual(["plugin registered"]);
+  });
+
   it("registers standalone text transforms", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

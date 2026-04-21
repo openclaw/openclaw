@@ -133,6 +133,8 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  /** Suppress loader-owned info chatter while preserving plugin/runtime logger behavior. */
+  suppressLoaderInfoLogs?: boolean;
   /**
    * Prefer `setupEntry` for configured channel plugins that explicitly opt in
    * via package metadata because their setup entry covers the pre-listen startup surface.
@@ -1753,9 +1755,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 (left, right) => left.localeCompare(right),
               ),
             );
-            logger.info(
-              `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
-            );
+            if (options.suppressLoaderInfoLogs !== true) {
+              logger.info(
+                `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
+              );
+            }
           }
         } catch (error) {
           pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);

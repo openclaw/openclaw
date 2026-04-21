@@ -14,6 +14,9 @@ export function ensureRuntimePluginsLoaded(params: {
   const loadOptions = {
     config: params.config,
     workspaceDir,
+    // Embedded runs can warm a scoped registry on demand; suppress info-level plugin
+    // loader chatter so per-turn gateway logs only show warnings and errors.
+    suppressLoaderInfoLogs: true,
     runtimeOptions: params.allowGatewaySubagentBinding
       ? {
           allowGatewaySubagentBinding: true,
