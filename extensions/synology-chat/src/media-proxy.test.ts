@@ -215,10 +215,22 @@ describe("resolveSynologyWebhookFileUrl", () => {
         "x-forwarded-host": "attacker.example.com, openclaw.example.com",
         "x-forwarded-proto": "http, https",
       },
-      socket: {},
+      socket: { remoteAddress: "127.0.0.1" },
     } as never);
 
     expect(origin).toBe("https://openclaw.example.com");
+  });
+
+  it("rejects forwarded origin learning when the request did not arrive from a local proxy hop", () => {
+    const origin = deriveSynologyPublicOrigin({
+      headers: {
+        "x-forwarded-host": "openclaw.example.com",
+        "x-forwarded-proto": "https",
+      },
+      socket: { remoteAddress: "198.51.100.10" },
+    } as never);
+
+    expect(origin).toBeUndefined();
   });
 
   it("rejects origin learning when only a raw Host header is present", () => {
@@ -226,7 +238,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
       headers: {
         host: "openclaw.example.com",
       },
-      socket: { encrypted: true },
+      socket: { encrypted: true, remoteAddress: "127.0.0.1" },
     } as never);
 
     expect(origin).toBeUndefined();
@@ -237,7 +249,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
       headers: {
         "x-forwarded-host": "openclaw.example.com",
       },
-      socket: { encrypted: true },
+      socket: { encrypted: true, remoteAddress: "127.0.0.1" },
     } as never);
 
     expect(origin).toBeUndefined();
@@ -249,7 +261,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
         "x-forwarded-host": "127.0.0.1:3000",
         "x-forwarded-proto": "https",
       },
-      socket: {},
+      socket: { remoteAddress: "127.0.0.1" },
     } as never);
 
     expect(origin).toBeUndefined();

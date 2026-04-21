@@ -47,6 +47,11 @@ function normalizeHostname(hostname: string): string {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
 }
 
+function isTrustedProxyRemoteAddress(remoteAddress: string | undefined): boolean {
+  const normalized = remoteAddress ? normalizeHostname(remoteAddress.trim()) : "";
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "::ffff:127.0.0.1";
+}
+
 function isBlockedSpecialIpLiteral(hostname: string): boolean {
   const normalizedHostname = normalizeHostname(hostname);
   if (!ipaddr.isValid(normalizedHostname)) {
@@ -208,6 +213,10 @@ export function rememberSynologyHostedMediaOrigin(
 }
 
 export function deriveSynologyPublicOrigin(req: IncomingMessage): string | undefined {
+  if (!isTrustedProxyRemoteAddress(req.socket?.remoteAddress)) {
+    return undefined;
+  }
+
   const host = resolveForwardedHeaderValue(req.headers["x-forwarded-host"]);
   if (!host) {
     return undefined;
