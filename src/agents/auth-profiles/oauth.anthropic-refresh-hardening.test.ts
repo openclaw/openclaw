@@ -128,7 +128,10 @@ describe("external CLI sync freshness guard", () => {
 
 // ---- Fix 4: Subagent merge prefers fresher OAuth credentials ----
 
-describe("subagent merge freshness", () => {
+// First dynamic import of ./store.js inside these tests triggers a full auth-profile
+// module graph load. On cold CI shards that exceeds the default 120s timeout on the
+// first test; follow-ups are instant because the module is cached. 300s headroom.
+describe("subagent merge freshness", { timeout: 300_000 }, () => {
   it("prefers base OAuth credential when it has a later expiry than override", async () => {
     // We access mergeAuthProfileStores indirectly through runtime snapshots
     const {
