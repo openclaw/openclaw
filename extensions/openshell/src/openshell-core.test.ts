@@ -248,6 +248,35 @@ describe("openshell fs bridges", () => {
     );
   });
 
+  it("rejects symlink-parent writes instead of escaping the local mount root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.symlink(outsideDir, path.join(workspaceDir, "alias"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.writeFile({
+        filePath: "alias/escape.txt",
+        data: "owned",
+        mkdir: true,
+      }),
+    ).rejects.toThrow();
+    await expect(fs.stat(path.join(outsideDir, "escape.txt"))).rejects.toThrow();
+    await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+    expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
+  });
+
   it("maps agent mount paths when the sandbox workspace is read-only", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const agentWorkspaceDir = await makeTempDir("openclaw-openshell-agent-");

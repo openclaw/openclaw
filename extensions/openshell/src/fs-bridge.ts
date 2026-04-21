@@ -6,6 +6,7 @@ import type {
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
+import { writeFileWithinRoot } from "../../../src/infra/fs-safe.js";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
@@ -69,25 +70,15 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "write files");
-    await assertLocalPathSafety({
-      target,
-      root: target.mountHostRoot,
-      allowMissingLeaf: true,
-      allowFinalSymlinkForUnlink: false,
-    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const parentDir = path.dirname(hostPath);
-    if (params.mkdir !== false) {
-      await fsPromises.mkdir(parentDir, { recursive: true });
-    }
-    const tempPath = path.join(
-      parentDir,
-      `.openclaw-openshell-write-${path.basename(hostPath)}-${process.pid}-${Date.now()}`,
-    );
-    await fsPromises.writeFile(tempPath, buffer);
-    await fsPromises.rename(tempPath, hostPath);
+    await writeFileWithinRoot({
+      rootDir: target.mountHostRoot,
+      relativePath: path.relative(target.mountHostRoot, hostPath),
+      data: buffer,
+      mkdir: params.mkdir,
+    });
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
 
