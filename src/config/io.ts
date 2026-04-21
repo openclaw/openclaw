@@ -1588,6 +1588,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       homedir: deps.homedir,
       fsModule: deps.fs,
     });
+    const writePath = snapshot.exists
+      ? await deps.fs.promises.realpath(configPath).catch(() => configPath)
+      : configPath;
     const outputConfigBase =
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
@@ -1714,9 +1717,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       throw err;
     }
 
+    const writeDir = path.dirname(writePath);
     const tmp = path.join(
-      dir,
-      `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+      writeDir,
+      `${path.basename(writePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
     );
 
     try {
@@ -1725,18 +1729,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         mode: 0o600,
       });
 
-      if (deps.fs.existsSync(configPath)) {
-        await maintainConfigBackups(configPath, deps.fs.promises);
+      if (deps.fs.existsSync(writePath)) {
+        await maintainConfigBackups(writePath, deps.fs.promises);
       }
 
       try {
-        await deps.fs.promises.rename(tmp, configPath);
+        await deps.fs.promises.rename(tmp, writePath);
       } catch (err) {
         const code = (err as { code?: string }).code;
         // Windows doesn't reliably support atomic replace via rename when dest exists.
         if (code === "EPERM" || code === "EEXIST") {
-          await deps.fs.promises.copyFile(tmp, configPath);
-          await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
+          await deps.fs.promises.copyFile(tmp, writePath);
+          await deps.fs.promises.chmod(writePath, 0o600).catch(() => {
             // best-effort
           });
           await deps.fs.promises.unlink(tmp).catch(() => {
@@ -1747,7 +1751,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           await appendWriteAudit(
             "copy-fallback",
             undefined,
-            await deps.fs.promises.stat(configPath).catch(() => null),
+            await deps.fs.promises.stat(writePath).catch(() => null),
           );
           return { persistedHash: nextHash };
         }
@@ -1761,7 +1765,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       await appendWriteAudit(
         "rename",
         undefined,
-        await deps.fs.promises.stat(configPath).catch(() => null),
+        await deps.fs.promises.stat(writePath).catch(() => null),
       );
       return { persistedHash: nextHash };
     } catch (err) {
