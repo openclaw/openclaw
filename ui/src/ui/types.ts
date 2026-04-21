@@ -438,7 +438,13 @@ export type GatewaySessionRow = {
   execSecurity?: "deny" | "allowlist" | "full";
   execAsk?: "off" | "on-miss" | "always";
   planMode?: {
-    mode: "plan" | "normal";
+    // PR #68939 follow-up (P2.6) — widened from `"plan" | "normal"` to
+    // include the new `"executing"` state (post-approve, mid-execution).
+    // Mirror of the server-side widening in
+    // `src/config/sessions/types.ts`. UI consumers (mode-switcher chip,
+    // hydrate, app-render selector) handle it as plan-equivalent for
+    // chip rendering — see resolveCurrentMode in mode-switcher.ts.
+    mode: "plan" | "executing" | "normal";
     approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
     approvalId?: string;
     cycleId?: string;

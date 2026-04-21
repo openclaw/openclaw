@@ -2333,7 +2333,19 @@ export function renderApp(state: AppViewState) {
                   // Inline minimal copy of resolveCurrentMode's plan-aware
                   // logic; the imported helper isn't accessible from this
                   // bundling layer without a cycle. Cheap structural check:
-                  if (activeSession?.planMode?.mode === "plan") {
+                  //
+                  // PR #68939 follow-up (P2.6) — `"executing"` state
+                  // also resolves to the plan / plan-auto chip so the
+                  // post-approve short-circuit catches "user picked
+                  // Plan ⚡ while we're already in executing mode" as
+                  // a no-op (was: the short-circuit missed because
+                  // currentChipMode returned null for executing,
+                  // letting a redundant patch fire on every selector
+                  // re-click during execution).
+                  if (
+                    activeSession?.planMode?.mode === "plan" ||
+                    activeSession?.planMode?.mode === "executing"
+                  ) {
                     if (activeSession.planMode.autoApprove === true) {
                       return "plan-auto";
                     }

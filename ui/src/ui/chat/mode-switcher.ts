@@ -237,10 +237,21 @@ const CUSTOM_MODE_ICON = html`<svg
 export function resolveCurrentMode(
   execSecurity?: string,
   execAsk?: string,
-  planMode?: "plan" | "normal",
+  planMode?: "plan" | "executing" | "normal",
   planAutoApprove?: boolean,
 ): ModeDefinition {
-  if (planMode === "plan") {
+  // PR #68939 follow-up (P2.6) — `"executing"` state renders the SAME
+  // chip as `"plan"` (or "Plan ⚡" if autoApprove is set). The user's
+  // mental model is "I'm in plan mode" through both designing the plan
+  // AND watching the agent execute it; the chip should not silently
+  // revert to "Default" the moment the approval lands.
+  //
+  // Pre-P2.6, mode flipped to "normal" on approve which made the chip
+  // immediately revert — confusing because autoApprove was still
+  // armed for the next cycle and the agent was actively executing.
+  // Now mode stays "executing" until close-on-complete deletes
+  // planMode entirely; the chip stays on Plan / Plan ⚡ throughout.
+  if (planMode === "plan" || planMode === "executing") {
     // PR-10: prefer the "plan-auto" entry when the session's
     // autoApprove flag is set so the chip surfaces the auto state.
     // Falls back to plain "plan" when the flag is absent so existing
