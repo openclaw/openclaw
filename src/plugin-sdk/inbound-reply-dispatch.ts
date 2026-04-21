@@ -18,7 +18,10 @@ type RecordInboundSessionFn = typeof import("../channels/session.js").recordInbo
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("../auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
 
-type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+type ReplyDispatchFromConfigOptions = Omit<
+  GetReplyOptions,
+  "onToolResult" | "onBlockReply" | "registerAfterFinalDelivery"
+>;
 
 /** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
@@ -32,12 +35,15 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
     onSettled: params.onSettled,
-    run: () =>
+    run: ({ registerAfterFinalDelivery }) =>
       dispatchReplyFromConfig({
         ctx: params.ctxPayload,
         cfg: params.cfg,
         dispatcher: params.dispatcher,
-        replyOptions: params.replyOptions,
+        replyOptions: {
+          ...params.replyOptions,
+          registerAfterFinalDelivery,
+        },
         configOverride: params.configOverride,
       }),
   });

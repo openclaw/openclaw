@@ -64,7 +64,7 @@ describe("broadcast dispatch", () => {
     onSettled,
   }) => {
     try {
-      return await run();
+      return await run({ registerAfterFinalDelivery: () => undefined });
     } finally {
       dispatcher.markComplete();
       try {

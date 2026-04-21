@@ -229,7 +229,8 @@ const resolveEnvelopeFormatOptionsMock = () => ({});
 const finalizeInboundContextMock = (ctx: Record<string, unknown>) => ctx;
 const withReplyDispatcherMock = async ({
   run,
-}: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
+}: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) =>
+  await run({ registerAfterFinalDelivery: () => undefined });
 
 const {
   mockCreateFeishuReplyDispatcher,
@@ -530,7 +531,7 @@ describe("handleFeishuMessage command authorization", () => {
       onSettled,
     }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
       try {
-        return await run();
+        return await run({ registerAfterFinalDelivery: () => undefined });
       } finally {
         dispatcher.markComplete();
         try {

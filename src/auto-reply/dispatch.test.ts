@@ -1,5 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ReplyPayload } from "./types.js";
+const dispatchFromConfigMock = vi.hoisted(() => ({
+  dispatchReplyFromConfig: vi.fn(),
+}));
+
+vi.mock("./reply/dispatch-from-config.js", () => ({
+  dispatchReplyFromConfig: dispatchFromConfigMock.dispatchReplyFromConfig,
+}));
+
 import {
   dispatchInboundMessage,
   dispatchInboundMessageWithBufferedDispatcher,
@@ -25,6 +34,21 @@ function createDispatcher(record: string[]): ReplyDispatcher {
 }
 
 describe("withReplyDispatcher", () => {
+  beforeEach(() => {
+    dispatchFromConfigMock.dispatchReplyFromConfig.mockReset();
+    dispatchFromConfigMock.dispatchReplyFromConfig.mockImplementation(async (params) => {
+      const reply = await params.replyResolver?.(params.ctx, params.replyOptions);
+      const replies = reply ? (Array.isArray(reply) ? reply : [reply]) : [];
+      for (const payload of replies) {
+        params.dispatcher.sendFinalReply(payload as ReplyPayload);
+      }
+      return {
+        queuedFinal: replies.length > 0,
+        counts: params.dispatcher.getQueuedCounts(),
+      };
+    });
+  });
+
   it("always marks complete and waits for idle after success", async () => {
     const order: string[] = [];
     const dispatcher = createDispatcher(order);
@@ -66,8 +90,9 @@ describe("withReplyDispatcher", () => {
     expect(order).toEqual(["run", "markComplete", "waitForIdle", "onSettled"]);
   });
 
-  it("dispatchInboundMessage owns dispatcher lifecycle", async () => {
+  it("dispatchInboundMessage waits for idle before deferred callbacks run", async () => {
     const order: string[] = [];
+    let resolveIdle: (() => void) | undefined;
     const dispatcher = {
       sendToolResult: () => true,
       sendBlockReply: () => true,
@@ -81,23 +106,86 @@ describe("withReplyDispatcher", () => {
         order.push("markComplete");
       },
       waitForIdle: async () => {
+        order.push("waitForIdle:start");
+        await new Promise<void>((resolve) => {
+          resolveIdle = resolve;
+        });
+        order.push("waitForIdle:end");
+      },
+    } satisfies ReplyDispatcher;
+    dispatchFromConfigMock.dispatchReplyFromConfig.mockImplementationOnce(async (params) => {
+      params.dispatcher.sendFinalReply({ text: "ok" });
+      params.replyOptions?.registerAfterFinalDelivery?.(() => {
+        order.push("afterFinalDelivery");
+      });
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
+
+    const dispatchPromise = dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+    });
+
+    await Promise.resolve();
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle:start"]);
+
+    resolveIdle?.();
+    await dispatchPromise;
+
+    expect(order).toEqual([
+      "sendFinalReply",
+      "markComplete",
+      "waitForIdle:start",
+      "waitForIdle:end",
+      "afterFinalDelivery",
+    ]);
+  });
+
+  it("dispatchInboundMessage skips deferred callbacks when final delivery never succeeds", async () => {
+    const order: string[] = [];
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => {
+        order.push("sendFinalReply");
+        return true;
+      },
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      markComplete: () => {
+        order.push("markComplete");
+      },
+      waitForIdle: async () => {
         order.push("waitForIdle");
       },
     } satisfies ReplyDispatcher;
+    dispatchFromConfigMock.dispatchReplyFromConfig.mockImplementationOnce(async (params) => {
+      params.dispatcher.sendFinalReply({ text: "ok" });
+      params.replyOptions?.registerAfterFinalDelivery?.(() => {
+        const delivered =
+          params.dispatcher.getQueuedCounts().final - params.dispatcher.getFailedCounts().final;
+        if (delivered <= 0) {
+          return;
+        }
+        order.push("afterFinalDelivery");
+      });
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
 
     await dispatchInboundMessage({
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcher,
-      replyResolver: async (_ctx, opts) => {
-        opts?.registerAfterFinalDelivery?.(() => {
-          order.push("afterFinalDelivery");
-        });
-        return { text: "ok" };
-      },
     });
 
-    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle", "afterFinalDelivery"]);
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
   });
 
   it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {

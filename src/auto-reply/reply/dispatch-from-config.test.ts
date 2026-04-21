@@ -2239,6 +2239,81 @@ describe("dispatchReplyFromConfig", () => {
     expect(events).toEqual(["send:hi", "register", "after-final"]);
   });
 
+  it("skips deferred final-delivery hooks when dispatcher delivery fully fails", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const events: string[] = [];
+    const registered: Array<() => Promise<void> | void> = [];
+    (dispatcher.sendFinalReply as Mock).mockImplementation((payload: ReplyPayload) => {
+      events.push(`send:${payload.text ?? "<empty>"}`);
+      return true;
+    });
+    (dispatcher.getQueuedCounts as Mock).mockReturnValue({ tool: 0, block: 0, final: 1 });
+    (dispatcher.getFailedCounts as Mock).mockReturnValue({ tool: 0, block: 0, final: 1 });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      options?.registerAfterFinalDelivery?.(() => {
+        events.push("after-final");
+      });
+      return { text: "hi" } as ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx(),
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        registerAfterFinalDelivery: (callback) => {
+          events.push("register");
+          registered.push(callback);
+        },
+      },
+    });
+
+    expect(events).toEqual(["send:hi", "register"]);
+    expect(registered).toHaveLength(1);
+    await registered[0]?.();
+    expect(events).toEqual(["send:hi", "register"]);
+  });
+
+  it("does not register deferred hooks when routed final delivery fails", async () => {
+    setNoAbort();
+    mocks.routeReply.mockImplementationOnce(async () => ({ ok: false, messageId: "" }));
+    const dispatcher = createDispatcher();
+    const events: string[] = [];
+    const registered: Array<() => Promise<void> | void> = [];
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      options?.registerAfterFinalDelivery?.(() => {
+        events.push("after-final");
+      });
+      return { text: "hi" } as ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        registerAfterFinalDelivery: (callback) => {
+          events.push("register");
+          registered.push(callback);
+        },
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(registered).toHaveLength(0);
+  });
+
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {
     setNoAbort();
     const cfg = emptyConfig;

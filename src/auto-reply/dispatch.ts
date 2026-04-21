@@ -13,19 +13,35 @@ import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions } from "./types.js";
 
 export type DispatchInboundResult = DispatchFromConfigResult;
+type DeferredFinalDeliveryCallback = () => Promise<void> | void;
+type DispatchInboundReplyOptions = Omit<
+  GetReplyOptions,
+  "onToolResult" | "onBlockReply" | "registerAfterFinalDelivery"
+>;
 
 export async function withReplyDispatcher<T>(params: {
   dispatcher: ReplyDispatcher;
-  run: () => Promise<T>;
+  run: (helpers: {
+    registerAfterFinalDelivery: (callback: DeferredFinalDeliveryCallback) => void;
+  }) => Promise<T>;
   onSettled?: () => void | Promise<void>;
 }): Promise<T> {
+  const afterFinalDeliveryCallbacks: DeferredFinalDeliveryCallback[] = [];
   try {
-    return await params.run();
+    return await params.run({
+      registerAfterFinalDelivery: (callback) => {
+        afterFinalDeliveryCallbacks.push(callback);
+      },
+    });
   } finally {
     // Ensure dispatcher reservations are always released on every exit path.
     params.dispatcher.markComplete();
     try {
       await params.dispatcher.waitForIdle();
+      while (afterFinalDeliveryCallbacks.length > 0) {
+        const callback = afterFinalDeliveryCallbacks.shift();
+        await callback?.();
+      }
     } finally {
       await params.onSettled?.();
     }
@@ -36,32 +52,23 @@ export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: DispatchInboundReplyOptions;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  const afterFinalDeliveryCallbacks: Array<() => Promise<void> | void> = [];
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
-    run: () =>
+    run: ({ registerAfterFinalDelivery }) =>
       dispatchReplyFromConfig({
         ctx: finalized,
         cfg: params.cfg,
         dispatcher: params.dispatcher,
         replyOptions: {
           ...params.replyOptions,
-          registerAfterFinalDelivery: (callback) => {
-            afterFinalDeliveryCallbacks.push(callback);
-          },
+          registerAfterFinalDelivery,
         },
         replyResolver: params.replyResolver,
       }),
-    onSettled: async () => {
-      while (afterFinalDeliveryCallbacks.length > 0) {
-        const callback = afterFinalDeliveryCallbacks.shift();
-        await callback?.();
-      }
-    },
   });
 }
 
@@ -69,7 +76,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: DispatchInboundReplyOptions;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -95,7 +102,7 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: DispatchInboundReplyOptions;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const dispatcher = createReplyDispatcher(params.dispatcherOptions);
