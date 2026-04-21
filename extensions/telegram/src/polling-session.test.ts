@@ -51,7 +51,7 @@ function makeBot() {
 
 function installPollingStallWatchdogHarness(
   dateNowSequence: readonly number[] = [0, 0],
-  fallbackDateNow = 120_001,
+  fallbackDateNow = 150_001,
 ) {
   let watchdog: (() => void) | undefined;
   const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
@@ -141,6 +141,7 @@ function createPollingSession(params: {
   log?: (message: string) => void;
   telegramTransport?: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
+  stallThresholdMs?: number;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
   return new TelegramPollingSession({
@@ -155,6 +156,7 @@ function createPollingSession(params: {
     persistUpdateId: async () => undefined,
     log: params.log ?? (() => undefined),
     telegramTransport: params.telegramTransport,
+    stallThresholdMs: params.stallThresholdMs,
     setStatus: params.setStatus,
     ...(params.createTelegramTransport
       ? { createTelegramTransport: params.createTelegramTransport }
@@ -388,6 +390,38 @@ describe("TelegramPollingSession", () => {
       expect(botStop).toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("polling stall detected"));
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
+  it("honors a custom polling stall threshold", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0], 150_001);
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      stallThresholdMs: 180_000,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      watchdog?.();
+
+      expect(runnerStop).not.toHaveBeenCalled();
+      expect(botStop).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
     } finally {
       watchdogHarness.restore();
     }
@@ -662,8 +696,8 @@ describe("TelegramPollingSession", () => {
     const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
     // t=0: lastGetUpdatesAt and lastApiActivityAt initialized
-    // t=120_001: watchdog fires (getUpdates stale for 120s)
-    // But right before watchdog, a sendMessage succeeded at t=120_000
+    // t=150_001: watchdog fires (getUpdates stale for 150s)
+    // But right before watchdog, a sendMessage succeeds at t=150_001
     // All subsequent Date.now calls return the same value, giving apiIdle = 0.
     const watchdogHarness = installPollingStallWatchdogHarness();
 
@@ -789,7 +823,7 @@ describe("TelegramPollingSession", () => {
         );
         const sendPromise = apiMiddleware(slowPrev, "sendMessage", { chat_id: 123, text: "hello" });
 
-        // The in-flight send started at t=1 and is still stuck at t=120_001.
+        // The in-flight send started at t=1 and is still stuck at t=150_001.
         // That is older than the watchdog threshold, so restart should proceed.
         watchdog?.();
 

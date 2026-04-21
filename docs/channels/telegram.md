@@ -259,6 +259,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
 - DM messages can carry `message_thread_id`; OpenClaw routes them with thread-aware session keys and preserves thread ID for replies.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
+- Long-polling watchdog restarts trigger after 120 seconds without completed `getUpdates` liveness by default. Increase `channels.telegram.pollingStallThresholdMs` only if your deployment still sees false polling-stall restarts during long-running work. The value is in milliseconds and is allowed from `30000` to `600000`; per-account overrides are supported.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
 
 ## Feature reference
