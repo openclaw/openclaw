@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOutboundMediaFromUrlMock = vi.fn();
@@ -86,7 +86,7 @@ describe("zalo outbound hosted media", () => {
     const id = pathname.split("/").pop();
     expect(id).toBeTruthy();
 
-    const storageDir = join(tmpdir(), "openclaw-zalo-outbound-media");
+    const storageDir = join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-outbound-media");
     const [dirStats, metadataStats, bufferStats] = await Promise.all([
       stat(storageDir),
       stat(join(storageDir, `${id}.json`)),
