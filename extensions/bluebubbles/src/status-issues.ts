@@ -1,6 +1,6 @@
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { collectIssuesForEnabledAccounts } from "openclaw/plugin-sdk/status-helpers";
 import { asRecord } from "./monitor-normalize.js";
-import type { ChannelAccountSnapshot } from "./runtime-api.js";
 
 type BlueBubblesAccountStatus = {
   accountId?: unknown;

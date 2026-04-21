@@ -41,7 +41,11 @@ type EventHandlerContext = {
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
   clearLocalBtwRunIds?: () => void;
+  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
+  streamingWatchdogMs?: number;
 };
+
+const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -66,6 +70,52 @@ export function createEventHandlers(context: EventHandlerContext) {
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
   let gapClearedRunId: string | null = null;
+
+  const streamingWatchdogMs =
+    typeof context.streamingWatchdogMs === "number" &&
+    Number.isFinite(context.streamingWatchdogMs) &&
+    context.streamingWatchdogMs >= 0
+      ? Math.floor(context.streamingWatchdogMs)
+      : DEFAULT_STREAMING_WATCHDOG_MS;
+  let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let streamingWatchdogRunId: string | null = null;
+
+  const clearStreamingWatchdog = () => {
+    if (streamingWatchdogTimer) {
+      clearTimeout(streamingWatchdogTimer);
+      streamingWatchdogTimer = null;
+    }
+    streamingWatchdogRunId = null;
+  };
+
+  const armStreamingWatchdog = (runId: string) => {
+    if (streamingWatchdogMs <= 0) {
+      return;
+    }
+    if (streamingWatchdogTimer) {
+      clearTimeout(streamingWatchdogTimer);
+    }
+    streamingWatchdogRunId = runId;
+    streamingWatchdogTimer = setTimeout(() => {
+      streamingWatchdogTimer = null;
+      if (streamingWatchdogRunId !== runId || state.activeChatRunId !== runId) {
+        return;
+      }
+      streamingWatchdogRunId = null;
+      state.activeChatRunId = null;
+      setActivityStatus("idle");
+      chatLog.addSystem(
+        `streaming watchdog: no stream updates for ${Math.round(
+          streamingWatchdogMs / 1000,
+        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
+      );
+      tui.requestRender();
+    }, streamingWatchdogMs);
+    const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
+    if (typeof maybeUnref === "function") {
+      maybeUnref.call(streamingWatchdogTimer);
+    }
+  };
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -104,6 +154,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
+    clearStreamingWatchdog();
   };
 
   const flushPendingHistoryRefreshIfIdle = () => {
@@ -145,6 +196,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      clearStreamingWatchdog();
+    } else if (streamingWatchdogRunId === params.runId) {
+      clearStreamingWatchdog();
     }
     void refreshSessionInfo?.();
   };
@@ -163,6 +217,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      clearStreamingWatchdog();
+    } else if (streamingWatchdogRunId === params.runId) {
+      clearStreamingWatchdog();
     }
     void refreshSessionInfo?.();
   };
@@ -262,6 +319,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       chatLog.updateAssistant(displayText, evt.runId);
       setActivityStatus("streaming");
+      if (state.activeChatRunId === evt.runId) {
+        armStreamingWatchdog(evt.runId);
+      }
     }
     if (evt.state === "final") {
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
@@ -427,6 +487,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
+  const dispose = () => {
+    clearStreamingWatchdog();
+  };
+
   const handleEventGap = (opts?: { reload?: boolean }) => {
     const shouldReload = opts?.reload !== false;
     const refreshAfterGap = () => {
@@ -463,5 +527,5 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent, handleEventGap };
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent, handleEventGap, dispose };
 }

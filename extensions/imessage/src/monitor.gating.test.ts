@@ -104,6 +104,22 @@ describe("imessage monitor gating + envelope builders", () => {
     ).toBeNull();
   });
 
+  it("parseIMessageNotification preserves destination_caller_id metadata", () => {
+    expect(
+      parseIMessageNotification({
+        message: {
+          id: 1,
+          sender: "+15550001111",
+          destination_caller_id: "+15550002222",
+          is_from_me: true,
+          text: "hello",
+        },
+      }),
+    ).toMatchObject({
+      destination_caller_id: "+15550002222",
+    });
+  });
+
   it("drops group messages without mention by default", () => {
     const decision = resolve({
       message: {

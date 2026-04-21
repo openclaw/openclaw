@@ -31,8 +31,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   chunkItems,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -171,7 +173,8 @@ export function shouldOpenDiscordModelPickerFromCommand(params: {
     return null;
   }
 
-  const serializedArgs = serializeCommandArgs(params.command, params.commandArgs)?.trim() ?? "";
+  const serializedArgs =
+    normalizeOptionalString(serializeCommandArgs(params.command, params.commandArgs)) ?? "";
   if (context === "model") {
     const modelValue = resolveCommandArgStringValue(params.commandArgs, "model");
     return !modelValue && !serializedArgs ? context : null;
@@ -243,7 +246,7 @@ async function resolveDiscordModelPickerRouteState(params: {
     channelType === ChannelType.AnnouncementThread;
   const rawChannelId = channel?.id ?? "unknown";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   let threadParentId: string | undefined;
   if (interaction.guild && channel && isThreadChannel && rawChannelId) {
@@ -252,7 +255,7 @@ async function resolveDiscordModelPickerRouteState(params: {
       client: interaction.client,
       threadChannel: {
         id: rawChannelId,
-        name: "name" in channel ? (channel.name as string | undefined) : undefined,
+        name: resolveDiscordChannelNameSafe(channel),
         parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
         parent: undefined,
       },

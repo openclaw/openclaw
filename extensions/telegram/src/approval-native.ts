@@ -2,6 +2,8 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -22,6 +24,7 @@ import {
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
+import { parseTelegramThreadId } from "./outbound-params.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -31,7 +34,7 @@ function resolveTurnSourceTelegramOriginTarget(
   request: ApprovalRequest,
 ): TelegramOriginTarget | null {
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
+  const rawTurnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
   const parsedTurnSourceTarget = rawTurnSourceTo ? parseTelegramTarget(rawTurnSourceTo) : null;
   const turnSourceTo = normalizeTelegramChatId(parsedTurnSourceTarget?.chatId ?? rawTurnSourceTo);
   if (turnSourceChannel !== "telegram" || !turnSourceTo) {
@@ -39,25 +42,19 @@ function resolveTurnSourceTelegramOriginTarget(
   }
   const rawThreadId =
     request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
-  const threadId =
-    typeof rawThreadId === "number"
-      ? rawThreadId
-      : typeof rawThreadId === "string"
-        ? Number.parseInt(rawThreadId, 10)
-        : undefined;
   return {
     to: turnSourceTo,
-    threadId: Number.isFinite(threadId) ? threadId : undefined,
+    threadId: parseTelegramThreadId(rawThreadId),
   };
 }
 
 function resolveSessionTelegramOriginTarget(sessionTarget: {
   to: string;
-  threadId?: number | null;
+  threadId?: string | number | null;
 }): TelegramOriginTarget {
   return {
     to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: sessionTarget.threadId ?? undefined,
+    threadId: parseTelegramThreadId(sessionTarget.threadId),
   };
 }
 
@@ -94,7 +91,7 @@ const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
 const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "telegram",
   channelLabel: "Telegram",
-  describeExecApprovalSetup: ({ accountId }) => {
+  describeExecApprovalSetup: ({ accountId }: { accountId?: string | null }) => {
     const prefix =
       accountId && accountId !== "default"
         ? `channels.telegram.accounts.${accountId}`
@@ -118,11 +115,32 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
     normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveTelegramOriginTarget,
   resolveApproverDmTargets: resolveTelegramApproverDmTargets,
+  notifyOriginWhenDmOnly: true,
+  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    eventKinds: ["exec", "plugin"],
+    isConfigured: ({ cfg, accountId }) =>
+      isTelegramExecApprovalClientEnabled({
+        cfg,
+        accountId,
+      }),
+    shouldHandle: ({ cfg, accountId, request }) =>
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId,
+        request,
+      }),
+    load: async () =>
+      (await import("./approval-handler.runtime.js"))
+        .telegramApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+  }),
 });
 
 const resolveTelegramApproveCommandBehavior: NonNullable<
   ChannelApprovalCapability["resolveApproveCommandBehavior"]
-> = ({ cfg, accountId, senderId, approvalKind }) => {
+> = (
+  params: Parameters<NonNullable<ChannelApprovalCapability["resolveApproveCommandBehavior"]>>[0],
+) => {
+  const { cfg, accountId, senderId, approvalKind } = params;
   if (approvalKind !== "exec") {
     return undefined;
   }

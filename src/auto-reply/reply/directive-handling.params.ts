@@ -1,6 +1,6 @@
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
@@ -39,10 +39,12 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentElevatedLevel?: ElevatedLevel;
   surface?: string;
   gatewayClientScopes?: string[];
+  senderIsOwner?: boolean;
 };
 
 export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams & {
   commandAuthorized: boolean;
+  senderIsOwner: boolean;
   ctx: MsgContext;
   agentId?: string;
   isGroup: boolean;

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -10,7 +10,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
@@ -156,7 +156,7 @@ export function createSessionsSendTool(opts?: {
             params: resolveParams,
             timeoutMs: 10_000,
           });
-          resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+          resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
         } catch (err) {
           const msg = formatErrorMessage(err);
           if (restrictToSpawned) {
@@ -276,7 +276,7 @@ export function createSessionsSendTool(opts?: {
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
-        lane: AGENT_LANE_NESTED,
+        lane: resolveNestedAgentLaneForSession(resolvedKey),
         extraSystemPrompt: agentMessageContext,
         inputProvenance: {
           kind: "inter_session",

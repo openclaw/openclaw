@@ -9,7 +9,7 @@ import type {
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import {
   readConfigFileSnapshot,
   replaceConfigFile,
@@ -190,7 +190,7 @@ async function resolveChannelReports(params: {
       includeActions: true,
     }).actions;
     const actions = Array.from(
-      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => String(action))]),
+      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
     );
 
     reports.push({
@@ -224,7 +224,7 @@ export async function channelsCapabilitiesCommand(
   let cfg = loadedCfg;
   const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
-  const rawTarget = typeof opts.target === "string" ? opts.target.trim() : "";
+  const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
     runtime.error(danger("--account requires a specific --channel."));

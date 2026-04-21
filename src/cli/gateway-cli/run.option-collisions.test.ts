@@ -226,7 +226,7 @@ describe("gateway run option collisions", () => {
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
     expect(gatewayLogMessages).toContain(
-      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. Prebuild with `pnpm ui:build` for a faster first boot.",
+      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
     );
   });
 
@@ -247,7 +247,7 @@ describe("gateway run option collisions", () => {
       },
     };
 
-    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:78");
 
     expect(runtimeErrors).toContain(
       "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",

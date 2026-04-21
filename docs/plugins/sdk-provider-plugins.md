@@ -20,6 +20,13 @@ API key auth, and dynamic model resolution.
   structure and manifest setup.
 </Info>
 
+<Tip>
+  Provider plugins add models to OpenClaw's normal inference loop. If the model
+  must run through a native agent daemon that owns threads, compaction, or tool
+  events, pair the provider with an [agent harness](/plugins/sdk-agent-harness)
+  instead of putting daemon protocol details in core.
+</Tip>
+
 ## Walkthrough
 
 <Steps>
@@ -58,6 +65,9 @@ API key auth, and dynamic model resolution.
       "providerAuthEnvVars": {
         "acme-ai": ["ACME_AI_API_KEY"]
       },
+      "providerAuthAliases": {
+        "acme-ai-coding": "acme-ai"
+      },
       "providerAuthChoices": [
         {
           "provider": "acme-ai",
@@ -80,9 +90,10 @@ API key auth, and dynamic model resolution.
     </CodeGroup>
 
     The manifest declares `providerAuthEnvVars` so OpenClaw can detect
-    credentials without loading your plugin runtime. `modelSupport` is optional
-    and lets OpenClaw auto-load your provider plugin from shorthand model ids
-    like `acme-large` before runtime hooks exist. If you publish the
+    credentials without loading your plugin runtime. Add `providerAuthAliases`
+    when a provider variant should reuse another provider id's auth. `modelSupport`
+    is optional and lets OpenClaw auto-load your provider plugin from shorthand
+    model ids like `acme-large` before runtime hooks exist. If you publish the
     provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
     are required in `package.json`.
 
@@ -163,6 +174,28 @@ API key auth, and dynamic model resolution.
     That is a working provider. Users can now
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
+
+    If the upstream provider uses different control tokens than OpenClaw, add a
+    small bidirectional text transform instead of replacing the stream path:
+
+    ```typescript
+    api.registerTextTransforms({
+      input: [
+        { from: /red basket/g, to: "blue basket" },
+        { from: /paper ticket/g, to: "digital ticket" },
+        { from: /left shelf/g, to: "right shelf" },
+      ],
+      output: [
+        { from: /blue basket/g, to: "red basket" },
+        { from: /digital ticket/g, to: "paper ticket" },
+        { from: /right shelf/g, to: "left shelf" },
+      ],
+    });
+    ```
+
+    `input` rewrites the final system prompt and text message content before
+    transport. `output` rewrites assistant text deltas and final text before
+    OpenClaw parses its own control markers or channel delivery.
 
     For bundled providers that only register one text provider with API-key
     auth plus a single catalog-backed runtime, prefer the narrower
@@ -502,16 +535,18 @@ API key auth, and dynamic model resolution.
       | 31 | `augmentModelCatalog` | Synthetic forward-compat rows |
       | 32 | `isBinaryThinking` | Binary thinking on/off |
       | 33 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 34 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 35 | `isModernModelRef` | Live/smoke model matching |
-      | 36 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 37 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 38 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 39 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
-      | 40 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 41 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 34 | `supportsAdaptiveThinking` | Adaptive thinking support |
+      | 35 | `supportsMaxThinking` | `max` reasoning support |
+      | 36 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 37 | `isModernModelRef` | Live/smoke model matching |
+      | 38 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 39 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 40 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 41 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | 42 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 43 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 44 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 45 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       Prompt tuning note:
 
@@ -707,7 +742,7 @@ Do not use the legacy skill-only publish alias here; plugin packages should use
 ```
 <bundled-plugin-root>/acme-ai/
 ├── package.json              # openclaw.providers metadata
-├── openclaw.plugin.json      # Manifest with providerAuthEnvVars
+├── openclaw.plugin.json      # Manifest with provider auth metadata
 ├── index.ts                  # definePluginEntry + registerProvider
 └── src/
     ├── provider.test.ts      # Tests

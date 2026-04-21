@@ -9,6 +9,7 @@ import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
@@ -203,8 +204,8 @@ function inferMimeType(
   outputFormat: string | undefined,
   fileExtension: string | undefined,
 ): string | undefined {
-  const normalizedOutput = normalizeOptionalString(outputFormat)?.toLowerCase();
-  const normalizedExtension = normalizeOptionalString(fileExtension)?.toLowerCase();
+  const normalizedOutput = normalizeOptionalLowercaseString(outputFormat);
+  const normalizedExtension = normalizeOptionalLowercaseString(fileExtension);
   if (
     normalizedOutput === "mp3" ||
     normalizedOutput?.startsWith("mp3_") ||

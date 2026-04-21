@@ -1,21 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
+let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 
 async function loadModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
-  return Promise.all([
+  const [markersModule, secretsModule] = await Promise.all([
     import("./model-auth-markers.js"),
     import("./models-config.providers.secrets.js"),
   ]);
+  NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
+  createProviderAuthResolver = secretsModule.createProviderAuthResolver;
 }
 
-beforeEach(() => {
-  vi.doUnmock("../plugins/manifest-registry.js");
-});
+beforeAll(loadModules);
 
 describe("vercel-ai-gateway provider resolution", () => {
-  it("resolves AI_GATEWAY_API_KEY through provider auth lookup", async () => {
-    const [, { createProviderAuthResolver }] = await loadModules();
+  it("resolves AI_GATEWAY_API_KEY through provider auth lookup", () => {
     const resolveAuth = createProviderAuthResolver(
       {
         AI_GATEWAY_API_KEY: "vercel-gateway-test-key", // pragma: allowlist secret
@@ -30,8 +34,7 @@ describe("vercel-ai-gateway provider resolution", () => {
     });
   });
 
-  it("prefers env keyRef markers over runtime plaintext in auth profiles", async () => {
-    const [, { createProviderAuthResolver }] = await loadModules();
+  it("prefers env keyRef markers over runtime plaintext in auth profiles", () => {
     const resolveAuth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
       version: 1,
       profiles: {
@@ -52,8 +55,7 @@ describe("vercel-ai-gateway provider resolution", () => {
     });
   });
 
-  it("uses non-env markers for non-env keyRef vercel profiles", async () => {
-    const [{ NON_ENV_SECRETREF_MARKER }, { createProviderAuthResolver }] = await loadModules();
+  it("uses non-env markers for non-env keyRef vercel profiles", () => {
     const resolveAuth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
       version: 1,
       profiles: {

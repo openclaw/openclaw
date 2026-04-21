@@ -2,10 +2,17 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   fetchWithTimeout,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export const DEFAULT_VYDRA_BASE_URL = "https://www.vydra.ai/api/v1";
 export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
@@ -130,7 +137,7 @@ export function resolveVydraResponseJobId(payload: unknown): string | undefined 
 }
 
 export function resolveVydraResponseStatus(payload: unknown): string | undefined {
-  return trimToUndefined(asObject(payload)?.status)?.toLowerCase();
+  return normalizeOptionalLowercaseString(trimToUndefined(asObject(payload)?.status));
 }
 
 export function resolveVydraErrorMessage(payload: unknown): string | undefined {
@@ -187,7 +194,7 @@ export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): 
 }
 
 function inferExtension(kind: VydraMediaKind, mimeType: string): string {
-  const normalized = mimeType.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
   if (normalized.includes("jpeg")) {
     return "jpg";
   }
@@ -243,6 +250,10 @@ export async function waitForVydraJob(params: {
   fetchFn: typeof fetch;
   kind: VydraMediaKind;
 }): Promise<unknown> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: `Vydra job ${params.jobId}`,
+  });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     const response = await fetchWithTimeout(
       `${params.baseUrl}/jobs/${params.jobId}`,
@@ -250,7 +261,7 @@ export async function waitForVydraJob(params: {
         method: "GET",
         headers: params.headers,
       },
-      params.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+      resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS }),
       params.fetchFn,
     );
     await assertOkOrThrowHttpError(response, "Vydra job status request failed");
@@ -262,7 +273,7 @@ export async function waitForVydraJob(params: {
     if (status === "failed" || status === "error" || status === "cancelled") {
       throw new Error(resolveVydraErrorMessage(payload) ?? `Vydra job ${params.jobId} failed`);
     }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
   }
   throw new Error(`Vydra job ${params.jobId} did not finish in time`);
 }

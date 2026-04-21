@@ -1,20 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock shared.js to avoid transitive runtime-api imports that pull in uninstalled packages.
-vi.mock("./shared.js", () => ({
-  applyAuthorizationHeaderForUrl: vi.fn(),
-  GRAPH_ROOT: "https://graph.microsoft.com/v1.0",
-  inferPlaceholder: vi.fn(({ contentType }: { contentType?: string }) =>
-    contentType?.startsWith("image/") ? "[image]" : "[file]",
-  ),
-  isRecord: (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v),
-  isUrlAllowed: vi.fn(() => true),
-  normalizeContentType: vi.fn((ct: string | null | undefined) => ct ?? undefined),
-  resolveMediaSsrfPolicy: vi.fn(() => undefined),
-  resolveAttachmentFetchPolicy: vi.fn(() => ({ allowHosts: ["*"], authAllowHosts: ["*"] })),
-  resolveRequestUrl: vi.fn((input: string) => input),
-  safeFetchWithPolicy: vi.fn(),
-}));
+vi.mock("./shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./shared.js")>();
+  return {
+    ...actual,
+    applyAuthorizationHeaderForUrl: vi.fn(),
+    GRAPH_ROOT: "https://graph.microsoft.com/v1.0",
+    inferPlaceholder: vi.fn(({ contentType }: { contentType?: string }) =>
+      contentType?.startsWith("image/") ? "[image]" : "[file]",
+    ),
+    isRecord: (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v),
+    isUrlAllowed: vi.fn(() => true),
+    normalizeContentType: vi.fn((ct: string | null | undefined) => ct ?? undefined),
+    resolveMediaSsrfPolicy: vi.fn(() => undefined),
+    resolveAttachmentFetchPolicy: vi.fn(() => ({ allowHosts: ["*"], authAllowHosts: ["*"] })),
+    resolveRequestUrl: vi.fn((input: string) => input),
+    safeFetchWithPolicy: vi.fn(),
+  };
+});
 
 vi.mock("../../runtime-api.js", () => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -58,6 +62,44 @@ function mockBinaryResponse(data: Uint8Array, status = 200) {
   return new Response(Buffer.from(data) as BodyInit, { status });
 }
 
+type GuardedFetchParams = { url: string; init?: RequestInit };
+
+function guardedFetchResult(params: GuardedFetchParams, response: Response) {
+  return {
+    response,
+    release: async () => {},
+    finalUrl: params.url,
+  };
+}
+
+function mockGraphMediaFetch(options: {
+  messageId: string;
+  messageResponse?: unknown;
+  hostedContents?: unknown[];
+  valueResponses?: Record<string, Response>;
+  fetchCalls?: string[];
+}) {
+  vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+    options.fetchCalls?.push(params.url);
+    const url = params.url;
+    if (url.endsWith(`/messages/${options.messageId}`) && !url.includes("hostedContents")) {
+      return guardedFetchResult(
+        params,
+        mockFetchResponse(options.messageResponse ?? { body: {}, attachments: [] }),
+      );
+    }
+    if (url.endsWith("/hostedContents")) {
+      return guardedFetchResult(params, mockFetchResponse({ value: options.hostedContents ?? [] }));
+    }
+    for (const [fragment, response] of Object.entries(options.valueResponses ?? {})) {
+      if (url.includes(fragment)) {
+        return guardedFetchResult(params, response);
+      }
+    }
+    return guardedFetchResult(params, mockFetchResponse({}, 404));
+  });
+}
+
 describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -68,49 +110,13 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
 
     const fetchCalls: string[] = [];
 
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string }) => {
-      fetchCalls.push(params.url);
-      const url = params.url;
-
-      // Main message fetch
-      if (url.endsWith("/messages/msg-1") && !url.includes("hostedContents")) {
-        return {
-          response: mockFetchResponse({ body: {}, attachments: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      // hostedContents collection
-      if (url.endsWith("/hostedContents")) {
-        return {
-          response: mockFetchResponse({
-            value: [{ id: "hosted-123", contentType: "image/png", contentBytes: null }],
-          }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      // $value endpoint (the fallback being tested)
-      if (url.includes("/hostedContents/hosted-123/$value")) {
-        return {
-          response: mockBinaryResponse(imageBytes),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      // attachments collection
-      if (url.endsWith("/attachments")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      return {
-        response: mockFetchResponse({}, 404),
-        release: async () => {},
-        finalUrl: params.url,
-      };
+    mockGraphMediaFetch({
+      messageId: "msg-1",
+      hostedContents: [{ id: "hosted-123", contentType: "image/png", contentBytes: null }],
+      valueResponses: {
+        "/hostedContents/hosted-123/$value": mockBinaryResponse(imageBytes),
+      },
+      fetchCalls,
     });
 
     const result = await downloadMSTeamsGraphMedia({
@@ -127,36 +133,9 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
   });
 
   it("skips hosted content when contentBytes is null and id is missing", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string }) => {
-      const url = params.url;
-      if (url.endsWith("/messages/msg-2") && !url.includes("hostedContents")) {
-        return {
-          response: mockFetchResponse({ body: {}, attachments: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/hostedContents")) {
-        return {
-          response: mockFetchResponse({
-            value: [{ contentType: "image/png", contentBytes: null }],
-          }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/attachments")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      return {
-        response: mockFetchResponse({}, 404),
-        release: async () => {},
-        finalUrl: params.url,
-      };
+    mockGraphMediaFetch({
+      messageId: "msg-2",
+      hostedContents: [{ contentType: "image/png", contentBytes: null }],
     });
 
     const result = await downloadMSTeamsGraphMedia({
@@ -172,49 +151,19 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
   it("skips $value content when Content-Length exceeds maxBytes", async () => {
     const fetchCalls: string[] = [];
 
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string }) => {
-      fetchCalls.push(params.url);
-      const url = params.url;
-      if (url.endsWith("/messages/msg-cl") && !url.includes("hostedContents")) {
-        return {
-          response: mockFetchResponse({ body: {}, attachments: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/hostedContents")) {
-        return {
-          response: mockFetchResponse({
-            value: [{ id: "hosted-big", contentType: "image/png", contentBytes: null }],
-          }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.includes("/hostedContents/hosted-big/$value")) {
-        // Return a response whose Content-Length exceeds maxBytes
-        const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-        return {
-          response: new Response(Buffer.from(data) as BodyInit, {
+    mockGraphMediaFetch({
+      messageId: "msg-cl",
+      hostedContents: [{ id: "hosted-big", contentType: "image/png", contentBytes: null }],
+      valueResponses: {
+        "/hostedContents/hosted-big/$value": new Response(
+          Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])) as BodyInit,
+          {
             status: 200,
             headers: { "content-length": "999999999" },
-          }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/attachments")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      return {
-        response: mockFetchResponse({}, 404),
-        release: async () => {},
-        finalUrl: params.url,
-      };
+          },
+        ),
+      },
+      fetchCalls,
     });
 
     const result = await downloadMSTeamsGraphMedia({
@@ -233,37 +182,10 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     const fetchCalls: string[] = [];
     const base64Png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
 
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string }) => {
-      fetchCalls.push(params.url);
-      const url = params.url;
-      if (url.endsWith("/messages/msg-3") && !url.includes("hostedContents")) {
-        return {
-          response: mockFetchResponse({ body: {}, attachments: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/hostedContents")) {
-        return {
-          response: mockFetchResponse({
-            value: [{ id: "hosted-456", contentType: "image/png", contentBytes: base64Png }],
-          }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/attachments")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      return {
-        response: mockFetchResponse({}, 404),
-        release: async () => {},
-        finalUrl: params.url,
-      };
+    mockGraphMediaFetch({
+      messageId: "msg-3",
+      hostedContents: [{ id: "hosted-456", contentType: "image/png", contentBytes: base64Png }],
+      fetchCalls,
     });
 
     const result = await downloadMSTeamsGraphMedia({
@@ -279,37 +201,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
   });
 
   it("adds the OpenClaw User-Agent to guarded Graph attachment fetches", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(
-      async (params: { url: string; init?: RequestInit }) => {
-        const url = params.url;
-        if (url.endsWith("/messages/msg-ua") && !url.includes("hostedContents")) {
-          return {
-            response: mockFetchResponse({ body: {}, attachments: [] }),
-            release: async () => {},
-            finalUrl: params.url,
-          };
-        }
-        if (url.endsWith("/hostedContents")) {
-          return {
-            response: mockFetchResponse({ value: [] }),
-            release: async () => {},
-            finalUrl: params.url,
-          };
-        }
-        if (url.endsWith("/attachments")) {
-          return {
-            response: mockFetchResponse({ value: [] }),
-            release: async () => {},
-            finalUrl: params.url,
-          };
-        }
-        return {
-          response: mockFetchResponse({}, 404),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      },
-    );
+    mockGraphMediaFetch({ messageId: "msg-ua" });
 
     await downloadMSTeamsGraphMedia({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-ua",
@@ -329,43 +221,18 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
   });
 
   it("adds the OpenClaw User-Agent to Graph shares downloads for reference attachments", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string }) => {
-      const url = params.url;
-      if (url.endsWith("/messages/msg-share") && !url.includes("hostedContents")) {
-        return {
-          response: mockFetchResponse({
-            body: {},
-            attachments: [
-              {
-                contentType: "reference",
-                contentUrl: "https://tenant.sharepoint.com/file.docx",
-                name: "file.docx",
-              },
-            ],
-          }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/hostedContents")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/attachments")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      return {
-        response: mockFetchResponse({}, 404),
-        release: async () => {},
-        finalUrl: params.url,
-      };
+    mockGraphMediaFetch({
+      messageId: "msg-share",
+      messageResponse: {
+        body: {},
+        attachments: [
+          {
+            contentType: "reference",
+            contentUrl: "https://tenant.sharepoint.com/file.docx",
+            name: "file.docx",
+          },
+        ],
+      },
     });
     vi.mocked(safeFetchWithPolicy).mockResolvedValue(new Response(null, { status: 200 }));
     vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockImplementation(async (params) => {
@@ -395,5 +262,155 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     const requestInit = vi.mocked(safeFetchWithPolicy).mock.calls[0]?.[0]?.requestInit;
     const headers = requestInit?.headers as Headers;
     expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
+  });
+});
+
+describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does NOT call the nonexistent ${messageUrl}/attachments sub-resource", async () => {
+    // The Graph v1.0 API does not expose a `/attachments` sub-resource on
+    // channel or chat messages. Issue #58617 documented that the old code
+    // path called this endpoint and recorded a 404 in diagnostics. After
+    // this fix, the helper must source attachments from the main message
+    // resource's inline `attachments` array instead.
+    const fetchCalls: string[] = [];
+
+    mockGraphMediaFetch({
+      messageId: "msg-no-sub",
+      messageResponse: {
+        body: { content: "hi" },
+        attachments: [],
+      },
+      fetchCalls,
+    });
+
+    await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-no-sub",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    const calledSubResource = fetchCalls.some((u) =>
+      u.endsWith("/messages/msg-no-sub/attachments"),
+    );
+    expect(calledSubResource).toBe(false);
+  });
+
+  it("sources reference attachments from the message body's attachments array", async () => {
+    // Before the fix, the helper fetched `/attachments` and used that list.
+    // After the fix, it must use `msgData.attachments` from the main fetch.
+    mockGraphMediaFetch({
+      messageId: "msg-inline",
+      messageResponse: {
+        body: {},
+        attachments: [
+          {
+            contentType: "reference",
+            contentUrl: "https://tenant.sharepoint.com/inline.pdf",
+            name: "inline.pdf",
+          },
+        ],
+      },
+    });
+    vi.mocked(safeFetchWithPolicy).mockResolvedValue(new Response(null, { status: 200 }));
+    vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockResolvedValue({
+      path: "/tmp/inline.pdf",
+      contentType: "application/pdf",
+      placeholder: "[file]",
+    });
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-inline",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result.media).toHaveLength(1);
+    expect(result.media[0]?.path).toBe("/tmp/inline.pdf");
+    // Regression guard: attachmentCount now reflects real inline attachments,
+    // not the imaginary `/attachments` sub-resource count.
+    expect(result.attachmentCount).toBe(1);
+  });
+
+  it("logs a debug event when the message fetch throws instead of swallowing it", async () => {
+    // Regression test for #51749: empty `catch {}` blocks used to hide the
+    // real error, producing misleading `graph media fetch empty` diagnostics
+    // without surfacing the underlying cause.
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+      if (params.url.endsWith("/messages/msg-err")) {
+        throw new Error("network boom");
+      }
+      // hostedContents and any other paths succeed so the error branch under
+      // test is the only one that fires.
+      return guardedFetchResult(params, mockFetchResponse({ value: [] }));
+    });
+    const logger = { warn: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-err",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+      logger,
+    });
+
+    expect(result.media).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "msteams graph message fetch failed",
+      expect.objectContaining({ error: "network boom" }),
+    );
+  });
+
+  it("logs a debug event when the message fetch returns non-ok", async () => {
+    // If the message endpoint returns 403/404, we want that recorded so
+    // operators can distinguish auth issues from empty result sets.
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+      const url = params.url;
+      if (url.endsWith("/hostedContents")) {
+        return guardedFetchResult(params, mockFetchResponse({ value: [] }));
+      }
+      return guardedFetchResult(params, mockFetchResponse({ error: "forbidden" }, 403));
+    });
+    const log = { debug: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-403",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+      log,
+    });
+
+    expect(result.media).toHaveLength(0);
+    expect(result.attachmentStatus).toBe(403);
+    expect(log.debug).toHaveBeenCalledWith(
+      "graph media message fetch not ok",
+      expect.objectContaining({ status: 403 }),
+    );
+  });
+
+  it("logs a debug event when token acquisition fails", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) =>
+      guardedFetchResult(params, mockFetchResponse({})),
+    );
+    const logger = { warn: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-token",
+      tokenProvider: {
+        getAccessToken: vi.fn(async () => {
+          throw new Error("token expired");
+        }),
+      },
+      maxBytes: 10 * 1024 * 1024,
+      logger,
+    });
+
+    expect(result.tokenError).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "msteams graph token acquisition failed",
+      expect.objectContaining({ error: "token expired" }),
+    );
   });
 });

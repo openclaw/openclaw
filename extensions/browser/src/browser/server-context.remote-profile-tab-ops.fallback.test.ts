@@ -1,59 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-type RemoteProfileTestDeps = {
-  chromeModule: typeof import("./chrome.js");
-  InvalidBrowserNavigationUrlError: typeof import("./navigation-guard.js").InvalidBrowserNavigationUrlError;
-  pwAiModule: typeof import("./pw-ai-module.js");
-  closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
-  createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
-  createJsonListFetchMock: typeof import("./server-context.remote-tab-ops.harness.js").createJsonListFetchMock;
-  createRemoteRouteHarness: typeof import("./server-context.remote-tab-ops.harness.js").createRemoteRouteHarness;
-  createSequentialPageLister: typeof import("./server-context.remote-tab-ops.harness.js").createSequentialPageLister;
-  makeState: typeof import("./server-context.remote-tab-ops.harness.js").makeState;
-  originalFetch: typeof import("./server-context.remote-tab-ops.harness.js").originalFetch;
-};
-
-async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps> {
-  vi.resetModules();
-  await import("./server-context.chrome-test-harness.js");
-  const chromeModule = await import("./chrome.js");
-  const { InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js");
-  const pwAiModule = await import("./pw-ai-module.js");
-  const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
-  const { createBrowserRouteContext } = await import("./server-context.js");
-  const {
-    createJsonListFetchMock,
-    createRemoteRouteHarness,
-    createSequentialPageLister,
-    makeState,
-    originalFetch,
-  } = await import("./server-context.remote-tab-ops.harness.js");
-  return {
-    chromeModule,
-    InvalidBrowserNavigationUrlError,
-    pwAiModule,
-    closePlaywrightBrowserConnection,
-    createBrowserRouteContext,
-    createJsonListFetchMock,
-    createRemoteRouteHarness,
-    createSequentialPageLister,
-    makeState,
-    originalFetch,
-  };
-}
+import { describe, expect, it, vi } from "vitest";
+import {
+  installRemoteProfileTestLifecycle,
+  loadRemoteProfileTestDeps,
+  type RemoteProfileTestDeps,
+} from "./server-context.remote-profile-tab-ops.test-helpers.js";
 
 const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  globalThis.fetch = deps.originalFetch;
-});
-
-afterEach(async () => {
-  await deps.closePlaywrightBrowserConnection().catch(() => {});
-  globalThis.fetch = deps.originalFetch;
-  vi.restoreAllMocks();
-});
+installRemoteProfileTestLifecycle(deps);
 
 describe("browser remote profile fallback and attachOnly behavior", () => {
   it("uses profile-level attachOnly when global attachOnly is false", async () => {
@@ -127,7 +80,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
-    state.resolved.ssrfPolicy = {};
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
 
     await expect(remote.openTab("https://example.com")).rejects.toBeInstanceOf(
       deps.InvalidBrowserNavigationUrlError,

@@ -1,4 +1,5 @@
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
@@ -19,6 +20,7 @@ export type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
   | "browser_container_local"
+  | "shared_secret_loopback_local"
   | "remote";
 
 export type HandshakeBrowserSecurityContext = {
@@ -41,7 +43,7 @@ function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
     return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
   }
   try {
-    return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${new URL(trimmedOrigin).origin.toLowerCase()}`;
+    return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${normalizeLowercaseStringOrEmpty(new URL(trimmedOrigin).origin)}`;
   } catch {
     return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
   }
@@ -101,6 +103,26 @@ function isCliContainerLocalEquivalent(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
     isCliClient &&
+    params.sharedAuthOk &&
+    usesSharedSecretAuth &&
+    !params.hasProxyHeaders &&
+    !params.hasBrowserOriginHeader &&
+    isLoopbackAddress(params.remoteAddress) &&
+    isPrivateOrLoopbackHost(resolveHostName(params.requestHost))
+  );
+}
+
+function isSharedSecretLoopbackLocalEquivalent(params: {
+  requestHost?: string;
+  remoteAddress?: string;
+  hasProxyHeaders: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const usesSharedSecretAuth =
+    params.authMethod === "token" || params.authMethod === "password";
+  return (
     params.sharedAuthOk &&
     usesSharedSecretAuth &&
     !params.hasProxyHeaders &&
@@ -188,6 +210,18 @@ export function resolvePairingLocality(params: {
     })
   ) {
     return "cli_container_local";
+  }
+  if (
+    isSharedSecretLoopbackLocalEquivalent({
+      requestHost: params.requestHost,
+      remoteAddress: params.remoteAddress,
+      hasProxyHeaders: params.hasProxyHeaders,
+      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
+      sharedAuthOk: params.sharedAuthOk,
+      authMethod: params.authMethod,
+    })
+  ) {
+    return "shared_secret_loopback_local";
   }
   return "remote";
 }

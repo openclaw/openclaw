@@ -1,8 +1,8 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.shared.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { applyExtraParamsToAgent } from "./extra-params.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { __testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
 
 export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   headers?: Record<string, string>;
@@ -31,6 +31,7 @@ type RunExtraParamsCaseParams<
   callerHeaders?: Record<string, string>;
   cfg?: OpenClawConfig;
   model: Model<TApi>;
+  mockProviderRuntime?: boolean;
   options?: SimpleStreamOptions;
   payload: TPayload;
   thinkingLevel?: ThinkLevel;
@@ -52,14 +53,26 @@ export function runExtraParamsCase<
   };
   const agent = { streamFn: baseStreamFn };
 
-  applyExtraParamsToAgent(
-    agent,
-    params.cfg,
-    params.applyProvider ?? params.model.provider,
-    params.applyModelId ?? params.model.id,
-    undefined,
-    params.thinkingLevel,
-  );
+  if (params.mockProviderRuntime === true) {
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: () => undefined,
+      wrapProviderStreamFn: () => undefined,
+    });
+  }
+  try {
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg,
+      params.applyProvider ?? params.model.provider,
+      params.applyModelId ?? params.model.id,
+      undefined,
+      params.thinkingLevel,
+    );
+  } finally {
+    if (params.mockProviderRuntime === true) {
+      extraParamsTesting.resetProviderRuntimeDepsForTest();
+    }
+  }
 
   const context: Context = { messages: [] };
   void agent.streamFn?.(params.model, context, {

@@ -1,4 +1,8 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type {
+  ContextEnginePromptCacheInfo,
+  ContextEngineRuntimeContext,
+} from "../../../context-engine/types.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
@@ -10,8 +14,8 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-pr
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
-import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
@@ -118,6 +122,50 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
+function extractUserMessagePlainText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed || undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .flatMap((part) =>
+      part && typeof part === "object" && "type" in part && part.type === "text"
+        ? [typeof part.text === "string" ? part.text : ""]
+        : [],
+    )
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+export function mergeOrphanedTrailingUserPrompt(params: {
+  prompt: string;
+  trigger: EmbeddedRunAttemptParams["trigger"];
+  leafMessage: { content?: unknown };
+}): { prompt: string; merged: boolean } {
+  if (!shouldWarnOnOrphanedUserRepair(params.trigger)) {
+    return { prompt: params.prompt, merged: false };
+  }
+
+  const orphanText = extractUserMessagePlainText(params.leafMessage.content);
+  if (!orphanText || orphanText.length < 4 || params.prompt.includes(orphanText)) {
+    return { prompt: params.prompt, merged: false };
+  }
+
+  return {
+    prompt: [
+      "[Queued user message that arrived while the previous turn was still active]",
+      orphanText,
+      "",
+      params.prompt,
+    ].join("\n"),
+    merged: true,
+  };
+}
+
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -179,28 +227,55 @@ export function buildAfterTurnRuntimeContext(params: {
   >;
   workspaceDir: string;
   agentDir: string;
-}): Partial<CompactEmbeddedPiSessionParams> {
-  return buildEmbeddedCompactionRuntimeContext({
-    sessionKey: params.attempt.sessionKey,
-    messageChannel: params.attempt.messageChannel,
-    messageProvider: params.attempt.messageProvider,
-    agentAccountId: params.attempt.agentAccountId,
-    currentChannelId: params.attempt.currentChannelId,
-    currentThreadTs: params.attempt.currentThreadTs,
-    currentMessageId: params.attempt.currentMessageId,
-    authProfileId: params.attempt.authProfileId,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    config: params.attempt.config,
-    skillsSnapshot: params.attempt.skillsSnapshot,
-    senderIsOwner: params.attempt.senderIsOwner,
-    senderId: params.attempt.senderId,
-    provider: params.attempt.provider,
-    modelId: params.attempt.modelId,
-    thinkLevel: params.attempt.thinkLevel,
-    reasoningLevel: params.attempt.reasoningLevel,
-    bashElevated: params.attempt.bashElevated,
-    extraSystemPrompt: params.attempt.extraSystemPrompt,
-    ownerNumbers: params.attempt.ownerNumbers,
+  tokenBudget?: number;
+  currentTokenCount?: number;
+  promptCache?: ContextEnginePromptCacheInfo;
+}): ContextEngineRuntimeContext {
+  return {
+    ...buildEmbeddedCompactionRuntimeContext({
+      sessionKey: params.attempt.sessionKey,
+      messageChannel: params.attempt.messageChannel,
+      messageProvider: params.attempt.messageProvider,
+      agentAccountId: params.attempt.agentAccountId,
+      currentChannelId: params.attempt.currentChannelId,
+      currentThreadTs: params.attempt.currentThreadTs,
+      currentMessageId: params.attempt.currentMessageId,
+      authProfileId: params.attempt.authProfileId,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      config: params.attempt.config,
+      skillsSnapshot: params.attempt.skillsSnapshot,
+      senderIsOwner: params.attempt.senderIsOwner,
+      senderId: params.attempt.senderId,
+      provider: params.attempt.provider,
+      modelId: params.attempt.modelId,
+      thinkLevel: params.attempt.thinkLevel,
+      reasoningLevel: params.attempt.reasoningLevel,
+      bashElevated: params.attempt.bashElevated,
+      extraSystemPrompt: params.attempt.extraSystemPrompt,
+      ownerNumbers: params.attempt.ownerNumbers,
+    }),
+    ...(typeof params.tokenBudget === "number" &&
+    Number.isFinite(params.tokenBudget) &&
+    params.tokenBudget > 0
+      ? { tokenBudget: Math.floor(params.tokenBudget) }
+      : {}),
+    ...(typeof params.currentTokenCount === "number" &&
+    Number.isFinite(params.currentTokenCount) &&
+    params.currentTokenCount > 0
+      ? { currentTokenCount: Math.floor(params.currentTokenCount) }
+      : {}),
+    ...(params.promptCache ? { promptCache: params.promptCache } : {}),
+  };
+}
+
+export function buildAfterTurnRuntimeContextFromUsage(
+  params: Omit<Parameters<typeof buildAfterTurnRuntimeContext>[0], "currentTokenCount"> & {
+    lastCallUsage?: NormalizedUsage;
+  },
+): ContextEngineRuntimeContext {
+  return buildAfterTurnRuntimeContext({
+    ...params,
+    currentTokenCount: derivePromptTokens(params.lastCallUsage),
   });
 }

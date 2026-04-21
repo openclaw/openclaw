@@ -35,18 +35,49 @@ function ensureDir(): void {
   }
 }
 
-/** Return the session file path for one account. */
-function getSessionPath(accountId: string): string {
+function encodeAccountIdForFileName(accountId: string): string {
+  return Buffer.from(accountId, "utf8").toString("base64url");
+}
+
+function getLegacySessionPath(accountId: string): string {
   const safeId = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
   return path.join(SESSION_DIR, `session-${safeId}.json`);
 }
 
+/** Return the session file path for one account. */
+function getSessionPath(accountId: string): string {
+  const encodedId = encodeAccountIdForFileName(accountId);
+  return path.join(SESSION_DIR, `session-${encodedId}.json`);
+}
+
+function getCandidateSessionPaths(accountId: string): string[] {
+  const primaryPath = getSessionPath(accountId);
+  const legacyPath = getLegacySessionPath(accountId);
+  return primaryPath === legacyPath ? [primaryPath] : [primaryPath, legacyPath];
+}
+
+function isSessionFileName(file: string): boolean {
+  return file.startsWith("session-") && file.endsWith(".json");
+}
+
+function readSessionStateFile(file: string): { filePath: string; state: SessionState } {
+  const filePath = path.join(SESSION_DIR, file);
+  const data = fs.readFileSync(filePath, "utf-8");
+  return { filePath, state: JSON.parse(data) as SessionState };
+}
+
 /** Load a saved session, rejecting expired or mismatched appId entries. */
 export function loadSession(accountId: string, expectedAppId?: string): SessionState | null {
-  const filePath = getSessionPath(accountId);
-
   try {
-    if (!fs.existsSync(filePath)) {
+    let filePath: string | null = null;
+    for (const candidatePath of getCandidateSessionPaths(accountId)) {
+      if (fs.existsSync(candidatePath)) {
+        filePath = candidatePath;
+        break;
+      }
+    }
+
+    if (!filePath) {
       return null;
     }
 
@@ -138,6 +169,7 @@ export function saveSession(state: SessionState): void {
 /** Write one session file to disk immediately. */
 function doSaveSession(state: SessionState): void {
   const filePath = getSessionPath(state.accountId);
+  const legacyPath = getLegacySessionPath(state.accountId);
 
   try {
     ensureDir();
@@ -148,6 +180,9 @@ function doSaveSession(state: SessionState): void {
     };
 
     fs.writeFileSync(filePath, JSON.stringify(stateToSave, null, 2), "utf-8");
+    if (legacyPath !== filePath && fs.existsSync(legacyPath)) {
+      fs.unlinkSync(legacyPath);
+    }
     debugLog(
       `[session-store] Saved session for ${state.accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}`,
     );
@@ -158,8 +193,6 @@ function doSaveSession(state: SessionState): void {
 
 /** Clear a saved session and any pending throttle state. */
 export function clearSession(accountId: string): void {
-  const filePath = getSessionPath(accountId);
-
   const throttle = throttleState.get(accountId);
   if (throttle) {
     if (throttle.throttleTimer) {
@@ -169,8 +202,14 @@ export function clearSession(accountId: string): void {
   }
 
   try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    let cleared = false;
+    for (const filePath of getCandidateSessionPaths(accountId)) {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        cleared = true;
+      }
+    }
+    if (cleared) {
       debugLog(`[session-store] Cleared session for ${accountId}`);
     }
   } catch (err) {
@@ -191,19 +230,23 @@ export function updateLastSeq(accountId: string, lastSeq: number): void {
 
 /** Load all saved sessions from disk. */
 export function getAllSessions(): SessionState[] {
-  const sessions: SessionState[] = [];
+  const sessions = new Map<string, SessionState>();
 
   try {
     ensureDir();
     const files = fs.readdirSync(SESSION_DIR);
 
     for (const file of files) {
-      if (file.startsWith("session-") && file.endsWith(".json")) {
-        const filePath = path.join(SESSION_DIR, file);
+      if (isSessionFileName(file)) {
         try {
-          const data = fs.readFileSync(filePath, "utf-8");
-          const state = JSON.parse(data) as SessionState;
-          sessions.push(state);
+          const { state } = readSessionStateFile(file);
+          if (typeof state.accountId !== "string" || !state.accountId) {
+            continue;
+          }
+          const existing = sessions.get(state.accountId);
+          if (!existing || (state.savedAt ?? 0) >= (existing.savedAt ?? 0)) {
+            sessions.set(state.accountId, state);
+          }
         } catch {
           // Ignore malformed session files here.
         }
@@ -213,7 +256,7 @@ export function getAllSessions(): SessionState[] {
     // Ignore missing directories and similar filesystem errors.
   }
 
-  return sessions;
+  return [...sessions.values()];
 }
 
 /**
@@ -228,11 +271,10 @@ export function cleanupExpiredSessions(): number {
     const now = Date.now();
 
     for (const file of files) {
-      if (file.startsWith("session-") && file.endsWith(".json")) {
+      if (isSessionFileName(file)) {
         const filePath = path.join(SESSION_DIR, file);
         try {
-          const data = fs.readFileSync(filePath, "utf-8");
-          const state = JSON.parse(data) as SessionState;
+          const { state } = readSessionStateFile(file);
 
           if (now - state.savedAt > SESSION_EXPIRE_TIME) {
             fs.unlinkSync(filePath);

@@ -72,6 +72,8 @@ Schema tooling notes:
 
 - `openclaw config schema` prints the same JSON Schema family used by Control UI
   and config validation.
+- Treat that schema output as the canonical machine-readable contract for
+  `openclaw.json`; this overview and the configuration reference summarize it.
 - Field `title` and `description` values are carried into the schema output for
   editor and form tooling.
 - Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same
@@ -84,6 +86,8 @@ Schema tooling notes:
   summaries for drill-down tooling.
 - Runtime plugin/channel schemas are merged in when the gateway can load the
   current manifest registry.
+- `pnpm config:docs:check` detects drift between docs-facing config baseline
+  artifacts and the current schema surface.
 
 When validation fails:
 
@@ -91,6 +95,17 @@ When validation fails:
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (or `--yes`) to apply repairs
+
+The Gateway also keeps a trusted last-known-good copy after a successful startup. If
+`openclaw.json` is later changed outside OpenClaw and no longer validates, startup
+and hot reload preserve the broken file as a timestamped `.clobbered.*` snapshot,
+restore the last-known-good copy, and log a loud warning with the recovery reason.
+The next main-agent turn also receives a system-event warning telling it that the
+config was restored and must not be blindly rewritten. Last-known-good promotion
+is updated after validated startup and after accepted hot reloads, including
+OpenClaw-owned config writes whose persisted file hash still matches the accepted
+write. Promotion is skipped when the candidate contains redacted secret
+placeholders such as `***` or shortened token values.
 
 ## Common tasks
 
@@ -220,7 +235,7 @@ When validation fails:
     - Omit `agents.list[].skills` to inherit the defaults.
     - Set `agents.list[].skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/configuration-reference#agentsdefaultsskills).
+      the [Configuration Reference](/gateway/configuration-reference#agents-defaults-skills).
 
   </Accordion>
 
@@ -283,7 +298,7 @@ When validation fails:
   </Accordion>
 
   <Accordion title="Enable sandboxing">
-    Run agent sessions in isolated Docker containers:
+    Run agent sessions in isolated sandbox runtimes:
 
     ```json5
     {
@@ -489,6 +504,19 @@ When validation fails:
 ## Config hot reload
 
 The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically — no manual restart needed for most settings.
+
+Direct file edits are treated as untrusted until they validate. The watcher waits
+for editor temp-write/rename churn to settle, reads the final file, and rejects
+invalid external edits by restoring the last-known-good config. OpenClaw-owned
+config writes use the same schema gate before writing; destructive clobbers such
+as dropping `gateway.mode` or shrinking the file by more than half are rejected
+and saved as `.rejected.*` for inspection.
+
+If you see `Config auto-restored from last-known-good` or
+`config reload restored last-known-good config` in logs, inspect the matching
+`.clobbered.*` file next to `openclaw.json`, fix the rejected payload, then run
+`openclaw config validate`. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config)
+for the recovery checklist.
 
 ### Reload modes
 

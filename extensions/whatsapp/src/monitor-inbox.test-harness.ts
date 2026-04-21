@@ -53,6 +53,51 @@ const sessionState = vi.hoisted(() => ({
   sock: undefined as MockSock | undefined,
 }));
 
+const inboundRuntimeMocks = vi.hoisted(() => {
+  const wrapperKeys = [
+    "ephemeralMessage",
+    "viewOnceMessage",
+    "viewOnceMessageV2",
+    "viewOnceMessageV2Extension",
+    "documentWithCaptionMessage",
+  ] as const;
+
+  function normalizeMessageContent(message: unknown): unknown {
+    let current = message;
+    while (current && typeof current === "object") {
+      const record = current as Record<string, unknown>;
+      const wrapper = wrapperKeys
+        .map((key) => record[key])
+        .find(
+          (candidate): candidate is { message: unknown } =>
+            Boolean(candidate) &&
+            typeof candidate === "object" &&
+            "message" in (candidate as Record<string, unknown>) &&
+            Boolean((candidate as { message?: unknown }).message),
+        );
+      if (!wrapper) {
+        break;
+      }
+      current = wrapper.message;
+    }
+    return current;
+  }
+
+  return {
+    downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
+    isJidGroup: vi.fn((jid: string | undefined | null) =>
+      typeof jid === "string" ? jid.endsWith("@g.us") : false,
+    ),
+    normalizeMessageContent: vi.fn(normalizeMessageContent),
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      id: "mid",
+      path: "/tmp/mid",
+      size: 1,
+      contentType: "image/jpeg",
+    }),
+  };
+});
+
 function createResolvedMock() {
   return vi.fn().mockResolvedValue(undefined);
 }
@@ -77,21 +122,15 @@ function createMockSock(): MockSock {
   };
 }
 
-vi.mock("./inbound/save-media.runtime.js", () => {
+vi.mock("./inbound/runtime-api.js", () => {
   return {
-    saveMediaBuffer: vi.fn().mockResolvedValue({
-      id: "mid",
-      path: "/tmp/mid",
-      size: 1,
-      contentType: "image/jpeg",
-    }),
+    DisconnectReason: { loggedOut: 401 },
+    ...inboundRuntimeMocks,
   };
 });
 
 vi.mock("./session.js", async () => {
-  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   return {
-    ...actual,
     createWaSocket: vi.fn().mockImplementation(async () => {
       if (!sessionState.sock) {
         throw new Error("mock WhatsApp socket not initialized");
@@ -100,6 +139,7 @@ vi.mock("./session.js", async () => {
     }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
     getStatusCode: vi.fn(() => 500),
+    formatError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
   };
 });
 
@@ -111,8 +151,11 @@ export function getSock(): MockSock {
 }
 
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
+type ResetWebInboundDedupe = typeof import("./inbound.js").resetWebInboundDedupe;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
+export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
+let resetWebInboundDedupe: ResetWebInboundDedupe;
 
 function expectInboxPairingReplyText(
   text: string,
@@ -141,7 +184,8 @@ export function getMonitorWebInbox(): MonitorWebInbox {
 }
 
 export async function settleInboundWork() {
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
@@ -156,7 +200,7 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
 
 export async function startInboxMonitor(
   onMessage: InboxOnMessage,
-  options: { selfChatMode?: boolean } = {},
+  extraOptions: Partial<InboxMonitorOptions> = {},
 ) {
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
@@ -166,7 +210,7 @@ export async function startInboxMonitor(
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
-    selfChatMode: options.selfChatMode,
+    ...extraOptions,
   });
   return { listener, sock: getSock() };
 }
@@ -201,14 +245,11 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls[0];
   expect(sendCall?.[0]).toBe(jid);
-  expectInboxPairingReplyText(
-    String((sendCall?.[1] as { text?: string } | undefined)?.text ?? ""),
-    {
-      channel: "whatsapp",
-      idLine: `Your WhatsApp phone number: ${senderE164}`,
-      code: "PAIRCODE",
-    },
-  );
+  expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
+    channel: "whatsapp",
+    idLine: `Your WhatsApp phone number: ${senderE164}`,
+    code: "PAIRCODE",
+  });
 }
 
 let authDir: string | undefined;
@@ -225,13 +266,14 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
 
   beforeEach(async () => {
     vi.useRealTimers();
-    vi.resetModules();
     vi.clearAllMocks();
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
-    const inboundModule = await import("./inbound.js");
-    monitorWebInbox = inboundModule.monitorWebInbox;
-    const { resetWebInboundDedupe } = inboundModule;
+    if (!monitorWebInbox || !resetWebInboundDedupe) {
+      const inboundModule = await import("./inbound.js");
+      monitorWebInbox = inboundModule.monitorWebInbox;
+      resetWebInboundDedupe = inboundModule.resetWebInboundDedupe;
+    }
     resetWebInboundDedupe();
     if (createAuthDir) {
       authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));

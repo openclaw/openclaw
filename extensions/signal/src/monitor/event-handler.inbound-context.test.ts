@@ -1,6 +1,6 @@
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
 vi.useRealTimers();
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
@@ -9,7 +9,7 @@ const [
 
 const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture } = vi.hoisted(
   () => {
-    const captureState: { ctx: MsgContext | undefined } = { ctx: undefined };
+    const captureState: { ctx?: MsgContext } = {};
     return {
       sendTypingMock: vi.fn(),
       sendReadReceiptMock: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock("../../../../src/pairing/pairing-store.js", () => ({
 
 describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
-    capture.ctx = undefined;
+    delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
     dispatchInboundMessageMock.mockClear();

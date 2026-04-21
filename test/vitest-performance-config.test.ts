@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadVitestExperimentalConfig } from "../vitest.performance-config.ts";
+import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
 
 describe("loadVitestExperimentalConfig", () => {
   it("enables the filesystem module cache by default", () => {

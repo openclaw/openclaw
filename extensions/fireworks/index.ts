@@ -1,11 +1,12 @@
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
-  buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { isFireworksKimiModelId } from "./model-id.js";
 import { applyFireworksConfig, FIREWORKS_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildFireworksProvider,
@@ -14,12 +15,9 @@ import {
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
 } from "./provider-catalog.js";
+import { wrapFireworksProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "fireworks";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
 function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   const modelId = ctx.modelId.trim();
   if (!modelId) {
@@ -34,6 +32,7 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
       ctx,
       patch: {
         provider: PROVIDER_ID,
+        reasoning: !isFireworksKimiModelId(modelId),
       },
     }) ??
     normalizeModelCompat({
@@ -42,7 +41,7 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
       provider: PROVIDER_ID,
       api: "openai-completions",
       baseUrl: FIREWORKS_BASE_URL,
-      reasoning: true,
+      reasoning: !isFireworksKimiModelId(modelId),
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
@@ -77,6 +76,7 @@ export default defineSingleProviderPluginEntry({
       allowExplicitBaseUrl: true,
     },
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+    wrapStreamFn: wrapFireworksProviderStream,
     resolveDynamicModel: (ctx) => resolveFireworksDynamicModel(ctx),
     isModernModelRef: () => true,
   },

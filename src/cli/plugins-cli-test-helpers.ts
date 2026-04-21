@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -15,6 +15,7 @@ type ListMarketplacePluginsFn =
 type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TArgs): TResult {
   return (mock as (...args: TArgs) => TResult)(...args);
 }
@@ -53,6 +54,33 @@ const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
 export { runtimeErrors, runtimeLogs };
+
+function restoreRuntimeCaptureMocks() {
+  defaultRuntime.log.mockReset();
+  defaultRuntime.log.mockImplementation((...args: unknown[]) => {
+    runtimeLogs.push(args.map((value) => String(value)).join(" "));
+  });
+
+  defaultRuntime.error.mockReset();
+  defaultRuntime.error.mockImplementation((...args: unknown[]) => {
+    runtimeErrors.push(args.map((value) => String(value)).join(" "));
+  });
+
+  defaultRuntime.writeStdout.mockReset();
+  defaultRuntime.writeStdout.mockImplementation((value: string) => {
+    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+  });
+
+  defaultRuntime.writeJson.mockReset();
+  defaultRuntime.writeJson.mockImplementation((value: unknown, space = 2) => {
+    defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+  });
+
+  defaultRuntime.exit.mockReset();
+  defaultRuntime.exit.mockImplementation((code: number) => {
+    throw new Error(`__exit__:${code}`);
+  });
+}
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
@@ -225,6 +253,8 @@ vi.mock("./prompt.js", () => ({
 vi.mock("../plugins/install.js", () => ({
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+    SECURITY_SCAN_BLOCKED: "security_scan_blocked",
+    SECURITY_SCAN_FAILED: "security_scan_failed",
   },
   installPluginFromNpmSpec: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>
@@ -318,15 +348,18 @@ const { registerPluginsCli } = await import("./plugins-cli.js");
 
 export { registerPluginsCli };
 
-export function runPluginsCommand(argv: string[]) {
+export async function runPluginsCommand(argv: string[]) {
   const program = new Command();
   program.exitOverride();
-  registerPluginsCli(program);
-  return program.parseAsync(argv, { from: "user" });
+  vi.resetModules();
+  const { registerPluginsCli: registerPluginsCliFresh } = await import("./plugins-cli.js");
+  registerPluginsCliFresh(program);
+  return await program.parseAsync(argv, { from: "user" });
 }
 
 export function resetPluginsCliTestState() {
   resetRuntimeCapture();
+  restoreRuntimeCaptureMocks();
   loadConfig.mockReset();
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset();

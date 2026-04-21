@@ -19,7 +19,10 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   buildCanvasScopedHostUrl,
   CANVAS_CAPABILITY_TTL_MS,
@@ -98,6 +101,39 @@ type PendingNodeAction = {
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
+function normalizeBrowserProxyPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  if (withLeadingSlash.length <= 1) {
+    return withLeadingSlash;
+  }
+  return withLeadingSlash.replace(/\/+$/, "");
+}
+
+function isPersistentBrowserProxyMutation(method: string, path: string): boolean {
+  const normalizedPath = normalizeBrowserProxyPath(path);
+  if (
+    method === "POST" &&
+    (normalizedPath === "/profiles/create" || normalizedPath === "/reset-profile")
+  ) {
+    return true;
+  }
+  return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
+}
+
+function isForbiddenBrowserProxyMutation(params: unknown): boolean {
+  if (!params || typeof params !== "object") {
+    return false;
+  }
+  const candidate = params as { method?: unknown; path?: unknown };
+  const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
+  const path = normalizeOptionalString(candidate.path) ?? "";
+  return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
+}
+
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
   return auth.ok
@@ -162,8 +198,8 @@ function shouldQueueAsPendingForegroundAction(params: {
     params.error && typeof params.error === "object"
       ? (params.error as { code?: unknown; message?: unknown })
       : null;
-  const code = typeof error?.code === "string" ? error.code.trim().toUpperCase() : "";
-  const message = typeof error?.message === "string" ? error.message.trim().toUpperCase() : "";
+  const code = normalizeOptionalString(error?.code)?.toUpperCase() ?? "";
+  const message = normalizeOptionalString(error?.message)?.toUpperCase() ?? "";
   return code === "NODE_BACKGROUND_UNAVAILABLE" || message.includes("BACKGROUND_UNAVAILABLE");
 }
 
@@ -482,6 +518,15 @@ export async function waitForNodeReconnect(params: {
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
 
+/**
+ * Remove cached wake/nudge state for a node that has disconnected.
+ * Called from the WS close handler to prevent unbounded growth.
+ */
+export function clearNodeWakeState(nodeId: string): void {
+  nodeWakeById.delete(nodeId);
+  nodeWakeNudgeById.delete(nodeId);
+}
+
 export const nodeHandlers: GatewayRequestHandlers = {
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {
@@ -682,7 +727,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const { nodeId } = params as { nodeId: string };
-    const id = String(nodeId ?? "").trim();
+    const id = normalizeOptionalString(nodeId) ?? "";
     if (!id) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -714,7 +759,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const baseCanvasHostUrl = client?.canvasHostUrl?.trim() ?? "";
+    const baseCanvasHostUrl = normalizeOptionalString(client?.canvasHostUrl) ?? "";
     if (!baseCanvasHostUrl) {
       respond(
         false,
@@ -760,7 +805,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = String(nodeId ?? "").trim();
+    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -791,13 +836,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = String(nodeId ?? "").trim();
+    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     const ackIds = Array.from(
-      new Set((params.ids ?? []).map((value) => String(value ?? "").trim()).filter(Boolean)),
+      new Set(
+        (params.ids ?? []).map((value) => normalizeOptionalString(value) ?? "").filter(Boolean),
+      ),
     );
     const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
     respond(
@@ -826,8 +873,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
-    const nodeId = String(p.nodeId ?? "").trim();
-    const command = String(p.command ?? "").trim();
+    const nodeId = normalizeOptionalString(p.nodeId) ?? "";
+    const command = normalizeOptionalString(p.command) ?? "";
     if (!nodeId || !command) {
       respond(
         false,
@@ -843,6 +890,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+          { details: { command } },
+        ),
+      );
+      return;
+    }
+    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(p.params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.invoke cannot mutate persistent browser profiles via browser.proxy",
           { details: { command } },
         ),
       );

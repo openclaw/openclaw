@@ -57,6 +57,14 @@ export interface QQBotAccountConfig {
    * - "hot-reload": run an in-place npm update flow
    */
   upgradeMode?: "doc" | "hot-reload";
+  /**
+   * Block streaming configuration.
+   * - mode "partial" (default): enable block streaming for incremental delivery.
+   * - mode "off": buffer the full response before sending.
+   */
+  streaming?: {
+    mode?: "off" | "partial";
+  };
 }
 
 /** Audio format policy controlling which formats can skip transcoding. */

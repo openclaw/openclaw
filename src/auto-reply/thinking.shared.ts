@@ -1,7 +1,22 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeFastMode,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export { normalizeFastMode };
+
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
 export type VerboseLevel = "off" | "on" | "full";
+export type TraceLevel = "off" | "on" | "raw";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
@@ -13,20 +28,11 @@ export type ThinkingCatalogEntry = {
   reasoning?: boolean;
 };
 
-const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high", "adaptive"];
+const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 const NO_THINKING_LEVELS: ThinkLevel[] = [...BASE_THINKING_LEVELS];
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
   void provider;
-  return false;
-}
-
-export function supportsBuiltInXHighThinking(
-  provider?: string | null,
-  model?: string | null,
-): boolean {
-  void provider;
-  void model;
   return false;
 }
 
@@ -39,6 +45,9 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   const collapsed = key.replace(/[\s_-]+/g, "");
   if (collapsed === "adaptive" || collapsed === "auto") {
     return "adaptive";
+  }
+  if (collapsed === "max") {
+    return "max";
   }
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
@@ -58,9 +67,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-  ) {
+  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {
@@ -93,6 +100,10 @@ export function formatThinkingLevels(
 
 export function formatXHighModelHint(): string {
   return "provider models that advertise xhigh reasoning";
+}
+
+export function formatMaxModelHint(): string {
+  return "provider models that advertise max reasoning";
 }
 
 export function resolveThinkingDefaultForModel(params: {
@@ -132,6 +143,23 @@ export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undef
   return normalizeOnOffFullLevel(raw);
 }
 
+export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return undefined;
+  }
+  if (["off", "false", "no", "0"].includes(key)) {
+    return "off";
+  }
+  if (["on", "true", "yes", "1"].includes(key)) {
+    return "on";
+  }
+  if (["raw", "unfiltered"].includes(key)) {
+    return "raw";
+  }
+  return undefined;
+}
+
 export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
   return normalizeOnOffFullLevel(raw);
 }
@@ -140,7 +168,7 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "disable", "disabled"].includes(key)) {
     return "off";
   }
@@ -160,28 +188,11 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
-export function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
-    return false;
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
-    return true;
-  }
-  return undefined;
-}
-
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0"].includes(key)) {
     return "off";
   }
@@ -211,7 +222,7 @@ export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | u
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"].includes(key)) {
     return "off";
   }

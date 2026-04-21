@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { matrixApprovalCapability, matrixNativeApprovalAdapter } from "./approval-native.js";
+import { matrixApprovalCapability } from "./approval-native.js";
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>>,
@@ -22,7 +22,7 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-describe("matrix native approval adapter", () => {
+describe("matrix approval capability", () => {
   it("describes the correct Matrix exec-approval setup path", () => {
     const text = matrixApprovalCapability.describeExecApprovalSetup?.({
       channel: "matrix",
@@ -46,7 +46,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("describes native matrix approval delivery capabilities", () => {
-    const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+    const capabilities = matrixApprovalCapability.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -69,12 +69,12 @@ describe("matrix native approval adapter", () => {
       preferredSurface: "both",
       supportsOriginSurface: true,
       supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: false,
+      notifyOriginWhenDmOnly: true,
     });
   });
 
   it("resolves origin targets from matrix turn source", async () => {
-    const target = await matrixNativeApprovalAdapter.native?.resolveOriginTarget?.({
+    const target = await matrixApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -100,7 +100,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("resolves approver dm targets", async () => {
-    const targets = await matrixNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+    const targets = await matrixApprovalCapability.native?.resolveApproverDmTargets?.({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -117,15 +117,17 @@ describe("matrix native approval adapter", () => {
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
   });
 
-  it("keeps plugin forwarding fallback active when native delivery is exec-only", () => {
-    const shouldSuppress = matrixNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+  it("suppresses same-channel plugin forwarding when Matrix native delivery is available", () => {
+    const shouldSuppress = matrixApprovalCapability.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {
       throw new Error("delivery suppression helper unavailable");
     }
 
     expect(
       shouldSuppress({
-        cfg: buildConfig(),
+        cfg: buildConfig({
+          dm: { allowFrom: ["@owner:example.org"] },
+        }),
         approvalKind: "plugin",
         target: {
           channel: "matrix",
@@ -133,9 +135,11 @@ describe("matrix native approval adapter", () => {
           accountId: "default",
         },
         request: {
-          id: "req-1",
+          id: "plugin:req-1",
           request: {
-            command: "echo hi",
+            title: "Plugin Approval Required",
+            description: "Allow plugin action",
+            pluginId: "git-tools",
             turnSourceChannel: "matrix",
             turnSourceTo: "room:!ops:example.org",
             turnSourceAccountId: "default",
@@ -143,12 +147,12 @@ describe("matrix native approval adapter", () => {
           createdAtMs: 0,
           expiresAtMs: 1000,
         },
-      }),
-    ).toBe(false);
+      } as never),
+    ).toBe(true);
   });
 
   it("preserves room-id case when matching Matrix origin targets", async () => {
-    const target = await matrixNativeApprovalAdapter.native?.resolveOriginTarget?.({
+    const target = await matrixApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -241,8 +245,64 @@ describe("matrix native approval adapter", () => {
     });
   });
 
-  it("disables matrix-native plugin approval delivery", () => {
-    const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+  it("reports exec initiating-surface availability independently from plugin auth", () => {
+    const cfg = buildConfig({
+      dm: { allowFrom: ["@owner:example.org"] },
+      execApprovals: {
+        enabled: false,
+        approvers: [],
+        target: "both",
+      },
+    });
+
+    expect(
+      matrixApprovalCapability.getActionAvailabilityState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ kind: "enabled" });
+
+    expect(
+      matrixApprovalCapability.getExecInitiatingSurfaceState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "disabled" });
+  });
+
+  it("enables matrix-native plugin approval delivery when DM approvers are configured", () => {
+    const capabilities = matrixApprovalCapability.native?.describeDeliveryCapabilities({
+      cfg: buildConfig({
+        dm: { allowFrom: ["@owner:example.org"] },
+      }),
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Plugin Approval Required",
+          description: "Allow plugin access",
+          pluginId: "git-tools",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(capabilities).toEqual({
+      enabled: true,
+      preferredSurface: "both",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+  });
+
+  it("keeps matrix-native plugin approval delivery disabled without DM approvers", () => {
+    const capabilities = matrixApprovalCapability.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "plugin",
@@ -260,10 +320,10 @@ describe("matrix native approval adapter", () => {
 
     expect(capabilities).toEqual({
       enabled: false,
-      preferredSurface: "approver-dm",
-      supportsOriginSurface: false,
-      supportsApproverDmSurface: false,
-      notifyOriginWhenDmOnly: false,
+      preferredSurface: "both",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
     });
   });
 });

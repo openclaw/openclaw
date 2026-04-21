@@ -307,17 +307,49 @@ describe("browser config", () => {
     });
   });
 
-  it("defaults browser SSRF policy to trusted-network mode", () => {
+  it("defaults browser SSRF policy to strict mode when unset", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-    });
+    expect(resolved.ssrfPolicy).toEqual({});
   });
 
   it("supports explicit strict mode by disabling private network access", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         dangerouslyAllowPrivateNetwork: false,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
+  });
+
+  it("preserves legacy explicit strict mode from allowPrivateNetwork=false", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: false,
+      },
+    } as unknown as BrowserConfig);
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
+  });
+
+  it("keeps allowlist-only browser SSRF policy strict by default", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowedHostnames: ["example.com"],
+        hostnameAllowlist: ["*.example.com"],
+      },
+    } as unknown as BrowserConfig);
+    expect(resolved.ssrfPolicy).toEqual({
+      allowedHostnames: ["example.com"],
+      hostnameAllowlist: ["*.example.com"],
+    });
+  });
+
+  it("keeps configured profile cdpUrls out of the shared browser SSRF policy", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        remote: {
+          color: "#123456",
+          cdpUrl: "http://172.29.128.1:9223",
+        },
       },
     });
     expect(resolved.ssrfPolicy).toEqual({});

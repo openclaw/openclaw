@@ -6,6 +6,7 @@ import type {
 } from "@mariozechner/pi-tui";
 import chalk from "chalk";
 import { highlight, supportsLanguage } from "cli-highlight";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 import { createSyntaxTheme } from "./syntax-theme.js";
 
@@ -46,7 +47,7 @@ function pickHigherContrastText(r: number, g: number, b: number): boolean {
 }
 
 function isLightBackground(): boolean {
-  const explicit = process.env.OPENCLAW_THEME?.toLowerCase();
+  const explicit = normalizeOptionalLowercaseString(process.env.OPENCLAW_THEME);
   if (explicit === "light") {
     return true;
   }

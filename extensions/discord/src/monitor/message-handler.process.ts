@@ -46,6 +46,7 @@ import {
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { createDiscordRestClient } from "../client.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
@@ -143,6 +144,7 @@ export async function processDiscordMessage(
     displayChannelSlug,
     guildInfo,
     guildSlug,
+    memberRoleIds,
     channelConfig,
     baseSessionKey,
     boundSessionKey,
@@ -201,7 +203,7 @@ export async function processDiscordMessage(
         isDirect: isDirectMessage,
         isGroup: isGuildMessage || isGroupDm,
         isMentionableGroup: isGuildMessage,
-        requireMention: Boolean(shouldRequireMention),
+        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,
@@ -442,8 +444,14 @@ export async function processDiscordMessage(
     runtime.error?.(danger("discord: missing reply target"));
     return;
   }
+  const dmConversationTarget = isDirectMessage
+    ? resolveDiscordConversationIdentity({
+        isDirectMessage,
+        userId: author.id,
+      })
+    : undefined;
   // Keep DM routes user-addressed so follow-up sends resolve direct session keys.
-  const lastRouteTo = isDirectMessage ? `user:${author.id}` : effectiveTo;
+  const lastRouteTo = dmConversationTarget ?? effectiveTo;
 
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0
@@ -453,6 +461,8 @@ export async function processDiscordMessage(
           timestamp: entry.timestamp,
         }))
       : undefined;
+
+  const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -472,6 +482,7 @@ export async function processDiscordMessage(
     SenderTag: senderTag,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
+    MemberRoleIds: memberRoleIds,
     UntrustedContext: untrustedContext,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
@@ -493,7 +504,7 @@ export async function processDiscordMessage(
     CommandSource: "text" as const,
     // Originating channel for reply routing.
     OriginatingChannel: "discord" as const,
-    OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
+    OriginatingTo: originatingTo,
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
   observer?.onReplyPlanResolved?.({

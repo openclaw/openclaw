@@ -35,8 +35,9 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`logs`](/cli/logs)
 - [`system`](/cli/system)
 - [`models`](/cli/models)
-- [`infer`](/cli/capability)
+- [`infer`](/cli/infer)
 - [`memory`](/cli/memory)
+- [`wiki`](/cli/wiki)
 - [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)
 - [`devices`](/cli/devices)
@@ -162,6 +163,19 @@ openclaw [--dev] [--profile <name>] <command>
     status
     index
     search
+  wiki
+    status
+    doctor
+    init
+    ingest
+    compile
+    lint
+    search
+    get
+    apply
+    bridge import
+    unsafe-local import
+    obsidian status|search|open|command|daily
   message
     send
     broadcast
@@ -459,6 +473,7 @@ Chat messages support `/...` commands (text and native). See [/tools/slash-comma
 Highlights:
 
 - `/status` for quick diagnostics.
+- `/trace` for session-scoped plugin trace/debug lines.
 - `/config` for persisted config changes.
 - `/debug` for runtime-only config overrides (memory, not disk; requires `commands.debug: true`).
 
@@ -838,7 +853,7 @@ Subcommands:
 Notes:
 
 - `devices list` and `devices approve` can fall back to local pairing files on local loopback when direct pairing scope is unavailable.
-- `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
+- `devices approve` requires an explicit request ID before minting tokens; omitting `requestId` or passing `--latest` only previews the newest pending request.
 - Stored-token reconnects reuse the token's cached approved scopes; explicit
   `devices rotate --scope ...` updates that stored scope set for future
   cached-token reconnects.

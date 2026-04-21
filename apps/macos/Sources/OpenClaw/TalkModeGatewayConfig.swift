@@ -44,7 +44,13 @@ enum TalkModeGatewayConfigParser {
                 acc[key] = value
             } ?? [:]
         let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedModel = (model?.isEmpty == false) ? model! : defaultModelIdFallback
+        let resolvedModel: String? = if model?.isEmpty == false {
+            model!
+        } else if activeProvider == defaultProvider {
+            defaultModelIdFallback
+        } else {
+            nil
+        }
         let outputFormat = activeConfig?["outputFormat"]?.stringValue
         let interrupt = talk?["interruptOnSpeech"]?.boolValue
         let apiKey = activeConfig?["apiKey"]?.stringValue

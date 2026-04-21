@@ -1,10 +1,17 @@
 import path from "node:path";
+import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
+import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 import {
-  defaultQaModelForMode,
-  isQaFastModeEnabled,
+  DEFAULT_QA_LIVE_PROVIDER_MODE,
+  getQaProvider,
+  isQaProviderModeInput,
+  normalizeQaProviderMode as normalizeQaProviderModeInput,
   type QaProviderMode,
-} from "./model-selection.js";
+} from "./providers/index.js";
 import type { QaSeedScenario } from "./scenario-catalog.js";
+
+export type { QaProviderMode } from "./model-selection.js";
+export type { QaProviderModeInput } from "./providers/index.js";
 
 export type QaLabRunSelection = {
   providerMode: QaProviderMode;
@@ -30,21 +37,40 @@ export type QaLabRunnerSnapshot = {
   error: string | null;
 };
 
-export function createDefaultQaRunSelection(scenarios: QaSeedScenario[]): QaLabRunSelection {
-  const providerMode: QaProviderMode = "mock-openai";
-  const primaryModel = defaultQaModelForMode(providerMode);
-  const alternateModel = defaultQaModelForMode(providerMode, { alternate: true });
+export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
+  return defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined);
+}
+
+type QaDefaultModelResolver = (mode: QaProviderMode, alternate?: boolean) => string;
+
+function defaultStaticModelForMode(mode: QaProviderMode, alternate = false) {
+  return defaultStaticQaModelForMode(mode, alternate ? { alternate: true } : undefined);
+}
+
+export function createDefaultQaRunSelection(
+  scenarios: QaSeedScenario[],
+  options?: { resolveDefaultModel?: QaDefaultModelResolver },
+): QaLabRunSelection {
+  const providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE;
+  const resolveDefaultModel = options?.resolveDefaultModel ?? defaultQaModelForMode;
   return {
     providerMode,
-    primaryModel,
-    alternateModel,
-    fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
+    primaryModel: resolveDefaultModel(providerMode),
+    alternateModel: resolveDefaultModel(providerMode, true),
+    fastMode: true,
     scenarioIds: scenarios.map((scenario) => scenario.id),
   };
 }
 
-function normalizeProviderMode(input: unknown): QaProviderMode {
-  return input === "live-openai" ? "live-openai" : "mock-openai";
+export function normalizeQaProviderMode(input: unknown): QaProviderMode {
+  if (input === undefined || input === null || input === "") {
+    return DEFAULT_QA_LIVE_PROVIDER_MODE;
+  }
+  if (isQaProviderModeInput(input)) {
+    return normalizeQaProviderModeInput(input);
+  }
+  const details = typeof input === "string" ? `: ${input}` : "";
+  throw new Error(`unknown QA provider mode${details}`);
 }
 
 function normalizeModel(input: unknown, fallback: string) {
@@ -70,17 +96,15 @@ export function normalizeQaRunSelection(
   scenarios: QaSeedScenario[],
 ): QaLabRunSelection {
   const payload = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  const providerMode = normalizeProviderMode(payload.providerMode);
-  const primaryModel = normalizeModel(payload.primaryModel, defaultQaModelForMode(providerMode));
-  const alternateModel = normalizeModel(
-    payload.alternateModel,
-    defaultQaModelForMode(providerMode, { alternate: true }),
-  );
+  const providerMode = normalizeQaProviderMode(payload.providerMode);
   return {
     providerMode,
-    primaryModel,
-    alternateModel,
-    fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
+    primaryModel: normalizeModel(payload.primaryModel, defaultQaModelForMode(providerMode)),
+    alternateModel: normalizeModel(
+      payload.alternateModel,
+      defaultQaModelForMode(providerMode, true),
+    ),
+    fastMode: getQaProvider(providerMode).kind === "live" || payload.fastMode === true,
     scenarioIds: normalizeScenarioIds(payload.scenarioIds, scenarios),
   };
 }
@@ -88,7 +112,9 @@ export function normalizeQaRunSelection(
 export function createIdleQaRunnerSnapshot(scenarios: QaSeedScenario[]): QaLabRunnerSnapshot {
   return {
     status: "idle",
-    selection: createDefaultQaRunSelection(scenarios),
+    selection: createDefaultQaRunSelection(scenarios, {
+      resolveDefaultModel: defaultStaticModelForMode,
+    }),
     artifacts: null,
     error: null,
   };

@@ -20,7 +20,10 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
@@ -101,7 +104,7 @@ function isPrivateLanIpHost(host: string): boolean {
   if (!isIpv6Address(parsed)) {
     return false;
   }
-  const normalized = parsed.toString().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(parsed.toString());
   return (
     normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
   );

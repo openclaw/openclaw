@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -38,7 +38,7 @@ function normalizeTailnetHostForUrl(rawHost: string): string | null {
   }
   const parsed = parseCanonicalIpAddress(trimmed);
   if (parsed && isIpv6Address(parsed)) {
-    return `[${parsed.toString().toLowerCase()}]`;
+    return `[${normalizeLowercaseStringOrEmpty(parsed.toString())}]`;
   }
   return trimmed;
 }

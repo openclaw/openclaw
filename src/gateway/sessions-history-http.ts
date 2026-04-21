@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -14,11 +16,10 @@ import {
   setSseHeaders,
 } from "./http-common.js";
 import {
-  authorizeGatewayHttpRequestOrReply,
+  authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import {
@@ -44,7 +45,7 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = getHeader(req, "accept")?.toLowerCase() ?? "";
+  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
   return accept.includes("text/event-stream");
 }
 
@@ -105,33 +106,22 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  const cfg = loadConfig();
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+  // HTTP callers must declare the same least-privilege operator scopes they
+  // intend to use over WS so both transport surfaces enforce the same gate.
+  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
-    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
+    operatorMethod: "chat.history",
+    resolveOperatorScopes: resolveTrustedHttpOperatorScopes,
   });
-  if (!requestAuth) {
+  if (!authResult) {
     return true;
   }
-
-  // HTTP callers must declare the same least-privilege operator scopes they
-  // intend to use over WS so both transport surfaces enforce the same gate.
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
-    return true;
-  }
+  const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
   const store = loadSessionStore(target.storePath);

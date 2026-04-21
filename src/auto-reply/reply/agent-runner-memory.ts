@@ -5,7 +5,6 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { compactEmbeddedPiSession, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -13,7 +12,6 @@ import {
   normalizeUsage,
   type UsageLike,
 } from "../../agents/usage.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
@@ -22,6 +20,7 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -44,6 +43,58 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
+
+type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
+
+let piEmbeddedRuntimePromise: Promise<PiEmbeddedRuntime> | undefined;
+
+function loadPiEmbeddedRuntime(): Promise<PiEmbeddedRuntime> {
+  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.js");
+  return piEmbeddedRuntimePromise;
+}
+
+async function compactEmbeddedPiSessionDefault(
+  ...args: Parameters<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>
+): Promise<
+  Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>>
+> {
+  const { compactEmbeddedPiSession } = await loadPiEmbeddedRuntime();
+  return await compactEmbeddedPiSession(...args);
+}
+
+async function runEmbeddedPiAgentDefault(
+  ...args: Parameters<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>
+): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>>> {
+  const { runEmbeddedPiAgent } = await loadPiEmbeddedRuntime();
+  return await runEmbeddedPiAgent(...args);
+}
+
+const memoryDeps = {
+  compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
+  runWithModelFallback,
+  runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+  registerAgentRunContext,
+  refreshQueuedFollowupSession,
+  incrementCompactionCount,
+  updateSessionStoreEntry,
+  randomUUID: () => crypto.randomUUID(),
+  now: () => Date.now(),
+};
+
+export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
+  Object.assign(memoryDeps, {
+    runWithModelFallback,
+    compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
+    runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+    registerAgentRunContext,
+    refreshQueuedFollowupSession,
+    incrementCompactionCount,
+    updateSessionStoreEntry,
+    randomUUID: () => crypto.randomUUID(),
+    now: () => Date.now(),
+    ...overrides,
+  });
+}
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
   const trimmed = normalizeOptionalString(prompt);
@@ -164,10 +215,10 @@ async function appendPostCompactionRefreshPrompt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
 }): Promise<void> {
-  const refreshPrompt = await readPostCompactionContext(
-    params.followupRun.run.workspaceDir,
-    params.cfg,
-  );
+  const refreshPrompt = await readPostCompactionContext(params.followupRun.run.workspaceDir, {
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+  });
   if (!refreshPrompt) {
     return;
   }
@@ -331,6 +382,8 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
@@ -407,7 +460,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.sessionKey ?? params.followupRun.run.sessionKey,
     { storePath: params.storePath },
   );
-  const result = await compactEmbeddedPiSession({
+  const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
@@ -415,6 +468,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     groupId: entry.groupId ?? params.followupRun.run.groupId,
     groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
     groupSpace: entry.space ?? params.followupRun.run.groupSpace,
+    senderId: params.followupRun.run.senderId,
+    senderName: params.followupRun.run.senderName,
+    senderUsername: params.followupRun.run.senderUsername,
+    senderE164: params.followupRun.run.senderE164,
     sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
     workspaceDir: params.followupRun.run.workspaceDir,
     agentDir: params.followupRun.run.agentDir,
@@ -496,6 +553,8 @@ export async function runMemoryFlushIfNeeded(params: {
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
@@ -663,15 +722,15 @@ export async function runMemoryFlushIfNeeded(params: {
     activeSessionEntry?.systemPromptReport ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
   );
-  const flushRunId = crypto.randomUUID();
+  const flushRunId = memoryDeps.randomUUID();
   if (params.sessionKey) {
-    registerAgentRunContext(flushRunId, {
+    memoryDeps.registerAgentRunContext(flushRunId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
     });
   }
   let memoryCompactionCompleted = false;
-  const memoryFlushNowMs = Date.now();
+  const memoryFlushNowMs = memoryDeps.now();
   const activeMemoryFlushPlan =
     resolveMemoryFlushPlan({
       cfg: params.cfg,
@@ -686,7 +745,7 @@ export async function runMemoryFlushIfNeeded(params: {
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
   try {
-    await runWithModelFallback({
+    await memoryDeps.runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
@@ -699,7 +758,7 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
         });
-        const result = await runEmbeddedPiAgent({
+        const result = await memoryDeps.runEmbeddedPiAgent({
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
@@ -738,7 +797,7 @@ export async function runMemoryFlushIfNeeded(params: {
       0;
     if (memoryCompactionCompleted) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-      const nextCount = await incrementCompactionCount({
+      const nextCount = await memoryDeps.incrementCompactionCount({
         cfg: params.cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -756,7 +815,7 @@ export async function runMemoryFlushIfNeeded(params: {
         }
         const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
         if (queueKey) {
-          refreshQueuedFollowupSession({
+          memoryDeps.refreshQueuedFollowupSession({
             key: queueKey,
             previousSessionId,
             nextSessionId: updatedEntry.sessionId,
@@ -770,11 +829,11 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
-        const updatedEntry = await updateSessionStoreEntry({
+        const updatedEntry = await memoryDeps.updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           update: async () => ({
-            memoryFlushAt: Date.now(),
+            memoryFlushAt: memoryDeps.now(),
             memoryFlushCompactionCount,
           }),
         });

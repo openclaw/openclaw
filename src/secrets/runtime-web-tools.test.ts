@@ -34,14 +34,16 @@ const {
   ),
   resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => buildTestWebFetchProviders()),
 }));
-const { resolveManifestContractPluginIdsByCompatibilityRuntimePathMock } = vi.hoisted(() => ({
+const {
+  resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
+  resolveManifestContractOwnerPluginIdMock,
+  runtimeManifestActual,
+} = vi.hoisted(() => ({
   resolveManifestContractPluginIdsByCompatibilityRuntimePathMock: vi.fn(() => ["brave"]),
-}));
-const { resolveManifestContractOwnerPluginIdMock, manifestRegistryActual } = vi.hoisted(() => ({
   resolveManifestContractOwnerPluginIdMock: vi.fn(),
-  manifestRegistryActual: {
+  runtimeManifestActual: {
     resolveManifestContractOwnerPluginId: undefined as
-      | typeof import("../plugins/manifest-registry.js").resolveManifestContractOwnerPluginId
+      | typeof import("./runtime-web-tools-manifest.runtime.js").resolveManifestContractOwnerPluginId
       | undefined,
   },
 }));
@@ -77,11 +79,11 @@ vi.mock("./runtime-web-tools-public-artifacts.runtime.js", () => ({
     resolveBundledWebFetchProvidersFromPublicArtifactsMock,
 }));
 
-vi.mock("../plugins/manifest-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
-    "../plugins/manifest-registry.js",
+vi.mock("./runtime-web-tools-manifest.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-web-tools-manifest.runtime.js")>(
+    "./runtime-web-tools-manifest.runtime.js",
   );
-  manifestRegistryActual.resolveManifestContractOwnerPluginId =
+  runtimeManifestActual.resolveManifestContractOwnerPluginId =
     actual.resolveManifestContractOwnerPluginId;
   resolveManifestContractOwnerPluginIdMock.mockImplementation(
     actual.resolveManifestContractOwnerPluginId,
@@ -313,7 +315,7 @@ describe("runtime web tools resolution", () => {
     resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
     resolveManifestContractOwnerPluginIdMock.mockReset();
     resolveManifestContractOwnerPluginIdMock.mockImplementation(
-      manifestRegistryActual.resolveManifestContractOwnerPluginId!,
+      runtimeManifestActual.resolveManifestContractOwnerPluginId!,
     );
     resolveManifestContractOwnerPluginIdMock.mockClear();
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock.mockClear();
@@ -810,6 +812,83 @@ describe("runtime web tools resolution", () => {
       }),
       env: {
         GEMINI_PROVIDER_REF: "gemini-provider-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["google"],
+    });
+    expect(resolveManifestContractOwnerPluginIdMock).not.toHaveBeenCalled();
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("uses exact plugin-id hints for configured bundled provider entries without manifest owner lookup", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_PROVIDER_REF" },
+                },
+              },
+            },
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_PROVIDER_REF: "brave-provider-key",
+        GOOGLE_PROVIDER_REF: "google-provider-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["brave"],
+    });
+    expect(resolveManifestContractOwnerPluginIdMock).not.toHaveBeenCalled();
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("uses single plugin-scoped web search config as a bundled provider hint", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GOOGLE_PROVIDER_REF: "google-provider-key",
       },
     });
 

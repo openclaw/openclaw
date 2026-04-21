@@ -1,4 +1,4 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
   "": {
@@ -88,6 +88,10 @@ export const telegramChannelConfigUiHints = {
   timeoutSeconds: {
     label: "Telegram API Timeout (seconds)",
     help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+  },
+  pollingStallThresholdMs: {
+    label: "Telegram Polling Stall Threshold (ms)",
+    help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
   },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",

@@ -1,7 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { projectSafeChannelAccountSnapshotFields } from "../account-snapshot-fields.js";
 import { inspectReadOnlyChannelAccount } from "../read-only-account-inspect.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelAccountSnapshot } from "./types.public.js";
 
 // Channel docking: status snapshots flow through plugin.status hooks here.
 async function buildSnapshotFromAccount<ResolvedAccount>(params: {
@@ -21,7 +23,7 @@ async function buildSnapshotFromAccount<ResolvedAccount>(params: {
       probe: params.probe,
       audit: params.audit,
     });
-    return typeof snapshot.accountId === "string" && snapshot.accountId.trim().length > 0
+    return normalizeOptionalString(snapshot.accountId)
       ? snapshot
       : {
           ...snapshot,

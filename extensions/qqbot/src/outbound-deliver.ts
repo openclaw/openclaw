@@ -7,6 +7,10 @@
  */
 
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   sendC2CMessage,
   sendDmMessage,
   sendGroupMessage,
@@ -57,6 +61,30 @@ export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Prom
 
 /** Consume a quote ref exactly once. */
 export type ConsumeQuoteRefFn = () => string | undefined;
+
+type ReplyModeParams = {
+  textWithoutImages: string;
+  imageUrls: string[];
+  mdMatches: RegExpMatchArray[];
+  bareUrlMatches: RegExpMatchArray[];
+  event: DeliverEventContext;
+  actx: DeliverAccountContext;
+  sendWithRetry: SendWithRetryFn;
+  consumeQuoteRef: ConsumeQuoteRefFn;
+};
+
+function resolveReplyModeRuntime(params: ReplyModeParams) {
+  const { event, actx, sendWithRetry, consumeQuoteRef } = params;
+  const { account, log } = actx;
+  return {
+    event,
+    account,
+    log,
+    sendWithRetry,
+    consumeQuoteRef,
+    prefix: `[qqbot:${account.accountId}]`,
+  };
+}
 
 function resolveQQBotMediaTargetContext(
   event: DeliverEventContext,
@@ -151,7 +179,7 @@ export async function parseAndSendMediaTags(
 
   const tagCounts = mediaTagMatches.reduce(
     (acc, m) => {
-      const t = m[1].toLowerCase();
+      const t = normalizeLowercaseStringOrEmpty(m[1]);
       acc[t] = (acc[t] ?? 0) + 1;
       return acc;
     },
@@ -184,8 +212,8 @@ export async function parseAndSendMediaTags(
       sendQueue.push({ type: "text", content: filterInternalMarkers(textBefore) });
     }
 
-    const tagName = match[1].toLowerCase();
-    let mediaPath = decodeMediaPath(match[2]?.trim() ?? "", log, prefix);
+    const tagName = normalizeLowercaseStringOrEmpty(match[1]);
+    let mediaPath = decodeMediaPath(normalizeOptionalString(match[2]) ?? "", log, prefix);
 
     if (mediaPath) {
       const typeMap: Record<string, QueueItem["type"]> = {
@@ -365,27 +393,27 @@ export async function sendPlainReply(
   }
 
   if (useMarkdown) {
-    await sendMarkdownReply(
+    await sendMarkdownReply({
       textWithoutImages,
-      collectedImageUrls,
+      imageUrls: collectedImageUrls,
       mdMatches,
       bareUrlMatches,
       event,
       actx,
       sendWithRetry,
       consumeQuoteRef,
-    );
+    });
   } else {
-    await sendPlainTextReply(
+    await sendPlainTextReply({
       textWithoutImages,
-      collectedImageUrls,
+      imageUrls: collectedImageUrls,
       mdMatches,
       bareUrlMatches,
       event,
       actx,
       sendWithRetry,
       consumeQuoteRef,
-    );
+    });
   }
 
   // Send local media collected from payload.mediaUrl or markdown local paths.
@@ -497,6 +525,7 @@ async function sendQQBotTextChunk(params: {
   if (event.channelId) {
     return await sendChannelMessage(token, event.channelId, text, event.messageId);
   }
+  return undefined;
 }
 
 async function sendTextChunks(
@@ -632,18 +661,10 @@ async function sendVoiceWithTimeout(
 }
 
 /** Send in markdown mode. */
-async function sendMarkdownReply(
-  textWithoutImages: string,
-  imageUrls: string[],
-  mdMatches: RegExpMatchArray[],
-  bareUrlMatches: RegExpMatchArray[],
-  event: DeliverEventContext,
-  actx: DeliverAccountContext,
-  sendWithRetry: SendWithRetryFn,
-  consumeQuoteRef: ConsumeQuoteRefFn,
-): Promise<void> {
-  const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
+async function sendMarkdownReply(params: ReplyModeParams): Promise<void> {
+  const { textWithoutImages, imageUrls, mdMatches, bareUrlMatches } = params;
+  const { event, account, log, sendWithRetry, consumeQuoteRef, prefix } =
+    resolveReplyModeRuntime(params);
 
   // Split images into public URLs vs. Base64 payloads.
   const httpImageUrls: string[] = [];
@@ -767,26 +788,17 @@ async function sendMarkdownReply(
 }
 
 /** Send in plain-text mode. */
-async function sendPlainTextReply(
-  textWithoutImages: string,
-  imageUrls: string[],
-  mdMatches: RegExpMatchArray[],
-  bareUrlMatches: RegExpMatchArray[],
-  event: DeliverEventContext,
-  actx: DeliverAccountContext,
-  sendWithRetry: SendWithRetryFn,
-  consumeQuoteRef: ConsumeQuoteRefFn,
-): Promise<void> {
-  const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
+async function sendPlainTextReply(params: ReplyModeParams): Promise<void> {
+  const { event, account, log, sendWithRetry, consumeQuoteRef, prefix } =
+    resolveReplyModeRuntime(params);
 
   const imgMediaTarget = resolveQQBotMediaTargetContext(event, account, prefix);
 
-  let result = textWithoutImages;
-  for (const m of mdMatches) {
+  let result = params.textWithoutImages;
+  for (const m of params.mdMatches) {
     result = result.replace(m[0], "").trim();
   }
-  for (const m of bareUrlMatches) {
+  for (const m of params.bareUrlMatches) {
     result = result.replace(m[0], "").trim();
   }
 
@@ -796,7 +808,7 @@ async function sendPlainTextReply(
   }
 
   try {
-    for (const imageUrl of imageUrls) {
+    for (const imageUrl of params.imageUrls) {
       await sendQQBotPhotoWithLogging({
         target: imgMediaTarget,
         imageUrl,

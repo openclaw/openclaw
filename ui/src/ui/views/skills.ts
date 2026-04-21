@@ -8,6 +8,7 @@ import type {
 } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
 import { resolveSafeExternalUrl } from "../open-external-url.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
@@ -21,6 +22,13 @@ function safeExternalHref(raw?: string): string | null {
     return null;
   }
   return resolveSafeExternalUrl(raw, window.location.href);
+}
+
+function showDialogWhenClosed(el?: Element) {
+  if (!(el instanceof HTMLDialogElement) || el.open) {
+    return;
+  }
+  el.showModal();
 }
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
@@ -81,6 +89,7 @@ function skillMatchesStatus(skill: SkillStatusEntry, status: SkillsStatusFilter)
     case "disabled":
       return skill.disabled;
   }
+  throw new Error("Unsupported skills status filter");
 }
 
 function skillStatusClass(skill: SkillStatusEntry): string {
@@ -114,10 +123,12 @@ export function renderSkills(props: SkillsProps) {
       ? skills
       : skills.filter((s) => skillMatchesStatus(s, props.statusFilter));
 
-  const filter = props.filter.trim().toLowerCase();
+  const filter = normalizeLowercaseStringOrEmpty(props.filter);
   const filtered = filter
     ? afterStatus.filter((skill) =>
-        [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(filter),
+        normalizeLowercaseStringOrEmpty(
+          [skill.name, skill.description, skill.source].join(" "),
+        ).includes(filter),
       )
     : afterStatus;
   const groups = groupSkills(filtered);
@@ -286,17 +297,11 @@ function renderClawHubResults(props: SkillsProps) {
 
 function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
-  const ensureModalOpen = (el?: Element) => {
-    if (!(el instanceof HTMLDialogElement) || el.open) {
-      return;
-    }
-    el.showModal();
-  };
 
   return html`
     <dialog
       class="md-preview-dialog"
-      ${ref(ensureModalOpen)}
+      ${ref(showDialogWhenClosed)}
       @click=${(e: Event) => {
         const dialog = e.currentTarget as HTMLDialogElement;
         if (e.target === dialog) {
@@ -418,17 +423,11 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
-  const ensureModalOpen = (el?: Element) => {
-    if (!(el instanceof HTMLDialogElement) || el.open) {
-      return;
-    }
-    el.showModal();
-  };
 
   return html`
     <dialog
       class="md-preview-dialog"
-      ${ref(ensureModalOpen)}
+      ${ref(showDialogWhenClosed)}
       @click=${(e: Event) => {
         const dialog = e.currentTarget as HTMLDialogElement;
         if (e.target === dialog) {

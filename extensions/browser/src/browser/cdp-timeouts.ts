@@ -5,7 +5,9 @@ export const CDP_JSON_NEW_TIMEOUT_MS = 1500;
 export const CHROME_REACHABILITY_TIMEOUT_MS = 500;
 export const CHROME_WS_READY_TIMEOUT_MS = 800;
 export const CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS = 10_000;
+export const CHROME_BOOTSTRAP_PREFS_POLL_MS = 100;
 export const CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS = 5000;
+export const CHROME_BOOTSTRAP_EXIT_POLL_MS = 50;
 export const CHROME_LAUNCH_READY_WINDOW_MS = 15_000;
 export const CHROME_LAUNCH_READY_POLL_MS = 200;
 export const CHROME_STOP_TIMEOUT_MS = 2500;
@@ -20,6 +22,13 @@ export const PROFILE_POST_RESTART_WS_TIMEOUT_MS = 600;
 export const CHROME_MCP_ATTACH_READY_WINDOW_MS = 8000;
 export const CHROME_MCP_ATTACH_READY_POLL_MS = 200;
 
+export function usesFastLoopbackCdpProbeClass(params: {
+  profileIsLoopback: boolean;
+  attachOnly?: boolean;
+}): boolean {
+  return params.profileIsLoopback && params.attachOnly !== true;
+}
+
 function normalizeTimeoutMs(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -29,12 +38,18 @@ function normalizeTimeoutMs(value: number | undefined): number | undefined {
 
 export function resolveCdpReachabilityTimeouts(params: {
   profileIsLoopback: boolean;
+  attachOnly?: boolean;
   timeoutMs?: number;
   remoteHttpTimeoutMs: number;
   remoteHandshakeTimeoutMs: number;
 }): { httpTimeoutMs: number; wsTimeoutMs: number } {
   const normalized = normalizeTimeoutMs(params.timeoutMs);
-  if (params.profileIsLoopback) {
+  if (
+    usesFastLoopbackCdpProbeClass({
+      profileIsLoopback: params.profileIsLoopback,
+      attachOnly: params.attachOnly,
+    })
+  ) {
     const httpTimeoutMs = normalized ?? PROFILE_HTTP_REACHABILITY_TIMEOUT_MS;
     const wsTimeoutMs = Math.max(
       PROFILE_WS_REACHABILITY_MIN_TIMEOUT_MS,

@@ -2,7 +2,14 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { encodeQuery, extractReplyText, isRecord, readString } from "./comment-shared.js";
+import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
+import {
+  encodeQuery,
+  extractReplyText,
+  formatFeishuApiError,
+  isRecord,
+  readString,
+} from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
@@ -104,6 +111,7 @@ type FeishuDriveToolContext = {
   deliveryContext?: {
     channel?: string;
     to?: string;
+    threadId?: string | number;
   };
 };
 
@@ -264,28 +272,7 @@ function applyCommentFileTypeDefault<
 }
 
 function formatDriveApiError(error: unknown): string {
-  if (!isRecord(error)) {
-    return typeof error === "string" ? error : JSON.stringify(error);
-  }
-  const response = isRecord(error.response) ? error.response : undefined;
-  const responseData = isRecord(response?.data) ? response?.data : undefined;
-  return JSON.stringify({
-    message:
-      typeof error.message === "string"
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : JSON.stringify(error),
-    code: readString(error.code),
-    method: readString(isRecord(error.config) ? error.config.method : undefined),
-    url: readString(isRecord(error.config) ? error.config.url : undefined),
-    params: isRecord(error.config) ? error.config.params : undefined,
-    http_status: typeof response?.status === "number" ? response.status : undefined,
-    feishu_code:
-      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
-    feishu_msg: readString(responseData?.msg),
-    feishu_log_id: readString(responseData?.log_id),
-  });
+  return formatFeishuApiError(error, { includeConfigParams: true });
 }
 
 function extractDriveApiErrorMeta(error: unknown): {
@@ -808,14 +795,28 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               }
               case "add_comment": {
                 const resolved = applyAddCommentDefaults(applyAddCommentAmbientDefaults(p, ctx));
-                return jsonToolResult(await addComment(client, resolved));
+                try {
+                  return jsonToolResult(await addComment(client, resolved));
+                } finally {
+                  void cleanupAmbientCommentTypingReaction({
+                    client: getDriveInternalClient(client),
+                    deliveryContext: ctx.deliveryContext,
+                  });
+                }
               }
               case "reply_comment": {
                 const resolved = applyCommentFileTypeDefault(
                   applyAmbientCommentDefaults(p, ctx),
                   "reply_comment",
                 );
-                return jsonToolResult(await deliverCommentThreadText(client, resolved));
+                try {
+                  return jsonToolResult(await deliverCommentThreadText(client, resolved));
+                } finally {
+                  void cleanupAmbientCommentTypingReaction({
+                    client: getDriveInternalClient(client),
+                    deliveryContext: ctx.deliveryContext,
+                  });
+                }
               }
               default:
                 return unknownToolActionResult((p as { action?: unknown }).action);
@@ -829,5 +830,5 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     { name: "feishu_drive" },
   );
 
-  api.logger.info?.(`feishu_drive: Registered feishu_drive tool`);
+  api.logger.debug?.(`feishu_drive: Registered feishu_drive tool`);
 }

@@ -18,14 +18,20 @@ export function runExtensionOxlint(params) {
   });
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), params.tempDirPrefix));
   const tempConfigPath = path.join(tempDir, "oxlint.json");
+  let exitCode = 0;
 
   try {
+    prepareExtensionPackageBoundaryArtifacts(repoRoot);
+
     const extensionFiles = params.roots.flatMap((root) =>
       collectTypeScriptFiles(path.resolve(repoRoot, root)),
     );
 
     if (extensionFiles.length === 0) {
-      console.error(params.emptyMessage);
+      console.log(params.emptyMessage);
+      if (params.allowEmpty === true) {
+        return;
+      }
       process.exit(1);
     }
 
@@ -43,10 +49,46 @@ export function runExtensionOxlint(params) {
       throw result.error;
     }
 
-    process.exit(result.status ?? 1);
+    exitCode = result.status ?? 1;
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
     releaseLock();
+  }
+
+  process.exitCode = exitCode;
+}
+
+function prepareExtensionPackageBoundaryArtifacts(repoRoot) {
+  const releaseLock = acquireLocalHeavyCheckLockSync({
+    cwd: repoRoot,
+    env: process.env,
+    toolName: "extension-package-boundary-artifacts",
+    lockName: "extension-package-boundary-artifacts",
+  });
+  let exitCode = 0;
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve(repoRoot, "scripts", "prepare-extension-package-boundary-artifacts.mjs")],
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    exitCode = result.status ?? 1;
+  } finally {
+    releaseLock();
+  }
+
+  if (exitCode !== 0) {
+    process.exitCode = exitCode;
   }
 }
 

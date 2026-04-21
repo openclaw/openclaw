@@ -11,6 +11,10 @@ import { z } from "zod";
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
 //   - Outgoing webhook user_id: per-integration sequential ID (e.g. 1)
@@ -221,16 +225,16 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   log?: { warn: (...args: unknown[]) => void };
 }): Promise<number | undefined> {
   const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
-  const lower = params.mutableWebhookUsername.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(params.mutableWebhookUsername);
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
-  const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
+  const byNickname = users.find((u) => normalizeLowercaseStringOrEmpty(u.nickname) === lower);
   if (byNickname) {
     return byNickname.user_id;
   }
 
   // Then by username
-  const byUsername = users.find((u) => u.username.toLowerCase() === lower);
+  const byUsername = users.find((u) => normalizeLowercaseStringOrEmpty(u.username) === lower);
   if (byUsername) {
     return byUsername.user_id;
   }

@@ -1,51 +1,23 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
-  deriveAspectRatioFromSize,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
-import type {
-  GeneratedImageAsset,
-  ImageGenerationIgnoredOverride,
-  ImageGenerationNormalization,
-  ImageGenerationResolution,
-  ImageGenerationResult,
-  ImageGenerationSourceImage,
-} from "./types.js";
+import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
+import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
-export type GenerateImageParams = {
-  cfg: OpenClawConfig;
-  prompt: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-  count?: number;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  inputImages?: ImageGenerationSourceImage[];
-};
-
-export type GenerateImageRuntimeResult = {
-  images: GeneratedImageAsset[];
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-  normalization?: ImageGenerationNormalization;
-  metadata?: Record<string, unknown>;
-  ignoredOverrides: ImageGenerationIgnoredOverride[];
-};
+export type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 
 function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
   return buildNoCapabilityModelConfiguredMessage({
@@ -122,34 +94,10 @@ export async function generateImage(
         normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,
-          ...(sanitized.normalization?.size?.requested !== undefined &&
-          sanitized.normalization.size.applied !== undefined
-            ? {
-                requestedSize: sanitized.normalization.size.requested,
-                normalizedSize: sanitized.normalization.size.applied,
-              }
-            : {}),
-          ...(sanitized.normalization?.aspectRatio?.applied !== undefined
-            ? {
-                ...(sanitized.normalization.aspectRatio.requested !== undefined
-                  ? { requestedAspectRatio: sanitized.normalization.aspectRatio.requested }
-                  : {}),
-                normalizedAspectRatio: sanitized.normalization.aspectRatio.applied,
-                ...(sanitized.normalization.aspectRatio.derivedFrom === "size" && params.size
-                  ? {
-                      requestedSize: params.size,
-                      aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size),
-                    }
-                  : {}),
-              }
-            : {}),
-          ...(sanitized.normalization?.resolution?.requested !== undefined &&
-          sanitized.normalization.resolution.applied !== undefined
-            ? {
-                requestedResolution: sanitized.normalization.resolution.requested,
-                normalizedResolution: sanitized.normalization.resolution.applied,
-              }
-            : {}),
+          ...buildMediaGenerationNormalizationMetadata({
+            normalization: sanitized.normalization,
+            requestedSizeForDerivedAspectRatio: params.size,
+          }),
         },
         ignoredOverrides: sanitized.ignoredOverrides,
       };
@@ -168,7 +116,7 @@ export async function generateImage(
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "image generation",
     attempts,
     lastError,

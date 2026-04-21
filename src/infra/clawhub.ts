@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
+export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -81,7 +85,13 @@ export type ClawHubPackageVersion = {
     createdAt: number;
     changelog: string;
     distTags?: string[];
-    files?: unknown;
+    files?: Array<{
+      path: string;
+      size: number;
+      sha256: string;
+      contentType?: string;
+    }>;
+    sha256hash?: string | null;
     compatibility?: ClawHubPackageCompatibility | null;
     capabilities?: ClawHubPackageDetail["package"] extends infer T
       ? T extends { capabilities?: infer C }
@@ -200,10 +210,10 @@ export class ClawHubRequestError extends Error {
 
 function normalizeBaseUrl(baseUrl?: string): string {
   const envValue =
-    process.env.OPENCLAW_CLAWHUB_URL?.trim() ||
-    process.env.CLAWHUB_URL?.trim() ||
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
+    normalizeOptionalString(process.env.CLAWHUB_URL) ||
     DEFAULT_CLAWHUB_URL;
-  const value = (baseUrl?.trim() || envValue).replace(/\/+$/, "");
+  const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
 }
 
@@ -226,14 +236,14 @@ function extractTokenFromClawHubConfig(value: unknown): string | undefined {
 
 function resolveClawHubConfigPaths(): string[] {
   const explicit =
-    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH?.trim() ||
-    process.env.CLAWHUB_CONFIG_PATH?.trim() ||
-    process.env.CLAWDHUB_CONFIG_PATH?.trim(); // legacy misspelling from older clawhub CLI builds; keep for back-compat
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_CONFIG_PATH) ||
+    normalizeOptionalString(process.env.CLAWHUB_CONFIG_PATH) ||
+    normalizeOptionalString(process.env.CLAWDHUB_CONFIG_PATH); // legacy misspelling from older clawhub CLI builds; keep for back-compat
   if (explicit) {
     return [explicit];
   }
 
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  const xdgConfigHome = normalizeOptionalString(process.env.XDG_CONFIG_HOME);
   const configHome =
     xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : path.join(os.homedir(), ".config");
   const xdgPath = path.join(configHome, "clawhub", "config.json");
@@ -250,9 +260,9 @@ function resolveClawHubConfigPaths(): string[] {
 
 export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   const envToken =
-    process.env.OPENCLAW_CLAWHUB_TOKEN?.trim() ||
-    process.env.CLAWHUB_TOKEN?.trim() ||
-    process.env.CLAWHUB_AUTH_TOKEN?.trim();
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_TOKEN) ||
+    normalizeOptionalString(process.env.CLAWHUB_TOKEN) ||
+    normalizeOptionalString(process.env.CLAWHUB_AUTH_TOKEN);
   if (envToken) {
     return envToken;
   }
@@ -357,7 +367,7 @@ async function clawhubRequest(
   params: ClawHubRequestParams,
 ): Promise<{ response: Response; url: URL }> {
   const url = buildUrl(params);
-  const token = params.token?.trim() || (await resolveClawHubAuthToken());
+  const token = normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -409,27 +419,39 @@ export function formatSha256Integrity(bytes: Uint8Array): string {
   return `sha256-${digest}`;
 }
 
-export function parseClawHubPluginSpec(raw: string): {
-  name: string;
-  version?: string;
-  baseUrl?: string;
-} | null {
-  const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("clawhub:")) {
+export function normalizeClawHubSha256Integrity(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
     return null;
   }
-  const spec = trimmed.slice("clawhub:".length).trim();
-  if (!spec) {
+  const prefixedBase64 = /^sha256-([A-Za-z0-9+/]+={0,1})$/.exec(trimmed);
+  if (prefixedBase64?.[1]) {
+    try {
+      const decoded = Buffer.from(prefixedBase64[1], "base64");
+      if (decoded.length === 32) {
+        return `sha256-${decoded.toString("base64")}`;
+      }
+    } catch {
+      return null;
+    }
     return null;
   }
-  const atIndex = spec.lastIndexOf("@");
-  if (atIndex <= 0 || atIndex >= spec.length - 1) {
-    return { name: spec };
+  const prefixedHex = /^sha256:([A-Fa-f0-9]{64})$/.exec(trimmed);
+  if (prefixedHex?.[1]) {
+    return `sha256-${Buffer.from(prefixedHex[1], "hex").toString("base64")}`;
   }
-  return {
-    name: spec.slice(0, atIndex).trim(),
-    version: spec.slice(atIndex + 1).trim() || undefined,
-  };
+  if (/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
+    return `sha256-${Buffer.from(trimmed, "hex").toString("base64")}`;
+  }
+  return null;
+}
+
+export function normalizeClawHubSha256Hex(value: string): string | null {
+  const trimmed = value.trim();
+  if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
+    return null;
+  }
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 export async function fetchClawHubPackageDetail(params: {

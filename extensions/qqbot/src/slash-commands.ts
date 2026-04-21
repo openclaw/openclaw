@@ -11,19 +11,15 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
+import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { QQBotAccountConfig } from "./types.js";
 import { debugLog } from "./utils/debug-log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "./utils/platform.js";
 const require = createRequire(import.meta.url);
 
 // Read the package version from package.json.
-let PLUGIN_VERSION = "unknown";
-try {
-  const pkg = require("../package.json");
-  PLUGIN_VERSION = pkg.version ?? "unknown";
-} catch {
-  // fallback
-}
+const PLUGIN_VERSION = readPluginPackageVersion({ require });
 
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
 const QQBOT_UPGRADE_GUIDE_URL = "https://q.qq.com/qqbot/openclaw/upgrade.html";
@@ -108,16 +104,28 @@ export interface QQBotFrameworkCommand {
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
 
+function normalizeCommandAllowlistEntry(entry: unknown): string {
+  if (
+    typeof entry === "string" ||
+    typeof entry === "number" ||
+    typeof entry === "boolean" ||
+    typeof entry === "bigint"
+  ) {
+    return `${entry}`
+      .trim()
+      .replace(/^qqbot:\s*/i, "")
+      .trim();
+  }
+  return "";
+}
+
 function hasExplicitCommandAllowlist(accountConfig?: QQBotAccountConfig): boolean {
   const allowFrom = accountConfig?.allowFrom;
   if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
     return false;
   }
   return allowFrom.every((entry) => {
-    const normalized = String(entry)
-      .trim()
-      .replace(/^qqbot:\s*/i, "")
-      .trim();
+    const normalized = normalizeCommandAllowlistEntry(entry);
     return normalized.length > 0 && normalized !== "*";
   });
 }
@@ -134,9 +142,9 @@ const frameworkCommands: Map<string, SlashCommand> = new Map();
 
 function registerCommand(cmd: SlashCommand): void {
   if (cmd.requireAuth) {
-    frameworkCommands.set(cmd.name.toLowerCase(), cmd);
+    frameworkCommands.set(normalizeLowercaseStringOrEmpty(cmd.name), cmd);
   } else {
-    commands.set(cmd.name.toLowerCase(), cmd);
+    commands.set(normalizeLowercaseStringOrEmpty(cmd.name), cmd);
   }
 }
 
@@ -604,7 +612,9 @@ export async function matchSlashCommand(ctx: SlashCommandContext): Promise<Slash
 
   // Parse the command name and trailing arguments.
   const spaceIdx = content.indexOf(" ");
-  const cmdName = (spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx)).toLowerCase();
+  const cmdName = normalizeLowercaseStringOrEmpty(
+    spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx),
+  );
   const args = spaceIdx === -1 ? "" : content.slice(spaceIdx + 1).trim();
 
   const cmd = commands.get(cmdName);

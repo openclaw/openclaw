@@ -1,12 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  applyAccountNameToChannelSection,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/channel-plugin-common";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { applyAccountNameToChannelSection } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   applyQQBotAccountConfig,
@@ -15,6 +14,20 @@ import {
   resolveQQBotAccount,
 } from "./config.js";
 import type { ResolvedQQBotAccount } from "./types.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeStringifiedOptionalString(
+  value: string | number | null | undefined,
+): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const normalized = String(value).trim();
+  return normalized || undefined;
+}
 
 export const qqbotMeta = {
   id: "qqbot",
@@ -117,8 +130,8 @@ export function formatQQBotAllowFrom(params: {
   allowFrom: Array<string | number> | undefined | null;
 }): string[] {
   return (params.allowFrom ?? [])
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+    .map((entry) => normalizeStringifiedOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry))
     .map((entry) => entry.replace(/^qqbot:/i, ""))
     .map((entry) => entry.toUpperCase());
 }

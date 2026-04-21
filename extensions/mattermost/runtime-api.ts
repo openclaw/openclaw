@@ -86,5 +86,4 @@ export {
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
 export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-export { registerSlashCommandRoute } from "./src/mattermost/slash-state.js";
 export { setMattermostRuntime } from "./src/runtime.js";

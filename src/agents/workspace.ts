@@ -6,7 +6,7 @@ import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
@@ -16,7 +16,7 @@ export function resolveDefaultAgentWorkspaceDir(
 ): string {
   const home = resolveRequiredHomeDir(env, homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
-  if (profile && profile.toLowerCase() !== "default") {
+  if (profile && normalizeOptionalLowercaseString(profile) !== "default") {
     return path.join(home, ".openclaw", `workspace-${profile}`);
   }
   return path.join(home, ".openclaw", "workspace");
@@ -263,6 +263,22 @@ export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
 }
 
+export async function resolveWorkspaceBootstrapStatus(
+  dir: string,
+): Promise<"pending" | "complete"> {
+  const resolvedDir = resolveUserPath(dir);
+  const state = await readWorkspaceSetupStateForDir(resolvedDir);
+  if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
+    return "complete";
+  }
+  const bootstrapExists = await fileExists(path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME));
+  return bootstrapExists ? "pending" : "complete";
+}
+
+export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
+  return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
+}
+
 async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
@@ -334,6 +350,7 @@ export async function ensureAgentWorkspace(params?: {
   userPath?: string;
   heartbeatPath?: string;
   bootstrapPath?: string;
+  identityPathCreated?: boolean;
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
@@ -382,7 +399,7 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
+  const identityPathCreated = await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
@@ -459,6 +476,7 @@ export async function ensureAgentWorkspace(params?: {
     userPath,
     heartbeatPath,
     bootstrapPath,
+    identityPathCreated,
   };
 }
 

@@ -13,7 +13,10 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("bedrock-discovery");
 
@@ -69,7 +72,7 @@ function buildCacheKey(params: {
 }
 
 function includesTextModalities(modalities?: Array<string>): boolean {
-  return (modalities ?? []).some((entry) => entry.toLowerCase() === "text");
+  return (modalities ?? []).some((entry) => normalizeOptionalLowercaseString(entry) === "text");
 }
 
 function isActive(summary: BedrockModelSummary): boolean {
@@ -81,7 +84,7 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
   const inputs = summary.inputModalities ?? [];
   const mapped = new Set<"text" | "image">();
   for (const modality of inputs) {
-    const lower = modality.toLowerCase();
+    const lower = normalizeOptionalLowercaseString(modality);
     if (lower === "text") {
       mapped.add("text");
     }
@@ -96,7 +99,9 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
 }
 
 function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  const haystack = `${summary.modelId ?? ""} ${summary.modelName ?? ""}`.toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(
+    `${summary.modelId ?? ""} ${summary.modelName ?? ""}`,
+  );
   return haystack.includes("reasoning") || haystack.includes("thinking");
 }
 
@@ -256,7 +261,9 @@ function resolveInferenceProfiles(
       const models = profile.models ?? [];
       const matchesFilter = models.some((m) => {
         const provider = m.modelArn?.split("/")?.[1]?.split(".")?.[0];
-        return provider ? providerFilter.includes(provider.toLowerCase()) : false;
+        return provider
+          ? providerFilter.includes(normalizeOptionalLowercaseString(provider) ?? "")
+          : false;
       });
       if (!matchesFilter) {
         continue;
@@ -265,7 +272,9 @@ function resolveInferenceProfiles(
 
     // Look up the underlying foundation model to inherit its capabilities.
     const baseModelId = resolveBaseModelId(profile);
-    const baseModel = baseModelId ? foundationModels.get(baseModelId.toLowerCase()) : undefined;
+    const baseModel = baseModelId
+      ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
+      : undefined;
 
     discovered.push({
       id: profile.inferenceProfileId,
@@ -356,8 +365,9 @@ export async function discoverBedrockModels(params: {
         maxTokens: defaultMaxTokens,
       });
       discovered.push(def);
-      seenIds.add(def.id.toLowerCase());
-      foundationModels.set(def.id.toLowerCase(), def);
+      const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
+      seenIds.add(normalizedId);
+      foundationModels.set(normalizedId, def);
     }
 
     // Merge inference profiles — inherit capabilities from foundation models.
@@ -368,9 +378,10 @@ export async function discoverBedrockModels(params: {
       foundationModels,
     );
     for (const profile of inferenceProfiles) {
-      if (!seenIds.has(profile.id.toLowerCase())) {
+      const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);
+      if (!seenIds.has(normalizedId)) {
         discovered.push(profile);
-        seenIds.add(profile.id.toLowerCase());
+        seenIds.add(normalizedId);
       }
     }
 

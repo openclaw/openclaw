@@ -11,6 +11,32 @@ import {
 describe("qqbot local media path remapping", () => {
   const createdPaths: string[] = [];
 
+  function createOpenClawTestRoot() {
+    const actualHome = getHomeDir();
+    const openclawDir = path.join(actualHome, ".openclaw");
+    fs.mkdirSync(openclawDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
+    createdPaths.push(testRoot);
+    return { actualHome, testRootName: path.basename(testRoot) };
+  }
+
+  function createQqbotMediaFile(fileName: string) {
+    const { actualHome, testRootName } = createOpenClawTestRoot();
+    const mediaFile = path.join(
+      actualHome,
+      ".openclaw",
+      "media",
+      "qqbot",
+      "downloads",
+      testRootName,
+      fileName,
+    );
+    fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
+    fs.writeFileSync(mediaFile, "image", "utf8");
+    createdPaths.push(path.dirname(mediaFile));
+    return { actualHome, testRootName, mediaFile };
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
     for (const target of createdPaths.splice(0)) {
@@ -19,24 +45,7 @@ describe("qqbot local media path remapping", () => {
   });
 
   it("remaps missing workspace media paths to the real media directory", () => {
-    const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
-    createdPaths.push(testRoot);
-
-    const mediaFile = path.join(
-      actualHome,
-      ".openclaw",
-      "media",
-      "qqbot",
-      "downloads",
-      path.basename(testRoot),
-      "example.png",
-    );
-    fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
-    fs.writeFileSync(mediaFile, "image", "utf8");
-    createdPaths.push(path.dirname(mediaFile));
+    const { actualHome, testRootName, mediaFile } = createQqbotMediaFile("example.png");
 
     const missingWorkspacePath = path.join(
       actualHome,
@@ -44,7 +53,7 @@ describe("qqbot local media path remapping", () => {
       "workspace",
       "qqbot",
       "downloads",
-      path.basename(testRoot),
+      testRootName,
       "example.png",
     );
 
@@ -52,24 +61,7 @@ describe("qqbot local media path remapping", () => {
   });
 
   it("leaves existing media paths unchanged", () => {
-    const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
-    createdPaths.push(testRoot);
-
-    const mediaFile = path.join(
-      actualHome,
-      ".openclaw",
-      "media",
-      "qqbot",
-      "downloads",
-      path.basename(testRoot),
-      "existing.png",
-    );
-    fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
-    fs.writeFileSync(mediaFile, "image", "utf8");
-    createdPaths.push(path.dirname(mediaFile));
+    const { mediaFile } = createQqbotMediaFile("existing.png");
 
     expect(resolveQQBotLocalMediaPath(mediaFile)).toBe(mediaFile);
   });
@@ -99,41 +91,20 @@ describe("qqbot local media path remapping", () => {
   });
 
   it("allows structured payload files inside the QQ Bot media directory", () => {
-    const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
-    createdPaths.push(testRoot);
+    const { mediaFile } = createQqbotMediaFile("allowed.png");
 
-    const mediaFile = path.join(
-      actualHome,
-      ".openclaw",
-      "media",
-      "qqbot",
-      "downloads",
-      path.basename(testRoot),
-      "allowed.png",
-    );
-    fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
-    fs.writeFileSync(mediaFile, "image", "utf8");
-    createdPaths.push(path.dirname(mediaFile));
-
-    expect(resolveQQBotPayloadLocalFilePath(mediaFile)).toBe(mediaFile);
+    expect(resolveQQBotPayloadLocalFilePath(mediaFile)).toBe(fs.realpathSync(mediaFile));
   });
 
   it("blocks structured payload files inside the QQ Bot data directory", () => {
-    const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
-    createdPaths.push(testRoot);
+    const { actualHome, testRootName } = createOpenClawTestRoot();
 
     const dataFile = path.join(
       actualHome,
       ".openclaw",
       "qqbot",
       "sessions",
-      path.basename(testRoot),
+      testRootName,
       "session.json",
     );
     fs.mkdirSync(path.dirname(dataFile), { recursive: true });
@@ -144,24 +115,7 @@ describe("qqbot local media path remapping", () => {
   });
 
   it("allows legacy workspace paths when they remap into QQ Bot media storage", () => {
-    const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
-    createdPaths.push(testRoot);
-
-    const mediaFile = path.join(
-      actualHome,
-      ".openclaw",
-      "media",
-      "qqbot",
-      "downloads",
-      path.basename(testRoot),
-      "legacy.png",
-    );
-    fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
-    fs.writeFileSync(mediaFile, "image", "utf8");
-    createdPaths.push(path.dirname(mediaFile));
+    const { actualHome, testRootName, mediaFile } = createQqbotMediaFile("legacy.png");
 
     const missingWorkspacePath = path.join(
       actualHome,
@@ -169,10 +123,10 @@ describe("qqbot local media path remapping", () => {
       "workspace",
       "qqbot",
       "downloads",
-      path.basename(testRoot),
+      testRootName,
       "legacy.png",
     );
 
-    expect(resolveQQBotPayloadLocalFilePath(missingWorkspacePath)).toBe(mediaFile);
+    expect(resolveQQBotPayloadLocalFilePath(missingWorkspacePath)).toBe(fs.realpathSync(mediaFile));
   });
 });

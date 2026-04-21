@@ -180,7 +180,7 @@ The lookup token accepts a task ID, run ID, or session key. Shows the full recor
 openclaw tasks cancel <lookup>
 ```
 
-For ACP and subagent tasks, this kills the child session. Status transitions to `cancelled` and a delivery notification is sent.
+For ACP and subagent tasks, this kills the child session. For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
 
 ### `tasks notify`
 
@@ -301,7 +301,7 @@ See [Task Flow](/automation/taskflow) for details.
 
 ### Tasks and cron
 
-A cron job **definition** lives in `~/.openclaw/cron/jobs.json`. **Every** cron execution creates a task record — both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
+A cron job **definition** lives in `~/.openclaw/cron/jobs.json`; runtime execution state lives beside it in `~/.openclaw/cron/jobs-state.json`. **Every** cron execution creates a task record — both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
 
 See [Cron Jobs](/automation/cron-jobs).
 

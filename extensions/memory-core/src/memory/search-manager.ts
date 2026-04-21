@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -10,6 +11,7 @@ import {
   resolveMemoryBackendConfig,
   type MemoryEmbeddingProbeResult,
   type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
   type MemorySyncProgressUpdate,
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -32,10 +34,16 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
 const log = createSubsystemLogger("memory");
 const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
 let managerRuntimePromise: Promise<typeof import("../../manager-runtime.js")> | null = null;
+let qmdManagerModulePromise: Promise<typeof import("./qmd-manager.js")> | null = null;
 
 function loadManagerRuntime() {
   managerRuntimePromise ??= import("../../manager-runtime.js");
   return managerRuntimePromise;
+}
+
+function loadQmdManagerModule() {
+  qmdManagerModulePromise ??= import("./qmd-manager.js");
+  return qmdManagerModulePromise;
 }
 
 export type MemorySearchManagerResult = {
@@ -67,10 +75,20 @@ export async function getMemorySearchManager(params: {
       }
     }
 
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+    } catch (err) {
+      log.warn(
+        `qmd workspace unavailable (${workspaceDir}); falling back to builtin: ${formatErrorMessage(err)}`,
+      );
+      return await getBuiltinMemorySearchManager(params);
+    }
+
     const qmdBinary = await checkQmdBinaryAvailability({
       command: resolved.qmd.command,
       env: process.env,
-      cwd: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+      cwd: workspaceDir,
     });
     if (!qmdBinary.available) {
       log.warn(
@@ -78,7 +96,7 @@ export async function getMemorySearchManager(params: {
       );
     } else {
       try {
-        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const { QmdMemoryManager } = await loadQmdManagerModule();
         const primary = await QmdMemoryManager.create({
           cfg: params.cfg,
           agentId: params.agentId,
@@ -111,6 +129,14 @@ export async function getMemorySearchManager(params: {
     }
   }
 
+  return await getBuiltinMemorySearchManager(params);
+}
+
+async function getBuiltinMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: "default" | "status";
+}): Promise<MemorySearchManagerResult> {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
@@ -126,7 +152,13 @@ class BorrowedMemoryManager implements MemorySearchManager {
 
   async search(
     query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+    },
   ) {
     return await this.inner.search(query, opts);
   }
@@ -191,7 +223,13 @@ class FallbackMemoryManager implements MemorySearchManager {
 
   async search(
     query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+    },
   ) {
     if (!this.primaryFailed) {
       try {

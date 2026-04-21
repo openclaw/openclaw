@@ -1,9 +1,19 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
+  SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS,
+  isAllowedToolCallName,
+  isRedactedSessionsSpawnAttachment,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
-const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
+export { isRedactedSessionsSpawnAttachment } from "./tool-call-shared.js";
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -12,6 +22,14 @@ type RawToolCallBlock = {
   input?: unknown;
   arguments?: unknown;
 };
+
+function isThinkingLikeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
 
 function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   if (!block || typeof block !== "object") {
@@ -39,40 +57,6 @@ function hasToolCallId(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.id);
 }
 
-function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
-  if (!allowedToolNames) {
-    return null;
-  }
-  const normalized = new Set<string>();
-  for (const name of allowedToolNames) {
-    if (typeof name !== "string") {
-      continue;
-    }
-    const trimmed = name.trim();
-    if (trimmed) {
-      normalized.add(trimmed.toLowerCase());
-    }
-  }
-  return normalized.size > 0 ? normalized : null;
-}
-
-function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> | null): boolean {
-  if (typeof block.name !== "string") {
-    return false;
-  }
-  const trimmed = block.name.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
-    return false;
-  }
-  if (!allowedToolNames) {
-    return true;
-  }
-  return allowedToolNames.has(trimmed.toLowerCase());
-}
-
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -82,18 +66,35 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
   if (!Array.isArray(raw)) {
     return value;
   }
+  let changed = false;
   const next = raw.map((item) => {
-    if (!item || typeof item !== "object") {
+    if (isRedactedSessionsSpawnAttachment(item)) {
       return item;
     }
-    const a = item as Record<string, unknown>;
-    if (!Object.hasOwn(a, "content")) {
-      return item;
-    }
-    const { content: _content, ...rest } = a;
-    return { ...rest, content: "__OPENCLAW_REDACTED__" };
+    changed = true;
+    return redactSessionsSpawnAttachment(item);
   });
+  if (!changed) {
+    return value;
+  }
   return { ...rec, attachments: next };
+}
+
+function redactSessionsSpawnAttachment(item: unknown): Record<string, unknown> {
+  const next: Record<string, unknown> = {
+    content: REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
+  };
+  if (!item || typeof item !== "object") {
+    return next;
+  }
+  const attachment = item as Record<string, unknown>;
+  for (const key of SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS) {
+    const value = attachment[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      next[key] = value;
+    }
+  }
+  return next;
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
@@ -103,7 +104,7 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   const normalizedName = hasTrimmedName ? trimmedName : undefined;
   const nameChanged = hasTrimmedName && rawName !== trimmedName;
 
-  const isSessionsSpawn = normalizedName?.toLowerCase() === "sessions_spawn";
+  const isSessionsSpawn = normalizeLowercaseStringOrEmpty(normalizedName) === "sessions_spawn";
 
   if (!isSessionsSpawn) {
     if (!nameChanged) {
@@ -131,6 +132,44 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
     next.input = nextInput;
   }
   return next as RawToolCallBlock;
+}
+
+function countRawToolCallBlocks(content: unknown[]): number {
+  let count = 0;
+  for (const block of content) {
+    if (isRawToolCallBlock(block)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function isReplaySafeThinkingAssistantTurn(
+  content: unknown[],
+  allowedToolNames: Set<string> | null,
+): boolean {
+  let sawToolCall = false;
+  const seenToolCallIds = new Set<string>();
+  for (const block of content) {
+    if (!isRawToolCallBlock(block)) {
+      continue;
+    }
+    sawToolCall = true;
+    const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
+    if (
+      !hasToolCallInput(block) ||
+      !toolCallId ||
+      seenToolCallIds.has(toolCallId) ||
+      !isAllowedToolCallName(block.name, allowedToolNames)
+    ) {
+      return false;
+    }
+    seenToolCallIds.add(toolCallId);
+    if (sanitizeToolCallBlock(block) !== block) {
+      return false;
+    }
+  }
+  return sawToolCall;
 }
 
 function makeMissingToolResult(params: {
@@ -186,6 +225,7 @@ export type ToolCallInputRepairReport = {
 
 export type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
+  allowProviderOwnedThinkingReplay?: boolean;
 };
 
 export type ErroredAssistantResultPolicy = "preserve" | "drop";
@@ -223,6 +263,8 @@ export function repairToolCallInputs(
   let changed = false;
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
+  const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
+  const claimedReplaySafeToolCallIds = new Set<string>();
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -235,6 +277,32 @@ export function repairToolCallInputs(
       continue;
     }
 
+    if (
+      allowProviderOwnedThinkingReplay &&
+      msg.content.some((block) => isThinkingLikeBlock(block)) &&
+      countRawToolCallBlocks(msg.content) > 0
+    ) {
+      // Signed Anthropic thinking blocks must remain byte-for-byte stable on
+      // replay. Preserve the turn only if every sibling tool call is already
+      // valid and requires no redaction or normalization. Otherwise drop the
+      // whole assistant turn rather than mutating provider-owned content.
+      const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
+      if (
+        isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames) &&
+        replaySafeToolCalls.every((toolCall) => !claimedReplaySafeToolCallIds.has(toolCall.id))
+      ) {
+        for (const toolCall of replaySafeToolCalls) {
+          claimedReplaySafeToolCallIds.add(toolCall.id);
+        }
+        out.push(msg);
+      } else {
+        droppedToolCalls += countRawToolCallBlocks(msg.content);
+        droppedAssistantMessages += 1;
+        changed = true;
+      }
+      continue;
+    }
+
     const nextContent: typeof msg.content = [];
     let droppedInMessage = 0;
     let messageChanged = false;
@@ -244,7 +312,7 @@ export function repairToolCallInputs(
         isRawToolCallBlock(block) &&
         (!hasToolCallInput(block) ||
           !hasToolCallId(block) ||
-          !hasToolCallName(block, allowedToolNames))
+          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
       ) {
         droppedToolCalls += 1;
         droppedInMessage += 1;
@@ -264,7 +332,7 @@ export function repairToolCallInputs(
             typeof (block as { name?: unknown }).name === "string"
               ? (block as { name: string }).name.trim()
               : undefined;
-          if (blockName?.toLowerCase() === "sessions_spawn") {
+          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
             const sanitized = sanitizeToolCallBlock(block);
             if (sanitized !== block) {
               changed = true;

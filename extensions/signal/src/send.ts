@@ -2,6 +2,7 @@ import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runt
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
@@ -39,22 +40,13 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
-let signalConfigRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
-  | undefined;
-
-async function loadSignalConfigRuntime() {
-  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
-  return await signalConfigRuntimePromise;
-}
-
 async function resolveSignalRpcAccountInfo(
   opts: Pick<SignalSendOpts, "cfg" | "baseUrl" | "account" | "accountId">,
 ) {
   if (opts.baseUrl?.trim() && opts.account?.trim()) {
     return undefined;
   }
-  const cfg = opts.cfg ?? (await loadSignalConfigRuntime()).loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   return resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -66,11 +58,11 @@ function parseTarget(raw: string): SignalTarget {
   if (!value) {
     throw new Error("Signal recipient is required");
   }
-  const lower = value.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(value);
   if (lower.startsWith("signal:")) {
     value = value.slice("signal:".length).trim();
   }
-  const normalized = value.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized.startsWith("group:")) {
     return { type: "group", groupId: value.slice("group:".length).trim() };
   }

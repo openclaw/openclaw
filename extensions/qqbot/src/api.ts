@@ -1,6 +1,12 @@
 import { createRequire } from "node:module";
 import os from "node:os";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import {
+  fetchWithSsrFGuard,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
@@ -10,12 +16,7 @@ const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 
 // Plugin User-Agent format: QQBotPlugin/{version} (Node/{nodeVersion}; {os})
 const _require = createRequire(import.meta.url);
-let _pluginVersion = "unknown";
-try {
-  _pluginVersion = _require("../package.json").version ?? "unknown";
-} catch {
-  /* fallback */
-}
+const _pluginVersion = readPluginPackageVersion({ require: _require });
 export const PLUGIN_USER_AGENT = `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()})`;
 
 // =========================================================================
@@ -37,17 +38,17 @@ const onMessageSentHookMap = new Map<string, OnMessageSentCallback>();
 
 /** Register an outbound-message hook scoped to one appId. */
 export function onMessageSent(appId: string, callback: OnMessageSentCallback): void {
-  onMessageSentHookMap.set(String(appId).trim(), callback);
+  onMessageSentHookMap.set(normalizeOptionalString(appId) ?? "", callback);
 }
 
 /** Initialize per-app API behavior such as markdown support. */
 export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
-  markdownSupportMap.set(String(appId).trim(), options.markdownSupport === true);
+  markdownSupportMap.set(normalizeOptionalString(appId) ?? "", options.markdownSupport === true);
 }
 
 /** Return whether markdown is enabled for the given appId. */
 export function isMarkdownSupport(appId: string): boolean {
-  return markdownSupportMap.get(String(appId).trim()) ?? false;
+  return markdownSupportMap.get(normalizeOptionalString(appId) ?? "") ?? false;
 }
 
 // Keep token state per appId to avoid multi-account cross-talk.
@@ -58,7 +59,7 @@ const tokenFetchPromises = new Map<string, Promise<string>>();
  * Resolve an access token with caching and singleflight semantics.
  */
 export async function getAccessToken(appId: string, clientSecret: string): Promise<string> {
-  const normalizedAppId = String(appId).trim();
+  const normalizedAppId = normalizeOptionalString(appId) ?? "";
   const cachedToken = tokenCacheMap.get(normalizedAppId);
 
   // Refresh slightly ahead of expiry without making short-lived tokens unusable.
@@ -97,12 +98,19 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   debugLog(`[qqbot-api:${appId}] >>> POST ${TOKEN_URL}`);
 
   let response: Response;
+  let release = async () => {};
   try {
-    response = await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: requestHeaders,
-      body: JSON.stringify(requestBody),
+    const guarded = await fetchWithSsrFGuard({
+      url: TOKEN_URL,
+      init: {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody),
+      },
+      auditContext: "qqbot.token",
     });
+    response = guarded.response;
+    release = guarded.release;
   } catch (err) {
     debugError(`[qqbot-api:${appId}] <<< Network error:`, err);
     throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
@@ -110,50 +118,54 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     });
   }
 
-  const responseHeaders: Record<string, string> = {};
-  response.headers.forEach((value, key) => {
-    responseHeaders[key] = value;
-  });
-  const tokenTraceId = response.headers.get("x-tps-trace-id") ?? "";
-  debugLog(
-    `[qqbot-api:${appId}] <<< Status: ${response.status} ${response.statusText}${tokenTraceId ? ` | TraceId: ${tokenTraceId}` : ""}`,
-  );
-
-  let data: { access_token?: string; expires_in?: number };
-  let rawBody: string;
   try {
-    rawBody = await response.text();
-    // Redact the token before logging the raw response body.
-    const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
-    debugLog(`[qqbot-api:${appId}] <<< Body:`, logBody);
-    data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
-  } catch (err) {
-    debugError(`[qqbot-api:${appId}] <<< Parse error:`, err);
-    throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
-      cause: err,
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
     });
+    const tokenTraceId = response.headers.get("x-tps-trace-id") ?? "";
+    debugLog(
+      `[qqbot-api:${appId}] <<< Status: ${response.status} ${response.statusText}${tokenTraceId ? ` | TraceId: ${tokenTraceId}` : ""}`,
+    );
+
+    let data: { access_token?: string; expires_in?: number };
+    let rawBody: string;
+    try {
+      rawBody = await response.text();
+      // Redact the token before logging the raw response body.
+      const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
+      debugLog(`[qqbot-api:${appId}] <<< Body:`, logBody);
+      data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
+    } catch (err) {
+      debugError(`[qqbot-api:${appId}] <<< Parse error:`, err);
+      throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
+        cause: err,
+      });
+    }
+
+    if (!data.access_token) {
+      throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+    }
+
+    const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
+
+    tokenCacheMap.set(appId, {
+      token: data.access_token,
+      expiresAt,
+      appId,
+    });
+
+    debugLog(`[qqbot-api:${appId}] Token cached, expires at: ${new Date(expiresAt).toISOString()}`);
+    return data.access_token;
+  } finally {
+    await release();
   }
-
-  if (!data.access_token) {
-    throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
-  }
-
-  const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
-
-  tokenCacheMap.set(appId, {
-    token: data.access_token,
-    expiresAt,
-    appId,
-  });
-
-  debugLog(`[qqbot-api:${appId}] Token cached, expires at: ${new Date(expiresAt).toISOString()}`);
-  return data.access_token;
 }
 
 /** Clear one token cache or all token caches. */
 export function clearTokenCache(appId?: string): void {
   if (appId) {
-    const normalizedAppId = String(appId).trim();
+    const normalizedAppId = normalizeOptionalString(appId) ?? "";
     tokenCacheMap.delete(normalizedAppId);
     debugLog(`[qqbot-api:${normalizedAppId}] Token cache cleared manually.`);
   } else {
@@ -232,8 +244,15 @@ export async function apiRequest<T = unknown>(
   }
 
   let res: Response;
+  let release = async () => {};
   try {
-    res = await fetch(url, options);
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      init: options,
+      auditContext: `qqbot.api${path}`,
+    });
+    res = guarded.response;
+    release = guarded.release;
   } catch (err) {
     clearTimeout(timeoutId);
     if (err instanceof Error && err.name === "AbortError") {
@@ -255,24 +274,25 @@ export async function apiRequest<T = unknown>(
     `[qqbot-api] <<< Status: ${res.status} ${res.statusText}${traceId ? ` | TraceId: ${traceId}` : ""}`,
   );
 
-  let data: T;
-  let rawBody: string;
   try {
-    rawBody = await res.text();
+    let data: T;
+    const rawBody = await res.text();
     debugLog(`[qqbot-api] <<< Body:`, rawBody);
     data = JSON.parse(rawBody) as T;
+
+    if (!res.ok) {
+      const error = data as { message?: string; code?: number };
+      throw new Error(`API Error [${path}]: ${error.message ?? JSON.stringify(data)}`);
+    }
+
+    return data;
   } catch (err) {
     throw new Error(`Failed to parse response[${path}]: ${formatErrorMessage(err)}`, {
       cause: err,
     });
+  } finally {
+    await release();
   }
-
-  if (!res.ok) {
-    const error = data as { message?: string; code?: number };
-    throw new Error(`API Error [${path}]: ${error.message ?? JSON.stringify(data)}`);
-  }
-
-  return data;
 }
 
 // Upload retry with exponential backoff.
@@ -347,7 +367,7 @@ async function sendAndNotify(
   meta: OutboundMeta,
 ): Promise<MessageResponse> {
   const result = await apiRequest<MessageResponse>(accessToken, method, path, body);
-  const hook = onMessageSentHookMap.get(String(appId).trim());
+  const hook = onMessageSentHookMap.get(normalizeOptionalString(appId) ?? "");
   if (result.ext_info?.ref_idx && hook) {
     try {
       hook(result.ext_info.ref_idx, meta);
@@ -517,6 +537,22 @@ export interface UploadMediaResponse {
   id?: string;
 }
 
+async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch (err) {
+    throw new Error(`Invalid media URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("Direct-upload media URL must use HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  return parsed.toString();
+}
+
 export async function uploadC2CMedia(
   accessToken: string,
   openid: string,
@@ -540,7 +576,7 @@ export async function uploadC2CMedia(
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
   if (url) {
-    body.url = url;
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }
@@ -593,7 +629,7 @@ export async function uploadGroupMedia(
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
   if (url) {
-    body.url = url;
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }

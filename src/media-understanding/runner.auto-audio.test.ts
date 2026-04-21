@@ -1,12 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
 
 function createProviderRegistry(
   providers: Record<string, MediaUnderstandingProvider>,

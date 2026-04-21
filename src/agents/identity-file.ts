@@ -12,6 +12,15 @@ export type AgentIdentityFile = {
   avatar?: string;
 };
 
+const WRITABLE_IDENTITY_FIELDS = [
+  ["name", "Name"],
+  ["theme", "Theme"],
+  ["emoji", "Emoji"],
+  ["avatar", "Avatar"],
+] as const satisfies ReadonlyArray<readonly [keyof AgentIdentityFile, string]>;
+
+const RICH_IDENTITY_LABELS = new Set(["name", "creature", "vibe", "theme", "emoji", "avatar"]);
+
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "pick something you like",
   "ai? robot? familiar? ghost in the machine? something weirder?",
@@ -88,6 +97,88 @@ export function identityHasValues(identity: AgentIdentityFile): boolean {
     identity.vibe ||
     identity.avatar,
   );
+}
+
+function buildIdentityLine(label: string, value: string): string {
+  return `- ${label}: ${value}`;
+}
+
+function matchesIdentityLabel(line: string, label: string): boolean {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\s*-\\s*(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:`, "i").test(line.trim());
+}
+
+function normalizeIdentityContent(content: string | undefined): string[] {
+  if (!content) {
+    return [];
+  }
+  return content.replace(/\r\n/g, "\n").split("\n");
+}
+
+function resolveIdentityInsertIndex(lines: string[]): number {
+  let lastIdentityIndex = -1;
+  for (const [index, line] of lines.entries()) {
+    const cleaned = line.trim().replace(/^\s*-\s*/, "");
+    const colonIndex = cleaned.indexOf(":");
+    if (colonIndex === -1) {
+      continue;
+    }
+    const label = normalizeLowercaseStringOrEmpty(
+      cleaned.slice(0, colonIndex).replace(/[*_]/g, ""),
+    );
+    if (RICH_IDENTITY_LABELS.has(label)) {
+      lastIdentityIndex = index;
+    }
+  }
+  if (lastIdentityIndex >= 0) {
+    return lastIdentityIndex + 1;
+  }
+
+  const headingIndex = lines.findIndex((line) => line.trim().startsWith("#"));
+  if (headingIndex === -1) {
+    return 0;
+  }
+  let insertIndex = headingIndex + 1;
+  while (insertIndex < lines.length && lines[insertIndex]?.trim() === "") {
+    insertIndex += 1;
+  }
+  return insertIndex;
+}
+
+export function mergeIdentityMarkdownContent(
+  content: string | undefined,
+  identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
+): string {
+  const lines = normalizeIdentityContent(content);
+  const nextLines = lines.length > 0 ? [...lines] : ["# IDENTITY.md - Agent Identity", ""];
+
+  for (const [field, label] of WRITABLE_IDENTITY_FIELDS) {
+    const value = identity[field]?.trim();
+    if (!value) {
+      continue;
+    }
+
+    const matchingIndexes = nextLines.reduce<number[]>((indexes, line, index) => {
+      if (matchesIdentityLabel(line, label)) {
+        indexes.push(index);
+      }
+      return indexes;
+    }, []);
+
+    if (matchingIndexes.length > 0) {
+      const [firstIndex, ...duplicateIndexes] = matchingIndexes;
+      nextLines[firstIndex] = buildIdentityLine(label, value);
+      for (const duplicateIndex of duplicateIndexes.toReversed()) {
+        nextLines.splice(duplicateIndex, 1);
+      }
+      continue;
+    }
+
+    const insertIndex = resolveIdentityInsertIndex(nextLines);
+    nextLines.splice(insertIndex, 0, buildIdentityLine(label, value));
+  }
+
+  return nextLines.join("\n").replace(/\n*$/, "\n");
 }
 
 export function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {

@@ -5,6 +5,8 @@
  */
 
 import { Buffer } from "buffer";
+import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { debugLog } from "./debug-log.js";
 
 export interface ImageSize {
@@ -144,7 +146,17 @@ export function parseImageSize(buffer: Buffer): ImageSize | null {
 }
 
 /**
+ * SSRF policy for image-dimension probing.  Generic public-network-only blocking
+ * (no hostname allowlist) because markdown image URLs can legitimately point to
+ * any public host, not just QQ-owned CDNs.
+ */
+const IMAGE_PROBE_SSRF_POLICY: SsrFPolicy = {};
+
+/**
  * Fetch image dimensions from a public URL using only the first 64 KB.
+ *
+ * Uses {@link fetchRemoteMedia} with SSRF guard to block probes against
+ * private/reserved/loopback/link-local/metadata destinations.
  */
 export async function getImageSizeFromUrl(
   url: string,
@@ -154,33 +166,31 @@ export async function getImageSizeFromUrl(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Request only the first 64 KB, which is enough for common headers.
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Range: "bytes=0-65535",
-        "User-Agent": "QQBot-Image-Size-Detector/1.0",
-      },
-    });
+    try {
+      const { buffer } = await fetchRemoteMedia({
+        url,
+        maxBytes: 65_536,
+        maxRedirects: 0,
+        ssrfPolicy: IMAGE_PROBE_SSRF_POLICY,
+        requestInit: {
+          signal: controller.signal,
+          headers: {
+            Range: "bytes=0-65535",
+            "User-Agent": "QQBot-Image-Size-Detector/1.0",
+          },
+        },
+      });
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok && response.status !== 206) {
-      debugLog(`[image-size] Failed to fetch ${url}: ${response.status}`);
-      return null;
+      const size = parseImageSize(buffer);
+      if (size) {
+        debugLog(
+          `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
+        );
+      }
+      return size;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    const size = parseImageSize(buffer);
-    if (size) {
-      debugLog(
-        `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
-      );
-    }
-
-    return size;
   } catch (err) {
     debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${String(err)}`);
     return null;

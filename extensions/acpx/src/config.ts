@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type { z } from "openclaw/plugin-sdk/zod";
-import { AcpxPluginConfigSchema } from "./config-schema.js";
+import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
   AcpxPermissionMode,
@@ -112,26 +112,13 @@ type ParseResult =
   | { ok: true; value: AcpxPluginConfig | undefined }
   | { ok: false; message: string };
 
-function formatAcpxConfigIssue(issue: z.ZodIssue | undefined): string {
-  if (!issue) {
-    return "invalid config";
-  }
-  if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
-    return `unknown config key: ${issue.keys[0]}`;
-  }
-  if (issue.code === "invalid_type" && issue.path.length === 0) {
-    return "expected config object";
-  }
-  return issue.message;
-}
-
 function parseAcpxPluginConfig(value: unknown): ParseResult {
   if (value === undefined) {
     return { ok: true, value: undefined };
   }
   const parsed = AcpxPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
-    return { ok: false, message: formatAcpxConfigIssue(parsed.error.issues[0]) };
+    return { ok: false, message: formatPluginConfigIssue(parsed.error.issues[0]) };
   }
   return {
     ok: true,
@@ -232,13 +219,14 @@ export function resolveAcpxPluginConfig(params: {
   return {
     cwd,
     stateDir,
+    probeAgent: normalized.probeAgent,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
     pluginToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
-    timeoutSeconds: normalized.timeoutSeconds,
+    timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
     legacyCompatibilityConfig: {
       strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
