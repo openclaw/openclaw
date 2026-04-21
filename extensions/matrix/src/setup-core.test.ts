@@ -139,6 +139,33 @@ describe("createMatrixSetupWizardProxy", () => {
     expect(loader).toHaveBeenCalledTimes(1);
     expect(promptAllowFrom).toHaveBeenCalledTimes(1);
   });
+
+  it("removes wildcard allowFrom when switching from open to a restrictive policy", () => {
+    const loader = vi.fn(async () => ({ matrixSetupWizard: makeFakeSetupWizard() }));
+    const proxy = createMatrixSetupWizardProxy(loader);
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {
+              dm: {
+                policy: "open",
+                allowFrom: ["*", "  @ops:example.org  "],
+              },
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const next = proxy.dmPolicy?.setPolicy(cfg, "allowlist", "ops") as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops?.dm).toMatchObject({
+      policy: "allowlist",
+      allowFrom: ["@ops:example.org"],
+    });
+    expect(loader).not.toHaveBeenCalled();
+  });
 });
 
 describe("matrixSetupAdapter", () => {

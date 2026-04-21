@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   type DmPolicy,
   normalizeAccountId,
@@ -11,6 +10,7 @@ import {
 import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { applyMatrixSetupAccountConfig, validateMatrixSetupInput } from "./setup-config.js";
+import { resolveMatrixSetupDmAllowFrom } from "./setup-dm-policy.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -32,13 +32,12 @@ function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy, accountId?: string
     cfg,
     accountId: resolvedAccountId,
   });
-  const allowFrom =
-    policy === "open" ? addWildcardAllowFrom(existing.dm?.allowFrom) : existing.dm?.allowFrom;
+  const allowFrom = resolveMatrixSetupDmAllowFrom(policy, existing.dm?.allowFrom);
   return updateMatrixAccountConfig(cfg, resolvedAccountId, {
     dm: {
       ...existing.dm,
       policy,
-      ...(allowFrom ? { allowFrom } : {}),
+      allowFrom,
     },
   });
 }
