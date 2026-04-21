@@ -4,6 +4,7 @@
   "description": "Synology Chat channel plugin for OpenClaw",
   "type": "module",
   "dependencies": {
+    "ipaddr.js": "^2.3.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
