@@ -1990,6 +1990,65 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
   });
 
+  it("does not treat preexisting memory embedding providers as duplicates during snapshot loads", () => {
+    useNoBundledPlugins();
+    registerMemoryEmbeddingProvider({
+      id: "openai",
+      create: async () => ({ provider: null }),
+    });
+    const plugin = writePlugin({
+      id: "snapshot-provider",
+      filename: "snapshot-provider.cjs",
+      body: `module.exports = {
+        id: "snapshot-provider",
+        register(api) {
+          api.registerMemoryEmbeddingProvider({
+            id: "openai",
+            create: async () => ({ provider: null }),
+          });
+        },
+      };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "snapshot-provider",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          contracts: {
+            memoryEmbeddingProviders: ["openai"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-provider"],
+        },
+      },
+      onlyPluginIds: ["snapshot-provider"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-provider")?.status).toBe("loaded");
+    expect(
+      scoped.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "snapshot-provider" &&
+          diag.message.includes("memory embedding provider already registered: openai"),
+      ),
+    ).toBe(false);
+    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["openai"]);
+  });
+
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

@@ -47,7 +47,7 @@ function createRuntime(): RuntimeEnv {
 
 async function runCodexOAuth(params: {
   isRemote: boolean;
-  openUrl?: (url: string) => Promise<void>;
+  openUrl?: (url: string) => Promise<boolean | void>;
 }) {
   const { prompter, spin } = createPrompter();
   const runtime = createRuntime();
@@ -266,6 +266,52 @@ describe("loginOpenAICodexOAuth", () => {
       "OpenAI Codex OAuth callback did not arrive within 15000ms; switching to manual entry (callback_timeout).",
     );
     vi.useRealTimers();
+  });
+
+  it("falls back to manual entry immediately when the browser cannot be opened locally", async () => {
+    const { prompter } = createPrompter();
+    const runtime = createRuntime();
+    const openUrl = vi.fn(async () => false);
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: {
+        onAuth: (event: { url: string }) => Promise<void>;
+        onManualCodeInput?: () => Promise<string>;
+      }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize?state=abc",
+        });
+        const manualCode = await opts.onManualCodeInput?.();
+        return {
+          provider: "openai-codex" as const,
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "user@example.com",
+          manualCode,
+        };
+      },
+    );
+
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl,
+      }),
+    ).resolves.toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+    });
+
+    expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize?state=abc");
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Paste the authorization code (or full redirect URL):",
+      validate: expect.any(Function),
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "\nOpen this URL in your browser:\n\nhttps://auth.openai.com/oauth/authorize?state=abc\n",
+    );
   });
 
   it("clears the local manual fallback timer when browser callback settles first", async () => {

@@ -87,6 +87,21 @@ describe("discoverConfigurablePlugins", () => {
     const result = discoverConfigurablePlugins({ manifestPlugins: plugins });
     expect(result.map((p) => p.id)).toEqual(["alpha", "zeta"]);
   });
+
+  it("only includes quickstart-tagged fields when surface is quickstart", () => {
+    const plugins = [
+      makeManifestPlugin("miya", {
+        "personaLite.profileName": { label: "Profile", quickstart: true },
+        "personaLite.styleTags": { label: "Style" },
+      }),
+    ];
+    const result = discoverConfigurablePlugins({
+      manifestPlugins: plugins,
+      surface: "quickstart",
+    });
+    expect(result).toHaveLength(1);
+    expect(Object.keys(result[0].uiHints)).toEqual(["personaLite.profileName"]);
+  });
 });
 
 describe("discoverUnconfiguredPlugins", () => {
@@ -211,6 +226,22 @@ describe("discoverUnconfiguredPlugins", () => {
       config,
     });
     expect(result).toHaveLength(0);
+  });
+
+  it("ignores non-quickstart uiHints when discovering quickstart gaps", () => {
+    const plugins = [
+      makeManifestPlugin("miya", {
+        "personaLite.profileName": { label: "Profile", quickstart: true },
+        "personaLite.styleTags": { label: "Style" },
+      }),
+    ];
+    const result = discoverUnconfiguredPlugins({
+      manifestPlugins: plugins,
+      config: {},
+      surface: "quickstart",
+    });
+    expect(result).toHaveLength(1);
+    expect(Object.keys(result[0].uiHints)).toEqual(["personaLite.profileName"]);
   });
 });
 
@@ -381,5 +412,50 @@ describe("setupPluginConfig", () => {
     expect(result.plugins?.entries?.["retry-plugin"]?.config).toEqual({
       retries: 3,
     });
+  });
+
+  it("skips multiselect entirely when no quickstart fields are exposed", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        makeManifestPlugin("miya", {
+          "personaLite.styleTags": { label: "Style tags" },
+        }),
+      ],
+    });
+
+    const multiselect = vi.fn(async () => ["miya"]);
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            miya: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+      surface: "quickstart",
+    });
+
+    expect(result).toEqual({
+      plugins: {
+        entries: {
+          miya: {
+            enabled: true,
+          },
+        },
+      },
+    });
+    expect(multiselect).not.toHaveBeenCalled();
   });
 });

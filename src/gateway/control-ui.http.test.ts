@@ -34,6 +34,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantName: string;
       assistantAvatar: string;
       assistantAgentId: string;
+      gatewayToken?: string;
       localMediaPreviewRoots?: string[];
     };
   }
@@ -52,14 +53,21 @@ describe("handleControlUiHttpRequest", () => {
     url: string;
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
+    auth?: ResolvedGatewayAuth;
     basePath?: string;
+    remoteAddress?: string;
     rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method,
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
+      } as IncomingMessage,
       res,
       {
+        ...(params.auth ? { auth: params.auth } : {}),
         ...(params.basePath ? { basePath: params.basePath } : {}),
         root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
@@ -436,6 +444,39 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("includes the gateway token in bootstrap config for direct loopback requests", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { end, handled } = runControlUiRequest({
+          url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+          method: "GET",
+          rootPath: tmp,
+          auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.gatewayToken).toBe("loopback-token");
+      },
+    });
+  });
+
+  it("does not include the gateway token in bootstrap config for non-loopback requests", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { end, handled } = runControlUiRequest({
+          url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+          method: "GET",
+          rootPath: tmp,
+          auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+          remoteAddress: "203.0.113.10",
+        });
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.gatewayToken).toBeUndefined();
       },
     });
   });

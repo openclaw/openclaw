@@ -44,10 +44,13 @@ type ChatRefreshHost = AppViewState & {
 };
 
 export function resolveAssistantAttachmentAuthToken(
-  state: Pick<AppViewState, "settings" | "password">,
+  state: Pick<AppViewState, "settings" | "password" | "bootstrapGatewayToken">,
 ) {
   return (
-    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
+    normalizeOptionalString(state.settings.token) ??
+    normalizeOptionalString(state.bootstrapGatewayToken) ??
+    normalizeOptionalString(state.password) ??
+    null
   );
 }
 
@@ -76,6 +79,12 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.chatActiveToolCallCount = 0;
+  state.chatLastActivityAt = null;
+  state.chatLastToolActivityAt = null;
+  state.chatLastTerminalAt = null;
+  state.chatLastTerminalKind = null;
+  state.chatReconnectPendingAt = null;
   state.chatSideResult = null;
   state.lastError = null;
   state.compactionStatus = null;

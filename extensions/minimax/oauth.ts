@@ -180,7 +180,7 @@ async function pollOAuthToken(params: {
 }
 
 export async function loginMiniMaxPortalOAuth(params: {
-  openUrl: (url: string) => Promise<void>;
+  openUrl: (url: string) => Promise<unknown>;
   note: (message: string, title?: string) => Promise<void>;
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;

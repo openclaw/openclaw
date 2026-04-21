@@ -1,5 +1,6 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { ChatTerminalKind } from "./chat-activity.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -66,6 +67,7 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  bootstrapGatewayToken: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
@@ -80,6 +82,12 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatActiveToolCallCount: number;
+  chatLastActivityAt: number | null;
+  chatLastToolActivityAt: number | null;
+  chatLastTerminalAt: number | null;
+  chatLastTerminalKind: ChatTerminalKind | null;
+  chatReconnectPendingAt: number | null;
   chatSideResult: ChatSideResult | null;
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;

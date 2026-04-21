@@ -617,6 +617,16 @@ export async function runSetupWizard(
     await warnIfModelConfigLooksOff(nextConfig, prompter);
   }
 
+  if (flow === "quickstart") {
+    const { setupPluginConfig } = await import("./setup.plugin-config.js");
+    nextConfig = await setupPluginConfig({
+      config: nextConfig,
+      prompter,
+      workspaceDir,
+      surface: "quickstart",
+    });
+  }
+
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
   const gateway = await configureGatewayForSetup({
     flow,
@@ -683,6 +693,7 @@ export async function runSetupWizard(
       config: nextConfig,
       prompter,
       workspaceDir,
+      surface: "onboard",
     });
   }
 

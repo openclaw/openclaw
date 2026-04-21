@@ -7,11 +7,49 @@ const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
+const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadModelsMock = vi.hoisted(() => vi.fn(async () => []));
+const refreshSlashCommandsMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
+vi.mock("./controllers/chat.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/chat.ts")>();
+  return {
+    ...actual,
+    loadChatHistory: loadChatHistoryMock,
+  };
+});
+
+vi.mock("./controllers/sessions.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/sessions.ts")>();
+  return {
+    ...actual,
+    loadSessions: loadSessionsMock,
+  };
+});
+
+vi.mock("./controllers/models.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/models.ts")>();
+  return {
+    ...actual,
+    loadModels: loadModelsMock,
+  };
+});
+
+vi.mock("./chat/slash-commands.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat/slash-commands.ts")>();
+  return {
+    ...actual,
+    refreshSlashCommands: refreshSlashCommandsMock,
+  };
+});
+
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
@@ -19,7 +57,7 @@ async function loadChatHelpers(params?: { reload?: boolean }): Promise<void> {
   if (params?.reload) {
     vi.resetModules();
   }
-  ({ handleSendChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
+  ({ handleSendChat, refreshChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
     await import("./app-chat.ts"));
 }
 
@@ -77,6 +115,10 @@ describe("refreshChatAvatar", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    loadChatHistoryMock.mockReset();
+    loadSessionsMock.mockReset();
+    loadModelsMock.mockReset();
+    refreshSlashCommandsMock.mockReset();
   });
 
   it("uses a route-relative avatar endpoint before basePath bootstrap finishes", async () => {
@@ -158,6 +200,57 @@ describe("refreshChatAvatar", () => {
       "avatar/ops?meta=1",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("resolves refreshChat before secondary background loaders finish", async () => {
+    const historyDeferred = createDeferred<void>();
+    const sessionsDeferred = createDeferred<void>();
+    const modelsDeferred = createDeferred<void>();
+    const commandsDeferred = createDeferred<void>();
+    loadChatHistoryMock.mockImplementation(async () => {
+      await historyDeferred.promise;
+    });
+    loadSessionsMock.mockImplementation(async () => {
+      await sessionsDeferred.promise;
+    });
+    loadModelsMock.mockImplementation(async () => {
+      await modelsDeferred.promise;
+      return [];
+    });
+    refreshSlashCommandsMock.mockImplementation(async () => {
+      await commandsDeferred.promise;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ avatarUrl: "/avatar/main" }),
+      }) as unknown as typeof fetch,
+    );
+
+    const host = makeHost({
+      client: { request: vi.fn() } as unknown as ChatHost["client"],
+    });
+
+    let resolved = false;
+    const refreshPromise = refreshChat(host).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    historyDeferred.resolve();
+    await refreshPromise;
+
+    expect(resolved).toBe(true);
+    expect(loadSessionsMock).toHaveBeenCalledOnce();
+    expect(loadModelsMock).toHaveBeenCalledOnce();
+    expect(refreshSlashCommandsMock).toHaveBeenCalledOnce();
+
+    sessionsDeferred.resolve();
+    modelsDeferred.resolve();
+    commandsDeferred.resolve();
   });
 });
 

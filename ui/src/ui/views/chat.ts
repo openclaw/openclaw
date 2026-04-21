@@ -3,6 +3,12 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
+  resolveCurrentSessionApproval,
+  resolveChatActivityState,
+  type ChatApprovalEvidence,
+  type ChatTerminalKind,
+} from "../chat-activity.ts";
+import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
 } from "../chat/attachment-support.ts";
@@ -65,6 +71,14 @@ export type ChatProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  runId?: string | null;
+  activeToolCallCount?: number;
+  lastActivityAt?: number | null;
+  lastToolActivityAt?: number | null;
+  lastTerminalAt?: number | null;
+  lastTerminalKind?: ChatTerminalKind | null;
+  reconnectPendingAt?: number | null;
+  approvalRequests?: ChatApprovalEvidence[];
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -452,6 +466,53 @@ function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   return html`
     <div class=${className} role="status" aria-live="polite" title=${details}>
       ${icon} ${message}
+    </div>
+  `;
+}
+
+function renderChatActivityStatus(
+  activity: ReturnType<typeof resolveChatActivityState>,
+  options?: { compact?: boolean },
+) {
+  if (activity.kind === "idle") {
+    return nothing;
+  }
+  const compact = options?.compact === true;
+  const metaParts: string[] = [];
+  const now = Date.now();
+  if (activity.startedAt != null) {
+    const elapsedSeconds = Math.max(0, Math.round((now - activity.startedAt) / 1000));
+    if (elapsedSeconds > 0) {
+      metaParts.push(
+        activity.isBusy ? `Running for ${elapsedSeconds}s` : `Updated ${elapsedSeconds}s ago`,
+      );
+    }
+  }
+  if (activity.lastActivityAt != null) {
+    const lastActivitySeconds = Math.max(0, Math.round((now - activity.lastActivityAt) / 1000));
+    metaParts.push(
+      lastActivitySeconds === 0 ? "Last activity just now" : `Last activity ${lastActivitySeconds}s ago`,
+    );
+  }
+  const label = compact
+    ? activity.summaryKind === "in_progress"
+      ? "In progress"
+      : activity.summaryKind === "interrupted"
+        ? "Interrupted"
+        : activity.summaryKind === "completed"
+          ? "Completed"
+          : activity.label
+    : activity.label;
+  const detail = [compact ? null : activity.detail, ...metaParts].filter(Boolean).join(" • ");
+  return html`
+    <div
+      class="chat-activity chat-activity--${activity.kind} ${compact ? "chat-activity--compact" : ""}"
+      data-chat-activity=${activity.kind}
+      role="status"
+      aria-live="polite"
+    >
+      <span class="chat-activity__label">${label}</span>
+      ${detail ? html`<span class="chat-activity__detail">${detail}</span>` : nothing}
     </div>
   `;
 }
@@ -1000,9 +1061,27 @@ function renderSlashMenu(
 
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
-  const isBusy = props.sending || props.stream !== null;
-  const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const activity = resolveChatActivityState({
+    connected: props.connected,
+    sending: props.sending,
+    runId: props.runId ?? null,
+    stream: props.stream,
+    activeToolCallCount: props.activeToolCallCount,
+    reconnectPendingAt: props.reconnectPendingAt,
+    lastActivityAt: props.lastActivityAt,
+    lastToolActivityAt: props.lastToolActivityAt,
+    lastTerminalAt: props.lastTerminalAt,
+    lastTerminalKind: props.lastTerminalKind,
+    sessionStatus: activeSession?.status,
+    sessionEndedAt: activeSession?.endedAt,
+    currentSessionApproval: resolveCurrentSessionApproval(
+      props.approvalRequests,
+      props.sessionKey,
+    ),
+  });
+  const isBusy = activity.isBusy;
+  const canAbort = Boolean(props.canAbort && props.onAbort);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -1503,9 +1582,13 @@ export function renderChat(props: ChatProps) {
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
+          <div class="agent-chat__toolbar-status">
+            ${renderChatActivityStatus(activity, { compact: true })}
+          </div>
+
           <div class="agent-chat__toolbar-right">
             ${nothing /* search hidden for now */}
-            ${canAbort
+            ${canAbort || isBusy
               ? nothing
               : html`
                   <button
@@ -1547,7 +1630,7 @@ export function renderChat(props: ChatProps) {
                       }
                       props.onSend();
                     }}
-                    ?disabled=${!props.connected || props.sending}
+                    ?disabled=${!props.connected}
                     title=${isBusy ? "Queue" : "Send"}
                     aria-label=${isBusy ? "Queue message" : "Send message"}
                   >

@@ -19,6 +19,7 @@ const buildGatewayInstallPlan = vi.hoisted(() =>
     environment: {},
   })),
 );
+const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceRestart = vi.hoisted(() =>
   vi.fn<() => Promise<{ outcome: "completed" } | { outcome: "scheduled" }>>(async () => ({
@@ -85,7 +86,7 @@ vi.mock("../commands/health-format.js", () => ({
 }));
 
 vi.mock("../commands/health.js", () => ({
-  healthCommand: vi.fn(async () => {}),
+  healthCommand,
 }));
 
 vi.mock("../commands/onboard-search.js", () => ({
@@ -240,6 +241,7 @@ describe("finalizeSetupWizard", () => {
     probeGatewayReachable.mockClear();
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
+    healthCommand.mockClear();
     setupWizardShellCompletion.mockClear();
     buildGatewayInstallPlan.mockClear();
     gatewayServiceInstall.mockClear();
@@ -555,6 +557,37 @@ describe("finalizeSetupWizard", () => {
       "Gateway",
     );
     expect(prompter.note).not.toHaveBeenCalledWith(expect.any(String), "Dashboard ready");
+  });
+
+  it("does not block successful daemon onboarding on a full health command", async () => {
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(waitForGatewayReachable).toHaveBeenCalled();
+    expect(healthCommand).not.toHaveBeenCalled();
   });
 
   it("does not show a Codex native search summary when web search is globally disabled", async () => {

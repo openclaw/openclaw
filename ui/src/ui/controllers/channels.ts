@@ -7,7 +7,11 @@ import {
 
 export type { ChannelsState };
 
-export async function loadChannels(state: ChannelsState, probe: boolean) {
+export async function loadChannels(
+  state: ChannelsState,
+  probe: boolean,
+  opts?: { includeAccounts?: boolean },
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -19,6 +23,7 @@ export async function loadChannels(state: ChannelsState, probe: boolean) {
   try {
     const res = await state.client.request<ChannelsStatusSnapshot | null>("channels.status", {
       probe,
+      includeAccounts: opts?.includeAccounts,
       timeoutMs: 8000,
     });
     state.channelsSnapshot = res;

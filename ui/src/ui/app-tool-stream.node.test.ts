@@ -7,6 +7,9 @@ type MutableHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
+  chatActiveToolCallCount?: number;
+  chatLastActivityAt?: number | null;
+  chatLastToolActivityAt?: number | null;
 };
 
 function createHost(overrides?: Partial<MutableHost>): MutableHost {
@@ -24,6 +27,9 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     compactionClearTimer: null,
     fallbackStatus: null,
     fallbackClearTimer: null,
+    chatActiveToolCallCount: 0,
+    chatLastActivityAt: null,
+    chatLastToolActivityAt: null,
     ...overrides,
   };
 }
@@ -310,5 +316,43 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionClearTimer).toBeNull();
 
     vi.useRealTimers();
+  });
+
+  it("tracks active tool work and last tool activity timestamps", () => {
+    const host = createHost({ chatRunId: "run-1", chatStream: "Thinking..." });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 5_000,
+      sessionKey: "main",
+      data: {
+        toolCallId: "tool-1",
+        name: "fetch",
+        phase: "start",
+        args: { q: "status" },
+      },
+    });
+
+    expect(host.chatActiveToolCallCount).toBe(1);
+    expect(host.chatLastActivityAt).toBeTypeOf("number");
+    expect(host.chatLastToolActivityAt).toBeTypeOf("number");
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: 5_100,
+      sessionKey: "main",
+      data: {
+        toolCallId: "tool-1",
+        name: "fetch",
+        phase: "result",
+        result: { text: "ok" },
+      },
+    });
+
+    expect(host.chatActiveToolCallCount).toBe(0);
   });
 });

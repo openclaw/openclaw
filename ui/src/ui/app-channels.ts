@@ -16,6 +16,7 @@ type ChannelsActionHost = ChannelsState &
   ConfigState & {
     hello?: { auth?: { deviceToken?: string | null } | null } | null;
     password?: string;
+    bootstrapGatewayToken?: string | null;
     settings: { token?: string };
     nostrProfileFormState: NostrProfileFormState;
     nostrProfileAccountId: string | null;
@@ -86,6 +87,10 @@ function resolveGatewayHttpAuthHeader(host: ChannelsActionHost): string | null {
   const token = normalizeOptionalString(host.settings.token);
   if (token) {
     return `Bearer ${token}`;
+  }
+  const bootstrapGatewayToken = normalizeOptionalString(host.bootstrapGatewayToken);
+  if (bootstrapGatewayToken) {
+    return `Bearer ${bootstrapGatewayToken}`;
   }
   const password = normalizeOptionalString(host.password);
   if (password) {

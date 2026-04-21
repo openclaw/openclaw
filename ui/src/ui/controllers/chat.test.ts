@@ -25,7 +25,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     lastError: null,
     sessionKey: "main",
     ...overrides,
-  };
+  } as ChatState;
 }
 
 function createDeferred<T>() {
@@ -518,6 +518,34 @@ describe("handleChatEvent", () => {
     // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("records terminal metadata when a run completes", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial reply",
+      chatStreamStartedAt: 100,
+      chatLastTerminalAt: null,
+      chatLastTerminalKind: null,
+      chatReconnectPendingAt: 50,
+    } as Partial<ChatState>);
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect((state as ChatState & { chatLastTerminalKind?: string | null }).chatLastTerminalKind).toBe(
+      "completed",
+    );
+    expect((state as ChatState & { chatLastTerminalAt?: number | null }).chatLastTerminalAt).toBeTypeOf(
+      "number",
+    );
+    expect(
+      (state as ChatState & { chatReconnectPendingAt?: number | null }).chatReconnectPendingAt,
+    ).toBeNull();
   });
 });
 

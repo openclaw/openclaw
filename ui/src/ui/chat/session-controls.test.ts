@@ -102,10 +102,17 @@ function createChatHeaderState(
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatActiveToolCallCount: 0,
+    chatLastActivityAt: null,
+    chatLastToolActivityAt: null,
+    chatLastTerminalAt: null,
+    chatLastTerminalKind: null,
+    chatReconnectPendingAt: null,
     chatQueue: [],
     chatMessages: [],
     chatLoading: false,
     chatThinkingLevel: null,
+    execApprovalQueue: [],
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
@@ -236,6 +243,45 @@ describe("chat session controls", () => {
     const { state } = createChatHeaderState();
     state.chatRunId = "run-123";
     state.chatStream = "Working";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.disabled).toBe(true);
+  });
+
+  it("disables the chat header model picker while reconnect reconciliation keeps run state unknown", () => {
+    const { state } = createChatHeaderState();
+    state.chatRunId = null;
+    state.chatStream = null;
+    state.chatReconnectPendingAt = Date.now();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.disabled).toBe(true);
+  });
+
+  it("disables the chat header model picker while the current session is waiting for approval", () => {
+    const { state } = createChatHeaderState();
+    state.execApprovalQueue = [
+      {
+        id: "approval-1",
+        kind: "exec",
+        request: {
+          command: "rg status",
+          sessionKey: "main",
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    ];
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 

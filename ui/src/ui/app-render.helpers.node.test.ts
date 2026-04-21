@@ -162,6 +162,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
         settings: { token: "session-token" } as AppViewState["settings"],
+        bootstrapGatewayToken: "bootstrap-token",
         password: "shared-password",
       }),
     ).toBe("session-token");
@@ -171,15 +172,27 @@ describe("resolveAssistantAttachmentAuthToken", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
         settings: { token: "   " } as AppViewState["settings"],
+        bootstrapGatewayToken: null,
         password: "shared-password",
       }),
     ).toBe("shared-password");
+  });
+
+  it("falls back to the bootstrap gateway token before password", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "   " } as AppViewState["settings"],
+        bootstrapGatewayToken: "bootstrap-token",
+        password: "shared-password",
+      }),
+    ).toBe("bootstrap-token");
   });
 
   it("returns null when neither auth secret is available", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
         settings: { token: "" } as AppViewState["settings"],
+        bootstrapGatewayToken: null,
         password: "   ",
       }),
     ).toBeNull();

@@ -1473,6 +1473,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     throw new PluginLoadReentryError(cacheKey);
   }
   inFlightPluginRegistryLoads.add(cacheKey);
+  const previousSnapshotMemoryEmbeddingProviders = shouldActivate
+    ? null
+    : listRegisteredMemoryEmbeddingProviders();
   try {
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
@@ -1482,6 +1485,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       clearPluginInteractiveHandlers();
       clearDetachedTaskLifecycleRuntimeRegistration();
       clearMemoryPluginState();
+    } else {
+      // Snapshot loads should validate registrations in isolation instead of
+      // inheriting process-global memory embedding adapters from earlier loads.
+      clearMemoryEmbeddingProviders();
     }
 
     // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
@@ -2327,6 +2334,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     return registry;
   } finally {
+    if (previousSnapshotMemoryEmbeddingProviders) {
+      restoreRegisteredMemoryEmbeddingProviders(previousSnapshotMemoryEmbeddingProviders);
+    }
     inFlightPluginRegistryLoads.delete(cacheKey);
   }
 }

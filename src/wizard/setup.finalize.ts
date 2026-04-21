@@ -13,7 +13,6 @@ import {
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
-import { healthCommand } from "../commands/health.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
@@ -249,21 +248,7 @@ export async function finalizeSetupWizard(
       token: settings.gatewayToken,
       deadlineMs: 15_000,
     });
-    if (gatewayProbe.ok) {
-      try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-      } catch (err) {
-        runtime.error(formatHealthCheckFailure(err));
-        await prompter.note(
-          [
-            "Docs:",
-            "https://docs.openclaw.ai/gateway/health",
-            "https://docs.openclaw.ai/gateway/troubleshooting",
-          ].join("\n"),
-          "Health check help",
-        );
-      }
-    } else if (installDaemon) {
+    if (!gatewayProbe.ok && installDaemon) {
       runtime.error(
         formatHealthCheckFailure(
           new Error(

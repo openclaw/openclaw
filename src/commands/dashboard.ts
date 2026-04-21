@@ -14,6 +14,22 @@ type DashboardOptions = {
   noOpen?: boolean;
 };
 
+function isLoopbackDashboardUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.trim().toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "::1" ||
+      host === "[::1]" ||
+      host === "127.0.0.1" ||
+      host.startsWith("127.")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
@@ -49,7 +65,9 @@ export async function dashboardCommand(
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
   if (resolvedToken.secretRefConfigured && token) {
     runtime.log(
-      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+      isLoopbackDashboardUrl(links.httpUrl)
+        ? "Local loopback Control UI will auto-connect using bootstrap auth; token is not added to the URL."
+        : "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
     );
   }
   if (resolvedToken.unresolvedRefReason) {

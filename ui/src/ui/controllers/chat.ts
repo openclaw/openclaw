@@ -1,3 +1,4 @@
+import type { ChatTerminalKind } from "../chat-activity.ts";
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
@@ -113,6 +114,12 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatActiveToolCallCount?: number;
+  chatLastActivityAt?: number | null;
+  chatLastToolActivityAt?: number | null;
+  chatLastTerminalAt?: number | null;
+  chatLastTerminalKind?: ChatTerminalKind | null;
+  chatReconnectPendingAt?: number | null;
   lastError: string | null;
 };
 
@@ -184,6 +191,8 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatActiveToolCallCount = 0;
+    state.chatReconnectPendingAt = null;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
@@ -337,6 +346,10 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatLastActivityAt = now;
+  state.chatLastTerminalAt = null;
+  state.chatLastTerminalKind = null;
+  state.chatReconnectPendingAt = null;
 
   try {
     await requestChatSend(state, { message: msg, attachments, runId });
@@ -428,6 +441,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
       state.chatStream = next;
+      state.chatLastActivityAt = Date.now();
+      state.chatReconnectPendingAt = null;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
@@ -446,6 +461,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatLastTerminalAt = Date.now();
+    state.chatLastTerminalKind = "completed";
+    state.chatReconnectPendingAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
@@ -466,11 +484,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatLastTerminalAt = Date.now();
+    state.chatLastTerminalKind = "aborted";
+    state.chatReconnectPendingAt = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
+    state.chatLastTerminalAt = Date.now();
+    state.chatLastTerminalKind = "error";
+    state.chatReconnectPendingAt = null;
   }
   return payload.state;
 }

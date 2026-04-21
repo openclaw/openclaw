@@ -140,6 +140,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const probe = (params as { probe?: boolean }).probe === true;
+    const includeAccounts = (params as { includeAccounts?: boolean }).includeAccounts !== false;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
     const cfg = applyPluginAutoEnable({
@@ -178,11 +179,11 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const plugin = pluginMap.get(channelId);
       if (!plugin) {
         return {
-          accounts: [] as ChannelAccountSnapshot[],
-          defaultAccountId: DEFAULT_ACCOUNT_ID,
-          defaultAccount: undefined as ChannelAccountSnapshot | undefined,
-          resolvedAccounts: {} as Record<string, unknown>,
-        };
+        accounts: [] as ChannelAccountSnapshot[],
+        defaultAccountId: DEFAULT_ACCOUNT_ID,
+        defaultAccount: undefined as ChannelAccountSnapshot | undefined,
+        resolvedAccounts: {} as Record<string, unknown>,
+      };
       }
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
@@ -256,6 +257,68 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
+    const buildChannelSummaryOnly = async (plugin: ChannelPlugin) => {
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const defaultAccountId = resolveChannelDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
+      const account = plugin.config.resolveAccount(cfg, defaultAccountId);
+      let probeResult: unknown;
+      let auditResult: unknown;
+      if (probe && isAccountEnabled(plugin, account) && plugin.status?.probeAccount) {
+        let configured = true;
+        if (plugin.config.isConfigured) {
+          configured = await plugin.config.isConfigured(account, cfg);
+        }
+        if (configured) {
+          probeResult = await plugin.status.probeAccount({
+            account,
+            timeoutMs,
+            cfg,
+          });
+        }
+      }
+      if (probe && isAccountEnabled(plugin, account) && plugin.status?.auditAccount) {
+        let configured = true;
+        if (plugin.config.isConfigured) {
+          configured = await plugin.config.isConfigured(account, cfg);
+        }
+        if (configured) {
+          auditResult = await plugin.status.auditAccount({
+            account,
+            timeoutMs,
+            cfg,
+            probe: probeResult,
+          });
+        }
+      }
+      const runtimeSnapshot = resolveRuntimeSnapshot(plugin.id, defaultAccountId, defaultAccountId);
+      const defaultAccount = await buildChannelAccountSnapshot({
+        plugin,
+        cfg,
+        accountId: defaultAccountId,
+        runtime: runtimeSnapshot,
+        probe: probeResult,
+        audit: auditResult,
+      });
+      const summary = plugin.status?.buildChannelSummary
+        ? await plugin.status.buildChannelSummary({
+            account,
+            cfg,
+            defaultAccountId,
+            snapshot: defaultAccount,
+          })
+        : {
+            configured: defaultAccount.configured ?? false,
+          };
+      return {
+        summary,
+        defaultAccountId,
+      };
+    };
+
     const uiCatalog = buildChannelUiCatalog(plugins);
     const payload: Record<string, unknown> = {
       ts: Date.now(),
@@ -272,6 +335,13 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const accountsMap = payload.channelAccounts as Record<string, unknown>;
     const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     for (const plugin of plugins) {
+      if (!includeAccounts) {
+        const { summary, defaultAccountId } = await buildChannelSummaryOnly(plugin);
+        channelsMap[plugin.id] = summary;
+        accountsMap[plugin.id] = [];
+        defaultAccountIdMap[plugin.id] = defaultAccountId;
+        continue;
+      }
       const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
         await buildChannelAccounts(plugin.id);
       const fallbackAccount =

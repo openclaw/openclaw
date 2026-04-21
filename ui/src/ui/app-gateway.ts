@@ -19,7 +19,6 @@ import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
   type AssistantIdentityState,
@@ -40,8 +39,6 @@ import {
   pruneExecApprovalQueue,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
-import { loadHealthState, type HealthState } from "./controllers/health.ts";
-import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
@@ -66,6 +63,7 @@ function isGenericBrowserFetchFailure(message: string): boolean {
 type GatewayHost = {
   settings: UiSettings;
   password: string;
+  bootstrapGatewayToken: string | null;
   clientInstanceId: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -92,6 +90,14 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
+  chatActiveToolCallCount: number;
+  chatLastActivityAt: number | null;
+  chatLastToolActivityAt: number | null;
+  chatLastTerminalAt: number | null;
+  chatLastTerminalKind: "completed" | "aborted" | "error" | null;
+  chatReconnectPendingAt: number | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -251,13 +257,32 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.execApprovalError = null;
 
   const previousClient = host.client;
+  const bootstrapGatewayToken = (() => {
+    const candidate = host.bootstrapGatewayToken?.trim();
+    if (!candidate) {
+      return undefined;
+    }
+    try {
+      const gatewayUrl = new URL(host.settings.gatewayUrl, window.location.href);
+      const gatewayHost = gatewayUrl.hostname.trim().toLowerCase();
+      const isLoopbackHost =
+        gatewayHost === "localhost" ||
+        gatewayHost === "::1" ||
+        gatewayHost === "[::1]" ||
+        gatewayHost === "127.0.0.1" ||
+        gatewayHost.startsWith("127.");
+      return isLoopbackHost ? candidate : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
   const clientVersion = resolveControlUiClientVersion({
     gatewayUrl: host.settings.gatewayUrl,
     serverVersion: host.serverVersion,
   });
   const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
-    token: host.settings.token.trim() ? host.settings.token : undefined,
+    token: bootstrapGatewayToken ?? (host.settings.token.trim() ? host.settings.token : undefined),
     password: host.password.trim() ? host.password : undefined,
     clientName: "openclaw-control-ui",
     clientVersion,
@@ -276,8 +301,8 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
-      (host as unknown as { chatStream: string | null }).chatStream = null;
-      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      host.chatStream = null;
+      host.chatStreamStartedAt = null;
       (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       if (shutdownHost.resumeChatQueueAfterReconnect) {
@@ -290,10 +315,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      void loadAgents(host as unknown as AgentsState);
-      void loadHealthState(host as unknown as HealthState);
-      void loadNodes(host as unknown as NodesState, { quiet: true });
-      void loadDevices(host as unknown as DevicesState, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason, error }) => {
@@ -301,6 +322,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      if (host.chatRunId || host.chatStream !== null || host.chatActiveToolCallCount > 0) {
+        host.chatReconnectPendingAt = Date.now();
+      }
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??

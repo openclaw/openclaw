@@ -19,33 +19,41 @@ export function createVpsAwareOAuthHandlers(params: {
 } {
   const manualPromptMessage = params.manualPromptMessage ?? "Paste the redirect URL";
   let manualCodePromise: Promise<string> | undefined;
+  const ensureManualPrompt = (prompt?: OAuthPrompt) => {
+    manualCodePromise ??= params.prompter.text({
+      message: prompt?.message ?? manualPromptMessage,
+      placeholder: prompt?.placeholder,
+      validate: validateRequiredInput,
+    });
+    return manualCodePromise;
+  };
 
   return {
     onAuth: async ({ url }) => {
       if (params.isRemote) {
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-        manualCodePromise = params.prompter.text({
-          message: manualPromptMessage,
-          validate: validateRequiredInput,
-        });
+        manualCodePromise = ensureManualPrompt();
         return;
       }
 
       params.spin.update(params.localBrowserMessage);
-      await params.openUrl(url);
+      const opened = await params.openUrl(url);
+      if (opened === false) {
+        params.spin.update(
+          "Could not open a browser automatically. Open the URL below, then paste the redirect URL here…",
+        );
+        params.runtime.log(`\nOpen this URL in your browser:\n\n${url}\n`);
+        manualCodePromise = ensureManualPrompt();
+        return;
+      }
       params.runtime.log(`Open: ${url}`);
     },
     onPrompt: async (prompt) => {
       if (manualCodePromise) {
         return manualCodePromise;
       }
-      const code = await params.prompter.text({
-        message: prompt.message,
-        placeholder: prompt.placeholder,
-        validate: validateRequiredInput,
-      });
-      return code;
+      return await ensureManualPrompt(prompt);
     },
   };
 }

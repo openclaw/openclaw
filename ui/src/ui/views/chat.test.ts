@@ -64,6 +64,14 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     streamSegments: [],
     stream: null,
     streamStartedAt: null,
+    runId: null,
+    activeToolCallCount: 0,
+    lastActivityAt: null,
+    lastToolActivityAt: null,
+    lastTerminalAt: null,
+    lastTerminalKind: null,
+    reconnectPendingAt: null,
+    approvalRequests: [],
     assistantAvatarUrl: null,
     draft: "",
     queue: [],
@@ -309,6 +317,158 @@ describe("chat view", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("shows a persistent running-tools status even when tool calls are hidden", () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      showToolCalls: false,
+      toolMessages: [
+        {
+          role: "assistant",
+          toolCallId: "tool-1",
+          content: [{ type: "toolcall", name: "fetch", arguments: { q: "status" } }],
+          timestamp: 1_000,
+        },
+      ],
+    }) as ChatProps & {
+      activeToolCallCount?: number;
+      lastActivityAt?: number | null;
+      lastToolActivityAt?: number | null;
+      lastTerminalAt?: number | null;
+      lastTerminalKind?: "completed" | "aborted" | "error" | null;
+      reconnectPendingAt?: number | null;
+    };
+    props.activeToolCallCount = 1;
+    props.lastActivityAt = 1_000;
+    props.lastToolActivityAt = 1_000;
+    props.lastTerminalAt = null;
+    props.lastTerminalKind = null;
+    props.reconnectPendingAt = null;
+    props.sessions = {
+      ...createSessions(),
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1_000,
+          status: "running",
+        },
+      ],
+    };
+
+    render(renderChat(props), container);
+
+    const status = container.querySelector('[data-chat-activity="running_tool"]');
+    expect(status).not.toBeNull();
+    expect(status?.textContent).toContain("In progress");
+    expect(
+      container.querySelector(".agent-chat__toolbar-status [data-chat-activity='running_tool']"),
+    ).toBe(status);
+  });
+
+  it("shows recent activity timing for silent processing", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now");
+
+    try {
+      nowSpy.mockReturnValue(10_000);
+      render(
+        renderChat(
+          createProps({
+            runId: "run-1",
+            lastActivityAt: 6_000,
+            sessions: {
+              ...createSessions(),
+              sessions: [
+                {
+                  key: "main",
+                  kind: "direct",
+                  updatedAt: 6_000,
+                  status: "running",
+                },
+              ],
+            },
+          }),
+        ),
+        container,
+      );
+
+      const status = container.querySelector('[data-chat-activity="silent_processing"]');
+      expect(status).not.toBeNull();
+      expect(status?.textContent).toContain("In progress");
+      expect(status?.textContent).toContain("Last activity 4s ago");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("shows approval-blocked state for the active session instead of generic processing", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderChat(
+        createProps({
+          runId: "run-approval",
+          activeToolCallCount: 1,
+          lastActivityAt: 8_000,
+          lastToolActivityAt: 8_000,
+          approvalRequests: [
+            {
+              kind: "exec",
+              sessionKey: "main",
+              createdAtMs: 8_500,
+            },
+          ],
+          sessions: {
+            ...createSessions(),
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: 8_000,
+                status: "running",
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const status = container.querySelector('[data-chat-activity="awaiting_approval"]');
+    expect(status).not.toBeNull();
+    expect(status?.textContent).toContain("In progress");
+  });
+
+  it("uses unified busy state to queue sends and hide new-session while tools are running", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          activeToolCallCount: 1,
+          lastActivityAt: 1_000,
+          lastToolActivityAt: 1_000,
+          sessions: {
+            ...createSessions(),
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: 1_000,
+                status: "running",
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const sendButton = container.querySelector<HTMLButtonElement>('button[aria-label="Queue message"]');
+    expect(sendButton).not.toBeNull();
+    expect(sendButton?.getAttribute("title")).toBe("Queue");
+    expect(container.querySelector('button[title="New session"]')).toBeNull();
   });
 
   it("renders the run action button for abortable and idle states", () => {
