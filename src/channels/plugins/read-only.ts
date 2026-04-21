@@ -67,6 +67,58 @@ function addChannelPlugins(
   }
 }
 
+function cloneChannelPluginForChannelId(plugin: ChannelPlugin, channelId: string): ChannelPlugin {
+  if (plugin.id === channelId && plugin.meta.id === channelId) {
+    return plugin;
+  }
+  return {
+    ...plugin,
+    id: channelId,
+    meta: {
+      ...plugin.meta,
+      id: channelId,
+    },
+  };
+}
+
+function addSetupChannelPlugins(
+  byId: Map<string, ChannelPlugin>,
+  setups: Iterable<{
+    pluginId: string;
+    plugin: ChannelPlugin;
+  }>,
+  options: {
+    ownedMissingChannelIdsByPluginId: ReadonlyMap<string, readonly string[]>;
+  },
+): void {
+  for (const setup of setups) {
+    const ownedMissingChannelIds = options.ownedMissingChannelIdsByPluginId.get(setup.pluginId);
+    if (!ownedMissingChannelIds || ownedMissingChannelIds.length === 0) {
+      continue;
+    }
+    if (ownedMissingChannelIds.includes(setup.plugin.id)) {
+      addChannelPlugins(byId, [setup.plugin], {
+        onlyIds: new Set(ownedMissingChannelIds),
+        allowOverwrite: false,
+      });
+      continue;
+    }
+    if (setup.plugin.id !== setup.pluginId) {
+      continue;
+    }
+    addChannelPlugins(
+      byId,
+      ownedMissingChannelIds.map((channelId) =>
+        cloneChannelPluginForChannelId(setup.plugin, channelId),
+      ),
+      {
+        onlyIds: new Set(ownedMissingChannelIds),
+        allowOverwrite: false,
+      },
+    );
+  }
+}
+
 function resolveReadOnlyWorkspaceDir(
   cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions,
@@ -189,6 +241,18 @@ export function resolveReadOnlyChannelPluginsForConfig(
     cache: options.cache,
   });
   if (externalPluginIds.length > 0) {
+    const missingChannelIdSet = new Set(missingConfiguredChannelIds);
+    const ownedMissingChannelIdsByPluginId = new Map(
+      externalManifestRecords
+        .filter((record) => externalPluginIds.includes(record.id))
+        .map(
+          (record) =>
+            [
+              record.id,
+              record.channels.filter((channelId) => missingChannelIdSet.has(channelId)),
+            ] as const,
+        ),
+    );
     const registry = loadOpenClawPlugins({
       config: cfg,
       activationSourceConfig: options.activationSourceConfig ?? cfg,
@@ -201,14 +265,9 @@ export function resolveReadOnlyChannelPluginsForConfig(
       requireSetupEntryForSetupOnlyChannelPlugins: true,
       onlyPluginIds: externalPluginIds,
     });
-    addChannelPlugins(
-      byId,
-      registry.channelSetups.map((setup) => setup.plugin),
-      {
-        onlyIds: new Set(missingConfiguredChannelIds),
-        allowOverwrite: false,
-      },
-    );
+    addSetupChannelPlugins(byId, registry.channelSetups, {
+      ownedMissingChannelIdsByPluginId,
+    });
   }
 
   const plugins = [...byId.values()];

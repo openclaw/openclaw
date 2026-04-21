@@ -75,7 +75,6 @@ function getChannelSecretTargetIds(): string[] {
 }
 
 function isScopedChannelSecretTargetEntry(params: {
-  pluginId: string;
   entry: {
     id: string;
     configFile?: string;
@@ -83,7 +82,11 @@ function isScopedChannelSecretTargetEntry(params: {
     refPathPattern?: string;
   };
 }): boolean {
-  const allowedPrefix = `channels.${params.pluginId}.`;
+  const channelId = /^channels\.([^.]+)\./.exec(params.entry.id)?.[1];
+  if (!channelId) {
+    return false;
+  }
+  const allowedPrefix = `channels.${channelId}.`;
   return (
     params.entry.id.startsWith(allowedPrefix) &&
     params.entry.configFile === "openclaw.json" &&
@@ -104,7 +107,7 @@ function getConfiguredChannelSecretTargetIds(
     includePersistedAuthState: false,
   })) {
     for (const entry of plugin.secrets?.secretTargetRegistryEntries ?? []) {
-      if (isScopedChannelSecretTargetEntry({ pluginId: plugin.id, entry })) {
+      if (isScopedChannelSecretTargetEntry({ entry })) {
         targetIds.add(entry.id);
       }
     }

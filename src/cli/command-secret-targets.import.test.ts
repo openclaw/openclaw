@@ -74,6 +74,24 @@ describe("command secret targets module import", () => {
           ],
         },
       },
+      {
+        id: "external-chat-plugin",
+        secrets: {
+          secretTargetRegistryEntries: [
+            {
+              id: "channels.external-chat.token",
+              targetType: "channels.external-chat.token",
+              configFile: "openclaw.json",
+              pathPattern: "channels.external-chat.token",
+              secretShape: "secret_input",
+              expectedResolvedValue: "string",
+              includeInPlan: true,
+              includeInConfigure: true,
+              includeInAudit: true,
+            },
+          ],
+        },
+      },
     ]);
 
     vi.doMock("../secrets/target-registry.js", () => ({
@@ -86,9 +104,13 @@ describe("command secret targets module import", () => {
 
     const mod = await import("./command-secret-targets.js");
     const targets = mod.getStatusCommandSecretTargetIds({
-      channels: { telegram: { botToken: "123456:ABCDEF" } },
+      channels: {
+        "external-chat": { token: "configured" },
+        telegram: { botToken: "123456:ABCDEF" },
+      },
     });
 
+    expect(targets.has("channels.external-chat.token")).toBe(true);
     expect(targets.has("channels.telegram.botToken")).toBe(true);
     expect(targets.has("channels.telegram.gatewayToken")).toBe(false);
     expect(targets.has("channels.telegram.gatewayTokenRef")).toBe(false);

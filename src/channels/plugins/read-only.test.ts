@@ -187,6 +187,35 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
+  it("matches setup-only plugins by manifest-owned channel ids when plugin id differs", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+      setupChannelId: "external-chat-plugin",
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": { token: "configured" },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env },
+        includePersistedAuthState: false,
+      },
+    );
+
+    const plugin = plugins.find((entry) => entry.id === "external-chat");
+    expect(plugin?.meta.id).toBe("external-chat");
+    expect(plugin?.meta.blurb).toBe("setup entry");
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
   it("keeps configured external channels visible when no setup entry exists", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       setupEntry: false,
