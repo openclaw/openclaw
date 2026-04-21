@@ -1,3 +1,6 @@
+import { stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOutboundMediaFromUrlMock = vi.fn();
@@ -51,6 +54,51 @@ describe("zalo outbound hosted media", () => {
     expect(hostedUrl).toMatch(
       /^https:\/\/gateway\.example\.com\/zalo-webhook\/media\/[a-f0-9]+\?token=[a-f0-9]+$/,
     );
+  });
+
+  it("passes proxy-aware fetch options into hosted media downloads", async () => {
+    const fetcher = vi.fn();
+
+    await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+      fetcher: fetcher as never,
+    });
+
+    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith("https://example.com/photo.png", {
+      maxBytes: 1024,
+      fetchImpl: fetcher,
+      trustExplicitProxyDns: true,
+    });
+  });
+
+  it("creates hosted media storage with private filesystem permissions", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+
+    if (process.platform === "win32") {
+      expect(hostedUrl).toContain("/zalo-webhook/media/");
+      return;
+    }
+
+    const { pathname } = new URL(hostedUrl);
+    const id = pathname.split("/").pop();
+    expect(id).toBeTruthy();
+
+    const storageDir = join(tmpdir(), "openclaw-zalo-outbound-media");
+    const [dirStats, metadataStats, bufferStats] = await Promise.all([
+      stat(storageDir),
+      stat(join(storageDir, `${id}.json`)),
+      stat(join(storageDir, `${id}.bin`)),
+    ]);
+
+    expect(dirStats.mode & 0o777).toBe(0o700);
+    expect(metadataStats.mode & 0o777).toBe(0o600);
+    expect(bufferStats.mode & 0o777).toBe(0o600);
   });
 
   it("preserves the root webhook path when deriving the hosted media route", () => {

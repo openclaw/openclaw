@@ -42,6 +42,9 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  requestInit?: RequestInit;
+  trustExplicitProxyDns?: boolean;
   workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
@@ -340,6 +343,9 @@ async function loadWebMediaInternal(
     maxBytes,
     optimizeImages = true,
     ssrfPolicy,
+    fetchImpl,
+    requestInit,
+    trustExplicitProxyDns,
     workspaceDir,
     localRoots,
     sandboxValidated = false,
@@ -436,7 +442,14 @@ async function loadWebMediaInternal(
         : optimizeImages
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
-    const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
+    const fetched = await fetchRemoteMedia({
+      url: mediaUrl,
+      fetchImpl,
+      requestInit,
+      maxBytes: fetchCap,
+      ssrfPolicy,
+      trustExplicitProxyDns,
+    });
     const { buffer, contentType, fileName } = fetched;
     const kind = kindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });

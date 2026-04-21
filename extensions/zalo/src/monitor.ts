@@ -663,6 +663,7 @@ async function deliverZaloReply(params: {
         webhookUrl,
         webhookPath,
         maxBytes: mediaMaxBytes,
+        fetcher,
       });
       await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher);
       statusSink?.({ lastOutboundAt: Date.now() });

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,8 @@ type HostedZaloMediaMetadata = {
   expiresAt: number;
 };
 
+type HostedZaloMediaFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 function resolveHostedZaloMediaMetadataPath(id: string): string {
   return join(ZALO_OUTBOUND_MEDIA_DIR, `${id}.json`);
 }
@@ -36,7 +38,8 @@ function createHostedZaloMediaToken(): string {
 }
 
 async function ensureHostedZaloMediaDir(): Promise<void> {
-  await mkdir(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true });
+  await mkdir(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, mode: 0o700 });
+  await chmod(ZALO_OUTBOUND_MEDIA_DIR, 0o700).catch(() => undefined);
 }
 
 async function deleteHostedZaloMediaEntry(id: string): Promise<void> {
@@ -119,12 +122,15 @@ export async function prepareHostedZaloMediaUrl(params: {
   webhookUrl: string;
   webhookPath?: string;
   maxBytes: number;
+  fetcher?: HostedZaloMediaFetch;
 }): Promise<string> {
   await ensureHostedZaloMediaDir();
   await cleanupExpiredHostedZaloMedia();
 
   const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
+    fetchImpl: params.fetcher,
+    trustExplicitProxyDns: params.fetcher ? true : undefined,
   });
 
   const routePath = resolveHostedZaloMediaRoutePath({
@@ -135,7 +141,7 @@ export async function prepareHostedZaloMediaUrl(params: {
   const token = createHostedZaloMediaToken();
   const publicBaseUrl = new URL(params.webhookUrl).origin;
 
-  await writeFile(resolveHostedZaloMediaBufferPath(id), media.buffer);
+  await writeFile(resolveHostedZaloMediaBufferPath(id), media.buffer, { mode: 0o600 });
   await writeFile(
     resolveHostedZaloMediaMetadataPath(id),
     JSON.stringify({
@@ -144,7 +150,7 @@ export async function prepareHostedZaloMediaUrl(params: {
       contentType: media.contentType,
       expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
     } satisfies HostedZaloMediaMetadata),
-    "utf8",
+    { encoding: "utf8", mode: 0o600 },
   );
 
   return `${publicBaseUrl}${routePath}${id}?token=${token}`;
