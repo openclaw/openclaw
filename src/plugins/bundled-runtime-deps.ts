@@ -187,6 +187,19 @@ function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return nextEnv;
 }
 
+export function createBundledRuntimeDepsInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...createNestedNpmInstallEnv(env),
+    npm_config_legacy_peer_deps: "true",
+    npm_config_package_lock: "false",
+    npm_config_save: "false",
+  };
+}
+
+export function createBundledRuntimeDepsInstallArgs(missingSpecs: readonly string[]): string[] {
+  return ["install", "--ignore-scripts", ...missingSpecs];
+}
+
 function resolvePathEnvKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
   if (platform !== "win32") {
     return "PATH";
@@ -457,24 +470,15 @@ export function installBundledRuntimeDeps(params: {
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
 }): void {
+  const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
   const npmRunner = resolveBundledRuntimeDepsNpmRunner({
-    env: params.env,
-    npmArgs: [
-      "install",
-      "--prefix",
-      params.installRoot,
-      "--omit=dev",
-      "--no-save",
-      "--package-lock=false",
-      "--ignore-scripts",
-      "--legacy-peer-deps",
-      ...params.missingSpecs,
-    ],
+    env: installEnv,
+    npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
   });
   const result = spawnSync(npmRunner.command, npmRunner.args, {
     cwd: params.installRoot,
     encoding: "utf8",
-    env: createNestedNpmInstallEnv(npmRunner.env ?? params.env),
+    env: npmRunner.env ?? installEnv,
     stdio: "pipe",
     shell: npmRunner.shell ?? false,
   });

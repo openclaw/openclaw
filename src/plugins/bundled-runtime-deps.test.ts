@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createBundledRuntimeDepsInstallArgs,
+  createBundledRuntimeDepsInstallEnv,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
   resolveBundledRuntimeDepsNpmRunner,
@@ -44,6 +46,26 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     expect(runner).toEqual({
       command: "C:\\Program Files\\nodejs\\node.exe",
       args: ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "acpx@0.5.3"],
+    });
+  });
+
+  it("uses package-manager-neutral install args with npm config env", () => {
+    expect(createBundledRuntimeDepsInstallArgs(["acpx@0.5.3"])).toEqual([
+      "install",
+      "--ignore-scripts",
+      "acpx@0.5.3",
+    ]);
+    expect(
+      createBundledRuntimeDepsInstallEnv({
+        PATH: "/usr/bin:/bin",
+        npm_config_global: "true",
+        npm_config_prefix: "/opt/homebrew",
+      }),
+    ).toEqual({
+      PATH: "/usr/bin:/bin",
+      npm_config_legacy_peer_deps: "true",
+      npm_config_package_lock: "false",
+      npm_config_save: "false",
     });
   });
 
@@ -126,20 +148,21 @@ describe("installBundledRuntimeDeps", () => {
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "npm.cmd",
-      [
-        "install",
-        "--prefix",
-        "C:\\openclaw",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "--ignore-scripts",
-        "--legacy-peer-deps",
-        "acpx@0.5.3",
-      ],
+      ["install", "--ignore-scripts", "acpx@0.5.3"],
       expect.objectContaining({
         cwd: "C:\\openclaw",
         shell: true,
+        env: expect.objectContaining({
+          npm_config_legacy_peer_deps: "true",
+          npm_config_package_lock: "false",
+          npm_config_save: "false",
+        }),
+      }),
+    );
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
         env: expect.not.objectContaining({
           npm_config_prefix: expect.any(String),
         }),
