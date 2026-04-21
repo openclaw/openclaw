@@ -1,25 +1,15 @@
 ---
 name: local-models
 description: Run local language models from the Hugging Face Hub with llama.cpp and GGUF. Use when finding a llama.cpp-compatible repo, reading the `?local-app=llama.cpp` snippet, confirming exact `.gguf` filenames from the Hub tree API, choosing an existing GGUF that fits local hardware, or writing `llama-cli` / `llama-server` commands for ready-to-run GGUF repos.
+name: local-models
+description: Run local language models from the Hugging Face Hub with llama.cpp and GGUF. Use when finding a llama.cpp-compatible repo, reading the `?local-app=llama.cpp` snippet, confirming exact `.gguf` filenames from the Hub tree API, choosing an existing GGUF that fits local hardware, or writing `llama-cli` / `llama-server` commands for ready-to-run GGUF repos.
+homepage: https://huggingface.co/docs/hub/gguf-llamacpp
 metadata:
   {
     "openclaw":
       {
         "emoji": "🦙",
-        "homepage": "https://huggingface.co/docs/hub/gguf-llamacpp",
         "requires": { "anyBins": ["llama-cli", "llama-server"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "llama.cpp",
-              "bins": ["llama-cli", "llama-server"],
-              "label": "Install llama.cpp (brew)",
-            },
-          ],
-      },
-  }
 ---
 
 # Local models with llama.cpp
