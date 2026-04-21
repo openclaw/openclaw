@@ -94,6 +94,29 @@ function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
 }
 
+function resolveGatewayUrl(
+  stored: string,
+  pageDerivedUrl: string,
+  defaultUrl: string,
+  autoDerivedFlag: boolean | undefined,
+): string {
+  if (stored === pageDerivedUrl) {
+    return defaultUrl;
+  }
+  if (autoDerivedFlag === true) {
+    return defaultUrl;
+  }
+  if (autoDerivedFlag === false) {
+    return stored;
+  }
+  // Pre-existing data without the flag.  Cannot reliably determine
+  // whether this was auto-derived or user-set, so preserve it.
+  // The fix takes effect on the *next* load: persistSettings writes
+  // the page-scoped key and the flag, so a subsequent page visit
+  // will find its own scoped key and never reach this path.
+  return stored;
+}
+
 function normalizeGatewayTokenScope(gatewayUrl: string): string {
   const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
   if (!trimmed) {
@@ -211,16 +234,22 @@ export function loadSettings(): UiSettings {
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
-    // When the persisted URL was auto-derived (not user-set), treat it as a
-    // stale default from another page context rather than a deliberate override.
-    // This fixes nginx reverse-proxy multi-instance setups where /a, /b, /c
-    // each route to a different backend but share one legacy localStorage key.
-    // A missing flag (pre-existing data) is treated as non-auto-derived to
-    // preserve valid manual overrides like wss://host/ws on UI path /openclaw.
-    const gatewayUrl =
-      parsedGatewayUrl === pageDerivedUrl || parsed.gatewayUrlAutoDerived === true
-        ? defaultUrl
-        : parsedGatewayUrl;
+    // Resolve gatewayUrl with three tiers:
+    //  1. Matches current page derivation → always use page default.
+    //  2. Flag present (new data) → flag is authoritative:
+    //     true  = auto-derived from another page → use page default.
+    //     false = user-set override → trust stored value.
+    //  3. Flag absent (pre-existing data) → one-time migration heuristic:
+    //     same-host different-path is treated as stale auto-derived
+    //     (nginx reverse-proxy pattern).  The subsequent persistSettings
+    //     write will set the flag, so this heuristic only fires once
+    //     per legacy record.
+    const gatewayUrl = resolveGatewayUrl(
+      parsedGatewayUrl,
+      pageDerivedUrl,
+      defaultUrl,
+      parsed.gatewayUrlAutoDerived,
+    );
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const { theme, mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,
@@ -334,6 +363,17 @@ function persistSettings(next: UiSettings) {
   try {
     storage?.setItem(scopedKey, serialized);
     storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    // Also write under the page-derived URL's scoped key so that the
+    // next load on this page path finds its own scoped entry directly,
+    // without falling back to the shared legacy key.  This ensures that
+    // nginx reverse-proxy multi-instance setups (e.g. /a, /b, /c) each
+    // get their own authoritative scoped record after the first visit.
+    // Only write when the key does not already exist, to avoid overwriting
+    // a page-scoped record that carries a different user-chosen gatewayUrl.
+    const pageDerivedKey = settingsKeyForGateway(deriveDefaultGatewayUrl().pageUrl);
+    if (pageDerivedKey !== scopedKey && storage?.getItem(pageDerivedKey) === null) {
+      storage?.setItem(pageDerivedKey, serialized);
+    }
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied
