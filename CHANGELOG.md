@@ -2,6 +2,15 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- Agents/Anthropic: honor explicit `cacheRetention: "long"` for custom `anthropic-messages` endpoints by applying the 1-hour ephemeral cache TTL independently of the Anthropic/Vertex hostname allowlist. Implicit and env-driven long retention still require an allowlisted host. (#67800) Thanks @MonkeyLeeT.
+- fix(agents): honor explicit long Anthropic cache TTL on custom hosts (#67800). Thanks @MonkeyLeeT
+
 ## 2026.4.20
 
 ### Changes
