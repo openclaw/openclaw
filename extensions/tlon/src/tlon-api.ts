@@ -233,25 +233,27 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       fileName: fileKey,
     });
 
-    const { response, release } = await fetchWithSsrFGuard({
-      url: uploadUrl,
-      init: {
-        method: "PUT",
-        body: params.blob,
-        headers: {
-          "Cache-Control": "public, max-age=3600",
-          "Content-Type": contentType,
-        },
-      },
-      auditContext: "tlon-memex-upload",
-    });
-
+    let release: (() => Promise<void>) | undefined;
     try {
-      if (!response.ok) {
-        throw new Error(`Upload failed: ${response.status}`);
+      const guarded = await fetchWithSsrFGuard({
+        url: uploadUrl,
+        init: {
+          method: "PUT",
+          body: params.blob,
+          headers: {
+            "Cache-Control": "public, max-age=3600",
+            "Content-Type": contentType,
+          },
+        },
+        auditContext: "tlon-memex-upload",
+        capture: false,
+      });
+      release = guarded.release;
+      if (!guarded.response.ok) {
+        throw new Error(`Upload failed: ${guarded.response.status}`);
       }
     } finally {
-      await release();
+      await release?.();
     }
 
     return { url: hostedUrl };

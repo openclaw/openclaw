@@ -51,7 +51,6 @@ describe("uploadFile memex upload hardening", () => {
     vi.clearAllMocks();
     vi.stubGlobal("fetch", vi.fn());
     mockAuthenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
-    mockRelease.mockClear();
     configureClient({
       shipUrl: "https://groups.tlon.network",
       shipName: "~zod",
@@ -119,6 +118,7 @@ describe("uploadFile memex upload hardening", () => {
         }),
       }),
       auditContext: "tlon-memex-upload",
+      capture: false,
     });
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
@@ -141,7 +141,9 @@ describe("uploadFile memex upload hardening", () => {
       expect.objectContaining({
         url: "http://169.254.169.254/upload",
         auditContext: "tlon-memex-upload",
+        capture: false,
       }),
     );
+    expect(mockRelease).not.toHaveBeenCalled();
   });
 });
