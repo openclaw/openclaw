@@ -2211,6 +2211,8 @@ describe("dispatchReplyFromConfig", () => {
       events.push(`send:${payload.text ?? "<empty>"}`);
       return true;
     });
+    (dispatcher.getQueuedCounts as Mock).mockReturnValue({ tool: 0, block: 0, final: 1 });
+    (dispatcher.getFailedCounts as Mock).mockReturnValue({ tool: 0, block: 0, final: 0 });
     const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
       options?.registerAfterFinalDelivery?.(() => {
         events.push("after-final");
