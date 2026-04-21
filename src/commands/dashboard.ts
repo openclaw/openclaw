@@ -18,12 +18,17 @@ function isLoopbackDashboardUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.trim().toLowerCase();
+    const octets = host.split(".");
+    const isLoopbackIpv4Literal =
+      octets.length === 4 &&
+      octets.every((octet) => /^\d+$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255) &&
+      Number(octets[0]) === 127;
     return (
       host === "localhost" ||
       host === "::1" ||
       host === "[::1]" ||
       host === "127.0.0.1" ||
-      host.startsWith("127.")
+      isLoopbackIpv4Literal
     );
   } catch {
     return false;

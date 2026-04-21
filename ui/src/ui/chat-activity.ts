@@ -148,14 +148,15 @@ export function resolveChatActivityState(evidence: ChatActivityEvidence): ChatAc
       evidence.runId ||
       evidence.stream !== null ||
       activeToolCallCount > 0 ||
-      reconnectReconciling
+      reconnectReconciling ||
+      evidence.currentSessionApproval != null
     ) {
       return buildState(
         "reconnecting",
         "in_progress",
         "Reconnecting to the gateway",
         "Checking whether the previous run is still active.",
-        evidence.reconnectPendingAt ?? latestActivityAt,
+        evidence.reconnectPendingAt ?? latestNonTerminalActivityAt ?? latestActivityAt,
         latestActivityAt,
         true,
       );
