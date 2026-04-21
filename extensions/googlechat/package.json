@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "google-auth-library": "^10.6.2",
+    "undici": "8.1.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -25,6 +25,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["google-auth-library"],
+    mirroredRootRuntimeDeps: ["undici"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
