@@ -328,6 +328,24 @@ describe("createManagedOutgoingImageBlocks", () => {
     );
   });
 
+  it("rejects oversized image data urls before decoding the payload", async () => {
+    const oversizedDataUrl = "data:image/png;base64,AAAAAA==";
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [oversizedDataUrl],
+        stateDir,
+        limits: {
+          ...DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS,
+          maxBytes: 3,
+        },
+      }),
+    ).rejects.toThrow(/Generated image 1.*byte limit/);
+
+    await expect(fs.readdir(path.join(stateDir, "media", "outgoing", "records"))).rejects.toThrow();
+  });
+
   it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;

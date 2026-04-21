@@ -141,6 +141,13 @@ function validateManagedImageBuffer(
   }
 }
 
+function estimateBase64DecodedByteLength(base64: string): number {
+  const normalized = base64.replace(/\s+/g, "");
+  const paddingMatch = /=+$/u.exec(normalized);
+  const padding = Math.min(paddingMatch?.[0].length ?? 0, 2);
+  return Math.floor((normalized.length * 3) / 4) - padding;
+}
+
 function getManagedImageMetadataLimitError(
   metadata: { width: number; height: number } | null,
   alt: string,
@@ -290,7 +297,11 @@ function deriveAltText(source: string, index: number) {
   return localName || fallback;
 }
 
-function parseImageDataUrl(source: string): ParsedImageDataUrl {
+function parseImageDataUrl(
+  source: string,
+  alt: string,
+  limits: ManagedImageAttachmentLimits,
+): ParsedImageDataUrl {
   const trimmed = source.trim();
   if (!trimmed.startsWith("data:")) {
     return { kind: "not-data-url" };
@@ -302,6 +313,11 @@ function parseImageDataUrl(source: string): ParsedImageDataUrl {
   const contentType = match[1]?.trim().toLowerCase() ?? "";
   if (!contentType.startsWith("image/")) {
     return { kind: "non-image-data-url" };
+  }
+  if (estimateBase64DecodedByteLength(match[2]) > limits.maxBytes) {
+    throw createManagedImageAttachmentError(
+      `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
+    );
   }
   return {
     kind: "image-data-url",
@@ -680,11 +696,10 @@ export async function createManagedOutgoingImageBlocks(params: {
   const limits = resolveManagedImageAttachmentLimits(params.limits);
   const blocks: ManagedImageBlock[] = [];
   for (const [index, mediaUrl] of mediaUrls.entries()) {
-    const parsedDataUrl = parseImageDataUrl(mediaUrl);
+    const fallbackAlt = `Generated image ${index + 1}`;
+    const parsedDataUrl = parseImageDataUrl(mediaUrl, fallbackAlt, limits);
     const alt =
-      parsedDataUrl.kind === "image-data-url"
-        ? `Generated image ${index + 1}`
-        : deriveAltText(mediaUrl, index);
+      parsedDataUrl.kind === "image-data-url" ? fallbackAlt : deriveAltText(mediaUrl, index);
     if (parsedDataUrl.kind === "non-image-data-url") {
       continue;
     }
