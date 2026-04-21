@@ -260,15 +260,18 @@ function tryReuseLoadedSessionStoreSnapshot(params: {
     return undefined;
   }
   try {
-    // Reject reuse if the caller-owned store has drifted from the loaded snapshot.
     const currentBaseStoreSerialized = JSON.stringify(params.baseStore, null, 2);
-    if (snapshot.serializedFromDisk !== undefined) {
-      if (currentBaseStoreSerialized !== snapshot.serializedFromDisk) {
-        return undefined;
-      }
-    } else if (
+    if (
+      snapshot.serializedFromDisk !== undefined &&
+      currentBaseStoreSerialized !== snapshot.serializedFromDisk &&
+      !isAcpScopedBaseStoreDrift(params.baseStore, snapshot)
+    ) {
+      return undefined;
+    }
+    if (
+      snapshot.serializedDigest !== undefined &&
       createHash("sha256").update(currentBaseStoreSerialized).digest("hex") !==
-      snapshot.serializedDigest
+        snapshot.serializedDigest
     ) {
       return undefined;
     }
@@ -287,6 +290,41 @@ function tryReuseLoadedSessionStoreSnapshot(params: {
   } catch {
     return undefined;
   }
+}
+
+function isAcpScopedBaseStoreDrift(
+  baseStore: Record<string, SessionEntry>,
+  snapshot: {
+    serializedFromDisk?: string;
+    acpByKey: Map<string, NonNullable<SessionEntry["acp"]>>;
+  },
+): boolean {
+  if (snapshot.serializedFromDisk === undefined) {
+    return false;
+  }
+  let parsedSnapshot: Record<string, SessionEntry>;
+  try {
+    const parsed = JSON.parse(snapshot.serializedFromDisk);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    parsedSnapshot = parsed as Record<string, SessionEntry>;
+  } catch {
+    return false;
+  }
+
+  const allKeys = new Set([...Object.keys(parsedSnapshot), ...Object.keys(baseStore)]);
+  for (const key of allKeys) {
+    const before = parsedSnapshot[key];
+    const after = baseStore[key];
+    if (JSON.stringify(before) === JSON.stringify(after)) {
+      continue;
+    }
+    if (!snapshot.acpByKey.has(key)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function syncSessionStoreInPlace(params: {
