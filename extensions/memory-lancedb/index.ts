@@ -300,13 +300,15 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
+    if (typeof this.dimensions === "number" && this.dimensions <= 0) {
+      throw new Error("Embedding dimensions must be a positive number");
+    }
+
     const params: Record<string, unknown> = {
       model: this.model,
       input: text,
     };
-    if (this.dimensions) {
-      params.dimensions = this.dimensions;
-    }
+
     ensureGlobalUndiciEnvProxyDispatcher();
     // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
     // omitted, then decodes the response. Several compatible providers either
@@ -318,9 +320,24 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
       body: params,
       ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
     });
-    return normalizeEmbeddingVector(response.data?.[0]?.embedding);
+
+    const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
+    return this.trimEmbedding(embedding);
+  }
+
+  private trimEmbedding(embedding: number[]): number[] {
+    if (typeof this.dimensions !== "number") {
+      return embedding;
+    }
+    if (embedding.length < this.dimensions) {
+      throw new Error(
+        `Embedding model ${this.model} returned ${embedding.length} dimensions, need at least ${this.dimensions} for local truncation`,
+      );
+    }
+    return embedding.slice(0, this.dimensions);
   }
 }
+
 
 class ProviderAdapterEmbeddings implements Embeddings {
   private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
