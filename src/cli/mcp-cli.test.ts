@@ -82,6 +82,24 @@ describe("mcp cli", () => {
     });
   });
 
+  it("clarifies that mcp list shows only OpenClaw-managed servers", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "list"]);
+
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("OpenClaw-managed MCP servers"));
+      expect(mockLog).toHaveBeenCalledWith("- context7");
+      expect(mockLog).toHaveBeenCalledWith(
+        "Note: this command does not include mcporter servers from config/mcporter.json.",
+      );
+    });
+  });
+
   it("fails when removing an unknown MCP server", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();

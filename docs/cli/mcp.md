@@ -364,6 +364,8 @@ MCP server lists.
 Important behavior:
 
 - these commands only read or write OpenClaw config
+- they do not read mcporter servers from `config/mcporter.json`; use
+  `mcporter list --output json` for that registry
 - they do not connect to the target MCP server
 - they do not validate whether the command, URL, or remote transport is
   reachable right now

@@ -1162,7 +1162,8 @@ Options:
 
 #### `mcp list`
 
-List saved MCP server definitions.
+List saved OpenClaw-managed MCP server definitions from `mcp.servers`. This does
+not include mcporter servers from `config/mcporter.json`.
 
 Options:
 
