@@ -282,9 +282,10 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
     const runtime = createRuntime();
+    let result: Awaited<ReturnType<typeof finalizeSetupWizard>> | undefined;
 
     try {
-      await finalizeSetupWizard({
+      result = await finalizeSetupWizard({
         flow: "quickstart",
         opts: {
           acceptRisk: true,
@@ -345,6 +346,8 @@ describe("finalizeSetupWizard", () => {
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
+    expect(result).toEqual({ launchedTui: true });
+    expect(setupWizardShellCompletion).not.toHaveBeenCalled();
   });
 
   it("restores terminal state after failed TUI hatch", async () => {

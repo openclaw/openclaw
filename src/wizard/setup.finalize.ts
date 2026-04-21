@@ -435,7 +435,7 @@ export async function finalizeSetupWizard(
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
       }
-      launchedTui = true;
+      return { launchedTui: true };
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
