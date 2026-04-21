@@ -43,7 +43,21 @@ export type SlackPin = {
 
 function resolveToken(explicit?: string, accountId?: string) {
   const cfg = loadConfig();
-  const account = resolveSlackAccount({ cfg, accountId });
+  // Tolerate unresolved channel SecretRefs in the cfg snapshot here: the
+  // action path either receives an explicit `opts.token` (resolved by the
+  // caller) or surfaces the existing "missing bot token" error via the
+  // guard below. The runtime snapshot can legitimately retain unresolved
+  // `channels.slack.*` SecretRefs (see the inspect/strict separation
+  // introduced in #66818) when the active account's secrets were not part
+  // of the agent-runtime base target set; failing the strict resolver
+  // here would block Slack actions (edit, pin, read, reactions, etc.)
+  // even though inbound dispatch keeps working via the boot-resolved
+  // token. Mirrors the outbound-send fix from #68954. See #68237.
+  const account = resolveSlackAccount({
+    cfg,
+    accountId,
+    tolerateUnresolvedSecrets: true,
+  });
   const token = resolveSlackBotToken(explicit ?? account.botToken ?? undefined);
   if (!token) {
     logVerbose(
