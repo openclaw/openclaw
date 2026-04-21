@@ -26,6 +26,19 @@ function looksLikeEnvelopeHeader(header: string): boolean {
   return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
 }
 
+// Check if sender part looks like a group/room label rather than a person
+// Group indicators: #channel, "group:", "guild:", numeric-only IDs, etc.
+function looksLikeGroupSender(senderPart: string): boolean {
+  const trimmed = senderPart.trim();
+  // Starts with # (Discord channel)
+  if (trimmed.startsWith("#")) return true;
+  // Contains group: or guild: prefix (room identifiers)
+  if (/group:|guild:|channel:/i.test(trimmed)) return true;
+  // Numeric only (just an ID with no name) - group labels often are just IDs
+  if (/^\d+$/.test(trimmed)) return true;
+  return false;
+}
+
 export function extractEnvelopeSender(text: string): string | null {
   const match = text.match(ENVELOPE_PREFIX);
   if (!match) {
@@ -35,22 +48,29 @@ export function extractEnvelopeSender(text: string): string | null {
   if (!looksLikeEnvelopeHeader(header)) {
     return null;
   }
-  const parts = header.split(" ");
-  if (parts.length < 2) {
+  // Find which channel this is (handles multi-word channels like "Google Chat")
+  const channelMatch = ENVELOPE_CHANNELS.find((c) => header.startsWith(`${c} `));
+  if (!channelMatch) {
     return null;
   }
-  const channel = parts[0];
-  if (!ENVELOPE_CHANNELS.includes(channel as (typeof ENVELOPE_CHANNELS)[number])) {
+  // Extract sender part after channel name
+  const senderPart = header.slice(channelMatch.length + 1).trim();
+  if (!senderPart) {
     return null;
   }
-  const senderParts = parts.slice(1);
-  if (senderParts.length > 0) {
-    const lastPart = senderParts[senderParts.length - 1];
+  // Exclude group/room sender parts (they would misidentify the actual sender)
+  if (looksLikeGroupSender(senderPart)) {
+    return null;
+  }
+  // Remove trailing timestamp if present (last part with 4-digit year)
+  const parts = senderPart.split(" ");
+  if (parts.length > 1) {
+    const lastPart = parts[parts.length - 1];
     if (lastPart && /\d{4}/.test(lastPart)) {
-      senderParts.pop();
+      parts.pop();
     }
   }
-  return senderParts.length > 0 ? senderParts.join(" ") : null;
+  return parts.join(" ") || null;
 }
 
 export function stripEnvelope(text: string): string {
