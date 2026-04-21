@@ -2,7 +2,7 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
+## 2026.4.20
 
 ### Changes
 
@@ -16,6 +16,10 @@ Docs: https://docs.openclaw.ai
 - Moonshot/Kimi: default bundled Moonshot setup, web search, and media-understanding surfaces to `kimi-k2.6` while keeping `kimi-k2.5` available for compatibility. (#69477) Thanks @scoootscooob.
 - Moonshot/Kimi: allow `thinking.keep = "all"` on `moonshot/kimi-k2.6`, and strip it for other Moonshot models or requests where pinned `tool_choice` disables thinking. (#68816) Thanks @aniaan.
 - BlueBubbles/groups: forward per-group `systemPrompt` config into inbound context `GroupSystemPrompt` so configured group-specific behavioral instructions (for example threaded-reply and tapback conventions) are injected on every turn. Supports `"*"` wildcard fallback matching the existing `requireMention` pattern. Closes #60665. (#69198) Thanks @omarshahine.
+- Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
+- Terminal/logging: optimize `sanitizeForLog()` by replacing the iterative control-character stripping loop with a single regex pass while preserving the existing ANSI-first sanitization behavior. (#67205) Thanks @bulutmuf.
+- QA/CI: make `openclaw qa suite` and `openclaw qa telegram` fail by default when scenarios fail, add `--allow-failures` for artifact-only runs, and tighten live-lane defaults for CI automation. (#69122) Thanks @joshavant.
+- Mattermost: stream thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when safe. (#47838) thanks @ninjaa.
 
 ### Fixes
 
@@ -70,18 +74,6 @@ Docs: https://docs.openclaw.ai
 - Codex/app-server: release the session lane when a downstream consumer throws while draining the `turn/completed` notification, so follow-up messages after a Codex plugin reply stop queueing behind a stale lane lock. Fixes #67996. (#69072) Thanks @ayeshakhalid192007-dev.
 - Codex/app-server: default approval handling to `on-request` so Codex harness sessions do not start with overly permissive tool approvals. (#68721) Thanks @Lucenx9.
 - Cron/delivery: keep isolated cron chat delivery tools available, resolve `channel: "last"` targets from the gateway, show delivery previews in `cron list/show`, and avoid duplicate fallback sends after direct message-tool delivery. (#69587) Thanks @obviyus.
-
-## 2026.4.20
-
-### Changes
-
-- Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
-- Terminal/logging: optimize `sanitizeForLog()` by replacing the iterative control-character stripping loop with a single regex pass while preserving the existing ANSI-first sanitization behavior. (#67205) Thanks @bulutmuf.
-- QA/CI: make `openclaw qa suite` and `openclaw qa telegram` fail by default when scenarios fail, add `--allow-failures` for artifact-only runs, and tighten live-lane defaults for CI automation. (#69122) Thanks @joshavant.
-- Mattermost: stream thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when safe. (#47838) thanks @ninjaa.
-
-### Fixes
-
 - Cron/Telegram: key isolated direct-delivery dedupe to each cron execution instead of the reused session id, so recurring Telegram announce runs no longer report delivered while silently skipping later sends. (#69000) Thanks @obviyus.
 - Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
 - Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.
