@@ -163,6 +163,34 @@ describe("createSynologyChatPlugin", () => {
         }),
       ).toEqual(["user1", "42"]);
     });
+
+    it("treats publicOrigin as a managed default-account field in the supported config adapter", () => {
+      const plugin = createSynologyChatPlugin();
+
+      expect(
+        plugin.config.deleteAccount?.({
+          cfg: {
+            channels: {
+              "synology-chat": {
+                publicOrigin: "https://gateway.example.com",
+                accounts: {
+                  office: {
+                    token: "office-token",
+                  },
+                },
+              },
+            },
+          },
+          accountId: "default",
+        }).channels?.["synology-chat"],
+      ).toEqual({
+        accounts: {
+          office: {
+            token: "office-token",
+          },
+        },
+      });
+    });
   });
 
   describe("security", () => {

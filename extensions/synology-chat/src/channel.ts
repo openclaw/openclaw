@@ -82,6 +82,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "token",
     "incomingUrl",
     "nasHost",
+    "publicOrigin",
     "webhookPath",
     "dangerouslyAllowNameMatching",
     "dangerouslyAllowInheritedWebhookPath",

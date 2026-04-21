@@ -18,7 +18,12 @@ vi.mock("node:http", () => {
 });
 
 const resolveSynologyWebhookFileUrlMock = vi.fn(
-  async ({ sourceUrl }: { account: ResolvedSynologyChatAccount; sourceUrl: string }) => sourceUrl,
+  async ({
+    sourceUrl,
+  }: {
+    account: ResolvedSynologyChatAccount;
+    sourceUrl: string;
+  }): Promise<string | null> => sourceUrl,
 );
 
 vi.mock("./media-proxy.js", () => ({
@@ -191,10 +196,8 @@ describe("sendFileUrl", () => {
     );
     mockSuccessResponse();
     await settleTimers(sendFileUrl(testAccount, "https://example.com/file.png", 42));
-    expect(lastMockRequestWrite).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "https://openclaw.example.com/webhook/synology/__openclaw-media/token-1",
-      ),
+    expect(decodeURIComponent(String(lastMockRequestWrite.mock.calls[0]?.[0] ?? ""))).toContain(
+      "https://openclaw.example.com/webhook/synology/__openclaw-media/token-1",
     );
   });
 
