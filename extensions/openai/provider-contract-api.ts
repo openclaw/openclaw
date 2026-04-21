@@ -1,6 +1,11 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
+const OPENAI_WIZARD_GROUP = {
+  groupId: "openai",
+  groupLabel: "OpenAI",
+  groupHint: "API key + Codex auth",
+} as const;
 
 export function createOpenAICodexProvider(): ProviderPlugin {
   return {
@@ -11,31 +16,43 @@ export function createOpenAICodexProvider(): ProviderPlugin {
       {
         id: "oauth",
         kind: "oauth",
-        label: "ChatGPT OAuth",
+        label: "OpenAI Codex Login",
         hint: "Browser sign-in",
         run: noopAuth,
         wizard: {
           choiceId: "openai-codex",
-          choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
+          choiceLabel: "OpenAI Codex Login",
           choiceHint: "Browser sign-in",
-          groupId: "openai",
-          groupLabel: "OpenAI",
-          groupHint: "Codex OAuth + API key",
+          assistantPriority: -30,
+          ...OPENAI_WIZARD_GROUP,
         },
       },
       {
         id: "device-code",
         kind: "device_code",
-        label: "ChatGPT device code",
-        hint: "Browser device-code sign-in",
+        label: "OpenAI Codex Device Pairing",
+        hint: "Pair in browser with a device code",
         run: noopAuth,
         wizard: {
           choiceId: "openai-codex-device-code",
-          choiceLabel: "OpenAI Codex (device code)",
-          choiceHint: "Browser device-code sign-in",
-          groupId: "openai",
-          groupLabel: "OpenAI",
-          groupHint: "Codex OAuth + API key",
+          choiceLabel: "OpenAI Codex Device Pairing",
+          choiceHint: "Pair in browser with a device code",
+          assistantPriority: -10,
+          ...OPENAI_WIZARD_GROUP,
+        },
+      },
+      {
+        id: "import-codex-cli",
+        kind: "oauth",
+        label: "OpenAI Codex",
+        hint: "Import existing ~/.codex login once",
+        run: noopAuth,
+        wizard: {
+          choiceId: "openai-codex-import",
+          choiceLabel: "OpenAI Codex",
+          choiceHint: "Import existing ~/.codex login once",
+          assistantPriority: -20,
+          ...OPENAI_WIZARD_GROUP,
         },
       },
     ],
@@ -59,9 +76,8 @@ export function createOpenAIProvider(): ProviderPlugin {
         wizard: {
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
-          groupId: "openai",
-          groupLabel: "OpenAI",
-          groupHint: "Codex OAuth + API key",
+          assistantPriority: -40,
+          ...OPENAI_WIZARD_GROUP,
         },
       },
     ],

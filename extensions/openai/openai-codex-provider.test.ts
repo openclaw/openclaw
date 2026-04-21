@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const readOpenAICodexCliOAuthProfileMock = vi.hoisted(() => vi.fn());
+const hasOpenAICodexCliOAuthCredentialMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
@@ -15,6 +16,7 @@ vi.mock("./openai-codex-cli-auth.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openai-codex-cli-auth.js")>();
   return {
     ...actual,
+    hasOpenAICodexCliOAuthCredential: hasOpenAICodexCliOAuthCredentialMock,
     readOpenAICodexCliOAuthProfile: readOpenAICodexCliOAuthProfileMock,
   };
 });
@@ -66,6 +68,8 @@ describe("openai codex provider", () => {
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
     readOpenAICodexCliOAuthProfileMock.mockReset();
+    hasOpenAICodexCliOAuthCredentialMock.mockReset();
+    hasOpenAICodexCliOAuthCredentialMock.mockReturnValue(false);
     loginOpenAICodexDeviceCodeMock.mockReset();
   });
 
@@ -145,7 +149,7 @@ describe("openai codex provider", () => {
     );
   });
 
-  it("offers browser, device-code, and one-time Codex CLI import auth methods", () => {
+  it("offers OpenAI menu auth methods for login, import, and device pairing", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     expect(provider.auth?.map((method) => method.id)).toEqual([
@@ -153,18 +157,47 @@ describe("openai codex provider", () => {
       "device-code",
       "import-codex-cli",
     ]);
+    expect(provider.auth?.find((method) => method.id === "oauth")).toMatchObject({
+      label: "OpenAI Codex Login",
+      hint: "Browser sign-in",
+      wizard: {
+        choiceId: "openai-codex",
+        choiceLabel: "OpenAI Codex Login",
+        assistantPriority: -30,
+      },
+    });
     expect(provider.auth?.find((method) => method.id === "device-code")).toMatchObject({
-      label: "ChatGPT device code",
-      hint: "Browser device-code sign-in",
+      label: "OpenAI Codex Device Pairing",
+      hint: "Pair in browser with a device code",
       kind: "device_code",
       wizard: {
         choiceId: "openai-codex-device-code",
+        choiceLabel: "OpenAI Codex Device Pairing",
+        assistantPriority: -10,
       },
     });
     expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
-      label: "Import Codex CLI login",
-      hint: "Use existing .codex auth once",
+      label: "OpenAI Codex",
+      hint: "Import existing ~/.codex login once",
       kind: "oauth",
+      wizard: {
+        choiceId: "openai-codex-import",
+        choiceLabel: "OpenAI Codex",
+        assistantPriority: -20,
+      },
+    });
+  });
+
+  it("annotates the import option when ~/.codex auth is detected", () => {
+    hasOpenAICodexCliOAuthCredentialMock.mockReturnValueOnce(true);
+
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
+      label: "OpenAI Codex (~/.codex existing key detected)",
+      wizard: {
+        choiceLabel: "OpenAI Codex (~/.codex existing key detected)",
+      },
     });
   });
 
