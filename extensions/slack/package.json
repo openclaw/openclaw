@@ -15,9 +15,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts",
-      "./runtime-setter-api.ts",
-      "./http-routes-api.ts"
+      "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
