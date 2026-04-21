@@ -6,7 +6,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
@@ -1067,9 +1067,14 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     defaultModel: DEFAULT_MODEL,
   });
   const contextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider,
+      model: resolved.model,
+      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,

@@ -135,6 +135,36 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gpt-5.4", { allowAsyncLoad: false })).toBe(272_000);
   });
 
+  it("falls back from Anthropic canonical ids to family aliases during cache lookup", async () => {
+    mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "sonnet", contextWindow: 222_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("claude-sonnet-4-5", { allowAsyncLoad: false })).toBe(222_000);
+  });
+
+  it("falls back from Claude CLI refs to Anthropic family aliases during cache lookup", async () => {
+    mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "opus", contextWindow: 333_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("claude-cli/opus-4.5", { allowAsyncLoad: false })).toBe(333_000);
+  });
+
   it("rehydrates config-backed cache entries after module reload when runtime config survives", async () => {
     const firstLoadConfigMock = vi.fn(() => ({
       models: {

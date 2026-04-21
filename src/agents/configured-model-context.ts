@@ -32,6 +32,12 @@ function pushUnique(items: string[], value: string | undefined) {
   items.push(trimmed);
 }
 
+function pushLookupCandidates(items: string[], values: Iterable<string | undefined>) {
+  for (const value of values) {
+    pushUnique(items, value);
+  }
+}
+
 function buildConfiguredProviderLookupIds(provider: string): string[] {
   const normalized = normalizeProviderId(provider);
   if (normalized === "claude-cli") {
@@ -50,26 +56,34 @@ function buildAnthropicModelLookupIds(model: string): string[] {
   const trimmed = model.trim();
   const lower = trimmed.toLowerCase();
   const lookupIds: string[] = [];
+  const is1m = lower.endsWith("[1m]");
+  const family =
+    lower === "sonnet" ||
+    lower.startsWith("sonnet-") ||
+    lower.startsWith("sonnet[") ||
+    lower.startsWith("claude-sonnet-") ||
+    lower.startsWith("claude-sonnet[")
+      ? "sonnet"
+      : lower === "opus" ||
+          lower.startsWith("opus-") ||
+          lower.startsWith("opus[") ||
+          lower.startsWith("claude-opus-") ||
+          lower.startsWith("claude-opus[")
+        ? "opus"
+        : null;
+
+  if (family && is1m) {
+    pushUnique(lookupIds, `${family}[1m]`);
+  }
 
   // Prefer family aliases when present so users can configure Anthropic limits
   // under stable ids like `sonnet` / `opus` even if the runtime model is a
   // versioned Claude id.
-  if (
-    lower === "sonnet" ||
-    lower === "sonnet-4.6" ||
-    lower === "claude-sonnet-4-6" ||
-    lower === "claude-sonnet-4.6"
-  ) {
-    pushUnique(lookupIds, "sonnet");
-    pushUnique(lookupIds, "claude-sonnet-4-6");
-  } else if (
-    lower === "opus" ||
-    lower === "opus-4.6" ||
-    lower === "claude-opus-4-6" ||
-    lower === "claude-opus-4.6"
-  ) {
-    pushUnique(lookupIds, "opus");
-    pushUnique(lookupIds, "claude-opus-4-6");
+  if (family && !is1m) {
+    pushUnique(lookupIds, family);
+    if (lower === family) {
+      pushUnique(lookupIds, family === "sonnet" ? "claude-sonnet-4-6" : "claude-opus-4-6");
+    }
   }
 
   pushUnique(lookupIds, trimmed);
@@ -112,6 +126,27 @@ function findContextTokensForProviderEntry(
   }
 
   return undefined;
+}
+
+export function buildContextCacheLookupIds(rawModelId: string): string[] {
+  const trimmed = rawModelId.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const lookupIds: string[] = [];
+  const slash = trimmed.indexOf("/");
+  if (slash > 0) {
+    const provider = normalizeProviderId(trimmed.slice(0, slash));
+    const model = trimmed.slice(slash + 1).trim();
+    if (provider === "anthropic" || provider === "claude-cli") {
+      pushLookupCandidates(lookupIds, buildConfiguredModelLookupIds(provider, model));
+    }
+    return lookupIds;
+  }
+
+  pushLookupCandidates(lookupIds, buildAnthropicModelLookupIds(trimmed));
+  return lookupIds;
 }
 
 export function resolveConfiguredProviderContextTokens(

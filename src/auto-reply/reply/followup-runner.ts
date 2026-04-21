@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runModelAwareAgent } from "../../agents/model-aware-runner.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -313,7 +313,13 @@ export function createFollowupRunner(params: {
         : undefined;
       const contextTokensUsed =
         agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
+        resolveContextTokensForModel({
+          cfg: queued.run.config,
+          provider: providerUsed,
+          model: modelUsed,
+          allowAsyncLoad: false,
+        }) ??
+        lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
         sessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 

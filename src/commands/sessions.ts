@@ -1,4 +1,4 @@
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
@@ -13,8 +13,8 @@ import {
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
+  resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
@@ -92,9 +92,14 @@ export async function sessionsCommand(
   const cfg = loadConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configContextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(displayDefaults.model) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg,
+      provider: displayDefaults.provider,
+      model: displayDefaults.model,
+      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
     opts: {
@@ -154,14 +159,23 @@ export async function sessionsCommand(
       count: rows.length,
       activeMinutes: activeMinutes ?? null,
       sessions: rows.map((r) => {
-        const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
+        const resolvedModel = resolveSessionDisplayModelRef(cfg, r, displayDefaults);
+        const model = resolvedModel.model;
         return {
           ...r,
           totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
           totalTokensFresh:
             typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
           contextTokens:
-            r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
+            r.contextTokens ??
+            resolveContextTokensForModel({
+              cfg,
+              provider: resolvedModel.provider,
+              model,
+              fallbackContextTokens: configContextTokens ?? undefined,
+              allowAsyncLoad: false,
+            }) ??
+            null,
           model,
         };
       }),
@@ -200,8 +214,17 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = resolveSessionDisplayModel(cfg, row, displayDefaults);
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const resolvedModel = resolveSessionDisplayModelRef(cfg, row, displayDefaults);
+    const model = resolvedModel.model;
+    const contextTokens =
+      row.contextTokens ??
+      resolveContextTokensForModel({
+        cfg,
+        provider: resolvedModel.provider,
+        model,
+        fallbackContextTokens: configContextTokens,
+        allowAsyncLoad: false,
+      });
     const total = resolveFreshSessionTotalTokens(row);
 
     const line = [

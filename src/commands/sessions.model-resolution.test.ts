@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockSessionsConfig, runSessionsJson, writeStore } from "./sessions.test-helpers.js";
+import {
+  mockSessionsConfig,
+  resetMockSessionsConfig,
+  runSessionsJson,
+  writeStore,
+} from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
 
@@ -39,6 +44,7 @@ describe("sessionsCommand model resolution", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetMockSessionsConfig();
   });
 
   it("prefers runtime model fields for subagent sessions in JSON output", async () => {

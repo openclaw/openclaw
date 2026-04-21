@@ -7,7 +7,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { resolveConfiguredProviderContextTokens } from "./configured-model-context.js";
+import {
+  buildContextCacheLookupIds,
+  resolveConfiguredProviderContextTokens,
+} from "./configured-model-context.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -258,7 +261,22 @@ export function lookupContextTokens(
     // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
-  return lookupCachedContextTokens(modelId);
+  const direct = lookupCachedContextTokens(modelId);
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  for (const candidate of buildContextCacheLookupIds(modelId)) {
+    if (candidate === modelId) {
+      continue;
+    }
+    const fallback = lookupCachedContextTokens(candidate);
+    if (fallback !== undefined) {
+      return fallback;
+    }
+  }
+
+  return undefined;
 }
 
 if (shouldEagerWarmContextWindowCache()) {

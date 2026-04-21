@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeRuntime,
   mockSessionsConfig,
+  resetMockSessionsConfig,
   runSessionsJson,
+  setMockSessionsConfig,
   writeStore,
 } from "./sessions.test-helpers.js";
 
@@ -22,6 +24,7 @@ describe("sessionsCommand", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetMockSessionsConfig();
   });
 
   it("renders a tabular view with token percentages", async () => {
@@ -104,6 +107,44 @@ describe("sessionsCommand", () => {
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("uses alias-aware configured context windows in JSON output", async () => {
+    setMockSessionsConfig({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/sonnet" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "sonnet", contextWindow: 222_000 }],
+          },
+        },
+      },
+    });
+
+    const store = writeStore({
+      main: {
+        sessionId: "alias-demo",
+        updatedAt: Date.now() - 2 * 60_000,
+        modelProvider: "claude-cli",
+        model: "claude-sonnet-4-5",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        contextTokens: number | null;
+      }>;
+    }>(sessionsCommand, store);
+
+    expect(payload.sessions?.find((row) => row.key === "main")?.contextTokens).toBe(222_000);
   });
 
   it("applies --active filtering in JSON output", async () => {

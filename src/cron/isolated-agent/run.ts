@@ -5,7 +5,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -497,6 +497,12 @@ async function finalizeCronRun(params: {
     execution.liveSelection.provider;
   const contextTokens =
     resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
+    resolveContextTokensForModel({
+      cfg: prepared.cfgWithAgentDefaults,
+      provider: providerUsed,
+      model: modelUsed,
+      allowAsyncLoad: false,
+    }) ??
     lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
