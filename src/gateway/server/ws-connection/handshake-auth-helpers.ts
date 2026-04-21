@@ -83,8 +83,7 @@ export function shouldAllowSilentLocalPairing(params: {
     (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
     (params.reason === "not-paired" ||
       params.reason === "scope-upgrade" ||
-      params.reason === "role-upgrade" ||
-      params.reason === "metadata-upgrade")
+      params.reason === "role-upgrade")
   );
 }
 
