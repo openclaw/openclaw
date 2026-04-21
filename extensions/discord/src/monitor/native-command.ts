@@ -33,7 +33,6 @@ import {
   type ChatCommandDefinition,
   type CommandArgDefinition,
   type CommandArgValues,
-  type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
@@ -88,6 +87,10 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type DiscordCommandArgs = {
+  raw?: string;
+  values?: CommandArgValues;
+};
 const log = createSubsystemLogger("discord/native-command");
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
@@ -559,7 +562,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
 function readDiscordCommandArgs(
   interaction: CommandInteraction,
   definitions?: CommandArgDefinition[],
-): CommandArgs | undefined {
+): DiscordCommandArgs | undefined {
   if (!definitions || definitions.length === 0) {
     return undefined;
   }
@@ -726,7 +729,7 @@ export function createDiscordNativeCommand(params: {
         ? ({
             ...commandArgs,
             raw: serializeCommandArgs(commandDefinition, commandArgs) ?? commandArgs.raw,
-          } satisfies CommandArgs)
+          } satisfies DiscordCommandArgs)
         : undefined;
       const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
       await dispatchDiscordCommandInteraction({
@@ -752,7 +755,7 @@ async function dispatchDiscordCommandInteraction(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   prompt: string;
   command: ChatCommandDefinition;
-  commandArgs?: CommandArgs;
+  commandArgs?: DiscordCommandArgs;
   cfg: ReturnType<typeof loadConfig>;
   discordConfig: DiscordConfig;
   accountId: string;
@@ -1402,10 +1405,7 @@ async function deliverDiscordInteractionReply(params: {
       if (!chunk.trim()) {
         continue;
       }
-      await interaction.followUp({
-        content: chunk,
-        ...(params.responseEphemeral !== undefined ? { ephemeral: params.responseEphemeral } : {}),
-      });
+      await sendMessage(chunk);
     }
     return;
   }
