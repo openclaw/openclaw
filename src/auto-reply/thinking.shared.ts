@@ -20,7 +20,7 @@ export type ThinkingCatalogEntry = {
   reasoning?: boolean;
 };
 
-const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high", "adaptive"];
+const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 const NO_THINKING_LEVELS: ThinkLevel[] = [...BASE_THINKING_LEVELS];
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {

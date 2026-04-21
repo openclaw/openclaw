@@ -208,7 +208,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 OpenClaw adds an OpenAI-specific GPT-5 prompt contribution for `openai/*` and `openai-codex/*` GPT-5-family runs. It lives in the bundled OpenAI plugin, applies to model ids such as `gpt-5`, `gpt-5.2`, `gpt-5.4`, and `gpt-5.4-mini`, and does not apply to older GPT-4.x models.
 
-The GPT-5 contribution adds a tagged behavior contract for output shape, tool persistence, dependency checks, parallel lookup, completion checks, verification, and autonomy by default. That guidance is always enabled for matching GPT-5 models. The friendly interaction-style layer is separate and configurable.
+The GPT-5 contribution adds a tagged behavior contract for persona persistence, execution safety, tool discipline, output shape, completion checks, and verification. Channel-specific reply and silent-message behavior stays in the shared OpenClaw system prompt and outbound delivery policy. The GPT-5 guidance is always enabled for matching models. The friendly interaction-style layer is separate and configurable.
 
 | Value                  | Effect                                      |
 | ---------------------- | ------------------------------------------- |

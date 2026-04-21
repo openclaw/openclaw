@@ -218,6 +218,18 @@ describe("anthropic provider replay hooks", () => {
         modelId: "claude-opus-4-6",
       } as never),
     ).toBe(false);
+    expect(
+      provider.supportsAdaptiveThinking?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-7",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.supportsAdaptiveThinking?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+      } as never),
+    ).toBe(true);
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {
