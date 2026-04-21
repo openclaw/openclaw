@@ -3,7 +3,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
-import { prepareHostedZaloMediaUrl } from "./outbound-media.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { resolveZaloToken } from "./token.js";
 
@@ -62,32 +61,6 @@ function resolveSendContext(options: ZaloSendOptions): {
   const token = options.token ?? resolveZaloToken(undefined, options.accountId).token;
   const proxy = options.proxy;
   return { token, fetcher: resolveZaloProxyFetch(proxy) };
-}
-
-async function resolveZaloPhotoParam(photoUrl: string, options: ZaloSendOptions): Promise<string> {
-  const trimmedPhotoUrl = photoUrl.trim();
-  if (!options.cfg) {
-    throw new Error("Zalo photo sends require a configured webhookUrl to host media safely");
-  }
-
-  const account = resolveZaloAccount({
-    cfg: options.cfg,
-    accountId: options.accountId,
-  });
-  const webhookUrl = account.config.webhookUrl?.trim();
-  if (!webhookUrl) {
-    throw new Error("Zalo photo sends require a configured webhookUrl to host media safely");
-  }
-
-  const mediaMaxBytes = (account.config.mediaMaxMb ?? 5) * 1024 * 1024;
-  const proxyUrl = options.proxy ?? account.config.proxy;
-  return await prepareHostedZaloMediaUrl({
-    mediaUrl: trimmedPhotoUrl,
-    webhookUrl,
-    webhookPath: account.config.webhookPath,
-    maxBytes: mediaMaxBytes,
-    proxyUrl,
-  });
 }
 
 function resolveValidatedSendContext(
@@ -171,7 +144,7 @@ export async function sendPhotoZalo(
         context.token,
         {
           chat_id: context.chatId,
-          photo: await resolveZaloPhotoParam(photoUrl, options),
+          photo: photoUrl.trim(),
           caption: options.caption?.slice(0, 2000),
         },
         context.fetcher,
