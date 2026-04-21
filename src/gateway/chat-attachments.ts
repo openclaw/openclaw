@@ -569,7 +569,21 @@ export async function describeOffloadedImagesForTextOnlyModel(params: {
   }
 
   // Resolve the imageModel from config (e.g. agents.defaults.imageModel)
-  const imageModel = await resolveAutoImageModel!({ cfg, agentDir });
+  // Guard against resolveAutoImageModel throwing (e.g. provider misconfiguration)
+  // so that a config error doesn't crash the entire message pipeline.
+  let imageModel: Awaited<ReturnType<typeof resolveAutoImageModel>> | undefined;
+  try {
+    imageModel = await resolveAutoImageModel!({ cfg, agentDir });
+  } catch (err) {
+    log?.warn(`describeOffloadedImages: resolveAutoImageModel failed: ${err instanceof Error ? err.message : String(err)}`);
+    // Neutralize all media:// markers so the runner doesn't try to parse them
+    let neutralMessage = parsed.message;
+    for (const ref of parsed.offloadedRefs) {
+      const marker = `[media attached: ${ref.mediaRef}]`;
+      neutralMessage = neutralMessage.replace(marker, "[image attached but could not be described: imageModel resolution failed]");
+    }
+    return { ...parsed, message: neutralMessage };
+  }
   if (!imageModel?.model) {
     log?.warn(
       `describeOffloadedImages: no imageModel configured, ${parsed.offloadedRefs.length} image(s) cannot be described`,
