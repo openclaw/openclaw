@@ -5,6 +5,7 @@
   "dist/extensions/copilot-proxy/runtime-api.js",
   "dist/extensions/diffs/runtime-api.js",
   "dist/extensions/discord/runtime-api.js",
+  "dist/extensions/discord/runtime-setter-api.js",
   "dist/extensions/feishu/runtime-api.js",
   "dist/extensions/google/runtime-api.js",
   "dist/extensions/googlechat/runtime-api.js",
