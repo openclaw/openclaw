@@ -88,6 +88,23 @@ function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string
   return shifted.toISOString().slice(0, 10);
 }
 
+function buildStartupMemoryDateStamps(params: {
+  nowMs: number;
+  timezone: string;
+  dailyMemoryDays: number;
+}): string[] {
+  const localTodayStamp = formatDateStamp(params.nowMs, params.timezone);
+  const utcTodayStamp = formatDateStamp(params.nowMs, "UTC");
+  const ordered = new Set<string>();
+
+  for (let offset = 0; offset < params.dailyMemoryDays; offset += 1) {
+    ordered.add(shiftDateStampByCalendarDays(localTodayStamp, offset));
+    ordered.add(shiftDateStampByCalendarDays(utcTodayStamp, offset));
+  }
+
+  return [...ordered];
+}
+
 function trimStartupMemoryContent(content: string, maxChars: number): string {
   const trimmed = content.trim();
   if (trimmed.length <= maxChars) {
@@ -256,9 +273,11 @@ export async function buildSessionStartupContextPrelude(params: {
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const limits = resolveStartupContextLimits(params.cfg);
   const dailyPaths: string[] = [];
-  const todayStamp = formatDateStamp(nowMs, timezone);
-  for (let offset = 0; offset < limits.dailyMemoryDays; offset += 1) {
-    const stamp = shiftDateStampByCalendarDays(todayStamp, offset);
+  for (const stamp of buildStartupMemoryDateStamps({
+    nowMs,
+    timezone,
+    dailyMemoryDays: limits.dailyMemoryDays,
+  })) {
     const relativePaths = await listStartupMemoryPathsForDate({
       workspaceDir: params.workspaceDir,
       stamp,
