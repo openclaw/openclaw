@@ -43,10 +43,14 @@ describe("gateway codex harness live helpers", () => {
   });
 
   it("accepts sandbox escalation rejection for codex models", () => {
-    const text =
-      "I couldn’t list them because `codex models` requires running outside the sandbox here, and that approval was rejected.";
+    const texts = [
+      "I couldn’t list them because `codex models` requires running outside the sandbox here, and that approval was rejected.",
+      "I couldn’t list them because the local `codex models` command requires elevated execution in this environment, and that request was rejected.",
+    ];
 
-    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+    for (const text of texts) {
+      expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+    }
   });
 
   it("accepts the interactive TUI current-model summary", () => {

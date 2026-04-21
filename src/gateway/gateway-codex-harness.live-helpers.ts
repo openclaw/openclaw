@@ -59,6 +59,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
       normalized.includes("sandbox blocks") ||
       (normalized.includes("outside the sandbox") &&
         normalized.includes("approval was rejected")) ||
+      (normalized.includes("elevated execution") && normalized.includes("request was rejected")) ||
       normalized.includes("interactive in this environment") ||
       normalized.includes("sandboxed session") ||
       normalized.includes("required user namespace") ||
