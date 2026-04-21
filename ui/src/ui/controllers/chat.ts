@@ -404,10 +404,13 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
   const runId = state.chatRunId;
   try {
-    await state.client.request(
+    const result = await state.client.request<{ aborted?: boolean }>(
       "chat.abort",
       runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
     );
+    if (result?.aborted === false) {
+      return false;
+    }
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;

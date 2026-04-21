@@ -707,6 +707,30 @@ describe("abortChatRun", () => {
     expect(state.chatLastTerminalAt).toBeTypeOf("number");
   });
 
+  it("keeps local run state when the gateway reports that no run was aborted", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, aborted: false });
+    const state = createState({
+      connected: true,
+      chatRunId: "run-1",
+      chatStream: "partial",
+      chatStreamStartedAt: 123,
+      chatActiveToolCallCount: 1,
+      chatReconnectPendingAt: 456,
+      client: { request } as never,
+    });
+
+    const result = await abortChatRun(state);
+
+    expect(result).toBe(false);
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatStream).toBe("partial");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatActiveToolCallCount).toBe(1);
+    expect(state.chatReconnectPendingAt).toBe(456);
+    expect(state.chatLastTerminalKind).toBeUndefined();
+    expect(state.chatLastTerminalAt).toBeUndefined();
+  });
+
   it("formats structured non-auth connect failures for chat abort", async () => {
     // Abort now shares the same structured connect-error formatter as send.
     const request = vi.fn().mockRejectedValue(
