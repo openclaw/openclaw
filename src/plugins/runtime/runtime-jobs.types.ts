@@ -31,7 +31,8 @@ export type DurableJobListParams = {
 export type DurableJobRuntimeMutationFailureReason =
   | "not_found"
   | "revision_conflict"
-  | "status_conflict";
+  | "status_conflict"
+  | "disposition_required";
 
 export type DurableJobRuntimeUpdateResult =
   | {

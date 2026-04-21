@@ -69,7 +69,11 @@ describe("jobs cli subprocess persistence", () => {
           reason: "Seeded for subprocess proof",
           actor: "tests",
           at: 121,
-          disposition: { kind: "notify_and_schedule", notify: true, nextWakeAt: 900 },
+          disposition: {
+            kind: "notify_and_schedule",
+            notification: { status: "sent" },
+            wake: { status: "scheduled", nextWakeAt: 900 },
+          },
           revision: job.audit.revision,
         });
 
@@ -117,7 +121,13 @@ describe("jobs cli subprocess persistence", () => {
             revision: 0,
             disposition: expect.objectContaining({
               kind: "notify_and_schedule",
-              nextWakeAt: 900,
+              notification: expect.objectContaining({
+                status: "sent",
+              }),
+              wake: expect.objectContaining({
+                status: "scheduled",
+                nextWakeAt: 900,
+              }),
             }),
           }),
         ]);

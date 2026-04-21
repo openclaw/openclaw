@@ -118,7 +118,9 @@ function formatTransition(transition: DurableJobTransitionRecord): string {
   const reason = safeText(transition.reason, 80);
   const actor = safeText(transition.actor, 24);
   const disposition = safeText(transition.disposition?.kind, 24);
-  return `${formatTimestamp(transition.at)} ${from} -> ${transition.to} actor=${actor} disposition=${disposition} reason=${reason}`;
+  const notification = safeText(transition.disposition?.notification?.status, 16);
+  const wake = safeText(transition.disposition?.wake?.status, 16);
+  return `${formatTimestamp(transition.at)} ${from} -> ${transition.to} actor=${actor} disposition=${disposition} notification=${notification} wake=${wake} reason=${reason}`;
 }
 
 export async function jobsListCommand(

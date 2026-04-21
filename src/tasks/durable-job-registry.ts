@@ -24,6 +24,13 @@ import type {
 } from "./durable-job-registry.types.js";
 
 const DURABLE_JOB_STATUS_SET = new Set<DurableJobStatus>(DURABLE_JOB_STATUSES);
+const DURABLE_JOB_DISPOSITION_REQUIRED_STATUSES = new Set<DurableJobStatus>([
+  "waiting",
+  "blocked",
+  "completed",
+  "cancelled",
+  "superseded",
+]);
 
 const jobs = new Map<string, DurableJobRecord>();
 const transitionsByJobId = new Map<string, DurableJobTransitionRecord[]>();
@@ -201,10 +208,63 @@ function normalizeDisposition(
   if (!disposition) {
     return undefined;
   }
+  const notification = disposition.notification
+    ? {
+        status: assertDispositionNotificationStatus(disposition.notification.status),
+        ...(normalizeOptionalString(disposition.notification.detail)
+          ? { detail: normalizeOptionalString(disposition.notification.detail)! }
+          : {}),
+      }
+    : undefined;
+  const wake = disposition.wake
+    ? {
+        status: assertDispositionWakeStatus(disposition.wake.status),
+        ...(normalizeOptionalTimestamp(disposition.wake.nextWakeAt) != null
+          ? { nextWakeAt: normalizeOptionalTimestamp(disposition.wake.nextWakeAt)! }
+          : {}),
+        ...(normalizeOptionalString(disposition.wake.detail)
+          ? { detail: normalizeOptionalString(disposition.wake.detail)! }
+          : {}),
+      }
+    : undefined;
   return {
     ...cloneJsonObject(disposition),
     kind: assertNonEmptyString(disposition.kind, "Durable job disposition.kind"),
+    ...(notification ? { notification } : {}),
+    ...(wake ? { wake } : {}),
   };
+}
+
+function assertDispositionNotificationStatus(
+  value: DurableJobTransitionDisposition["notification"] extends { status: infer T } ? T : never,
+): "sent" | "skipped" | "failed" {
+  if (value === "sent" || value === "skipped" || value === "failed") {
+    return value;
+  }
+  throw new Error(`Unsupported durable job disposition.notification.status: ${String(value)}`);
+}
+
+function assertDispositionWakeStatus(
+  value: DurableJobTransitionDisposition["wake"] extends { status: infer T } ? T : never,
+): "scheduled" | "cleared" | "unchanged" {
+  if (value === "scheduled" || value === "cleared" || value === "unchanged") {
+    return value;
+  }
+  throw new Error(`Unsupported durable job disposition.wake.status: ${String(value)}`);
+}
+
+export function isDurableJobTransitionDispositionRequired(to: DurableJobStatus): boolean {
+  return DURABLE_JOB_DISPOSITION_REQUIRED_STATUSES.has(to);
+}
+
+function assertDispositionProvidedForTransition(params: {
+  to: DurableJobStatus;
+  disposition?: DurableJobTransitionDisposition;
+}) {
+  if (params.disposition || !isDurableJobTransitionDispositionRequired(params.to)) {
+    return;
+  }
+  throw new Error(`Durable job transition to ${params.to} requires an explicit disposition.`);
 }
 
 function normalizeOptionalTimestamp(value: number | null | undefined): number | undefined {
@@ -427,11 +487,17 @@ export function recordDurableJobTransition(
   params: DurableJobTransitionInput,
 ): DurableJobTransitionRecord {
   ensureDurableJobRegistryReady();
+  const to = normalizeStatus(params.to);
+  const disposition = normalizeDisposition(params.disposition);
+  assertDispositionProvidedForTransition({
+    to,
+    disposition,
+  });
   const transition: DurableJobTransitionRecord = {
     transitionId: normalizeOptionalString(params.transitionId) ?? `jobtx_${crypto.randomUUID()}`,
     jobId: assertNonEmptyString(params.jobId, "Durable job transition jobId"),
     ...(params.from ? { from: normalizeStatus(params.from) } : {}),
-    to: normalizeStatus(params.to),
+    to,
     ...(normalizeOptionalString(params.reason)
       ? { reason: normalizeOptionalString(params.reason)! }
       : {}),
@@ -439,9 +505,7 @@ export function recordDurableJobTransition(
     ...(normalizeOptionalString(params.actor)
       ? { actor: normalizeOptionalString(params.actor)! }
       : {}),
-    ...(normalizeDisposition(params.disposition)
-      ? { disposition: normalizeDisposition(params.disposition)! }
-      : {}),
+    ...(disposition ? { disposition } : {}),
     ...(typeof params.revision === "number" && Number.isFinite(params.revision)
       ? { revision: params.revision }
       : {}),

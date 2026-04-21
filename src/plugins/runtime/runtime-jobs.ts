@@ -6,6 +6,7 @@ import {
 } from "../../tasks/durable-job-owner-access.js";
 import {
   createDurableJobRecord,
+  isDurableJobTransitionDispositionRequired,
   recordDurableJobTransition,
   updateDurableJobRecordByIdExpectedRevision,
 } from "../../tasks/durable-job-registry.js";
@@ -121,6 +122,13 @@ function createBoundDurableJobsRuntime(params: {
         return {
           applied: false,
           reason: "status_conflict",
+          current,
+        };
+      }
+      if (isDurableJobTransitionDispositionRequired(to) && !disposition) {
+        return {
+          applied: false,
+          reason: "disposition_required",
           current,
         };
       }

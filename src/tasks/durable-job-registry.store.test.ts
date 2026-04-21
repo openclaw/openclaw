@@ -69,7 +69,13 @@ function createStoredTransition(): DurableJobTransitionRecord {
     at: 321,
     disposition: {
       kind: "notify_and_schedule",
-      notify: true,
+      notification: {
+        status: "sent",
+      },
+      wake: {
+        status: "scheduled",
+        nextWakeAt: 333,
+      },
     },
     revision: 4,
   };
@@ -206,7 +212,11 @@ describe("durable-job-registry store runtime", () => {
         reason: "Waiting for the next wake",
         actor: "assistant",
         at: 421,
-        disposition: { kind: "notify_and_schedule", notify: true, nextWakeAt: 900 },
+        disposition: {
+          kind: "notify_and_schedule",
+          notification: { status: "sent" },
+          wake: { status: "scheduled", nextWakeAt: 900 },
+        },
         revision,
       });
 
@@ -265,5 +275,25 @@ describe("durable-job-registry store runtime", () => {
       expect(statSync(registryDir).mode & 0o777).toBe(0o700);
       expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
     });
+  });
+
+  it("requires an explicit disposition for important transitions", () => {
+    const created = createDurableJobRecord({
+      jobId: "job-disposition-required",
+      title: "Disposition required",
+      goal: "Reject waiting transitions without a structured disposition",
+      ownerSessionKey: "agent:main:main",
+      status: "running",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+    });
+
+    expect(() =>
+      recordDurableJobTransition({
+        jobId: created.jobId,
+        from: "running",
+        to: "waiting",
+      }),
+    ).toThrow("Durable job transition to waiting requires an explicit disposition.");
   });
 });

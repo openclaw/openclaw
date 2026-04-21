@@ -88,7 +88,13 @@ describe("runtime jobs", () => {
       at: 200,
       disposition: {
         kind: "notify_and_schedule",
-        notify: true,
+        notification: {
+          status: "sent",
+        },
+        wake: {
+          status: "scheduled",
+          nextWakeAt: 300,
+        },
       },
       patch: {
         currentStep: "await_next_wake",
@@ -242,7 +248,11 @@ describe("runtime jobs", () => {
         reason: "Awaiting next wake",
         actor: "assistant",
         at: 220,
-        disposition: { kind: "notify_and_schedule", notify: true, nextWakeAt: 500 },
+        disposition: {
+          kind: "notify_and_schedule",
+          notification: { status: "sent" },
+          wake: { status: "scheduled", nextWakeAt: 500 },
+        },
         patch: {
           currentStep: "await_next_wake",
           summary: "Waiting after persisted reload",
@@ -310,5 +320,38 @@ describe("runtime jobs", () => {
         deliveryContext: undefined,
       }),
     ).toThrow("Durable jobs runtime requires tool context with a sessionKey.");
+  });
+
+  it("requires an explicit disposition for important transitions", () => {
+    const runtime = createRuntimeJobs();
+    const jobs = runtime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const created = jobs.create({
+      title: "Wait for reviewer",
+      goal: "Move into waiting only with an explicit disposition",
+      status: "running",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+    });
+
+    expect(
+      jobs.transition({
+        jobId: created.jobId,
+        expectedRevision: created.audit.revision,
+        from: "running",
+        to: "waiting",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        applied: false,
+        reason: "disposition_required",
+        current: expect.objectContaining({
+          jobId: created.jobId,
+          status: "running",
+        }),
+      }),
+    );
   });
 });

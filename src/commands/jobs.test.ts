@@ -161,7 +161,11 @@ describe("jobs commands", () => {
         actor: "assistant",
         reason: "Waiting for the next sweep",
         at: 701,
-        disposition: { kind: "notify_and_schedule", notify: true, nextWakeAt: 900 },
+        disposition: {
+          kind: "notify_and_schedule",
+          notification: { status: "sent" },
+          wake: { status: "scheduled", nextWakeAt: 900 },
+        },
         revision: updated.job.audit.revision,
       });
 
@@ -197,6 +201,10 @@ describe("jobs commands", () => {
               to: "waiting",
               reason: "Waiting for the next sweep",
               revision: 1,
+              disposition: expect.objectContaining({
+                notification: expect.objectContaining({ status: "sent" }),
+                wake: expect.objectContaining({ status: "scheduled", nextWakeAt: 900 }),
+              }),
             }),
           ],
         }),
