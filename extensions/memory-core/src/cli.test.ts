@@ -384,6 +384,94 @@ describe("memory cli", () => {
     });
   });
 
+  it("reports dreaming blocked when another explicit heartbeat agent excludes main", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "30m",
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "ops",
+            heartbeat: {
+              every: "1h",
+            },
+          },
+        ],
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--agent", "main"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Dreaming status: blocked - managed dreaming cron targets "main" but heartbeat is not firing there. See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+      ),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it('reports dreaming blocked when main heartbeat interval is "0m"', async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "0m",
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Dreaming status: blocked - managed dreaming cron targets "main" but heartbeat is not firing there. See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+      ),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");

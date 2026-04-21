@@ -229,8 +229,20 @@ When enabled, the Gateway **Dreams** tab shows:
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
 
+## Troubleshooting
+
+### Dreaming never runs (status shows blocked)
+
+`openclaw memory status` shows `Dreaming status: blocked` when dreaming is enabled but the heartbeat that drives the cron is not firing for the default agent. Dreaming requires a heartbeat, so if the heartbeat is not scheduled for `main`, the managed cron never gets a chance to run.
+
+Two common causes:
+
+- Another agent declares an explicit `heartbeat:` block. When any entry in `agents.list` has its own `heartbeat` block, only those agents heartbeat — the defaults stop applying to everyone else, so `main` goes silent. Move the heartbeat settings to `agents.defaults.heartbeat`, or add an explicit `heartbeat` block on the `main` entry. See [Scope and precedence](/gateway/heartbeat#scope-and-precedence).
+- `heartbeat.every` is `0`, empty, or unparseable. The cron has no interval to schedule against, so the heartbeat is effectively disabled. Set `every` to a positive duration such as `30m`. See [Defaults](/gateway/heartbeat#defaults).
+
 ## Related
 
+- [Heartbeat](/gateway/heartbeat)
 - [Memory](/concepts/memory)
 - [Memory Search](/concepts/memory-search)
 - [memory CLI](/cli/memory)

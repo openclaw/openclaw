@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveHeartbeatSummaryForAgent } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -217,6 +218,22 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
   }
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
   return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
+}
+
+function resolveDreamingBlockedReason(cfg: OpenClawConfig): string | null {
+  const pluginConfig = resolveMemoryPluginConfig(cfg);
+  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  if (!dreaming.enabled) {
+    return null;
+  }
+
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const heartbeat = resolveHeartbeatSummaryForAgent(cfg, defaultAgentId);
+  if (heartbeat.enabled && heartbeat.everyMs != null) {
+    return null;
+  }
+
+  return `managed dreaming cron targets "${defaultAgentId}" but heartbeat is not firing there. See https://docs.openclaw.ai/concepts/dreaming#troubleshooting`;
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
@@ -858,6 +875,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Workspace")} ${info(workspacePath)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
+    const dreamingBlockedReason = resolveDreamingBlockedReason(cfg);
+    if (dreamingBlockedReason) {
+      lines.push(`${label("Dreaming status")} ${warn(`blocked - ${dreamingBlockedReason}`)}`);
+    }
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
       const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
