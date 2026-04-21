@@ -7,6 +7,7 @@ const SHORT_TERM_LEGACY_ABSOLUTE_MEMORY_FILE_RE =
   /(?:^|\/)memory\/\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/i;
+const WINDOWS_ABSOLUTE_PATH_RE = /^[a-z]:\//i;
 
 export type ParsedDailyMemoryFileName = {
   day: string;
@@ -22,6 +23,14 @@ export type DailyMemoryPathInfo = ParsedDailyMemoryFileName & {
 
 function normalizeDailyMemoryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+function isCrossPlatformAbsolutePath(normalizedPath: string): boolean {
+  return (
+    path.isAbsolute(normalizedPath) ||
+    WINDOWS_ABSOLUTE_PATH_RE.test(normalizedPath) ||
+    normalizedPath.startsWith("//")
+  );
 }
 
 export function parseDailyMemoryFileName(fileName: string): ParsedDailyMemoryFileName | null {
@@ -75,7 +84,7 @@ export function isSupportedShortTermMemoryPath(filePath: string): boolean {
   // `memory/YYYY-MM-DD*.md` files. Keep those entries visible until a later
   // rewrite normalizes them back to relative paths.
   return (
-    path.isAbsolute(normalizedPath) &&
+    isCrossPlatformAbsolutePath(normalizedPath) &&
     SHORT_TERM_LEGACY_ABSOLUTE_MEMORY_FILE_RE.test(normalizedPath)
   );
 }

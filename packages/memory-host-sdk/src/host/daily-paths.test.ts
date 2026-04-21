@@ -63,6 +63,7 @@ describe("daily-paths", () => {
     expect(isSupportedShortTermMemoryPath("2026-04-19-session-reset.md")).toBe(true);
     expect(isSupportedShortTermMemoryPath("2026-04-19-session-reset.MD")).toBe(true);
     expect(isSupportedShortTermMemoryPath("/tmp/workspace/memory/2026-04-19.md")).toBe(true);
+    expect(isSupportedShortTermMemoryPath("C:/workspace/memory/2026-04-19.md")).toBe(true);
     expect(isSupportedShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-19.md")).toBe(
       true,
     );
