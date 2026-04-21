@@ -4,6 +4,7 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -446,8 +447,14 @@ export const sendHandlers: GatewayRequestHandlers = {
           resolvedTarget: idLikeTarget,
           threadId,
         });
+        const providedSessionThread = parseSessionThreadInfo(providedSessionKey);
+        const shouldPreserveDerivedThreadRoute =
+          Boolean(providedSessionKey) &&
+          !providedSessionThread.threadId &&
+          Boolean(derivedRoute?.threadId) &&
+          providedSessionThread.baseSessionKey === derivedRoute?.baseSessionKey;
         const outboundRoute = derivedRoute
-          ? providedSessionKey
+          ? providedSessionKey && !shouldPreserveDerivedThreadRoute
             ? {
                 ...derivedRoute,
                 sessionKey: providedSessionKey,

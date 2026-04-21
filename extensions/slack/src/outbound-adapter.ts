@@ -115,7 +115,7 @@ async function sendSlackOutboundMessage(params: {
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
   const threadTs =
-    params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);
+    params.threadId != null ? String(params.threadId) : (params.replyToId ?? undefined);
   const hookResult = await applySlackMessageSendingHooks({
     cfg: params.cfg,
     to: params.to,

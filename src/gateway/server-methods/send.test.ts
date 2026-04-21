@@ -799,6 +799,49 @@ describe("gateway send mirroring", () => {
     });
   });
 
+  it("preserves derived thread-specific routing when a broader sessionKey is provided", async () => {
+    mockDeliverySuccess("m-thread-route");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:c1",
+      peer: { kind: "channel", id: "c1" },
+      chatType: "channel",
+      from: "slack:channel:c1",
+      to: "channel:c1",
+      threadId: "1710000000.9999",
+    });
+
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:c1",
+      threadId: "1710000000.9999",
+      idempotencyKey: "idem-thread-route",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+          baseSessionKey: "agent:main:slack:channel:c1",
+          threadId: "1710000000.9999",
+        }),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+        session: expect.objectContaining({
+          key: "agent:main:slack:channel:c1:thread:1710000000.9999",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+        }),
+      }),
+    );
+  });
+
   it("forwards threadId to outbound delivery when provided", async () => {
     mockDeliverySuccess("m-thread");
 

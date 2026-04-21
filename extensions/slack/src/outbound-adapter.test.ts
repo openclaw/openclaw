@@ -101,6 +101,29 @@ describe("slackOutbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
 
+  it("prefers threadId over replyToId for threaded sends", async () => {
+    sendMessageSlackMock.mockResolvedValue({ messageId: "m-thread-root" });
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "reply",
+      accountId: "default",
+      replyToId: "1712000000.000099",
+      threadId: "1712000000.000001",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "reply",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        threadTs: "1712000000.000001",
+      }),
+    );
+  });
+
   it("cancels sendMedia when message_sending hooks block it", async () => {
     hasHooksMock.mockReturnValue(true);
     runMessageSendingMock.mockResolvedValue({ cancel: true });
