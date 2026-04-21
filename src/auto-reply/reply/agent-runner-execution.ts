@@ -1111,8 +1111,15 @@ export async function runAgentTurnWithFallback(params: {
                 fallbackEntry: params.getActiveSessionEntry(),
               });
               const freshSessionPlanModeMode = freshSessionEntry?.planMode?.mode;
-              const sessionPlanModeMode: "plan" | "normal" | undefined =
-                freshSessionPlanModeMode === "plan" || freshSessionPlanModeMode === "normal"
+              // PR #68939 follow-up — accept the new "executing" value
+              // from disk and forward it through. Most consumers
+              // (mutation gate) only care about "plan" vs not, but
+              // having the precise value enables execution-phase
+              // nudges + UI chip rendering.
+              const sessionPlanModeMode: "plan" | "executing" | "normal" | undefined =
+                freshSessionPlanModeMode === "plan" ||
+                freshSessionPlanModeMode === "executing" ||
+                freshSessionPlanModeMode === "normal"
                   ? freshSessionPlanModeMode
                   : undefined;
               // PR-15: pending agent injection
@@ -1135,7 +1142,15 @@ export async function runAgentTurnWithFallback(params: {
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
-                ...(sessionPlanModeMode === "plan" ? { planMode: "plan" as const } : {}),
+                // PR #68939 follow-up — forward both "plan" and
+                // "executing" so the runtime ctx has the precise mode.
+                // Mutation gate still only blocks on "plan"; "executing"
+                // passes through. Forwarding the precise value enables
+                // execution-phase nudges + accurate plan_mode_status
+                // introspection during the resume run.
+                ...(sessionPlanModeMode === "plan" || sessionPlanModeMode === "executing"
+                  ? { planMode: sessionPlanModeMode }
+                  : {}),
                 // Bug 3+4 v2 + iter-2 Bug A: fresh disk read for
                 // mid-turn refreshes by the mutation gate + ack-only
                 // detector. Uses `resolveLatestPlanModeFromDisk`

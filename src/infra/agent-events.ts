@@ -313,7 +313,7 @@ export type AgentRunContext = {
    * snapshot. Optional so test contexts and unit fixtures don't have
    * to provide it.
    */
-  getLatestPlanMode?: () => "plan" | "normal" | undefined;
+  getLatestPlanMode?: () => "plan" | "executing" | "normal" | undefined;
   /**
    * Live-read accessor for `SessionEntry.postApprovalPermissions.
    * acceptEdits`. Returns `true` only when the user approved the plan

@@ -276,7 +276,7 @@ export function createOpenClawCodingTools(options?: {
    * threads it through to the before-tool-call hook so the gate fires
    * without re-loading the session store on every call.
    */
-  planMode?: "plan" | "normal";
+  planMode?: "plan" | "executing" | "normal";
   /**
    * Bug 3+4 fix: live-read accessor for the session's current planMode.
    * Returns the LATEST mode from the in-memory SessionEntry on every
@@ -287,7 +287,7 @@ export function createOpenClawCodingTools(options?: {
    * "normal" but the runtime still has "plan" cached for the rest of
    * the current run).
    */
-  getLatestPlanMode?: () => "plan" | "normal" | undefined;
+  getLatestPlanMode?: () => "plan" | "executing" | "normal" | undefined;
   /**
    * Cherry-pick of b6b2783ba3 (acceptEdits gate): live-read accessor
    * for the session's `postApprovalPermissions.acceptEdits` flag.

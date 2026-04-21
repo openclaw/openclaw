@@ -94,8 +94,13 @@ function buildAnnounceReplyInstruction(params: {
    * Undefined / "normal": no plan-mode-aware suffix added; default
    * announce behavior.
    */
-  requesterPlanMode?: "plan" | "normal";
+  requesterPlanMode?: "plan" | "executing" | "normal";
 }): string {
+  // PR #68939 follow-up — only the "plan" branch gets the plan-mode
+  // suffix. "executing" parents (post-approval, mid-execution) DON'T
+  // get the "you must call exit_plan_mode" steer because they're
+  // already past plan submission. They behave like "normal" for this
+  // suffix: standard "send a user-facing update" instruction.
   const planModeSuffix =
     params.requesterPlanMode === "plan"
       ? " You are currently in PLAN MODE — do not stop after the user-facing update. Your next action MUST be either: (a) call `exit_plan_mode(title=..., plan=[...])` if this subagent's result completes your investigation, OR (b) continue investigation with another read-only tool call. Trailing chat alone is treated as yielding without acting and will trigger a [PLAN_ACK_ONLY] retry."
@@ -517,12 +522,12 @@ export async function runSubagentAnnounceFlow(params: {
     // update now" instruction is read as a TERMINAL step and the
     // agent stalls instead of calling exit_plan_mode after
     // incorporating the subagent result.
-    let requesterPlanMode: "plan" | "normal" | undefined;
+    let requesterPlanMode: "plan" | "executing" | "normal" | undefined;
     if (!requesterIsSubagent) {
       try {
         const { entry: requesterEntry } = loadRequesterSessionEntry(targetRequesterSessionKey);
         const mode = requesterEntry?.planMode?.mode;
-        if (mode === "plan" || mode === "normal") {
+        if (mode === "plan" || mode === "executing" || mode === "normal") {
           requesterPlanMode = mode;
         }
       } catch {

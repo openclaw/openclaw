@@ -28,7 +28,24 @@
  * - After rejection: user's next text message = feedback for revision
  */
 
-export type PlanMode = "plan" | "normal";
+/**
+ * PR #68939 follow-up — widened from `"plan" | "normal"` to a 3-state
+ * union so the runtime can distinguish "plan approved + agent is
+ * executing the steps" from "no plan activity at all". See
+ * `SessionEntry.planMode.mode` doc in `src/config/sessions/types.ts`
+ * for the full lifecycle semantics + transition table.
+ *
+ * Most consumers (mutation gate, subagent-announce, the ack-only
+ * detector) only care about `"plan"` vs not-plan, and continue to
+ * work correctly: `"executing"` is treated like `"normal"` for
+ * mutation gating (mutations allowed). The new value unlocks:
+ *   - execution-phase nudge crons that fire only during `"executing"`
+ *   - UI chip rendering that shows "Plan ⚡" / "Executing" through
+ *     the execution phase instead of reverting to "Default" the
+ *     instant approval lands
+ *   - `plan_mode_status` introspection reporting accurate state
+ */
+export type PlanMode = "plan" | "executing" | "normal";
 
 export type PlanApprovalState =
   | "none"

@@ -101,7 +101,7 @@ export type RunEmbeddedPiAgentParams = {
    * avoids per-turn protocol surgery and keeps detectors (see
    * `resolveYieldDuringApprovedPlanInstruction`) pure lookups.
    */
-  planMode?: "plan" | "normal";
+  planMode?: "plan" | "executing" | "normal";
   /**
    * Bug 3+4 fix: live-read accessor for the session's current planMode.
    * Returns the LATEST mode from the in-memory SessionEntry on every
@@ -112,7 +112,7 @@ export type RunEmbeddedPiAgentParams = {
    * stale (sessions.patch flipped mode → "normal" but the runtime
    * still has "plan" cached for the rest of the current run).
    */
-  getLatestPlanMode?: () => "plan" | "normal" | undefined;
+  getLatestPlanMode?: () => "plan" | "executing" | "normal" | undefined;
   /**
    * Live-read accessor for the session's `postApprovalPermissions.
    * acceptEdits` flag. Threaded through to the HookContext so the

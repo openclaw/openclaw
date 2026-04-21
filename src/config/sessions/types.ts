@@ -263,6 +263,36 @@ export type SessionEntry = {
    * switcher OR by the `enter_plan_mode` agent tool. Clearing back to
    * "normal" releases the gate.
    *
+   * PR #68939 follow-up — mode is now a 3-state union:
+   *   - `"plan"`      — designing (mutation gate ARMED, design-phase
+   *                     nudges fire, agent allowlist enforced)
+   *   - `"executing"` — plan approved, steps in flight (mutation gate
+   *                     DISARMED, execution-phase nudges legal at
+   *                     tighter intervals; UI chip stays on "Plan ⚡"
+   *                     or shows "Executing" so the visual state
+   *                     matches the persisted state)
+   *   - `"normal"`    — no plan activity (default; selector chip shows
+   *                     Default/Ask/Accept/Bypass per execSecurity)
+   *
+   * Transitions:
+   *   - `enter_plan_mode` tool OR `sessions.patch { planMode: "plan" }`
+   *       → mode = "plan"
+   *   - `sessions.patch { planApproval: { action: "approve" | "edit" } }`
+   *       → mode = "executing" (was: deleted planMode)
+   *   - close-on-complete detector (all steps completed/cancelled)
+   *       → mode = "normal" + delete planMode
+   *   - `/plan off` OR `sessions.patch { planMode: "normal" }`
+   *       → mode = "normal" + delete planMode
+   *
+   * Migration note: existing on-disk entries with `mode: "normal"` AND
+   * non-empty `lastPlanSteps` AND any step still pending/in_progress
+   * are backfilled to `mode: "executing"` by
+   * `store-migrations.ts:applySessionStoreMigrations`. The old
+   * 2-state union (`"plan" | "normal"`) is preserved as the wire-
+   * accepted input to `sessions.patch { planMode }` (the patch handler
+   * maps that scalar to the appropriate 3-state value); only the
+   * persisted/runtime read shape has the new value.
+   *
    * Stored as a structural type rather than importing
    * `PlanModeSessionState` from `src/agents/plan-mode/types.ts` to avoid
    * an `agents/*` → `config/sessions/*` dependency on what is still a
@@ -270,7 +300,7 @@ export type SessionEntry = {
    * and is enforced via Zod at sessions.patch time.
    */
   planMode?: {
-    mode: "plan" | "normal";
+    mode: "plan" | "executing" | "normal";
     approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
     /**
      * Stable token for the active plan-mode cycle. Minted on each

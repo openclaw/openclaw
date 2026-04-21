@@ -29,7 +29,7 @@ const log = createSubsystemLogger("auto-reply/fresh-session-entry");
  * snapshot, which was the root cause of mutation-gate-blocks-after-
  * approval and ack-only-fires-after-approval (Bug A iter-2).
  */
-export type LivePlanMode = "plan" | "normal";
+export type LivePlanMode = "plan" | "executing" | "normal";
 
 export function resolveLatestPlanModeFromDisk(params: {
   storePath?: string;
@@ -48,6 +48,14 @@ export function resolveLatestPlanModeFromDisk(params: {
     const mode = liveEntry.planMode?.mode;
     if (mode === "plan") {
       return "plan";
+    }
+    if (mode === "executing") {
+      // PR #68939 follow-up — new "executing" state for post-approval
+      // execution phase. The mutation gate (the primary consumer of
+      // this helper) treats "executing" the same as "normal"
+      // (mutations allowed). New consumers like the execution-phase
+      // nudge cron + UI chip rendering use the distinction.
+      return "executing";
     }
     if (mode === "normal" || mode === undefined) {
       // mode === "normal" OR planMode object deleted (post-approval).
