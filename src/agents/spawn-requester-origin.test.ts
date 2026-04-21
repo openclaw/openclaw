@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { AgentBindingMatch } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 
 describe("resolveRequesterOriginForChild", () => {
+  function routeBinding(match: AgentBindingMatch) {
+    return { type: "route" as const, agentId: "bot-alpha", match };
+  }
+
   function resolveAccount(params: {
     cfg: OpenClawConfig;
     targetAgentId?: string;
@@ -30,18 +35,14 @@ describe("resolveRequesterOriginForChild", () => {
     (to, peerId, peerKind) => {
       const cfg = {
         bindings: [
-          {
-            type: "route",
-            agentId: "bot-alpha",
-            match: {
-              channel: "qa-channel",
-              peer: {
-                kind: peerKind,
-                id: peerId,
-              },
-              accountId: "bot-alpha-qa",
+          routeBinding({
+            channel: "qa-channel",
+            peer: {
+              kind: peerKind,
+              id: peerId,
             },
-          },
+            accountId: "bot-alpha-qa",
+          }),
         ],
       } as OpenClawConfig;
 
@@ -69,20 +70,12 @@ describe("resolveRequesterOriginForChild", () => {
       requesterTo: "!roomA:example.org",
       expected: "bot-alpha-room-a",
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: { channel: "matrix", accountId: "bot-alpha-default" },
-        },
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "channel", id: "!roomA:example.org" },
-            accountId: "bot-alpha-room-a",
-          },
-        },
+        routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!roomA:example.org" },
+          accountId: "bot-alpha-room-a",
+        }),
       ],
     },
     {
@@ -91,20 +84,12 @@ describe("resolveRequesterOriginForChild", () => {
       requesterTo: "!roomB:example.org",
       expected: "bot-alpha-default",
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: { channel: "matrix", accountId: "bot-alpha-default" },
-        },
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "channel", id: "!roomA:example.org" },
-            accountId: "bot-alpha-room-a",
-          },
-        },
+        routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!roomA:example.org" },
+          accountId: "bot-alpha-room-a",
+        }),
       ],
     },
     {
@@ -113,20 +98,12 @@ describe("resolveRequesterOriginForChild", () => {
       requesterTo: "!anyRoom:example.org",
       expected: "bot-alpha-wildcard",
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: { channel: "matrix", accountId: "bot-alpha-default" },
-        },
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "channel", id: "*" },
-            accountId: "bot-alpha-wildcard",
-          },
-        },
+        routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-wildcard",
+        }),
       ],
     },
     {
@@ -135,24 +112,16 @@ describe("resolveRequesterOriginForChild", () => {
       requesterTo: "!roomA:example.org",
       expected: "bot-alpha-room-a",
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "channel", id: "*" },
-            accountId: "bot-alpha-wildcard",
-          },
-        },
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "channel", id: "!roomA:example.org" },
-            accountId: "bot-alpha-room-a",
-          },
-        },
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-wildcard",
+        }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!roomA:example.org" },
+          accountId: "bot-alpha-room-a",
+        }),
       ],
     },
     {
@@ -163,22 +132,14 @@ describe("resolveRequesterOriginForChild", () => {
       requesterMemberRoleIds: ["admin"],
       expected: "bot-alpha-admin",
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: { channel: "discord", accountId: "bot-alpha-default" },
-        },
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "discord",
-            guildId: "guild-current",
-            roles: ["admin"],
-            peer: { kind: "channel", id: "channel:ops" },
-            accountId: "bot-alpha-admin",
-          },
-        },
+        routeBinding({ channel: "discord", accountId: "bot-alpha-default" }),
+        routeBinding({
+          channel: "discord",
+          guildId: "guild-current",
+          roles: ["admin"],
+          peer: { kind: "channel", id: "channel:ops" },
+          accountId: "bot-alpha-admin",
+        }),
       ],
     },
     {
@@ -187,15 +148,11 @@ describe("resolveRequesterOriginForChild", () => {
       requesterTo: "room:!exampleRoomId:example.org",
       expected: "bot-alpha",
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "channel", id: "!exampleRoomId:example.org" },
-            accountId: "bot-alpha",
-          },
-        },
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!exampleRoomId:example.org" },
+          accountId: "bot-alpha",
+        }),
       ],
     },
     {
@@ -204,24 +161,16 @@ describe("resolveRequesterOriginForChild", () => {
       requesterTo: "room:@other-user:example.org",
       expected: "bot-alpha-dm",
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "channel", id: "@other-user:example.org" },
-            accountId: "bot-alpha-wrong-kind",
-          },
-        },
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "matrix",
-            peer: { kind: "direct", id: "@other-user:example.org" },
-            accountId: "bot-alpha-dm",
-          },
-        },
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "@other-user:example.org" },
+          accountId: "bot-alpha-wrong-kind",
+        }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "direct", id: "@other-user:example.org" },
+          accountId: "bot-alpha-dm",
+        }),
       ],
     },
     {
@@ -231,13 +180,7 @@ describe("resolveRequesterOriginForChild", () => {
       requesterAgentId: "bot-alpha",
       requesterTo: "!someRoom:example.org",
       expected: "bot-alpha-adhoc",
-      bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: { channel: "matrix", accountId: "bot-alpha-default" },
-        },
-      ],
+      bindings: [routeBinding({ channel: "matrix", accountId: "bot-alpha-default" })],
     },
   ] as const)("selects target account: $name", (scenario) => {
     expect(
@@ -259,18 +202,14 @@ describe("resolveRequesterOriginForChild", () => {
     const to = "conversation:a:1:team-thread";
     const cfg = {
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "msteams",
-            peer: {
-              kind: "channel",
-              id: "a:1:team-thread",
-            },
-            accountId: "bot-alpha-teams",
+        routeBinding({
+          channel: "msteams",
+          peer: {
+            kind: "channel",
+            id: "a:1:team-thread",
           },
-        },
+          accountId: "bot-alpha-teams",
+        }),
       ],
     } as OpenClawConfig;
 
@@ -294,18 +233,14 @@ describe("resolveRequesterOriginForChild", () => {
     const to = "channel:@ops";
     const cfg = {
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "qa-channel",
-            peer: {
-              kind: "channel",
-              id: to,
-            },
-            accountId: "bot-alpha-qa",
+        routeBinding({
+          channel: "qa-channel",
+          peer: {
+            kind: "channel",
+            id: to,
           },
-        },
+          accountId: "bot-alpha-qa",
+        }),
       ],
     } as OpenClawConfig;
 
@@ -329,32 +264,24 @@ describe("resolveRequesterOriginForChild", () => {
     const to = "channel:ops";
     const cfg = {
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "discord",
-            guildId: "guild-other",
-            peer: {
-              kind: "channel",
-              id: to,
-            },
-            accountId: "bot-alpha-other-guild",
+        routeBinding({
+          channel: "discord",
+          guildId: "guild-other",
+          peer: {
+            kind: "channel",
+            id: to,
           },
-        },
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "discord",
-            guildId: "guild-current",
-            peer: {
-              kind: "channel",
-              id: to,
-            },
-            accountId: "bot-alpha-current-guild",
+          accountId: "bot-alpha-other-guild",
+        }),
+        routeBinding({
+          channel: "discord",
+          guildId: "guild-current",
+          peer: {
+            kind: "channel",
+            id: to,
           },
-        },
+          accountId: "bot-alpha-current-guild",
+        }),
       ],
     } as OpenClawConfig;
 
@@ -379,18 +306,14 @@ describe("resolveRequesterOriginForChild", () => {
     const to = "line:group:U123example";
     const cfg = {
       bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "line",
-            peer: {
-              kind: "group",
-              id: "U123example",
-            },
-            accountId: "bot-alpha-line",
+        routeBinding({
+          channel: "line",
+          peer: {
+            kind: "group",
+            id: "U123example",
           },
-        },
+          accountId: "bot-alpha-line",
+        }),
       ],
     } as OpenClawConfig;
 

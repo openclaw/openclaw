@@ -1,17 +1,25 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, type FileLockTimeoutError } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import "./oauth-external-auth-passthrough.test-support.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
   createExpiredOauthStore,
+  removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
+  resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "./store.js";
-import type { OAuthCredential } from "./types.js";
+
+const {
+  refreshProviderOAuthCredentialWithPluginMock,
+  formatProviderAuthProfileApiKeyWithPluginMock,
+} = getOAuthProviderRuntimeMocks();
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
@@ -22,22 +30,9 @@ const { withFileLockMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("../cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
-  writeCodexCliCredentials: () => true,
-}));
-
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }],
-}));
-
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
-    params?.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => undefined,
 }));
 
 vi.mock("../../infra/file-lock.js", () => ({
@@ -50,31 +45,6 @@ vi.mock("../../plugin-sdk/file-lock.js", () => ({
   FILE_LOCK_TIMEOUT_ERROR_CODE: "file_lock_timeout",
   resetFileLockStateForTest: () => undefined,
   withFileLock: withFileLockMock,
-}));
-
-vi.mock("./doctor.js", () => ({
-  formatAuthDoctorHint: async () => undefined,
-}));
-
-vi.mock("./external-auth.js", () => ({
-  overlayExternalAuthProfiles: <T>(store: T) => store,
-  shouldPersistExternalAuthProfile: () => true,
-}));
-
-vi.mock("./external-cli-sync.js", () => ({
-  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
-    credential?.type === "oauth" &&
-    credential.access.trim().length > 0 &&
-    Number.isFinite(credential.expires) &&
-    credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
-  readExternalCliBootstrapCredential: () => null,
-  readManagedExternalCliCredential: () => null,
-  resolveExternalCliAuthProfiles: () => [],
-  shouldBootstrapFromExternalCliCredential: () => false,
-  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
-    existing !== incoming,
 }));
 
 function createLockTimeoutError(lockPath: string): FileLockTimeoutError {
@@ -91,22 +61,22 @@ describe("OAuth refresh lock timeout classification", () => {
   let caseIndex = 0;
 
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-lock-timeout-"));
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-lock-timeout-");
     ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
   });
 
   beforeEach(async () => {
+    resetOAuthProviderRuntimeMocks({
+      refreshProviderOAuthCredentialWithPluginMock,
+      formatProviderAuthProfileApiKeyWithPluginMock,
+    });
     withFileLockMock.mockReset();
     withFileLockMock.mockImplementation(
       async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => await run(),
     );
     clearRuntimeAuthProfileStoreSnapshots();
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
-    process.env.OPENCLAW_STATE_DIR = caseRoot;
-    agentDir = path.join(caseRoot, "agents", "main", "agent");
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    await fs.mkdir(agentDir, { recursive: true });
+    agentDir = await createOAuthMainAgentDir(caseRoot);
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -117,7 +87,7 @@ describe("OAuth refresh lock timeout classification", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await removeOAuthTestTempRoot(tempRoot);
   });
 
   it("maps only global refresh lock timeouts to refresh_contention", async () => {

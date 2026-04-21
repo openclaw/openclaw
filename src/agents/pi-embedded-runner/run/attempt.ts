@@ -72,6 +72,7 @@ import {
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
+  downgradeOpenAIReasoningBlocks,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -79,7 +80,10 @@ import {
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
-import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
+import {
+  applyPiAutoCompactionGuard,
+  applyPiCompactionSettingsFromConfig,
+} from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -399,6 +403,17 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
+  tools: T[],
+  toolsAllow?: string[],
+): T[] {
+  if (!toolsAllow || toolsAllow.length === 0) {
+    return tools;
+  }
+  const allowSet = new Set(toolsAllow);
+  return tools.filter((tool) => allowSet.has(tool.name));
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -523,6 +538,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             disableMessageTool: params.disableMessageTool,
+            forceMessageTool: params.forceMessageTool,
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
@@ -531,11 +547,7 @@ export async function runEmbeddedAttempt(
               abortSessionForYield?.();
             },
           });
-          if (params.toolsAllow && params.toolsAllow.length > 0) {
-            const allowSet = new Set(params.toolsAllow);
-            return allTools.filter((tool) => allowSet.has(tool.name));
-          }
-          return allTools;
+          return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
         })();
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
@@ -1018,18 +1030,20 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
       });
-      // Only create an explicit resource loader when there are extension factories
-      // to register; otherwise let createAgentSession use its built-in default.
-      let resourceLoader: DefaultResourceLoader | undefined;
-      if (extensionFactories.length > 0) {
-        resourceLoader = new DefaultResourceLoader({
-          cwd: resolvedWorkspace,
-          agentDir,
-          settingsManager,
-          extensionFactories,
-        });
-        await resourceLoader.reload();
-      }
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        extensionFactories,
+      });
+      await resourceLoader.reload();
+      // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: params.config,
+        contextTokenBudget: params.contextTokenBudget,
+      });
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
@@ -1367,7 +1381,10 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
+          // Strip orphaned reasoning blocks first, then fix function-call
+          // pairing — matches the call order in google.ts.
+          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[]);
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
           if (sanitized === messages) {
             return inner(model, context, options);
           }

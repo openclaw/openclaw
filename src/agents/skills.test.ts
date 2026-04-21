@@ -120,6 +120,34 @@ function envSkillSnapshot(name: string, metadata: SkillEntry["metadata"]): Skill
   };
 }
 
+function rawSkillApiKeyRefConfig(skillName: string): OpenClawConfig {
+  return {
+    skills: {
+      entries: {
+        [skillName]: {
+          apiKey: {
+            source: "file",
+            provider: "default",
+            id: `/skills/entries/${skillName}/apiKey`,
+          },
+        },
+      },
+    },
+  };
+}
+
+function resolvedSkillApiKeyConfig(skillName: string, apiKey: string): OpenClawConfig {
+  return {
+    skills: {
+      entries: {
+        [skillName]: {
+          apiKey,
+        },
+      },
+    },
+  };
+}
+
 beforeAll(async () => {
   await fixtureSuite.setup();
   process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
@@ -552,32 +580,13 @@ describe("applySkillEnvOverrides", () => {
   });
 
   it("prefers the active runtime snapshot over raw SecretRef skill config", async () => {
-    const entries = envSkillEntries("env-skill", {
+    const skillName = "env-skill";
+    const entries = envSkillEntries(skillName, {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
     });
-    const sourceConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          "env-skill": {
-            apiKey: {
-              source: "file",
-              provider: "default",
-              id: "/skills/entries/env-skill/apiKey",
-            },
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          "env-skill": {
-            apiKey: "resolved-key",
-          },
-        },
-      },
-    };
+    const sourceConfig = rawSkillApiKeyRefConfig(skillName);
+    const runtimeConfig = resolvedSkillApiKeyConfig(skillName, "resolved-key");
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     withClearedEnv(["ENV_KEY"], () => {
@@ -596,32 +605,13 @@ describe("applySkillEnvOverrides", () => {
   });
 
   it("prefers resolved caller skill config when the active runtime snapshot is still raw", async () => {
-    const entries = envSkillEntries("env-skill", {
+    const skillName = "env-skill";
+    const entries = envSkillEntries(skillName, {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
     });
-    const sourceConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          "env-skill": {
-            apiKey: {
-              source: "file",
-              provider: "default",
-              id: "/skills/entries/env-skill/apiKey",
-            },
-          },
-        },
-      },
-    };
-    const callerConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          "env-skill": {
-            apiKey: "resolved-key",
-          },
-        },
-      },
-    };
+    const sourceConfig = rawSkillApiKeyRefConfig(skillName);
+    const callerConfig = resolvedSkillApiKeyConfig(skillName, "resolved-key");
     setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
 
     withClearedEnv(["ENV_KEY"], () => {
