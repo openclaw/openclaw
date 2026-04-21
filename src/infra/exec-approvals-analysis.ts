@@ -173,6 +173,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
         if (
           next === "(" ||
           next === "{" ||
+          next === "[" ||
           (next !== undefined &&
             (/^[A-Za-z_]$/.test(next) || /^[0-9]$/.test(next) || "@*?!$#-".includes(next)))
         ) {
@@ -195,7 +196,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           if (line === current.delimiter) {
             pendingHeredocs.shift();
           } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
-            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
+            return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
           }
         }
         heredocLine = "";
