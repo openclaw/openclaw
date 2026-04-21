@@ -152,6 +152,8 @@ function normalizeGoogleTtsProviderConfig(
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),
     voiceName: normalizeGoogleTtsVoiceName(raw?.voiceName ?? raw?.voice),
+    audioProfile: trimToUndefined(raw?.audioProfile),
+    speakerName: trimToUndefined(raw?.speakerName),
   };
 }
 
@@ -164,6 +166,8 @@ function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsPro
     voiceName: normalizeGoogleTtsVoiceName(
       config.voiceName ?? config.voice ?? normalized.voiceName,
     ),
+    audioProfile: trimToUndefined(config.audioProfile) ?? normalized.audioProfile,
+    speakerName: trimToUndefined(config.speakerName) ?? normalized.speakerName,
   };
 }
 
