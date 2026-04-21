@@ -5,7 +5,6 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -16,7 +15,11 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
 }
 
 function normalizeConfiguredDefaultAccountId(raw: unknown): string | null {
-  return normalizeOptionalLowercaseString(raw) ?? null;
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized || null;
 }
 
 function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): QQBotAccountConfig {
@@ -37,6 +40,23 @@ function normalizeAppId(raw: unknown): string {
     return String(raw);
   }
   return "";
+}
+
+function buildQQBotAccountConfigPatch(input: {
+  appId?: string;
+  clientSecret?: string;
+  clientSecretFile?: string;
+  name?: string;
+}): Partial<QQBotAccountConfig> {
+  return {
+    ...(input.appId ? { appId: input.appId } : {}),
+    ...(input.clientSecret
+      ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
+      : input.clientSecretFile
+        ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
+        : {}),
+    ...(input.name ? { name: input.name } : {}),
+  };
 }
 
 /** List all configured QQBot account IDs. */
@@ -163,6 +183,7 @@ export function applyQQBotAccountConfig(
   },
 ): OpenClawConfig {
   const next = { ...cfg };
+  const accountConfigPatch = buildQQBotAccountConfigPatch(input);
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     // Default allowFrom to ["*"] when not yet configured.
@@ -175,13 +196,7 @@ export function applyQQBotAccountConfig(
         ...(next.channels?.qqbot as Record<string, unknown> | undefined),
         enabled: true,
         allowFrom,
-        ...(input.appId ? { appId: input.appId } : {}),
-        ...(input.clientSecret
-          ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
-          : input.clientSecretFile
-            ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
-            : {}),
-        ...(input.name ? { name: input.name } : {}),
+        ...accountConfigPatch,
       },
     };
   } else {
@@ -201,13 +216,7 @@ export function applyQQBotAccountConfig(
             ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId],
             enabled: true,
             allowFrom,
-            ...(input.appId ? { appId: input.appId } : {}),
-            ...(input.clientSecret
-              ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
-              : input.clientSecretFile
-                ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
-                : {}),
-            ...(input.name ? { name: input.name } : {}),
+            ...accountConfigPatch,
           },
         },
       },

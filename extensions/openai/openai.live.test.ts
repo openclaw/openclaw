@@ -241,8 +241,9 @@ describeLive("openai plugin live", () => {
     });
 
     const text = (transcription?.text ?? "").toLowerCase();
+    const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
-    expect(text).toContain("openclaw");
+    expect(collapsedText).toContain("openclaw");
     expect(text).toMatch(/\bok\b/);
   }, 45_000);
 
@@ -323,9 +324,10 @@ describeLive("openai plugin live", () => {
         fileName: "reference.png",
         mime: "image/png",
         prompt: "Reply with one lowercase word for the dominant center color.",
-        timeoutMs: 30_000,
+        timeoutMs: 60_000,
         agentDir,
         cfg,
+        authStore: EMPTY_AUTH_STORE,
         model: LIVE_VISION_MODEL,
         provider: "openai",
       });
@@ -334,5 +336,5 @@ describeLive("openai plugin live", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 });

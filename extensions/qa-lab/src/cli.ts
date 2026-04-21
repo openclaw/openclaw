@@ -35,6 +35,7 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  allowFailures?: boolean;
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
@@ -60,6 +61,12 @@ async function runQaParityReport(opts: {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
 }
+
+async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCoverageReportCommand(opts);
+}
+
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -232,6 +239,11 @@ export function registerQaLabCli(program: Command) {
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
     )
+    .option(
+      "--allow-failures",
+      "Write artifacts without setting a failing exit code when scenarios fail",
+      false,
+    )
     .option("--fast", "Enable provider fast mode where supported", false)
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
@@ -250,6 +262,7 @@ export function registerQaLabCli(program: Command) {
         parityPack?: string;
         scenario?: string[];
         concurrency?: number;
+        allowFailures?: boolean;
         fast?: boolean;
         image?: string;
         cpus?: number;
@@ -269,6 +282,7 @@ export function registerQaLabCli(program: Command) {
           parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
           concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,
@@ -302,6 +316,15 @@ export function registerQaLabCli(program: Command) {
       },
     );
 
+  qa.command("coverage")
+    .description("Print the markdown scenario coverage inventory")
+    .option("--repo-root <path>", "Repository root to target when writing --output")
+    .option("--output <path>", "Write the coverage inventory to this path")
+    .option("--json", "Print JSON instead of Markdown", false)
+    .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
+      await runQaCoverageReport(opts);
+    });
+
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
@@ -316,7 +339,7 @@ export function registerQaLabCli(program: Command) {
     .option("--fast", "Enable provider fast mode for all candidate runs")
     .option(
       "--thinking <level>",
-      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive",
+      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
     )
     .option(
       "--model-thinking <ref=level>",

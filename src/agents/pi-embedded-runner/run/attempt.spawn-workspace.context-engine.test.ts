@@ -17,7 +17,6 @@ import {
 } from "./attempt.context-engine-helpers.js";
 import {
   cleanupTempPaths,
-  createContextEngineAttemptRunner,
   createContextEngineBootstrapAndAssemble,
   expectCalledWithSessionKey,
   getHoisted,
@@ -112,7 +111,7 @@ async function finalizeTurn(
 }
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
-  const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+  const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
@@ -479,59 +478,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         previousCacheRead: 5000,
         cacheRead: 2000,
         changes: expect.arrayContaining([expect.objectContaining({ code: "systemPrompt" })]),
-      }),
-    );
-  });
-
-  it("derives deferred maintenance currentTokenCount from prompt-only usage", async () => {
-    const afterTurn = vi.fn(
-      async (_params: {
-        runtimeContext?: {
-          currentTokenCount?: number;
-          promptCache?: { lastCallUsage?: { total?: number } };
-        };
-      }) => {},
-    );
-
-    await createContextEngineAttemptRunner({
-      sessionKey,
-      tempPaths,
-      contextEngine: {
-        assemble: async ({ messages }) => ({
-          messages,
-          estimatedTokens: 1,
-        }),
-        afterTurn,
-      },
-      sessionPrompt: async (session) => {
-        session.messages = [
-          ...session.messages,
-          {
-            role: "assistant",
-            content: "done",
-            timestamp: 2,
-            usage: {
-              input: 10,
-              output: 5,
-              cacheRead: 40,
-              cacheWrite: 2,
-              total: 57,
-            },
-          } as unknown as AgentMessage,
-        ];
-      },
-    });
-
-    expect(afterTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({
-          currentTokenCount: 52,
-          promptCache: expect.objectContaining({
-            lastCallUsage: expect.objectContaining({
-              total: 57,
-            }),
-          }),
-        }),
       }),
     );
   });

@@ -712,13 +712,15 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "ollama",
-        modelId: "kimi-k2.5:cloud",
+        provider: "custom-local",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:11434/v1",
         capability: "llm",
         transport: "stream",
       }),
     ).toMatchObject({
-      compatibilityFamily: "moonshot",
+      endpointClass: "local",
+      supportsNativeStreamingUsageCompat: false,
     });
   });
 
@@ -953,6 +955,28 @@ describe("provider attribution", () => {
           allowsResponsesStore: false,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native OpenAI Codex responses",
+        input: {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "openai-codex",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: true,
+          supportsOpenAIReasoningCompatPayload: true,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
           allowsAnthropicServiceTier: false,
           supportsNativeStreamingUsageCompat: false,
         },

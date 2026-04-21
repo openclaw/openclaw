@@ -9,6 +9,7 @@ import {
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -36,7 +37,9 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
+import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -70,7 +73,9 @@ function parseQaThinkingLevel(
   }
   const normalized = normalizeQaThinkingLevel(value);
   if (!normalized) {
-    throw new Error(`${label} must be one of off, minimal, low, medium, high, xhigh, adaptive`);
+    throw new Error(
+      `${label} must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
+    );
   }
   return normalized;
 }
@@ -117,6 +122,34 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
     throw new Error(`${label} must be a positive integer`);
   }
   return Math.floor(value);
+}
+
+async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
+  let summaryText: string;
+  try {
+    summaryText = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(summaryText) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
+  if (failedScenarioCount !== null) {
+    return failedScenarioCount;
+  }
+  throw new Error(
+    `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
+  );
 }
 
 function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthMode | undefined {
@@ -207,7 +240,7 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
           const thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
           if (!thinkingDefault) {
             throw new Error(
-              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive`,
+              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
             );
           }
           options.thinkingDefault = thinkingDefault;
@@ -327,6 +360,7 @@ export async function runQaSuiteCommand(opts: {
   parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
+  allowFailures?: boolean;
   image?: string;
   cpus?: number;
   memory?: string;
@@ -339,6 +373,7 @@ export async function runQaSuiteCommand(opts: {
     parityPack: opts.parityPack,
     scenarioIds: opts.scenarioIds,
   });
+  const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -365,6 +400,7 @@ export async function runQaSuiteCommand(opts: {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
+      allowFailures: true,
       scenarioIds,
       ...(opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
@@ -379,6 +415,12 @@ export async function runQaSuiteCommand(opts: {
     process.stdout.write(`QA Multipass summary: ${result.summaryPath}\n`);
     process.stdout.write(`QA Multipass host log: ${result.hostLogPath}\n`);
     process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
+    if (!allowFailures) {
+      const failedScenarioCount = await readQaFailedScenarioCountFromSummary(result.summaryPath);
+      if (failedScenarioCount > 0) {
+        process.exitCode = 1;
+      }
+    }
     return;
   }
   const result = await runQaSuiteFromRuntime({
@@ -398,6 +440,10 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(result);
+  if (!allowFailures && failedScenarioCount !== null && failedScenarioCount > 0) {
+    process.exitCode = 1;
+  }
 }
 
 export async function runQaParityReportCommand(opts: {
@@ -442,6 +488,29 @@ export async function runQaParityReportCommand(opts: {
     process.exitCode = 1;
   }
 }
+
+export async function runQaCoverageReportCommand(opts: {
+  repoRoot?: string;
+  output?: string;
+  json?: boolean;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
+  const outputPath = opts.output ? path.resolve(repoRoot, opts.output) : undefined;
+  const body = opts.json
+    ? `${JSON.stringify(inventory, null, 2)}\n`
+    : renderQaCoverageMarkdownReport(inventory);
+
+  if (outputPath) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, body, "utf8");
+    process.stdout.write(`QA coverage report: ${outputPath}\n`);
+    return;
+  }
+
+  process.stdout.write(body);
+}
+
 export async function runQaCharacterEvalCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
