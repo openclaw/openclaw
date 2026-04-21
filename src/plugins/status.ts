@@ -10,6 +10,10 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
+import {
+  readCompatibilityNoticesCache,
+  writeCompatibilityNoticesCache,
+} from "./compatibility-notices-cache.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   buildPluginShapeSummary,
@@ -34,17 +38,15 @@ export type PluginStatusReport = PluginRegistry & {
 
 export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
-export type PluginCompatibilityNotice = {
-  pluginId: string;
-  code: "legacy-before-agent-start" | "hook-only";
-  severity: "warn" | "info";
-  message: string;
-};
+import type {
+  PluginCompatibilityNotice,
+  PluginCompatibilitySummary,
+} from "./compatibility-notice-types.js";
 
-export type PluginCompatibilitySummary = {
-  noticeCount: number;
-  pluginCount: number;
-};
+export type {
+  PluginCompatibilityNotice,
+  PluginCompatibilitySummary,
+} from "./compatibility-notice-types.js";
 
 export type PluginInspectReport = {
   workspaceDir?: string;
@@ -403,7 +405,30 @@ export function buildPluginCompatibilityNotices(params?: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
-  return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+  // Callers that already hold a diagnostics report have paid the expensive
+  // plugin-load cost; skip the cache and return live results directly.
+  if (params?.report) {
+    return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+  }
+  const rawConfig = params?.config ?? loadConfig();
+  const cached = readCompatibilityNoticesCache({
+    config: rawConfig,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+  });
+  if (cached) {
+    return cached;
+  }
+  const notices = buildAllPluginInspectReports({ ...params, config: rawConfig }).flatMap(
+    (inspect) => inspect.compatibility,
+  );
+  writeCompatibilityNoticesCache({
+    config: rawConfig,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+    notices,
+  });
+  return notices;
 }
 
 export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {

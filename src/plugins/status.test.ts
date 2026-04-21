@@ -75,6 +75,11 @@ vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/default-workspace",
 }));
 
+vi.mock("./compatibility-notices-cache.js", () => ({
+  readCompatibilityNoticesCache: () => null,
+  writeCompatibilityNoticesCache: () => undefined,
+}));
+
 function setPluginLoadResult(overrides: Partial<ReturnType<typeof createPluginLoadResult>>) {
   const result = createPluginLoadResult({
     plugins: [],

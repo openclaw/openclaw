@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Status/perf: cache `openclaw status` plugin compatibility notices under `<workspaceDir>/.openclaw/plugin-compat-cache.json`, keyed by openclaw version plus normalized plugins config, so warm runs skip the ~20s full plugin diagnostics load when compatibility-relevant inputs have not changed. Set `OPENCLAW_COMPAT_CACHE=0` to disable. Related to #69103.
 - Sessions/reset: add `/reset soft [message]` for an in-place reset that keeps the current transcript/session while clearing reused CLI backend bindings and reloading startup/bootstrap context. (#68635) Thanks @Takhoffman.
 - Exec/YOLO: stop rejecting gateway-host exec in `security=full` plus `ask=off` mode via the Python/Node script preflight hardening path, so promptless YOLO exec once again runs direct interpreter stdin and heredoc forms such as `node <<'NODE' ... NODE`.
 - OpenAI Codex: normalize legacy `openai-completions` transport overrides on default OpenAI/Codex and GitHub Copilot-compatible hosts back to the native Codex Responses transport while leaving custom proxies untouched. (#45304, #42194) Thanks @dyss1992 and @DeadlySilent.
