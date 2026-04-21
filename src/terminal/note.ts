@@ -186,5 +186,6 @@ export function note(message: string, title?: string) {
   const columns = resolveNoteColumns(process.stdout.columns);
   clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
     output: createNoteOutput(columns),
+    format: (line) => line,
   });
 }
