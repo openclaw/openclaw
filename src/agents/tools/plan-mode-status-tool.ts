@@ -125,8 +125,17 @@ export function createPlanModeStatusTool(options?: CreatePlanModeStatusToolOptio
 
       const planMode = entry?.planMode;
       const inPlanMode = planMode?.mode === "plan";
+      // PR #68939 follow-up (P2.8) — surface the new "executing" state
+      // explicitly so the agent's self-diagnosis (and the /plan
+      // self-test introspection) can distinguish "plan being designed"
+      // from "plan approved + agent executing the steps". Pre-P2.8,
+      // both states would have collapsed to inPlanMode=false +
+      // mode=normal in the introspection, hiding the in-flight
+      // execution from the agent's view.
+      const inExecution = planMode?.mode === "executing";
       const status = {
         inPlanMode,
+        inExecution,
         approval: planMode?.approval,
         title: planMode?.title,
         approvalRunId: planMode?.approvalRunId,
@@ -160,11 +169,18 @@ export function createPlanModeStatusTool(options?: CreatePlanModeStatusToolOptio
       // failed, surface the unknown-state case in the summary
       // instead of pretending we know "not in plan mode" — that
       // misleads operators debugging stuck sessions.
+      //
+      // P2.8: third branch for the new "executing" state — distinct
+      // from "in plan mode" (designing) AND from "not in plan mode"
+      // (truly idle). The agent should know it's mid-execution so it
+      // can correctly answer "where are we" questions.
       const summary = !sessionStoreReadOk
         ? `WARNING: session-store read failed (${sessionStoreReadError ?? "unknown error"}); plan-mode state is UNKNOWN. The agent should treat this as a transient diagnostic failure, not a confirmed "normal" state.`
         : inPlanMode
           ? `In plan mode (approval=${planMode?.approval ?? "none"}; title="${planMode?.title ?? "(unset)"}"; ${openSubagentRunIds.length} subagent(s) in flight; ${planMode?.lastPlanSteps?.length ?? 0} plan step(s) tracked).`
-          : `Not in plan mode (mode=${planMode?.mode ?? "normal"}; ${entry?.recentlyApprovedAt ? `recently approved at ${new Date(entry.recentlyApprovedAt).toISOString()}` : "no recent approval"}).`;
+          : inExecution
+            ? `Executing approved plan (title="${planMode?.title ?? "(unset)"}"; approval=${planMode?.approval ?? "approved"}; ${planMode?.lastPlanSteps?.filter((s) => s.status === "in_progress").length ?? 0} step(s) in progress, ${planMode?.lastPlanSteps?.filter((s) => s.status === "pending").length ?? 0} pending, ${planMode?.lastPlanSteps?.filter((s) => s.status === "completed").length ?? 0} completed).`
+            : `Not in plan mode (mode=${planMode?.mode ?? "normal"}; ${entry?.recentlyApprovedAt ? `recently approved at ${new Date(entry.recentlyApprovedAt).toISOString()}` : "no recent approval"}).`;
       const debugSuffix = debugLogEnabled
         ? " Plan-mode debug log is ENABLED — tail with: tail -F ~/.openclaw/logs/gateway.err.log | grep '\\[plan-mode/'"
         : " Plan-mode debug log is DISABLED — enable with: openclaw config set agents.defaults.planMode.debug true";
