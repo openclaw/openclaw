@@ -1550,6 +1550,7 @@
     "jszip": "^3.10.1",
     "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
+    "markdown-it-task-lists": "^2.1.1",
     "openai": "^6.34.0",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.6.205",
