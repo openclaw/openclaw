@@ -381,6 +381,12 @@ jobs:
             timeout_minutes: 75
             release_path: true
             openwebui_only: false
+          - suite_id: docker-bundled-channel-deps
+            label: Bundled Channel Runtime Deps Docker E2E
+            command: pnpm test:docker:bundled-channel-deps
+            timeout_minutes: 75
+            release_path: true
+            openwebui_only: false
           - suite_id: docker-doctor-switch
             label: Doctor Install Switch Docker E2E
             command: pnpm test:docker:doctor-switch
