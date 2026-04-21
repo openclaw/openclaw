@@ -63,7 +63,6 @@ You will need to create a new application with a bot, add the bot to your server
 
     A **Bot Permissions** section will appear below. Enable:
 
-
     **General Permissions**
       - View Channels
     **Text Permissions**
@@ -522,7 +521,7 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
     - scopes: `bot`, `applications.commands`
 
     Typical baseline permissions:
-    
+
     **General Permissions**
       - View Channels
     **Text Permissions**
