@@ -21,6 +21,7 @@ import {
   collectBundledPluginRuntimeDependencySpecs,
   collectRootDistBundledRuntimeMirrors,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+import { runInstalledJobsCliPersistenceSmoke } from "./lib/jobs-cli-persistence-smoke.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import {
@@ -204,7 +205,7 @@ function resolveGlobalRoot(prefixDir: string, cwd: string): string {
   }).trim();
 }
 
-function runPackedBundledChannelEntrySmoke(): void {
+async function runPackedBundledChannelEntrySmoke(): Promise<void> {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
     const packDir = join(tmpRoot, "pack");
@@ -258,6 +259,7 @@ function runPackedBundledChannelEntrySmoke(): void {
       throw new Error("release-check: packed completion smoke produced no completion files.");
     }
 
+    await runInstalledJobsCliPersistenceSmoke({ packageRoot });
     runInstalledWorkspaceBootstrapSmoke({ packageRoot });
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -538,7 +540,7 @@ async function main() {
     process.exit(1);
   }
 
-  runPackedBundledChannelEntrySmoke();
+  await runPackedBundledChannelEntrySmoke();
 
   console.log("release-check: npm pack contents and bundled channel entrypoints look OK.");
 }
