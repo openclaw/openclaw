@@ -1,11 +1,8 @@
 import type { OpenClawConfig } from "../config/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import type { ContextEngine } from "./types.js";
-
-const contextEngineLog = createSubsystemLogger("context-engine");
 
 /**
  * A factory that creates a ContextEngine instance.
@@ -487,8 +484,8 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
           `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
       );
     }
-    contextEngineLog.error(
-      `Context engine "${sanitizeForLog(engineId)}" is not registered; ` +
+    console.error(
+      `[context-engine] Context engine "${sanitizeForLog(engineId)}" is not registered; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
     return resolveDefaultContextEngine(defaultEngineId);
@@ -501,8 +498,8 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
     if (isDefaultEngine) {
       throw factoryError;
     }
-    contextEngineLog.error(
-      `Context engine "${sanitizeForLog(engineId)}" factory threw during resolution: ` +
+    console.error(
+      `[context-engine] Context engine "${sanitizeForLog(engineId)}" factory threw during resolution: ` +
         `${sanitizeForLog(factoryError instanceof Error ? factoryError.message : String(factoryError))}; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
@@ -516,8 +513,8 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
     if (isDefaultEngine) {
       throw validationError;
     }
-    contextEngineLog.error(
-      `Context engine "${sanitizeForLog(engineId)}" contract validation threw: ` +
+    console.error(
+      `[context-engine] Context engine "${sanitizeForLog(engineId)}" contract validation threw: ` +
         `${sanitizeForLog(validationError instanceof Error ? validationError.message : String(validationError))}; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
@@ -528,8 +525,8 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
       throw new Error(contractError);
     }
     // contractError includes engineId from plugin config; sanitizeForLog covers it
-    contextEngineLog.error(
-      `${sanitizeForLog(contractError)}; falling back to default engine "${defaultEngineId}".`,
+    console.error(
+      `[context-engine] ${sanitizeForLog(contractError)}; falling back to default engine "${defaultEngineId}".`,
     );
     return resolveDefaultContextEngine(defaultEngineId);
   }
