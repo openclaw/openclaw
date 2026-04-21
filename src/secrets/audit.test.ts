@@ -442,6 +442,34 @@ describe("secrets audit", () => {
     });
   });
 
+  it("does not flag codex-app-server apiKey as plaintext (#69511)", async () => {
+    // codex's synthetic auth marker "codex-app-server" is declared in
+    // extensions/codex/openclaw.plugin.json under nonSecretAuthMarkers.
+    // Every agent with a codex provider block in models.json was emitting
+    // a false-positive PLAINTEXT_FOUND finding pre-fix.
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        codex: {
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          api: "codex-app-server",
+          apiKey: "codex-app-server", // pragma: allowlist secret
+          models: [{ id: "gpt-5-codex", name: "gpt-5-codex" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.codex.apiKey",
+      ),
+    ).toBe(false);
+  });
+
   it("flags arbitrary all-caps models.json apiKey values as plaintext", async () => {
     await writeModelsProvider({ apiKey: "ALLCAPS_SAMPLE" }); // pragma: allowlist secret
 
