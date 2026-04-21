@@ -19,7 +19,7 @@ const UNSAFE_CHANNEL_ENV_VAR_TRIGGER_NAMES = new Set([
 ]);
 
 export function isSafeChannelEnvVarTriggerName(key: string): boolean {
-  const normalized = key.trim();
+  const normalized = key.trim().toUpperCase();
   return (
     /^[A-Z][A-Z0-9_]*$/.test(normalized) && !UNSAFE_CHANNEL_ENV_VAR_TRIGGER_NAMES.has(normalized)
   );

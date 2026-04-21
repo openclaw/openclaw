@@ -70,7 +70,8 @@ function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
   if (!isSafeChannelEnvVarTriggerName(key)) {
     return false;
   }
-  const value = env[key];
+  const trimmed = key.trim();
+  const value = env[trimmed] ?? env[trimmed.toUpperCase()];
   return typeof value === "string" && value.trim().length > 0;
 }
 

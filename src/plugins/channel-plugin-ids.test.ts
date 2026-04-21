@@ -119,7 +119,7 @@ function createManifestRegistryFixture() {
         id: "ambient-env-channel-plugin",
         channels: ["ambient-env-channel"],
         channelEnvVars: {
-          "ambient-env-channel": ["HOME", "PATH", "lowercase_token"],
+          "ambient-env-channel": ["HOME", "PATH"],
         },
         origin: "config",
         enabledByDefault: undefined,
@@ -713,6 +713,66 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         includePersistedAuthState: false,
       }),
     ).toEqual([]);
+  });
+
+  it("accepts lowercase or mixed-case manifest env vars as read-only configured channel triggers", () => {
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          external_env_channel_token: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        manifestRecords: [
+          {
+            id: "external-env-channel-plugin",
+            channels: ["external-env-channel"],
+            channelEnvVars: {
+              "external-env-channel": ["external_env_channel_token"],
+            },
+            origin: "config",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          } as never,
+        ],
+      }),
+    ).toEqual(["external-env-channel"]);
+  });
+
+  it("matches uppercase process env entries for lowercase manifest env var declarations", () => {
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        manifestRecords: [
+          {
+            id: "external-env-channel-plugin",
+            channels: ["external-env-channel"],
+            channelEnvVars: {
+              "external-env-channel": ["external_env_channel_token"],
+            },
+            origin: "config",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          } as never,
+        ],
+      }),
+    ).toEqual(["external-env-channel"]);
   });
 
   it("uses manifest env vars for read-only channel presence checks", () => {
