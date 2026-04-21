@@ -35,7 +35,7 @@ skip assertions, weaken gates, or tune runner flags as the main fix.
    Push when requested. If CI is red, inspect with `gh run list/view`, fix, push,
    repeat until current CI is green or a blocker is proven unrelated.
 
-## Reuse
+## Output
 
-For deeper tactics, also use `$openclaw-test-performance`; it contains the
-hotspot catalog, benchmark commands, and handoff format.
+End with the pushed commit(s), before/after timings, gates run, current CI state,
+and any remaining tail lanes that need separate optimization.
