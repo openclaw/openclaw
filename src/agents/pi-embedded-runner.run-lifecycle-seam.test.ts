@@ -200,21 +200,52 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
     );
   });
 
-  it("continues prompt transitions in decide mode when the seam returns continue", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        promptError: new Error("plain prompt failure"),
-      }),
-    );
+  it("continues prompt transitions in decide mode by retrying the run", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: new Error("plain prompt failure"),
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await expect(
-      runEmbeddedPiAgent({
-        ...overflowBaseRunParams,
-        lifecycleDecisionMode: "decide",
-        lifecycleSeam: {
-          onPassTransitionDecision: vi.fn(async () => ({ next: "continue" as const })),
-        },
-      }),
-    ).rejects.toThrow(/plain prompt failure/i);
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lifecycleDecisionMode: "decide",
+      lifecycleSeam: {
+        onPassTransitionDecision: vi.fn(async () => ({ next: "continue" as const })),
+      },
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues assistant halt transitions in decide mode by retrying the run", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          lastAssistant: {
+            stopReason: "error",
+            errorMessage: "rate limited",
+            provider: "openai",
+            model: "gpt-5.4",
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lifecycleDecisionMode: "decide",
+      lifecycleSeam: {
+        onPassTransitionDecision: vi.fn(async (event) =>
+          event.source === "assistant" ? { next: "continue" as const } : { next: "noop" as const },
+        ),
+      },
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 });

@@ -755,6 +755,18 @@ export async function runEmbeddedPiAgent(
           }
           return details.length > 0 ? ` (${details.join(", ")})` : "";
         };
+        const throwIfTransitionHalted = (params2: {
+          decision: Awaited<ReturnType<typeof resolvePassTransitionDecision>>;
+          source: EmbeddedRunTransitionSource;
+          proposedAction: string;
+        }) => {
+          if (params2.decision.next !== "halt") {
+            return;
+          }
+          throw new Error(
+            `Embedded run lifecycle seam halted ${params2.source} transition before ${params2.proposedAction}.${formatTransitionDecisionDetails(params2.decision)}`,
+          );
+        };
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         let lastPassCorrelationId = createEmbeddedRunLifecycleCorrelationId();
@@ -784,10 +796,14 @@ export async function runEmbeddedPiAgent(
               proposedReason:
                 "reason" in retryLimitDecision ? retryLimitDecision.reason : undefined,
             });
-            if (retryLimitTransitionDecision.next === "halt") {
-              throw new Error(
-                `Embedded run lifecycle seam halted retry_limit transition before ${retryLimitDecision.action}.${formatTransitionDecisionDetails(retryLimitTransitionDecision)}`,
-              );
+            throwIfTransitionHalted({
+              decision: retryLimitTransitionDecision,
+              source: "retry_limit",
+              proposedAction: retryLimitDecision.action,
+            });
+            if (retryLimitTransitionDecision.next === "continue") {
+              runLoopIterations = Math.max(0, runLoopIterations - 1);
+              continue;
             }
             return handleRetryLimitExhaustion({
               message,
@@ -1552,7 +1568,7 @@ export async function runEmbeddedPiAgent(
                 failoverReason: promptFailoverReason,
               });
               logPromptFailoverDecision("rotate_profile");
-              await resolvePassTransitionDecision({
+              const promptRotateTransitionDecision = await resolvePassTransitionDecision({
                 passIndex,
                 passKind,
                 correlationId: passCorrelationId,
@@ -1561,6 +1577,11 @@ export async function runEmbeddedPiAgent(
                 source: "prompt",
                 proposedAction: "rotate_profile",
                 proposedReason: promptFailoverReason,
+              });
+              throwIfTransitionHalted({
+                decision: promptRotateTransitionDecision,
+                source: "prompt",
+                proposedAction: "rotate_profile",
               });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
@@ -1598,10 +1619,14 @@ export async function runEmbeddedPiAgent(
               proposedReason:
                 "reason" in promptFailoverDecision ? promptFailoverDecision.reason : undefined,
             });
-            if (promptTransitionDecision.next === "halt") {
-              throw new Error(
-                `Embedded run lifecycle seam halted prompt transition before ${promptFailoverDecision.action}.${formatTransitionDecisionDetails(promptTransitionDecision)}`,
-              );
+            throwIfTransitionHalted({
+              decision: promptTransitionDecision,
+              source: "prompt",
+              proposedAction: promptFailoverDecision.action,
+            });
+            if (promptTransitionDecision.next === "continue") {
+              await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+              continue;
             }
             // Throw FailoverError for prompt-side failover reasons when fallbacks
             // are configured so outer model fallback can continue on overload,
@@ -1790,16 +1815,22 @@ export async function runEmbeddedPiAgent(
                 ? assistantFailoverReason
                 : undefined,
           });
-          if (assistantTransitionDecision.next === "halt") {
-            throw new Error(
-              `Embedded run lifecycle seam halted assistant transition before ${
-                assistantFailoverOutcome.action === "retry"
-                  ? "continue"
-                  : assistantFailoverOutcome.action === "throw"
-                    ? "halt"
-                    : "noop"
-              }.${formatTransitionDecisionDetails(assistantTransitionDecision)}`,
-            );
+          throwIfTransitionHalted({
+            decision: assistantTransitionDecision,
+            source: "assistant",
+            proposedAction:
+              assistantFailoverOutcome.action === "retry"
+                ? "continue"
+                : assistantFailoverOutcome.action === "throw"
+                  ? "halt"
+                  : "noop",
+          });
+          if (
+            assistantTransitionDecision.next === "continue" &&
+            assistantFailoverOutcome.action === "throw"
+          ) {
+            await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+            continue;
           }
           if (assistantFailoverOutcome.action === "retry") {
             traceAttempts.push({
