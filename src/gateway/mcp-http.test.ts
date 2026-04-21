@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
+import { registerBuiltinResource, unregisterResource } from "./mcp-app-resources.js";
 
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -300,5 +301,99 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-sender-is-owner"]).toBe(
       "${OPENCLAW_MCP_SENDER_IS_OWNER}",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HTTP loopback: MCP App resources & initialize capabilities
+// ---------------------------------------------------------------------------
+
+const TEST_RESOURCE_URI = "ui://mcp-http-test/page.html";
+const TEST_RESOURCE_HTML = "<!DOCTYPE html><html><body>test</body></html>";
+
+describe("mcp loopback MCP App resources", () => {
+  let testServer: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
+
+  async function jsonRpc(port: number, token: string, method: string, params?: object) {
+    const res = await sendRaw({
+      port,
+      token,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as { result?: Record<string, unknown>; error?: { message: string } };
+  }
+
+  beforeEach(() => {
+    registerBuiltinResource({
+      uri: TEST_RESOURCE_URI,
+      name: "Test Page",
+      html: TEST_RESOURCE_HTML,
+    });
+  });
+
+  afterEach(async () => {
+    unregisterResource(TEST_RESOURCE_URI);
+    await testServer?.close();
+    testServer = undefined;
+  });
+
+  it("initialize advertises resources capability", async () => {
+    testServer = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime()!;
+    const body = await jsonRpc(testServer.port, runtime.token, "initialize", {
+      protocolVersion: "2025-03-26",
+    });
+    const caps = body.result?.capabilities as Record<string, unknown>;
+    expect(caps).toBeDefined();
+    expect(caps.tools).toBeDefined();
+    expect(caps.resources).toBeDefined();
+  });
+
+  it("resources/list returns registered resources", async () => {
+    testServer = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime()!;
+    const body = await jsonRpc(testServer.port, runtime.token, "resources/list");
+    const resources = body.result?.resources as Array<{ uri: string; name: string }>;
+    expect(resources).toBeDefined();
+    const entry = resources.find((r) => r.uri === TEST_RESOURCE_URI);
+    expect(entry).toBeDefined();
+    expect(entry!.name).toBe("Test Page");
+  });
+
+  it("resources/read returns HTML content for a valid URI", async () => {
+    testServer = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime()!;
+    const body = await jsonRpc(testServer.port, runtime.token, "resources/read", {
+      uri: TEST_RESOURCE_URI,
+    });
+    const contents = body.result?.contents as Array<{
+      uri: string;
+      text: string;
+      mimeType: string;
+    }>;
+    expect(contents).toHaveLength(1);
+    expect(contents[0].uri).toBe(TEST_RESOURCE_URI);
+    expect(contents[0].text).toBe(TEST_RESOURCE_HTML);
+    expect(contents[0].mimeType).toContain("text/html");
+  });
+
+  it("resources/read returns error when uri param is missing", async () => {
+    testServer = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime()!;
+    const body = await jsonRpc(testServer.port, runtime.token, "resources/read", {});
+    expect(body.error).toBeDefined();
+    expect(body.error!.message).toMatch(/uri/i);
+  });
+
+  it("resources/read returns error for unknown URI", async () => {
+    testServer = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime()!;
+    const body = await jsonRpc(testServer.port, runtime.token, "resources/read", {
+      uri: "ui://nonexistent/page.html",
+    });
+    expect(body.error).toBeDefined();
+    expect(body.error!.message).toMatch(/not found/i);
   });
 });

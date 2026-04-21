@@ -33,6 +33,8 @@ export type McpRequestContext = {
   messageProvider: string | undefined;
   accountId: string | undefined;
   senderIsOwner: boolean | undefined;
+  /** MCP Apps caller role for visibility filtering. */
+  callerRole: "model" | "app" | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -169,6 +171,7 @@ export function resolveMcpRequestContext(
   const senderIsOwnerRaw = normalizeOptionalLowercaseString(
     getHeader(req, "x-openclaw-sender-is-owner"),
   );
+  const callerRoleRaw = normalizeOptionalLowercaseString(getHeader(req, "x-openclaw-caller-role"));
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
@@ -176,5 +179,6 @@ export function resolveMcpRequestContext(
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     senderIsOwner:
       senderIsOwnerRaw === "true" ? true : senderIsOwnerRaw === "false" ? false : undefined,
+    callerRole: callerRoleRaw === "model" ? "model" : callerRoleRaw === "app" ? "app" : undefined,
   };
 }

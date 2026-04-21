@@ -6,12 +6,102 @@ import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
+/**
+ * CSP configuration for MCP App resources.
+ * Follows the MCP Apps spec domain-based declaration model (SEP-1865).
+ * The host translates these to actual CSP header directives.
+ */
+export type McpUiResourceCsp = {
+  /** Origins for network requests (fetch/XHR/WebSocket) → maps to CSP connect-src */
+  connectDomains?: string[];
+  /** Origins for static resources (images, scripts, styles, fonts, media) → maps to CSP img-src, script-src, style-src, font-src, media-src */
+  resourceDomains?: string[];
+  /** Origins for nested iframes → maps to CSP frame-src */
+  frameDomains?: string[];
+  /** Allowed base URIs for the document → maps to CSP base-uri */
+  baseUriDomains?: string[];
+};
+
+/**
+ * Structured permissions for MCP App resources.
+ * Follows the MCP Apps spec (SEP-1865).
+ * Maps to iframe Permission Policy `allow` attributes.
+ */
+export type McpUiPermissions = {
+  camera?: Record<string, never>;
+  microphone?: Record<string, never>;
+  geolocation?: Record<string, never>;
+  clipboardWrite?: Record<string, never>;
+};
+
+/**
+ * Resource-level metadata for MCP App resources.
+ * Returned in `resources/read` response as `_meta.ui` on the content block.
+ * Contains CSP, permissions, and rendering preferences.
+ */
+export type McpAppResourceMeta = {
+  /** CSP domain declarations per SEP-1865 */
+  csp?: McpUiResourceCsp;
+  /** Structured sandbox permissions */
+  permissions?: McpUiPermissions;
+  /** Dedicated origin for the sandbox (host-dependent format) */
+  domain?: string;
+  /** Whether the host should render a visible border around the app */
+  prefersBorder?: boolean;
+};
+
+/**
+ * Declares how the gateway should serve the HTML for an MCP App resource.
+ * Tools carry this so the gateway can auto-register the resource content
+ * alongside the tool's `ui://` URI in the resource registry.
+ */
+export type McpAppResourceSource =
+  | { type: "builtin"; html: string }
+  | { type: "file"; rootDir: string; relativePath: string }
+  | { type: "canvas"; canvasUrl: string };
+
+/**
+ * Optional MCP App UI metadata for tools that render interactive
+ * HTML content in a sandboxed iframe via the MCP Apps protocol.
+ *
+ * Per the MCP Apps spec (SEP-1865), tool `_meta.ui` carries only the
+ * resource URI and visibility. CSP/permissions belong to the resource
+ * metadata returned in `resources/read`.
+ */
+export type McpAppUiMeta = {
+  /** `ui://` resource URI — host fetches HTML via `resources/read` */
+  resourceUri: string;
+  /**
+   * Who can access this tool. Default: `["model", "app"]`.
+   * - `"model"`: visible to and callable by the LLM agent
+   * - `"app"`: callable by the MCP App from the same server connection only
+   */
+  visibility?: Array<"model" | "app">;
+  /**
+   * Resource-level metadata (CSP, permissions, rendering prefs).
+   * Stored on the tool for convenience; the gateway attaches this to
+   * the resource content in `resources/read` responses, NOT to the
+   * tool's `_meta.ui` on the wire.
+   */
+  resourceMeta?: McpAppResourceMeta;
+  /**
+   * Content source for the `ui://` resource. When set, the gateway
+   * auto-registers the resource on tool-cache refresh so that
+   * `resources/read` can serve it. Without this, the tool author
+   * must call `registerBuiltinResource` / `registerFileResource` /
+   * `registerCanvasResource` manually.
+   */
+  resourceSource?: McpAppResourceSource;
+};
+
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
 > & {
   ownerOnly?: boolean;
   displaySummary?: string;
+  /** When set, this tool renders its result via an MCP App iframe. */
+  mcpAppUi?: McpAppUiMeta;
 };
 
 // Cross-package tool registration still mixes concrete schema-typed tools with

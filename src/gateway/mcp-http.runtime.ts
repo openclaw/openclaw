@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { syncMcpAppResources } from "./mcp-app-resources.js";
 import {
   clearActiveMcpLoopbackRuntime,
   createMcpLoopbackServerConfig,
@@ -24,6 +25,11 @@ type CachedScopedTools = {
 
 export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
+  #owner: string;
+
+  constructor(owner = "default") {
+    this.#owner = owner;
+  }
 
   resolve(params: {
     cfg: OpenClawConfig;
@@ -65,6 +71,11 @@ export class McpLoopbackToolCache {
         this.#entries.delete(key);
       }
     }
+    // Sync resources with the union of ALL active cache entries' tools so that
+    // one session's cache refresh does not evict resources owned by another session.
+    // The owner key ensures cross-surface caches (HTTP vs WS) don't evict each other.
+    const allActiveTools = [...this.#entries.values()].flatMap((e) => e.tools);
+    syncMcpAppResources(allActiveTools, this.#owner);
     return nextEntry;
   }
 }

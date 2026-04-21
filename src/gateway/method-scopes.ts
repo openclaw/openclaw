@@ -115,6 +115,10 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    // MCP Apps — read-only queries
+    "mcp.tools.list",
+    "mcp.resources.list",
+    "mcp.resources.read",
   ],
   [WRITE_SCOPE]: [
     "message.action",
@@ -145,6 +149,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "doctor.memory.dedupeDreamDiary",
     "push.test",
     "node.pending.enqueue",
+    // MCP Apps — tool execution writes to the session
+    "mcp.tools.call",
   ],
   [ADMIN_SCOPE]: [
     "channels.start",

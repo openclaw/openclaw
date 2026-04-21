@@ -296,6 +296,14 @@ import {
   WizardStatusResultSchema,
   type WizardStep,
   WizardStepSchema,
+  type McpToolsListParams,
+  McpToolsListParamsSchema,
+  type McpToolsCallParams,
+  McpToolsCallParamsSchema,
+  type McpResourcesListParams,
+  McpResourcesListParamsSchema,
+  type McpResourcesReadParams,
+  McpResourcesReadParamsSchema,
 } from "./schema.js";
 
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
@@ -512,6 +520,14 @@ export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunPar
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
+export const validateMcpToolsListParams = ajv.compile<McpToolsListParams>(McpToolsListParamsSchema);
+export const validateMcpToolsCallParams = ajv.compile<McpToolsCallParams>(McpToolsCallParamsSchema);
+export const validateMcpResourcesListParams = ajv.compile<McpResourcesListParams>(
+  McpResourcesListParamsSchema,
+);
+export const validateMcpResourcesReadParams = ajv.compile<McpResourcesReadParams>(
+  McpResourcesReadParamsSchema,
+);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -673,6 +689,10 @@ export {
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
+  McpToolsListParamsSchema,
+  McpToolsCallParamsSchema,
+  McpResourcesListParamsSchema,
+  McpResourcesReadParamsSchema,
   ProtocolSchemas,
   PROTOCOL_VERSION,
   ErrorCodes,
@@ -800,4 +820,8 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
+  McpToolsListParams,
+  McpToolsCallParams,
+  McpResourcesListParams,
+  McpResourcesReadParams,
 };
