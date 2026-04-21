@@ -1,4 +1,5 @@
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
@@ -127,6 +128,13 @@ export type EmbeddedPiRunMeta = {
   toolSummary?: ToolSummaryTrace;
   completion?: CompletionTrace;
   contextManagement?: ContextManagementTrace;
+  /**
+   * Failed model-fallback attempts that preceded the successful run (empty when
+   * the primary succeeded on the first attempt). Populated by the outer agent
+   * command loop so downstream surfaces (e.g. the `model.run` capability
+   * envelope) can show which candidates were tried before the winner.
+   */
+  fallbackAttempts?: FallbackAttempt[];
 };
 
 export type EmbeddedPiRunResult = {

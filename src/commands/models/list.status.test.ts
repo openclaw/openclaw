@@ -441,6 +441,30 @@ describe("modelsStatusCommand auth overview", () => {
     );
   });
 
+  it("does not double-prefix openrouter auto in the resolved default label", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/auto", fallbacks: [] },
+          models: { "openrouter/auto": { alias: "OpenRouter" } },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(payload.resolvedDefault).toBe("openrouter/auto");
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
+  });
+
   it("throws when agent id is unknown", async () => {
     const localRuntime = createRuntime();
     await expect(modelsStatusCommand({ agent: "unknown" }, localRuntime as never)).rejects.toThrow(
