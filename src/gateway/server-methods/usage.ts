@@ -65,15 +65,22 @@ type CostUsageCacheEntry = {
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
 
-// Store an entry with FIFO eviction when adding a new key would exceed the
-// cap. Mirrors the pattern in session-transcript-key.ts and server-session-key.ts
-// so the cache stays bounded under sliding-window usage queries (each
-// day/range combination produces a distinct key).
+function findCostUsageCacheEvictionKey(): string | undefined {
+  for (const [key, entry] of costUsageCache) {
+    if (!entry.inFlight) {
+      return key;
+    }
+  }
+  return costUsageCache.keys().next().value;
+}
+
+// Keep the cache bounded while preserving in-flight request coalescing when a
+// settled entry is available to evict.
 function setCostUsageCache(cacheKey: string, entry: CostUsageCacheEntry): void {
   if (!costUsageCache.has(cacheKey) && costUsageCache.size >= COST_USAGE_CACHE_MAX) {
-    const oldest = costUsageCache.keys().next().value;
-    if (oldest !== undefined) {
-      costUsageCache.delete(oldest);
+    const evictKey = findCostUsageCacheEvictionKey();
+    if (evictKey !== undefined) {
+      costUsageCache.delete(evictKey);
     }
   }
   costUsageCache.set(cacheKey, entry);
