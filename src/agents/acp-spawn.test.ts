@@ -152,7 +152,7 @@ vi.mock("./subagent-registry.js", () => ({
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
 }));
 
-vi.mock("../tasks/task-registry.js", () => ({
+vi.mock("../tasks/runtime-internal.js", () => ({
   listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 

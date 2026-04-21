@@ -63,7 +63,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
-import { listTasksForOwnerKey } from "../tasks/task-registry.js";
+import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
