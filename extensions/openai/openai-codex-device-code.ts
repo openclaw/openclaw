@@ -9,6 +9,7 @@ const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
 const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS = 15 * 60_000;
 const OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5_000;
+const OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS = 1_000;
 const OPENAI_CODEX_DEVICE_CALLBACK_URL = `${OPENAI_AUTH_BASE_URL}/deviceauth/callback`;
 
 type OpenAICodexDeviceCodePrompt = {
@@ -22,7 +23,6 @@ type OpenAICodexDeviceCodeCredentials = {
   refresh: string;
   expires: number;
   accountId?: string;
-  idToken?: string;
 };
 
 type DeviceCodeUserCodePayload = {
@@ -58,11 +58,12 @@ type DeviceCodeAuthorizationCode = {
 };
 
 function normalizePositiveMilliseconds(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.trunc(value * 1000);
   }
   if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    return Number.parseInt(value.trim(), 10) * 1000;
+    const seconds = Number.parseInt(value.trim(), 10);
+    return seconds > 0 ? seconds * 1000 : undefined;
   }
   return undefined;
 }
@@ -86,6 +87,27 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
+function sanitizeDeviceCodeErrorText(value: string): string {
+  const esc = String.fromCharCode(0x1b);
+  const ansiCsiRegex = new RegExp(`${esc}\\[[\\u0020-\\u003f]*[\\u0040-\\u007e]`, "g");
+  const osc8Regex = new RegExp(`${esc}\\]8;;.*?${esc}\\\\|${esc}\\]8;;${esc}\\\\`, "g");
+  const c0Start = String.fromCharCode(0x00);
+  const c0End = String.fromCharCode(0x1f);
+  const del = String.fromCharCode(0x7f);
+  const controlCharsRegex = new RegExp(`[${c0Start}-${c0End}${del}]`, "g");
+  return value
+    .replace(osc8Regex, "")
+    .replace(ansiCsiRegex, "")
+    .replace(controlCharsRegex, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveNextDeviceCodePollDelayMs(intervalMs: number, deadlineMs: number): number {
+  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  return Math.min(Math.max(intervalMs, OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
+}
+
 function formatDeviceCodeError(params: {
   prefix: string;
   status: number;
@@ -94,13 +116,15 @@ function formatDeviceCodeError(params: {
   const body = parseJsonObject(params.bodyText);
   const error = trimNonEmptyString(body?.error);
   const description = trimNonEmptyString(body?.error_description);
-  if (error && description) {
-    return `${params.prefix}: ${error} (${description})`;
+  const safeError = error ? sanitizeDeviceCodeErrorText(error) : undefined;
+  const safeDescription = description ? sanitizeDeviceCodeErrorText(description) : undefined;
+  if (safeError && safeDescription) {
+    return `${params.prefix}: ${safeError} (${safeDescription})`;
   }
-  if (error) {
-    return `${params.prefix}: ${error}`;
+  if (safeError) {
+    return `${params.prefix}: ${safeError}`;
   }
-  const bodyText = params.bodyText.trim();
+  const bodyText = sanitizeDeviceCodeErrorText(params.bodyText);
   return bodyText
     ? `${params.prefix}: HTTP ${params.status} ${bodyText}`
     : `${params.prefix}: HTTP ${params.status}`;
@@ -185,7 +209,7 @@ async function pollOpenAICodexDeviceCode(params: {
 
     if (response.status === 403 || response.status === 404) {
       await new Promise((resolve) =>
-        setTimeout(resolve, Math.max(0, Math.min(params.intervalMs, deadline - Date.now()))),
+        setTimeout(resolve, resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline)),
       );
       continue;
     }
@@ -253,7 +277,6 @@ async function exchangeOpenAICodexDeviceCode(params: {
     refresh,
     expires,
     ...(accountId ? { accountId } : {}),
-    ...(idToken ? { idToken } : {}),
   };
 }
 

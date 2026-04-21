@@ -253,7 +253,6 @@ describe("openai codex provider", () => {
       refresh: "device-refresh-token",
       expires: Date.now() + 60_000,
       accountId: "acct-device-123",
-      idToken: "device-id-token",
     });
 
     const result = await deviceCodeMethod?.run({
@@ -285,12 +284,57 @@ describe("openai codex provider", () => {
               "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
             refresh: "device-refresh-token",
             accountId: "acct-device-123",
-            idToken: "device-id-token",
           },
         },
       ],
       defaultModel: "openai-codex/gpt-5.4",
     });
+    expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
+  });
+
+  it("does not log the device pairing code in remote mode", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    const note = vi.fn(async () => {});
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    loginOpenAICodexDeviceCodeMock.mockImplementationOnce(async ({ onVerification }) => {
+      await onVerification({
+        verificationUrl: "https://auth.openai.com/codex/device",
+        userCode: "CODE-12345",
+        expiresInMs: 900_000,
+      });
+      return {
+        access:
+          "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
+        refresh: "device-refresh-token",
+        expires: Date.now() + 60_000,
+        accountId: "acct-device-123",
+      };
+    });
+
+    await expect(
+      deviceCodeMethod?.run({
+        config: {},
+        env: process.env,
+        prompter: {
+          note,
+          progress: vi.fn(() => progress),
+        } as never,
+        runtime: runtime as never,
+        isRemote: true,
+        openUrl: async () => {},
+        oauth: { createVpsAwareHandlers: (() => ({})) as never },
+      }),
+    ).resolves.toBeDefined();
+
+    const logOutput = runtime.log.mock.calls.flat().join("\n");
+    expect(logOutput).toContain("https://auth.openai.com/codex/device");
+    expect(logOutput).not.toContain("CODE-12345");
   });
 
   it("exposes Codex CLI auth as a runtime-only external profile", () => {

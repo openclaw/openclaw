@@ -332,9 +332,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
           "OpenAI Codex device code",
         );
         if (ctx.isRemote) {
-          ctx.runtime.log(
-            `\nOpen this URL in your LOCAL browser:\n\n${verificationUrl}\n\nEnter this code:\n\n${userCode}\n`,
-          );
+          ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${verificationUrl}\n`);
           return;
         }
         try {
@@ -359,10 +357,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       expires: creds.expires,
       email: identity.email,
       profileName: identity.profileName,
-      credentialExtra: {
-        ...(trimNonEmptyString(creds.accountId) ? { accountId: creds.accountId } : {}),
-        ...(trimNonEmptyString(creds.idToken) ? { idToken: creds.idToken } : {}),
-      },
+      credentialExtra: trimNonEmptyString(creds.accountId) ? { accountId: creds.accountId } : {},
     });
   } catch (error) {
     spin.stop("OpenAI device code failed");
