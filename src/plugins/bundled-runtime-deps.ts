@@ -26,6 +26,12 @@ export type BundledRuntimeDepsInstallParams = {
 
 type JsonObject = Record<string, unknown>;
 
+export type BundledRuntimeDepsNpmRunner = {
+  command: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+};
+
 function dependencySentinelPath(depName: string): string {
   return path.join("node_modules", ...depName.split("/"), "package.json");
 }
@@ -71,6 +77,68 @@ function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   delete nextEnv.npm_config_location;
   delete nextEnv.npm_config_prefix;
   return nextEnv;
+}
+
+function resolvePathEnvKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (platform !== "win32") {
+    return "PATH";
+  }
+  return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path";
+}
+
+export function resolveBundledRuntimeDepsNpmRunner(params: {
+  npmArgs: string[];
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+  existsSync?: typeof fs.existsSync;
+  platform?: NodeJS.Platform;
+}): BundledRuntimeDepsNpmRunner {
+  const env = params.env ?? process.env;
+  const execPath = params.execPath ?? process.execPath;
+  const existsSync = params.existsSync ?? fs.existsSync;
+  const platform = params.platform ?? process.platform;
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  const nodeDir = pathImpl.dirname(execPath);
+
+  const npmCliCandidates = [
+    pathImpl.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
+    pathImpl.resolve(nodeDir, "node_modules/npm/bin/npm-cli.js"),
+  ];
+  const npmCliPath = npmCliCandidates.find((candidate) => existsSync(candidate));
+  if (npmCliPath) {
+    return {
+      command: execPath,
+      args: [npmCliPath, ...params.npmArgs],
+    };
+  }
+
+  if (platform === "win32") {
+    const npmExePath = pathImpl.resolve(nodeDir, "npm.exe");
+    if (existsSync(npmExePath)) {
+      return {
+        command: npmExePath,
+        args: params.npmArgs,
+      };
+    }
+    throw new Error(
+      `failed to resolve a toolchain-local npm next to ${execPath}. ` +
+        `Checked: ${[...npmCliCandidates, npmExePath].join(", ")}.`,
+    );
+  }
+
+  const pathKey = resolvePathEnvKey(env, platform);
+  const currentPath = env[pathKey];
+  return {
+    command: "npm",
+    args: params.npmArgs,
+    env: {
+      ...env,
+      [pathKey]:
+        typeof currentPath === "string" && currentPath.length > 0
+          ? `${nodeDir}${path.delimiter}${currentPath}`
+          : nodeDir,
+    },
+  };
 }
 
 function readBundledPluginChannels(pluginDir: string): string[] {
@@ -255,7 +323,13 @@ export function scanBundledPluginRuntimeDeps(params: {
     pluginIds: normalizePluginIdSet(params.pluginIds),
   });
   const missing = deps.filter(
-    (dep) => !fs.existsSync(path.join(params.packageRoot, dependencySentinelPath(dep.name))),
+    (dep) =>
+      !fs.existsSync(path.join(params.packageRoot, dependencySentinelPath(dep.name))) &&
+      !fs.existsSync(path.join(extensionsDir, dependencySentinelPath(dep.name))) &&
+      dep.pluginIds.every(
+        (pluginId) =>
+          !fs.existsSync(path.join(extensionsDir, pluginId, dependencySentinelPath(dep.name))),
+      ),
   );
   return { missing, conflicts };
 }
@@ -267,7 +341,7 @@ export function resolveBundledRuntimeDependencyInstallRoot(pluginRoot: string): 
     path.basename(extensionsDir) === "extensions" &&
     (path.basename(buildDir) === "dist" || path.basename(buildDir) === "dist-runtime")
   ) {
-    return path.dirname(buildDir);
+    return extensionsDir;
   }
   return extensionsDir;
 }
@@ -277,10 +351,12 @@ export function installBundledRuntimeDeps(params: {
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
 }): void {
-  const result = spawnSync(
-    "npm",
-    [
+  const npmRunner = resolveBundledRuntimeDepsNpmRunner({
+    env: params.env,
+    npmArgs: [
       "install",
+      "--prefix",
+      params.installRoot,
       "--omit=dev",
       "--no-save",
       "--package-lock=false",
@@ -288,14 +364,17 @@ export function installBundledRuntimeDeps(params: {
       "--legacy-peer-deps",
       ...params.missingSpecs,
     ],
-    {
-      cwd: params.installRoot,
-      encoding: "utf8",
-      env: createNestedNpmInstallEnv(params.env),
-      stdio: "pipe",
-      shell: false,
-    },
-  );
+  });
+  const result = spawnSync(npmRunner.command, npmRunner.args, {
+    cwd: params.installRoot,
+    encoding: "utf8",
+    env: createNestedNpmInstallEnv(npmRunner.env ?? params.env),
+    stdio: "pipe",
+    shell: false,
+  });
+  if (result.error) {
+    throw result.error;
+  }
   if (result.status !== 0) {
     const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
     throw new Error(output || "npm install failed");
@@ -339,6 +418,9 @@ export function ensureBundledPluginRuntimeDeps(params: {
   }
 
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot);
+  const dependencySpecs = deps
+    .map((dep) => `${dep.name}@${dep.version}`)
+    .toSorted((left, right) => left.localeCompare(right));
   const missingSpecs = deps
     .filter((dep) => !fs.existsSync(path.join(installRoot, dependencySentinelPath(dep.name))))
     .map((dep) => `${dep.name}@${dep.version}`)
@@ -346,7 +428,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
   if (missingSpecs.length === 0) {
     return [];
   }
-  const installSpecs = [...new Set([...(params.retainSpecs ?? []), ...missingSpecs])].toSorted(
+  const installSpecs = [...new Set([...(params.retainSpecs ?? []), ...dependencySpecs])].toSorted(
     (left, right) => left.localeCompare(right),
   );
 
@@ -359,5 +441,5 @@ export function ensureBundledPluginRuntimeDeps(params: {
         env: params.env,
       }));
   install({ installRoot, missingSpecs, installSpecs });
-  return missingSpecs;
+  return installSpecs;
 }
