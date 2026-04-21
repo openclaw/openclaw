@@ -654,6 +654,75 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("propagates registerAfterFinalDelivery through direct DM dispatch and followup redispatch", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou_sender_1",
+        },
+      },
+      message: {
+        message_id: "msg-followup-register",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const firstDispatchCall = mockDispatchReplyFromConfig.mock.calls[0]?.[0] as
+      | {
+          replyOptions?: {
+            registerAfterFinalDelivery?: (callback: () => void) => void;
+            dispatchFullFollowupTurn?: (queued: unknown) => Promise<boolean>;
+          };
+        }
+      | undefined;
+
+    expect(firstDispatchCall?.replyOptions?.registerAfterFinalDelivery).toBeTypeOf("function");
+    expect(firstDispatchCall?.replyOptions?.dispatchFullFollowupTurn).toBeTypeOf("function");
+
+    const handled = await firstDispatchCall?.replyOptions?.dispatchFullFollowupTurn?.({
+      prompt: "follow up",
+      messageId: "msg-followup-queued",
+      enqueuedAt: Date.now(),
+      originatingChannel: "feishu",
+      originatingTo: "oc-dm",
+      originatingAccountId: "default",
+      originatingChatType: "direct",
+      run: {
+        agentId: "main",
+        sessionKey: "agent:main:feishu:dm:ou-attacker",
+        senderId: "ou_sender_1",
+        senderName: "Sender",
+      },
+    });
+
+    expect(handled).toBe(true);
+
+    const secondDispatchCall = mockDispatchReplyFromConfig.mock.calls[1]?.[0] as
+      | {
+          replyOptions?: {
+            registerAfterFinalDelivery?: (callback: () => void) => void;
+          };
+        }
+      | undefined;
+
+    expect(secondDispatchCall?.replyOptions?.registerAfterFinalDelivery).toBeTypeOf("function");
+  });
+
   it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
     const cfg: ClawdbotConfig = {
       commands: { useAccessGroups: true },

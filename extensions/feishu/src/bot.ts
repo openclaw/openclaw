@@ -1578,12 +1578,16 @@ export async function handleFeishuMessage(params: {
         await core.channel.reply.withReplyDispatcher({
           dispatcher: fDispatcher,
           onSettled: () => fMarkIdle(),
-          run: () =>
+          run: ({ registerAfterFinalDelivery }) =>
             core.channel.reply.dispatchReplyFromConfig({
               ctx: followupCtx,
               cfg,
               dispatcher: fDispatcher,
-              replyOptions: { ...fReplyOptions, dispatchFullFollowupTurn },
+              replyOptions: {
+                ...fReplyOptions,
+                dispatchFullFollowupTurn,
+                registerAfterFinalDelivery,
+              },
             }),
         });
 
@@ -1596,12 +1600,16 @@ export async function handleFeishuMessage(params: {
         onSettled: () => {
           markDispatchIdle();
         },
-        run: () =>
+        run: ({ registerAfterFinalDelivery }) =>
           core.channel.reply.dispatchReplyFromConfig({
             ctx: ctxPayload,
             cfg,
             dispatcher,
-            replyOptions: { ...replyOptions, dispatchFullFollowupTurn },
+            replyOptions: {
+              ...replyOptions,
+              dispatchFullFollowupTurn,
+              registerAfterFinalDelivery,
+            },
           }),
       });
 
