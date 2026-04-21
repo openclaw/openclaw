@@ -163,7 +163,7 @@ export class OpenClawApp extends LitElement {
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
-  bootstrapGatewayToken: string | null = null;
+  @state() bootstrapGatewayToken: string | null = null;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
