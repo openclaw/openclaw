@@ -269,6 +269,48 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
+  it("clones setup-only plugins when only another owned channel is configured", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "alpha-chat",
+      manifestChannelIds: ["alpha-chat", "beta-chat"],
+      setupChannelId: "alpha-chat",
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "beta-chat": { token: "beta-token" },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env },
+        includePersistedAuthState: false,
+      },
+    );
+
+    expect(plugins.some((entry) => entry.id === "alpha-chat")).toBe(false);
+    const betaPlugin = plugins.find((entry) => entry.id === "beta-chat");
+    expect(betaPlugin?.meta.id).toBe("beta-chat");
+    expect(
+      betaPlugin?.secrets?.secretTargetRegistryEntries?.some(
+        (entry) => entry.id === "channels.beta-chat.token",
+      ),
+    ).toBe(true);
+    expect(
+      betaPlugin?.config.resolveAccount({
+        channels: {
+          "beta-chat": { token: "beta-token" },
+        },
+      } as never),
+    ).toMatchObject({ token: "beta-token" });
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
   it("keeps configured external channels visible when no setup entry exists", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       setupEntry: false,
@@ -363,7 +405,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       pluginId: "external-chat-plugin",
       channelId: "external-chat",
-      manifestChannelIds: ["external-chat", "spoofed-chat"],
+      manifestChannelIds: ["external-chat"],
       setupChannelId: "spoofed-chat",
     });
     const plugins = listReadOnlyChannelPluginsForConfig(

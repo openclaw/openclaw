@@ -258,6 +258,7 @@ function addSetupChannelPlugins(
     plugin: ChannelPlugin;
   }>,
   options: {
+    ownedChannelIdsByPluginId: ReadonlyMap<string, readonly string[]>;
     ownedMissingChannelIdsByPluginId: ReadonlyMap<string, readonly string[]>;
   },
 ): void {
@@ -283,7 +284,8 @@ function addSetupChannelPlugins(
       );
       continue;
     }
-    if (setup.plugin.id !== setup.pluginId) {
+    const ownedChannelIds = options.ownedChannelIdsByPluginId.get(setup.pluginId) ?? [];
+    if (setup.plugin.id !== setup.pluginId && !ownedChannelIds.includes(setup.plugin.id)) {
       continue;
     }
     addChannelPlugins(
@@ -422,16 +424,17 @@ export function resolveReadOnlyChannelPluginsForConfig(
   });
   if (externalPluginIds.length > 0) {
     const missingChannelIdSet = new Set(missingConfiguredChannelIds);
-    const ownedMissingChannelIdsByPluginId = new Map(
+    const externalPluginIdSet = new Set(externalPluginIds);
+    const ownedChannelIdsByPluginId = new Map(
       externalManifestRecords
-        .filter((record) => externalPluginIds.includes(record.id))
-        .map(
-          (record) =>
-            [
-              record.id,
-              record.channels.filter((channelId) => missingChannelIdSet.has(channelId)),
-            ] as const,
-        ),
+        .filter((record) => externalPluginIdSet.has(record.id))
+        .map((record) => [record.id, record.channels] as const),
+    );
+    const ownedMissingChannelIdsByPluginId = new Map(
+      [...ownedChannelIdsByPluginId].map(
+        ([pluginId, channelIds]) =>
+          [pluginId, channelIds.filter((channelId) => missingChannelIdSet.has(channelId))] as const,
+      ),
     );
     const registry = loadOpenClawPlugins({
       config: cfg,
@@ -446,6 +449,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
       onlyPluginIds: externalPluginIds,
     });
     addSetupChannelPlugins(byId, registry.channelSetups, {
+      ownedChannelIdsByPluginId,
       ownedMissingChannelIdsByPluginId,
     });
   }
