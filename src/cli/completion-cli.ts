@@ -219,6 +219,29 @@ function generateZshSubcmdList(cmd: Command): string {
   return `"1: :_values 'command' ${list}"`;
 }
 
+function generateZshPositionalArgs(cmd: Command): string {
+  const args = (cmd as unknown as { _args?: Array<{ name: string; description?: () => string; required: boolean; variadic: boolean }> })._args
+    ?? (cmd as unknown as { registeredArguments?: Array<{ name: string; description?: () => string; required: boolean; variadic: boolean }> }).registeredArguments;
+  if (!args || args.length === 0) {
+    return "";
+  }
+  return args
+    .map((arg, i) => {
+      const n = i + 1;
+      const desc = (arg.description?.() ?? arg.name)
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"')
+        .replace(/'/g, "'\\''")
+        .replace(/\[/g, "\\[")
+        .replace(/\]/g, "\\]");
+      if (arg.variadic) {
+        return `${n}:${desc}:_files`;
+      }
+      return `${n}:${desc}:_files`;
+    })
+    .join(" \\\n    ");
+}
+
 function generateZshSubcommands(program: Command, prefix: string): string {
   const segments: string[] = [];
 
@@ -257,7 +280,8 @@ ${funcName}() {
       segments.push(`
 ${funcName}() {
   _arguments -C \\
-    ${generateZshArgs(cmd)}
+    ${generateZshArgs(cmd)} \\
+    ${generateZshPositionalArgs(cmd)}
 }
 `);
     }
