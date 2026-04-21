@@ -1,5 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWindowsCommandShim } from "./windows-command.js";
+import {
+  resolveWindowsPathEnv,
+  resolveWindowsCmdShimArgv,
+  resolveWindowsCommandShim,
+} from "./windows-command.js";
 
 describe("resolveWindowsCommandShim", () => {
   it("leaves commands unchanged outside Windows", () => {
@@ -40,5 +47,209 @@ describe("resolveWindowsCommandShim", () => {
         platform: "win32",
       }),
     ).toBe("npm.cmd");
+  });
+});
+
+describe("resolveWindowsCmdShimArgv", () => {
+  it("leaves argv unchanged outside Windows", () => {
+    const argv = ["claude.cmd", "--print", "hi"];
+    expect(resolveWindowsCmdShimArgv(argv, { platform: "linux" })).toEqual(argv);
+  });
+
+  it("leaves argv unchanged when argv[0] is not a .cmd", () => {
+    const argv = ["node", "index.js"];
+    expect(resolveWindowsCmdShimArgv(argv, { platform: "win32" })).toEqual(argv);
+  });
+
+  it("leaves argv unchanged when the shim path does not exist", () => {
+    const argv = [path.join(os.tmpdir(), "does-not-exist-shim.cmd"), "--flag"];
+    expect(resolveWindowsCmdShimArgv(argv, { platform: "win32" })).toEqual(argv);
+  });
+
+  it("resolves a .cmd shim to its underlying .exe target", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    const exePath = path.join(dir, "target.exe");
+    const shimPath = path.join(dir, "wrapper.cmd");
+    fs.writeFileSync(exePath, "");
+    fs.writeFileSync(shimPath, `@echo off\r\nSET dp0=%~dp0\r\n"%dp0%target.exe" %*\r\n`);
+    try {
+      expect(
+        resolveWindowsCmdShimArgv([shimPath, "--flag", "value"], { platform: "win32" }),
+      ).toEqual([exePath, "--flag", "value"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a .cmd shim to node.exe + <cli.js> when the target is a .js file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    const jsPath = path.join(dir, "cli.js");
+    const shimPath = path.join(dir, "wrapper.cmd");
+    fs.writeFileSync(jsPath, "");
+    fs.writeFileSync(shimPath, `@echo off\r\nSET dp0=%~dp0\r\n"%dp0%cli.js" %*\r\n`);
+    try {
+      expect(
+        resolveWindowsCmdShimArgv([shimPath, "--flag"], { platform: "win32" }),
+      ).toEqual([process.execPath, jsPath, "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("looks up a bare .cmd name on PATH", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    const exePath = path.join(dir, "target.exe");
+    const shimPath = path.join(dir, "wrapper.cmd");
+    fs.writeFileSync(exePath, "");
+    fs.writeFileSync(shimPath, `@echo off\r\nSET dp0=%~dp0\r\n"%dp0%target.exe" %*\r\n`);
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["wrapper.cmd", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual([exePath, "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a bare name (no extension) via <name>.cmd on PATH when no higher-precedence binary exists", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    const targetExe = path.join(dir, "target.exe");
+    const shimPath = path.join(dir, "tool.cmd");
+    fs.writeFileSync(targetExe, "");
+    fs.writeFileSync(shimPath, `@echo off\r\nSET dp0=%~dp0\r\n"%dp0%target.exe" %*\r\n`);
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual([targetExe, "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a bare name unchanged when no <name>.cmd is on PATH", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual(["tool", "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a bare name unchanged when <name>.exe exists on PATH (even if <name>.cmd also exists)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    fs.writeFileSync(path.join(dir, "tool.exe"), "");
+    fs.writeFileSync(path.join(dir, "tool.cmd"), `@echo off\r\n"%~dp0other.exe" %*\r\n`);
+    fs.writeFileSync(path.join(dir, "other.exe"), "");
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual(["tool", "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects PATH directory order: an .exe in a later dir still wins over an earlier .cmd", () => {
+    const cmdDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-cmd-"));
+    const exeDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-exe-"));
+    fs.writeFileSync(path.join(cmdDir, "tool.cmd"), `@echo off\r\n"%~dp0other.exe" %*\r\n`);
+    fs.writeFileSync(path.join(cmdDir, "other.exe"), "");
+    fs.writeFileSync(path.join(exeDir, "tool.exe"), "");
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: `${cmdDir}${path.delimiter}${exeDir}`,
+        }),
+      ).toEqual(["tool", "--flag"]);
+    } finally {
+      fs.rmSync(cmdDir, { recursive: true, force: true });
+      fs.rmSync(exeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a bare .cmd name unchanged when not found on PATH (no CWD fallthrough)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["definitely-not-on-path.cmd", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual(["definitely-not-on-path.cmd", "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches the real command line in shims that check for a local node.exe first", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    const jsPath = path.join(dir, "cli.js");
+    const shimPath = path.join(dir, "tool.cmd");
+    fs.writeFileSync(jsPath, "");
+    fs.writeFileSync(
+      shimPath,
+      `@echo off\r\nSET dp0=%~dp0\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n"%_prog%" "%dp0%cli.js" %*\r\n`,
+    );
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual([process.execPath, jsPath, "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveWindowsPathEnv", () => {
+  it("returns the parent process PATH when env is undefined", () => {
+    expect(resolveWindowsPathEnv()).toBe(process.env.PATH ?? "");
+  });
+
+  it("returns the provided PATH value when env contains it", () => {
+    expect(resolveWindowsPathEnv({ PATH: "C:\\custom\\bin" })).toBe("C:\\custom\\bin");
+  });
+
+  it("matches PATH case-insensitively to handle Windows Path / path variants", () => {
+    expect(resolveWindowsPathEnv({ Path: "C:\\mixed\\bin" })).toBe("C:\\mixed\\bin");
+    expect(resolveWindowsPathEnv({ path: "C:\\lower\\bin" })).toBe("C:\\lower\\bin");
+  });
+
+  it("returns empty string when env is provided without a PATH key (no parent inheritance)", () => {
+    expect(resolveWindowsPathEnv({ FOO: "bar" })).toBe("");
+  });
+
+  it("returns empty string when env has PATH set to undefined", () => {
+    expect(resolveWindowsPathEnv({ PATH: undefined })).toBe("");
+  });
+
+  it("skips an undefined PATH entry and keeps scanning for a valid case variant", () => {
+    expect(
+      resolveWindowsPathEnv({ PATH: undefined, Path: "C:\\custom\\bin" }),
+    ).toBe("C:\\custom\\bin");
+    expect(
+      resolveWindowsPathEnv({ path: undefined, PATH: "C:\\upper\\bin" }),
+    ).toBe("C:\\upper\\bin");
+  });
+
+  it("returns empty string from an empty env object (no parent inheritance)", () => {
+    expect(resolveWindowsPathEnv({})).toBe("");
   });
 });
