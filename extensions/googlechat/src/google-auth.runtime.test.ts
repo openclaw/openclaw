@@ -183,6 +183,34 @@ describe("googlechat google auth runtime", () => {
     await expect(response.text()).resolves.toBe("ok");
   });
 
+  it("rejects oversized guarded auth responses before buffering them into memory", async () => {
+    const release = vi.fn();
+    let chunkIndex = 0;
+    const chunks = [new Uint8Array(700 * 1024), new Uint8Array(400 * 1024)];
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunkIndex < chunks.length) {
+          controller.enqueue(chunks[chunkIndex++]);
+          return;
+        }
+        controller.close();
+      },
+    });
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(body, { status: 200 }),
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+
+    await expect(
+      guardedFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+      } as RequestInit),
+    ).rejects.toThrow("Google auth response exceeds 1048576 bytes.");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("builds a scoped Gaxios transport without mutating global window", async () => {
     const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
     Reflect.deleteProperty(globalThis as object, "window");

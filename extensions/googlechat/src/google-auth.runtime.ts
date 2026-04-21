@@ -61,6 +61,7 @@ const GOOGLE_AUTH_PROVIDER_CERTS_URL = "https://www.googleapis.com/oauth2/v1/cer
 const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
 const GOOGLE_AUTH_UNIVERSE_DOMAIN = "googleapis.com";
 const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/metadata/x509/";
+const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
 const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
@@ -417,7 +418,7 @@ export function createGoogleAuthFetch(
       url,
     });
     try {
-      const body = await response.arrayBuffer();
+      const body = await readGoogleAuthResponseBytes(response);
       return new Response(body, {
         headers: response.headers,
         status: response.status,
@@ -427,6 +428,48 @@ export function createGoogleAuthFetch(
       await release();
     }
   };
+}
+
+async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value) {
+        continue;
+      }
+      total += value.byteLength;
+      if (total > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
+        try {
+          await reader.cancel("Google auth response exceeded buffer limit");
+        } catch {
+          // Ignore cancellation errors; the caller still releases the dispatcher.
+        }
+        throw new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
