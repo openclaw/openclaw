@@ -1710,12 +1710,12 @@ async function deliverOutboundPayloadsCore(
       }
     }
   }
-  if (params.mirror && results.length > 0) {
-    // Collect dropped-media from all payloads regardless of delivery status.
-    // A drop event means media was silently removed; that should always be
-    // recorded in the transcript for auditability even if the text payload
-    // itself failed or was cancelled.
-    const allDropped = normalizedPayloads.flatMap((p) => p.droppedMedia ?? []);
+  // Collect dropped-media from all payloads regardless of delivery status.
+  // A drop event means media was silently removed; that should always be
+  // recorded in the transcript for auditability even if the text payload
+  // itself failed or was cancelled.
+  const allDropped = normalizedPayloads.flatMap((p) => p.droppedMedia ?? []);
+  if (params.mirror && (results.length > 0 || allDropped.length > 0)) {
     const droppedNotice = allDropped.length > 0 ? formatDroppedMediaNotice(allDropped) : "";
     const mirrorText = resolveMirroredTranscriptText({
       text: params.mirror.text,
