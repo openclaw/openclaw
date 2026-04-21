@@ -15,8 +15,24 @@ vi.mock("../model-selection.js", () => ({
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
+type MockCost = {
+  input?: number;
+  output?: number;
+};
+
+type MockProviderModel = {
+  id: string;
+  cost?: MockCost;
+};
+
+type MockUsageFormatConfig = {
+  models?: {
+    providers?: Record<string, { models?: MockProviderModel[] }>;
+  };
+};
+
 vi.mock("../../utils/usage-format.js", () => ({
-  estimateUsageCost: (params: { usage?: { input?: number; output?: number }; cost?: { input?: number; output?: number } }) => {
+  estimateUsageCost: (params: { usage?: { input?: number; output?: number }; cost?: MockCost }) => {
     if (!params.usage || !params.cost) {
       return undefined;
     }
@@ -31,20 +47,14 @@ vi.mock("../../utils/usage-format.js", () => ({
     return total / 1e6;
   },
   resolveModelCostConfig: (params: { provider?: string; model?: string; config?: unknown }) => {
-    // Look up cost from config.models.providers[provider][model].cost
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const providers = params.config?.models?.providers as Record<string, unknown> | undefined;
+    const providers = (params.config as MockUsageFormatConfig | undefined)?.models?.providers;
     if (!providers) {
       return undefined;
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const provider = providers[params.provider ?? ""] as Record<string, unknown> | undefined;
-    if (!provider) {
-      return undefined;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const model = provider[params.model ?? ""] as { cost?: { input: number; output: number } } | undefined;
-    if (!model?.cost) {
+    const model = providers[params.provider ?? ""]?.models?.find(
+      (entry) => entry.id === params.model,
+    );
+    if (!model) {
       return undefined;
     }
     return model.cost;
@@ -426,12 +436,17 @@ describe("updateSessionStoreAfterAgentRun", () => {
         models: {
           providers: {
             openai: {
-              "gpt-4": {
-                cost: {
-                  input: 10, // $10 per million input tokens
-                  output: 30, // $30 per million output tokens
+              models: [
+                {
+                  id: "gpt-4",
+                  cost: {
+                    input: 10,
+                    output: 30,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  },
                 },
-              },
+              ],
             },
           },
         },
