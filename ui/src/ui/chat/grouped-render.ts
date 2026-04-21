@@ -14,7 +14,7 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
-import { agentLogoUrl } from "../views/agents-utils.ts";
+import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -383,10 +383,14 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
   return { audio, video };
 }
 
-export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
+export function renderReadingIndicatorGroup(
+  assistant?: AssistantIdentity,
+  basePath?: string,
+  authToken?: string | null,
+) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderAvatar("assistant", assistant, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -404,6 +408,7 @@ export function renderStreamingGroup(
   onOpenSidebar?: (content: SidebarContent) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
+  authToken?: string | null,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",
@@ -413,7 +418,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderAvatar("assistant", assistant, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -493,6 +498,7 @@ export function renderMessageGroup(
           avatar: opts.assistantAvatar ?? null,
         },
         opts.basePath,
+        opts.assistantAttachmentAuthToken,
       )}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
@@ -775,6 +781,7 @@ function renderAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   basePath?: string,
+  authToken?: string | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
@@ -827,6 +834,13 @@ function renderAvatar(
 
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
+      if (authToken?.trim() && assistantAvatar.startsWith("/")) {
+        return html`<img
+          class="chat-avatar ${className} chat-avatar--logo"
+          src="${agentLogoUrl(basePath ?? "")}"
+          alt="${assistantName}"
+        />`;
+      }
       return html`<img
         class="chat-avatar ${className}"
         src="${assistantAvatar}"

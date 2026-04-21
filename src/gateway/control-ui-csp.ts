@@ -44,7 +44,7 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     "frame-ancestors 'none'",
     scriptSrc,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: https: http://localhost:18791 http://127.0.0.1:18791",
+    "img-src 'self' data:",
     "font-src 'self' https://fonts.gstatic.com",
     "connect-src 'self' ws: wss:",
     "media-src 'self' http://localhost:18791 http://127.0.0.1:18791 data: blob:",

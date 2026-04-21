@@ -70,7 +70,7 @@ export function installChannelSurfaceContractSuite(params: {
           messaging?.normalizeTarget,
           messaging?.parseExplicitTarget,
           messaging?.inferTargetChatType,
-          messaging?.buildCrossContextComponents,
+          messaging?.buildCrossContextPresentation,
           messaging?.enableInteractiveReplies,
           messaging?.hasStructuredReplyPayload,
           messaging?.formatTargetDisplay,
