@@ -311,10 +311,17 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toContain("<code>");
     });
 
-    it("includes copy button", () => {
+    it("includes copy button with original code in data-code", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
       expect(html).toContain('class="code-block-copy"');
       expect(html).toContain("data-code=");
+    });
+
+    it("preserves special characters in data-code attribute", () => {
+      const code = '<div>hello & world</div>';
+      const html = toSanitizedMarkdownHtml("```\n" + code + "\n```");
+      // data-code should contain the original code, not HTML-escaped
+      expect(html).toContain('data-code="' + code + '"');
     });
 
     it("collapses JSON code blocks", () => {

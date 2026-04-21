@@ -145,6 +145,10 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/"/g, "&quot;");
+}
+
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
   return trimmed ? trimmed : "image";
@@ -430,8 +434,7 @@ md.renderer.rules.fence = (tokens, idx) => {
   const safeText = escapeHtml(text);
   const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
-  const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${escapeHtmlAttribute(text)}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   const trimmed = text.trim();
@@ -456,8 +459,7 @@ md.renderer.rules.code_block = (tokens, idx) => {
   const text = token.content;
   const safeText = escapeHtml(text);
   const codeBlock = `<pre><code>${safeText}</code></pre>`;
-  const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${escapeHtmlAttribute(text)}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;
 
   const trimmed = text.trim();
