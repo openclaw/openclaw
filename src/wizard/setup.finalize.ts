@@ -424,11 +424,16 @@ export async function finalizeSetupWizard(
     if (hatchChoice === "tui") {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
       try {
-        await launchTuiCli({
-          // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
-          deliver: false,
-          message: hasBootstrap ? "Wake up, my friend!" : undefined,
-        });
+        await launchTuiCli(
+          {
+            // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
+            deliver: false,
+            message: hasBootstrap ? "Wake up, my friend!" : undefined,
+          },
+          {
+            gatewayUrl: links.wsUrl,
+          },
+        );
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
       }

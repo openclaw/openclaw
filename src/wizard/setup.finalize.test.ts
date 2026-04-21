@@ -339,10 +339,15 @@ describe("finalizeSetupWizard", () => {
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
-    expect(launchTuiCli).toHaveBeenCalledWith({
-      deliver: false,
-      message: undefined,
-    });
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        deliver: false,
+        message: undefined,
+      },
+      {
+        gatewayUrl: "ws://127.0.0.1:18789",
+      },
+    );
   });
 
   it("restores terminal state after failed TUI hatch", async () => {

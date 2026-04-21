@@ -102,4 +102,22 @@ describe("launchTuiCli", () => {
       expect.objectContaining({ stdio: "inherit" }),
     );
   });
+
+  it("pins the child gateway URL through env without adding url argv", async () => {
+    const child = createChildProcess();
+    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    await launchTuiCli({ deliver: false }, { gatewayUrl: "ws://127.0.0.1:19122" });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["/repo/openclaw.mjs", "tui"],
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:19122" }),
+      }),
+    );
+  });
 });

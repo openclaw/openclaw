@@ -4,6 +4,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import type { TuiOptions } from "./tui.js";
 
+type TuiLaunchOptions = {
+  gatewayUrl?: string;
+};
+
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
   if (value === undefined) {
     return;
@@ -68,8 +72,14 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   return args;
 }
 
-export async function launchTuiCli(opts: TuiOptions): Promise<void> {
+export async function launchTuiCli(
+  opts: TuiOptions,
+  launchOptions: TuiLaunchOptions = {},
+): Promise<void> {
   const args = buildTuiCliArgs(opts);
+  const env = launchOptions.gatewayUrl
+    ? { ...process.env, OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl }
+    : process.env;
   const stdinWasPaused =
     typeof process.stdin.isPaused === "function" ? process.stdin.isPaused() : false;
 
@@ -78,7 +88,7 @@ export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       stdio: "inherit",
-      env: process.env,
+      env,
     });
     const { detach } = attachChildProcessBridge(child);
 
