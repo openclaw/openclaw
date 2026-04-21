@@ -1467,7 +1467,12 @@ async function deliverOutboundPayloadsCore(
       // When there are surviving media items, the notice is sent as a separate
       // text message after the media to avoid oversizing media captions (many
       // channels enforce strict caption length limits).
-      if (droppedMediaNotice && payloadSummary.mediaUrls.length === 0) {
+      // Only inline the notice when there are no surviving media items AND the
+      // payload is not a structured reply (interactive/channelData).  Structured
+      // adapters may not render payload.text, so the notice would be silently
+      // lost — keep it for the separate text-send path instead.
+      const isStructuredPayload = !!(effectivePayload.interactive || effectivePayload.channelData);
+      if (droppedMediaNotice && payloadSummary.mediaUrls.length === 0 && !isStructuredPayload) {
         const separator = payloadSummary.text.trim() ? "\n\n" : "";
         effectivePayload = {
           ...effectivePayload,
