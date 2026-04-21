@@ -1252,12 +1252,12 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       expect.objectContaining({
         storePath,
         sessionKey,
-        modelUsed: "claude-opus-4-6",
+        modelUsed: "claude-opus-4-5",
         providerUsed: "anthropic",
       }),
     );
     expect(sessionStore[sessionKey]?.totalTokens).toBe(400);
-    expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+    expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-5");
     // Accumulated usage is still stored for usage/cost tracking.
     expect(sessionStore[sessionKey]?.inputTokens).toBe(1_000);
     expect(sessionStore[sessionKey]?.outputTokens).toBe(50);
