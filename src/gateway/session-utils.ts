@@ -415,15 +415,43 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
+function resolveLoadSessionStoreLookupInput(args: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  canonicalKey: string;
+  agentId: string;
+}): { key: string; canonicalKey: string; agentId: string } {
+  const rawKey = normalizeOptionalString(args.sessionKey) ?? "";
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(args.cfg, rawKey);
+  if (deletedAgentId === DEFAULT_AGENT_ID) {
+    return {
+      key: rawKey,
+      canonicalKey: rawKey,
+      agentId: deletedAgentId,
+    };
+  }
+  return {
+    key: rawKey,
+    canonicalKey: args.canonicalKey,
+    agentId: args.agentId,
+  };
+}
+
 export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const { storePath, store } = resolveGatewaySessionStoreLookup({
+  const lookup = resolveLoadSessionStoreLookupInput({
     cfg,
-    key: normalizeOptionalString(sessionKey) ?? "",
+    sessionKey,
     canonicalKey,
     agentId,
+  });
+  const { storePath, store } = resolveGatewaySessionStoreLookup({
+    cfg,
+    key: lookup.key,
+    canonicalKey: lookup.canonicalKey,
+    agentId: lookup.agentId,
   });
   const target = resolveGatewaySessionStoreTarget({
     cfg,
