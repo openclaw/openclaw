@@ -97,7 +97,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: "false"
 
       - name: Detect changed extensions
         id: changed_extensions
@@ -337,7 +336,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: "false"
 
       - name: Setup Python
         id: setup-python
@@ -424,7 +422,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Build dist
         run: pnpm build:ci-artifacts
@@ -476,7 +473,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -522,7 +518,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run extension shard
         env:
@@ -577,7 +572,6 @@ jobs:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Configure Node test resources
         if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
@@ -701,7 +695,6 @@ jobs:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -813,7 +806,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run changed extension tests
         env:
@@ -840,7 +832,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
         env:
@@ -869,7 +860,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run plugin extension boundary guard
         id: plugin_extension_boundary
@@ -1078,7 +1068,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Restore dist cache
         id: build-smoke-dist-cache
@@ -1133,7 +1122,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check docs
         run: pnpm check:docs
@@ -1224,11 +1212,8 @@ jobs:
         with:
           pnpm-version: "10.32.1"
           cache-key-suffix: "node24"
-          # Sticky disk mount currently retries/fails on every shard and adds ~50s
-          # before install while still yielding zero pnpm store reuse.
-          # Try exact-key actions/cache restores instead to recover store reuse
-          # without the sticky-disk mount penalty.
-          use-sticky-disk: "false"
+          # Prefer exact-key actions/cache restores here so Windows shards avoid
+          # broad fallback restores that do not meaningfully improve reuse.
           use-restore-keys: "false"
           use-actions-cache: "true"
 
