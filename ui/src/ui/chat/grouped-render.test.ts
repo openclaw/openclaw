@@ -144,6 +144,24 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("appends the gateway token to assistant avatar routes", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      {
+        assistantAvatar: "/avatar/main",
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    const img = container.querySelector("img.chat-avatar");
+    expect(img?.getAttribute("src")).toBe("/avatar/main?token=session-token");
+  });
+
   it("positions delete confirm by message side", () => {
     const renderDeletable = (role: "user" | "assistant") => {
       const container = document.createElement("div");

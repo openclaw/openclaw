@@ -113,6 +113,27 @@ describe("refreshChatAvatar", () => {
     expect(host.chatAvatarUrl).toBe("/avatar/main");
   });
 
+  it("includes the gateway token in avatar metadata and local avatar URLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ avatarUrl: "/avatar/main" }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({
+      basePath: "/openclaw/",
+      sessionKey: "agent:main",
+      settings: { token: "session-token" },
+    });
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/avatar/main?meta=1&token=session-token",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(host.chatAvatarUrl).toBe("/avatar/main?token=session-token");
+  });
+
   it("keeps mounted dashboard avatar endpoints under the normalized base path", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,

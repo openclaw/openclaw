@@ -16,7 +16,7 @@ import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
@@ -36,6 +36,8 @@ export type ChatHost = {
   lastError?: string | null;
   sessionKey: string;
   basePath: string;
+  settings?: { token?: string | null };
+  password?: string | null;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
   chatSideResult?: ChatSideResult | null;
@@ -528,6 +530,34 @@ function buildAvatarMetaUrl(basePath: string, agentId: string): string {
   return base ? `${base}/avatar/${encoded}?meta=1` : `avatar/${encoded}?meta=1`;
 }
 
+function resolveChatAvatarAuthToken(host: Pick<ChatHost, "settings" | "password">): string | null {
+  return (
+    normalizeOptionalString(host.settings?.token) ?? normalizeOptionalString(host.password) ?? null
+  );
+}
+
+function appendAvatarAuthToken(url: string, authToken: string | null): string {
+  const token = authToken?.trim();
+  if (!token) {
+    return url;
+  }
+  const hashIndex = url.indexOf("#");
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
+  const pathAndQuery = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+  if (/^https?:\/\//i.test(pathAndQuery) || /^data:image\//i.test(pathAndQuery)) {
+    return url;
+  }
+  const queryIndex = pathAndQuery.indexOf("?");
+  const path = queryIndex >= 0 ? pathAndQuery.slice(0, queryIndex) : pathAndQuery;
+  const query = queryIndex >= 0 ? pathAndQuery.slice(queryIndex + 1) : "";
+  const params = new URLSearchParams(query);
+  if (!params.has("token")) {
+    params.set("token", token);
+  }
+  const nextQuery = params.toString();
+  return `${path}${nextQuery ? `?${nextQuery}` : ""}${hash}`;
+}
+
 export async function refreshChatAvatar(host: ChatHost) {
   if (!host.connected) {
     host.chatAvatarUrl = null;
@@ -543,7 +573,8 @@ export async function refreshChatAvatar(host: ChatHost) {
     return;
   }
   host.chatAvatarUrl = null;
-  const url = buildAvatarMetaUrl(host.basePath, agentId);
+  const authToken = resolveChatAvatarAuthToken(host);
+  const url = appendAvatarAuthToken(buildAvatarMetaUrl(host.basePath, agentId), authToken);
   try {
     const res = await fetch(url, { method: "GET" });
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
@@ -558,7 +589,10 @@ export async function refreshChatAvatar(host: ChatHost) {
       return;
     }
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
-    host.chatAvatarUrl = avatarUrl && isRenderableControlUiAvatarUrl(avatarUrl) ? avatarUrl : null;
+    host.chatAvatarUrl =
+      avatarUrl && isRenderableControlUiAvatarUrl(avatarUrl)
+        ? appendAvatarAuthToken(avatarUrl, authToken)
+        : null;
   } catch {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       host.chatAvatarUrl = null;

@@ -866,7 +866,11 @@ export function renderChat(props: ChatProps) {
               `;
             }
             if (item.kind === "reading-indicator") {
-              return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
+              return renderReadingIndicatorGroup(
+                assistantIdentity,
+                props.basePath,
+                props.assistantAttachmentAuthToken ?? null,
+              );
             }
             if (item.kind === "stream") {
               return renderStreamingGroup(
@@ -875,6 +879,7 @@ export function renderChat(props: ChatProps) {
                 props.onOpenSidebar,
                 assistantIdentity,
                 props.basePath,
+                props.assistantAttachmentAuthToken ?? null,
               );
             }
             if (item.kind === "group") {

@@ -184,10 +184,14 @@ function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
-export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
+export function renderReadingIndicatorGroup(
+  assistant?: AssistantIdentity,
+  basePath?: string,
+  authToken?: string | null,
+) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderAvatar("assistant", assistant, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -205,6 +209,7 @@ export function renderStreamingGroup(
   onOpenSidebar?: (content: SidebarContent) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
+  authToken?: string | null,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",
@@ -214,7 +219,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderAvatar("assistant", assistant, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -295,6 +300,7 @@ export function renderMessageGroup(
           avatar: opts.assistantAvatar ?? null,
         },
         opts.basePath,
+        opts.assistantAttachmentAuthToken,
       )}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
@@ -586,6 +592,7 @@ function renderAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   basePath?: string,
+  authToken?: string | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
@@ -640,7 +647,7 @@ function renderAvatar(
     if (isAvatarUrl(assistantAvatar)) {
       return html`<img
         class="chat-avatar ${className}"
-        src="${assistantAvatar}"
+        src="${appendAvatarAuthToken(assistantAvatar, authToken)}"
         alt="${assistantName}"
       />`;
     }
@@ -666,6 +673,25 @@ function renderAvatar(
 
 function isAvatarUrl(value: string): boolean {
   return isRenderableControlUiAvatarUrl(value);
+}
+
+function appendAvatarAuthToken(url: string, authToken?: string | null): string {
+  const token = authToken?.trim();
+  if (!token || /^https?:\/\//i.test(url) || /^data:image\//i.test(url)) {
+    return url;
+  }
+  const hashIndex = url.indexOf("#");
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
+  const pathAndQuery = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+  const queryIndex = pathAndQuery.indexOf("?");
+  const path = queryIndex >= 0 ? pathAndQuery.slice(0, queryIndex) : pathAndQuery;
+  const query = queryIndex >= 0 ? pathAndQuery.slice(queryIndex + 1) : "";
+  const params = new URLSearchParams(query);
+  if (!params.has("token")) {
+    params.set("token", token);
+  }
+  const nextQuery = params.toString();
+  return `${path}${nextQuery ? `?${nextQuery}` : ""}${hash}`;
 }
 
 function resolveRenderableMessageImages(
