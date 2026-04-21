@@ -73,6 +73,20 @@ describe("DroppedMedia types and helpers", () => {
       expect(sanitizeMediaDisplayName("/tmp/file\nname.png")).toBe("file_name.png");
       expect(sanitizeMediaDisplayName("/tmp/file\r\nname.png")).toBe("file__name.png");
     });
+
+    it("strips userinfo from credential-bearing URLs", () => {
+      expect(sanitizeMediaDisplayName("https://user:secret@example.com/files/doc.pdf")).toBe(
+        "doc.pdf",
+      );
+      expect(sanitizeMediaDisplayName("https://token@cdn.example.com/image.png?sig=abc")).toBe(
+        "image.png",
+      );
+    });
+
+    it("returns (url) for authority-only URLs with no pathname", () => {
+      expect(sanitizeMediaDisplayName("https://user:secret@example.com")).toBe("(url)");
+      expect(sanitizeMediaDisplayName("https://user:secret@example.com/")).toBe("(url)");
+    });
   });
 
   describe("resolveDroppedMediaCode", () => {

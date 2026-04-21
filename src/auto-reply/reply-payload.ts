@@ -69,6 +69,16 @@ export function sanitizeMediaDisplayName(mediaSource: string): string {
   if (/^data:/i.test(mediaSource)) {
     return "(inline data)";
   }
+  // For URLs, use URL parsing to safely extract the pathname and avoid
+  // leaking userinfo, query tokens, or fragment identifiers.
+  try {
+    const parsed = new URL(mediaSource);
+    const pathname = parsed.pathname;
+    const basename = path.basename(pathname) || "(url)";
+    return basename.replace(/[`\n\r]/g, "_");
+  } catch {
+    // Not a valid URL — treat as a filesystem path.
+  }
   // Normalize Windows backslash paths for cross-platform safety
   const normalized = mediaSource.replace(/\\/g, "/");
   // Strip URL query/fragment to avoid leaking signed tokens or credentials
