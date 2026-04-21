@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+   <strong>EXFOLIATE! EXFOLIATE!</strong>
   <strong>Your personal AI assistant — runs on your own devices, answers on the channels you already use.</strong>
 </p>
 
