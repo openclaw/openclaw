@@ -152,9 +152,30 @@ describe("discord native /status", () => {
     expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "status reply",
+        ephemeral: true,
       }),
     );
     expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("keeps every direct status chunk ephemeral", async () => {
+    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
+      text: `fallback models\nruntime info\n${"x".repeat(2200)}`,
+    });
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg);
+    const interaction = createInteraction();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
+    for (const [payload] of interaction.followUp.mock.calls) {
+      expect(payload).toEqual(
+        expect.objectContaining({
+          ephemeral: true,
+        }),
+      );
+    }
   });
 
   it("passes through the effective guild activation when requireMention is disabled", async () => {

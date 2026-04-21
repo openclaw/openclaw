@@ -80,6 +80,7 @@ export type DispatchDiscordCommandInteractionParams = {
   sessionPrefix: string;
   preferFollowUp: boolean;
   threadBindings: ThreadBindingManager;
+  responseEphemeral?: boolean;
   suppressReplies?: boolean;
 };
 
@@ -918,6 +919,7 @@ export async function handleDiscordCommandArgInteraction(params: {
     sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
+    responseEphemeral: true,
   });
 }
 
