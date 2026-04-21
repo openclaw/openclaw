@@ -1,5 +1,9 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import {
+  comparableChannelTargetsShareRoute,
+  resolveComparableTargetForChannel,
+} from "../../channels/plugins/target-parsing.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -237,7 +241,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
     reason,
     accountId: effectiveAccountId,
     // Heartbeats normally avoid inheriting session reply-thread IDs, but some
-    // plugins encode thread/topic ids as part of the destination identity.
+    // channels encode a group route separately from its current thread.
+    // Preserve that routing only when the heartbeat still targets the same
+    // routed group conversation.
     threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
@@ -309,17 +315,33 @@ function shouldReuseHeartbeatRouteThreadId(params: {
   const channel = params.resolvedTarget.channel;
   const messaging =
     channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
+  if (
+    messaging?.preserveHeartbeatThreadIdForGroupRoute !== true ||
+    params.resolvedTarget.threadId != null ||
+    params.target !== "last" ||
+    params.heartbeat?.to ||
+    params.turnSource?.threadId != null ||
+    !params.resolvedTarget.channel ||
+    params.resolvedTarget.channel !== params.resolvedTarget.lastChannel
+  ) {
+    return false;
+  }
+  const currentTarget = resolveComparableTargetForChannel({
+    channel: params.resolvedTarget.channel,
+    rawTarget: params.resolvedTarget.to,
+  });
+  const previousTarget = resolveComparableTargetForChannel({
+    channel: params.resolvedTarget.channel,
+    rawTarget: params.resolvedTarget.lastTo,
+    fallbackThreadId: params.resolvedTarget.lastThreadId,
+  });
+  const currentChatType = currentTarget?.chatType ?? normalizeChatType(params.entry?.chatType);
   return (
-    messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
-    params.resolvedTarget.threadId == null &&
-    params.target === "last" &&
-    !params.heartbeat?.to &&
-    params.turnSource?.threadId == null &&
-    params.resolvedTarget.channel === params.resolvedTarget.lastChannel &&
-    Boolean(params.resolvedTarget.to) &&
-    Boolean(params.resolvedTarget.lastTo) &&
-    params.resolvedTarget.to === params.resolvedTarget.lastTo &&
-    normalizeChatType(params.entry?.chatType) === "group"
+    currentChatType === "group" &&
+    comparableChannelTargetsShareRoute({
+      left: currentTarget,
+      right: previousTarget,
+    })
   );
 }
 

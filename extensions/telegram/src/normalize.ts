@@ -12,12 +12,14 @@ function normalizeTelegramTargetBody(raw: string): string | undefined {
     return undefined;
   }
 
-  const prefixStripped = trimmed.replace(TELEGRAM_PREFIX_RE, "").trim();
+  const parseInput =
+    /^group:/i.test(trimmed) && !TELEGRAM_PREFIX_RE.test(trimmed) ? `telegram:${trimmed}` : trimmed;
+  const prefixStripped = parseInput.replace(TELEGRAM_PREFIX_RE, "").trim();
   if (!prefixStripped) {
     return undefined;
   }
 
-  const parsed = parseTelegramTarget(trimmed);
+  const parsed = parseTelegramTarget(parseInput);
   const normalizedChatId = normalizeTelegramLookupTarget(parsed.chatId);
   if (!normalizedChatId) {
     return undefined;

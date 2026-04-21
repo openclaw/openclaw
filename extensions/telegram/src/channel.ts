@@ -275,13 +275,17 @@ function shouldTreatTelegramDeliveredTextAsVisible(params: {
   return params.kind !== "final";
 }
 
+function parseComparableTelegramTarget(rawTarget: string) {
+  return parseTelegramTarget(normalizeTelegramMessagingTarget(rawTarget) ?? rawTarget);
+}
+
 function targetsMatchTelegramReplySuppression(params: {
   originTarget: string;
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
-  const origin = parseTelegramTarget(params.originTarget);
-  const target = parseTelegramTarget(params.targetKey);
+  const origin = parseComparableTelegramTarget(params.originTarget);
+  const target = parseComparableTelegramTarget(params.targetKey);
   const originThreadId =
     origin.messageThreadId != null && normalizeOptionalString(String(origin.messageThreadId))
       ? normalizeOptionalString(String(origin.messageThreadId))
@@ -408,6 +412,17 @@ function parseTelegramExplicitTarget(raw: string) {
     threadId: target.messageThreadId,
     chatType: target.chatType === "unknown" ? undefined : target.chatType,
   };
+}
+
+function resolveTelegramSessionTarget(params: { id: string; threadId?: string | null }) {
+  const chatId = params.id.trim();
+  if (!chatId) {
+    return undefined;
+  }
+  const resolvedThreadId = parseTelegramThreadId(params.threadId);
+  const rawTarget =
+    resolvedThreadId == null ? chatId : `${chatId}:topic:${String(resolvedThreadId)}`;
+  return normalizeTelegramMessagingTarget(rawTarget) ?? undefined;
 }
 
 function shouldStripTelegramThreadFromAnnounceOrigin(params: {
@@ -688,6 +703,7 @@ export const telegramPlugin = createChatChannelPlugin({
         resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
       resolveSessionConversation: ({ kind, rawId }) =>
         resolveTelegramSessionConversation({ kind, rawId }),
+      resolveSessionTarget: ({ id, threadId }) => resolveTelegramSessionTarget({ id, threadId }),
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
       preserveHeartbeatThreadIdForGroupRoute: true,
@@ -1026,7 +1042,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
       shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,
-      preferFinalAssistantVisibleText: true,
+      shouldPreferFinalAssistantVisibleText: () => true,
       targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
       resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
         typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,

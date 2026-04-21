@@ -231,6 +231,7 @@ vi.mock("./helpers.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: getChannelPluginMock,
   getChannelPlugin: getChannelPluginMock,
 }));
 

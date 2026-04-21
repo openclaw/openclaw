@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SkillSnapshot } from "../../agents/skills.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
-  getChannelPluginMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
@@ -49,6 +50,22 @@ function makeAnnounceMessageToolJob(
     payload: { kind: "agentTurn", message: "send a message" },
     delivery: { mode: "announce", channel: "messagechat", to: "123", ...options.delivery },
   } as never;
+}
+
+function parseTopicchatTargetForTest(raw: string) {
+  const trimmed = raw.trim();
+  const threadMatch = /^([^#]+)#(.+)$/u.exec(trimmed);
+  if (threadMatch) {
+    return {
+      to: threadMatch[1],
+      threadId: threadMatch[2],
+      chatType: "group" as const,
+    };
+  }
+  return {
+    to: trimmed,
+    chatType: "group" as const,
+  };
 }
 
 function makeParams() {
@@ -185,28 +202,32 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
-    getChannelPluginMock.mockImplementation((channelId: string) =>
-      channelId === "topicchat"
-        ? {
-            threading: {
-              resolveCurrentChannelId: ({
-                to,
-                threadId,
-              }: {
-                to: string;
-                threadId?: string | number | null;
-              }) => {
-                if (threadId == null) {
-                  return to;
-                }
-                return to.includes("#") ? to : `${to}#${threadId}`;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "topicchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "topicchat",
+            outbound: {
+              deliveryMode: "direct",
+              shouldPreferFinalAssistantVisibleText: () => true,
+            },
+            messaging: {
+              parseExplicitTarget: ({ raw }) => parseTopicchatTargetForTest(raw),
+              resolveSessionTarget: ({ id, threadId }) => {
+                const normalizedThreadId =
+                  typeof threadId === "number"
+                    ? String(threadId)
+                    : typeof threadId === "string"
+                      ? threadId.trim()
+                      : "";
+                return normalizedThreadId ? `${id}#${normalizedThreadId}` : id;
               },
             },
-            outbound: {
-              preferFinalAssistantVisibleText: true,
-            },
-          }
-        : undefined,
+          }),
+        },
+      ]),
     );
     resolveDeliveryTargetMock.mockResolvedValue({
       ok: true,
@@ -261,6 +282,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   }
 
   afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
     restoreFastTestEnv(previousFastTestEnv);
   });
 

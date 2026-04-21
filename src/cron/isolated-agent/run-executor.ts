@@ -2,11 +2,11 @@ import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronJob } from "../types.js";
 import {
-  resolveCronChannelOutputPolicy,
-  resolveCurrentChannelTarget,
-} from "./channel-output-policy.js";
+  resolveOutboundCurrentChannelTarget,
+  shouldOutboundChannelPreferFinalAssistantVisibleText,
+} from "../../infra/outbound/channel-resolution.js";
+import type { CronJob } from "../types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   getCliSessionId,
@@ -153,11 +153,6 @@ export function createCronPromptExecutor(params: {
         }
         const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
           await loadCronEmbeddedRuntime();
-        const currentChannelId = await resolveCurrentChannelTarget({
-          channel: params.messageChannel,
-          to: params.resolvedDelivery.to,
-          threadId: params.resolvedDelivery.threadId,
-        });
         const result = await runEmbeddedPiAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.agentSessionKey,
@@ -170,7 +165,12 @@ export function createCronPromptExecutor(params: {
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
-          currentChannelId,
+          currentChannelId: resolveOutboundCurrentChannelTarget({
+            channel: params.messageChannel,
+            to: params.resolvedDelivery.to,
+            threadId: params.resolvedDelivery.threadId,
+            cfg: params.cfg,
+          }),
           sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
@@ -358,9 +358,10 @@ export async function executeCronRun(params: {
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
       finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
-      preferFinalAssistantVisibleText: (
-        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
-      ).preferFinalAssistantVisibleText,
+      preferFinalAssistantVisibleText: shouldOutboundChannelPreferFinalAssistantVisibleText({
+        channel: params.resolvedDelivery.channel,
+        cfg: params.cfg,
+      }),
     });
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =

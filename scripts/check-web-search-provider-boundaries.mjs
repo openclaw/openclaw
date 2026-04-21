@@ -3,6 +3,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildBundledWebSearchPluginToPrimaryProviderMap,
+  listBundledWebSearchProviderIds,
+} from "./lib/bundled-web-provider-contracts.mjs";
 import { diffInventoryEntries, runBaselineInventoryCheck } from "./lib/guard-inventory-utils.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
@@ -28,30 +32,20 @@ const ignoredDirNames = new Set([
   "node_modules",
 ]);
 
-const bundledProviderPluginToSearchProvider = new Map([
-  ["brave", "brave"],
-  ["firecrawl", "firecrawl"],
-  ["google", "gemini"],
-  ["moonshot", "kimi"],
-  ["perplexity", "perplexity"],
-  ["xai", "grok"],
-]);
+const bundledProviderPluginToSearchProvider = buildBundledWebSearchPluginToPrimaryProviderMap();
 
-const providerIds = new Set([
-  "brave",
-  "firecrawl",
-  "gemini",
-  "grok",
-  "kimi",
-  "perplexity",
-  "shared",
-]);
+const providerIds = new Set([...listBundledWebSearchProviderIds(), "shared"]);
 
 const allowedGenericFiles = new Set([
   "src/agents/tools/web-search.ts",
   "src/commands/onboard-search.ts",
-  "src/plugins/bundled-web-search-registry.ts",
+  "src/flows/search-setup.ts",
+  "src/plugins/web-provider-public-artifacts.ts",
+  "src/plugins/web-search-credential-presence.ts",
+  "src/plugins/web-search-providers.runtime.ts",
+  "src/plugins/web-search-providers.shared.ts",
   "src/secrets/runtime-web-tools.ts",
+  "src/secrets/runtime-web-tools-fallback.runtime.ts",
   "src/web-search/runtime.ts",
 ]);
 
@@ -116,8 +110,8 @@ function scanWebSearchProviderRegistry(lines, relativeFile, inventory) {
       });
     }
 
-    const providerMatch = line.match(/id:\s*"(brave|firecrawl|gemini|grok|kimi|perplexity)"/);
-    if (providerMatch) {
+    const providerMatch = line.match(/id:\s*"([^"]+)"/);
+    if (providerMatch && providerIds.has(providerMatch[1])) {
       pushEntry(inventory, {
         provider: providerMatch[1],
         file: relativeFile,
@@ -134,7 +128,10 @@ function scanGenericCoreImports(lines, relativeFile, inventory) {
   }
   for (const [index, line] of lines.entries()) {
     const lineNumber = index + 1;
-    if (line.includes("web-search-providers.js")) {
+    if (
+      line.includes("web-search-providers.runtime.js") ||
+      line.includes("web-search-providers.shared.js")
+    ) {
       pushEntry(inventory, {
         provider: "shared",
         file: relativeFile,
@@ -165,12 +162,17 @@ export async function collectWebSearchProviderBoundaryInventory() {
       });
 
       for (const { relativeFile, content } of files) {
-        if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
+        if (
+          ignoredFiles.has(relativeFile) ||
+          relativeFile.includes(".test.") ||
+          relativeFile.includes("test-support") ||
+          relativeFile.includes("test-helpers")
+        ) {
           continue;
         }
         const lines = content.split(/\r?\n/);
 
-        if (relativeFile === "src/plugins/web-search-providers.ts") {
+        if (relativeFile === "src/plugins/web-search-providers.runtime.ts") {
           scanWebSearchProviderRegistry(lines, relativeFile, inventory);
           continue;
         }

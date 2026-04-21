@@ -21,11 +21,11 @@ describe("plugin extension import boundary inventory", () => {
   it("keeps dedicated web-search registry shims out of the remaining inventory", async () => {
     const inventory = await collectPluginExtensionImportBoundaryInventory();
 
-    expect(inventory.some((entry) => entry.file === "src/plugins/web-search-providers.ts")).toBe(
-      false,
-    );
     expect(
-      inventory.some((entry) => entry.file === "src/plugins/bundled-web-search-registry.ts"),
+      inventory.some((entry) => entry.file === "src/plugins/web-search-providers.runtime.ts"),
+    ).toBe(false);
+    expect(
+      inventory.some((entry) => entry.file === "src/plugins/web-search-providers.shared.ts"),
     ).toBe(false);
   });
 

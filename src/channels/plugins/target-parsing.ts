@@ -1,41 +1,39 @@
-import {
-  normalizeOptionalString,
-  normalizeOptionalThreadValue,
-} from "../../shared/string-coerce.js";
 import { normalizeChatChannelId } from "../registry.js";
 import { getChannelPlugin, normalizeChannelId } from "./index.js";
-import type {
-  ComparableChannelTarget,
-  ParsedChannelExplicitTarget,
-} from "./target-parsing-loaded.js";
 export {
   comparableChannelTargetsMatch,
   comparableChannelTargetsShareRoute,
   parseExplicitTargetForLoadedChannel,
   resolveComparableTargetForLoadedChannel,
+  resolveCurrentChannelTargetFromMessaging,
 } from "./target-parsing-loaded.js";
 export type {
   ComparableChannelTarget,
   ParsedChannelExplicitTarget,
 } from "./target-parsing-loaded.js";
+import {
+  resolveComparableChannelTarget,
+  resolveParsedChannelTarget,
+  type ComparableChannelTarget,
+  type ParsedChannelExplicitTarget,
+} from "./target-parsing-shared.js";
 
-function parseWithPlugin(
-  getPlugin: (channel: string) => ReturnType<typeof getChannelPlugin>,
-  rawChannel: string,
-  rawTarget: string,
-): ParsedChannelExplicitTarget | null {
+function resolveChannelMessaging(rawChannel: string) {
   const channel = normalizeChatChannelId(rawChannel) ?? normalizeChannelId(rawChannel);
   if (!channel) {
-    return null;
+    return undefined;
   }
-  return getPlugin(channel)?.messaging?.parseExplicitTarget?.({ raw: rawTarget }) ?? null;
+  return getChannelPlugin(channel)?.messaging;
 }
 
 export function parseExplicitTargetForChannel(
   channel: string,
   rawTarget: string,
 ): ParsedChannelExplicitTarget | null {
-  return parseWithPlugin(getChannelPlugin, channel, rawTarget);
+  return resolveParsedChannelTarget({
+    rawTarget,
+    messaging: resolveChannelMessaging(channel),
+  }).parsedTarget;
 }
 
 export function resolveComparableTargetForChannel(params: {
@@ -43,16 +41,9 @@ export function resolveComparableTargetForChannel(params: {
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
 }): ComparableChannelTarget | null {
-  const rawTo = normalizeOptionalString(params.rawTarget);
-  if (!rawTo) {
-    return null;
-  }
-  const parsed = parseExplicitTargetForChannel(params.channel, rawTo);
-  const fallbackThreadId = normalizeOptionalThreadValue(params.fallbackThreadId);
-  return {
-    rawTo,
-    to: parsed?.to ?? rawTo,
-    threadId: normalizeOptionalThreadValue(parsed?.threadId ?? fallbackThreadId),
-    chatType: parsed?.chatType,
-  };
+  return resolveComparableChannelTarget({
+    rawTarget: params.rawTarget,
+    fallbackThreadId: params.fallbackThreadId,
+    messaging: resolveChannelMessaging(params.channel),
+  });
 }

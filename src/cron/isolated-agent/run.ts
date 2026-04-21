@@ -6,6 +6,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { shouldOutboundChannelPreferFinalAssistantVisibleText } from "../../infra/outbound/channel-resolution.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import type {
@@ -15,7 +16,6 @@ import type {
   CronJob,
   CronRunTelemetry,
 } from "../types.js";
-import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import {
   isHeartbeatOnlyResponse,
   resolveCronPayloadOutcome,
@@ -817,9 +817,10 @@ async function finalizeCronRun(params: {
     payloads,
     runLevelError: finalRunResult.meta?.error,
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
-    preferFinalAssistantVisibleText: (
-      await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
-    ).preferFinalAssistantVisibleText,
+    preferFinalAssistantVisibleText: shouldOutboundChannelPreferFinalAssistantVisibleText({
+      channel: prepared.resolvedDelivery.channel,
+      cfg: prepared.cfgWithAgentDefaults,
+    }),
   });
   const resolveRunOutcome = (result?: {
     delivered?: boolean;

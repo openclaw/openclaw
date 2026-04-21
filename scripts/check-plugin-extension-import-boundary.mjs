@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import {
+  listBundledWebSearchPluginIds,
+  listBundledWebSearchProviderIds,
+} from "./lib/bundled-web-provider-contracts.mjs";
+import {
   collectTypeScriptInventory,
   createCachedAsync,
   diffInventoryEntries,
@@ -31,22 +35,8 @@ const baselinePath = path.join(
   "plugin-extension-import-boundary-inventory.json",
 );
 
-const bundledWebSearchProviders = new Set([
-  "brave",
-  "firecrawl",
-  "gemini",
-  "grok",
-  "kimi",
-  "perplexity",
-]);
-const bundledWebSearchPluginIds = new Set([
-  "brave",
-  "firecrawl",
-  "google",
-  "moonshot",
-  "perplexity",
-  "xai",
-]);
+const bundledWebSearchProviders = new Set(listBundledWebSearchProviderIds());
+const bundledWebSearchPluginIds = new Set(listBundledWebSearchPluginIds());
 
 function compareEntries(left, right) {
   return (
@@ -101,7 +91,7 @@ function scanImportBoundaryViolations(sourceFile, filePath) {
 
 function scanWebSearchRegistrySmells(sourceFile, filePath) {
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
-  if (relativeFile !== "src/plugins/web-search-providers.ts") {
+  if (relativeFile !== "src/plugins/web-search-providers.runtime.ts") {
     return [];
   }
 
@@ -133,7 +123,7 @@ function scanWebSearchRegistrySmells(sourceFile, filePath) {
       });
     }
 
-    const providerMatch = line.match(/id:\s*"(brave|firecrawl|gemini|grok|kimi|perplexity)"/);
+    const providerMatch = line.match(/id:\s*"([^"]+)"/);
     if (providerMatch && bundledWebSearchProviders.has(providerMatch[1])) {
       pushEntry(entries, {
         file: relativeFile,

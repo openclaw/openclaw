@@ -1,4 +1,8 @@
-import { resolveComparableTargetForLoadedChannel } from "../channels/plugins/target-parsing-loaded.js";
+import {
+  comparableChannelTargetsShareRoute,
+  resolveComparableTargetForLoadedChannel,
+  type ComparableChannelTarget,
+} from "../channels/plugins/target-parsing-loaded.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -94,31 +98,25 @@ function deliveryContextFromSession(entry?: DeliveryContextSource): DeliveryCont
   });
 }
 
-function stripThreadRouteSuffix(target: string): string {
-  return /^(.*):topic:[^:]+$/u.exec(target)?.[1] ?? target;
-}
-
-function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
+function resolveAnnounceRouteTarget(
+  context?: DeliveryContext,
+  fallbackChannel?: string,
+): ComparableChannelTarget | null {
   const rawTo = normalizeOptionalString(context?.to);
   if (!rawTo) {
-    return undefined;
+    return null;
   }
-  const channel = normalizeOptionalLowercaseString(context?.channel);
-  const parsed = channel
-    ? resolveComparableTargetForLoadedChannel({
-        channel,
-        rawTarget: rawTo,
-        fallbackThreadId: context?.threadId,
-      })
-    : null;
-  let route = stripThreadRouteSuffix(parsed?.to ?? rawTo);
-  if (channel && route.toLowerCase().startsWith(`${channel}:`)) {
-    route = route.slice(channel.length + 1);
+  const channel =
+    normalizeOptionalLowercaseString(context?.channel) ??
+    normalizeOptionalLowercaseString(fallbackChannel);
+  if (!channel) {
+    return null;
   }
-  if (route.startsWith("group:") || route.startsWith("channel:")) {
-    route = route.slice(route.indexOf(":") + 1);
-  }
-  return route || undefined;
+  return resolveComparableTargetForLoadedChannel({
+    channel,
+    rawTarget: rawTo,
+    fallbackThreadId: context?.threadId,
+  });
 }
 
 function shouldStripThreadFromAnnounceEntry(
@@ -132,12 +130,16 @@ function shouldStripThreadFromAnnounceEntry(
   ) {
     return false;
   }
-  const requesterTarget = normalizeAnnounceRouteTarget(normalizedRequester);
-  const entryTarget = normalizeAnnounceRouteTarget(normalizedEntry);
-  if (requesterTarget && entryTarget) {
-    return requesterTarget !== entryTarget;
+  const requesterChannel = normalizeOptionalLowercaseString(normalizedRequester.channel);
+  const requesterTarget = resolveAnnounceRouteTarget(normalizedRequester, requesterChannel);
+  const entryTarget = resolveAnnounceRouteTarget(normalizedEntry, requesterChannel);
+  if (!requesterTarget || !entryTarget) {
+    return false;
   }
-  return false;
+  return !comparableChannelTargetsShareRoute({
+    left: requesterTarget,
+    right: entryTarget,
+  });
 }
 
 export function resolveAnnounceOrigin(

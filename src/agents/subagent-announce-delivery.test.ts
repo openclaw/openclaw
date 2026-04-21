@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
   __testing,
@@ -13,6 +15,44 @@ import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 afterEach(() => {
   __testing.setDepsForTest();
+  setActivePluginRegistry(createTestRegistry());
+});
+
+function parseTopicchatTargetForTest(raw: string) {
+  const trimmed = raw
+    .trim()
+    .replace(/^topicchat:/i, "")
+    .replace(/^group:/i, "");
+  const topicMatch = /^([^:]+):topic:(\d+)$/i.exec(trimmed);
+  if (topicMatch) {
+    return {
+      to: topicMatch[1],
+      threadId: Number.parseInt(topicMatch[2], 10),
+      chatType: "group" as const,
+    };
+  }
+  return {
+    to: trimmed,
+    chatType: "group" as const,
+  };
+}
+
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "topicchat",
+        source: "test",
+        plugin: createOutboundTestPlugin({
+          id: "topicchat",
+          outbound: { deliveryMode: "direct" },
+          messaging: {
+            parseExplicitTarget: ({ raw }) => parseTopicchatTargetForTest(raw),
+          },
+        }),
+      },
+    ]),
+  );
 });
 
 const slackThreadOrigin = {
@@ -191,6 +231,25 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
       resolveAnnounceOrigin(
         {
           lastChannel: "topicchat",
+          lastTo: "topicchat:room-a:topic:99",
+          lastThreadId: 99,
+        },
+        {
+          channel: "topicchat",
+          to: "group:room-a",
+        },
+      ),
+    ).toEqual({
+      channel: "topicchat",
+      to: "group:room-a",
+      threadId: 99,
+    });
+  });
+
+  it("preserves stored topic thread ids for legacy sessions without channel metadata", () => {
+    expect(
+      resolveAnnounceOrigin(
+        {
           lastTo: "topicchat:room-a:topic:99",
           lastThreadId: 99,
         },

@@ -221,4 +221,87 @@ describe("outbound channel resolution", () => {
     });
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(2);
   });
+
+  it("normalizes already-threaded targets before reusing them as currentChannelId", async () => {
+    getLoadedChannelPluginMock.mockReturnValue({
+      id: "alpha",
+      messaging: {
+        normalizeTarget: (raw: string) => (raw.startsWith("group:") ? `mock:${raw}` : raw),
+        parseExplicitTarget: ({ raw }: { raw: string }) => {
+          const threadMatch = /^mock:group:([^#]+)#(\d+)$/u.exec(raw);
+          if (threadMatch) {
+            return {
+              to: threadMatch[1],
+              threadId: Number.parseInt(threadMatch[2], 10),
+              chatType: "group" as const,
+            };
+          }
+          return {
+            to: raw,
+            chatType: "group" as const,
+          };
+        },
+      },
+    });
+    const channelResolution = await importChannelResolution("normalize-current-channel-target");
+
+    expect(
+      channelResolution.resolveOutboundCurrentChannelTarget({
+        channel: "alpha",
+        to: "group:room-a#42",
+        threadId: 42,
+        cfg: {} as never,
+      }),
+    ).toBe("mock:group:room-a#42");
+  });
+
+  it("preserves direct targets when threadId is present but the channel has no direct session-target builder", async () => {
+    getLoadedChannelPluginMock.mockReturnValue({
+      id: "alpha",
+      messaging: {
+        parseExplicitTarget: ({ raw }: { raw: string }) => ({
+          to: raw.replace(/^user:/u, ""),
+          chatType: "direct" as const,
+        }),
+        resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+      },
+    });
+    const channelResolution = await importChannelResolution("preserve-direct-current-channel-id");
+
+    expect(
+      channelResolution.resolveOutboundCurrentChannelTarget({
+        channel: "alpha",
+        to: "user:U123",
+        threadId: "stale-thread",
+        cfg: {} as never,
+      }),
+    ).toBe("user:U123");
+  });
+
+  it("falls back to the raw target when currentChannelId parsing throws", async () => {
+    getLoadedChannelPluginMock.mockReturnValue({
+      id: "alpha",
+      messaging: {
+        normalizeTarget: () => {
+          throw new Error("invalid");
+        },
+        parseExplicitTarget: () => ({
+          to: "unused",
+          chatType: "group" as const,
+        }),
+        resolveSessionTarget: ({ id, threadId }: { id: string; threadId?: string }) =>
+          `${id}#${threadId}`,
+      },
+    });
+    const channelResolution = await importChannelResolution("current-channel-id-throws");
+
+    expect(
+      channelResolution.resolveOutboundCurrentChannelTarget({
+        channel: "alpha",
+        to: "bad target",
+        threadId: 42,
+        cfg: {} as never,
+      }),
+    ).toBe("bad target");
+  });
 });

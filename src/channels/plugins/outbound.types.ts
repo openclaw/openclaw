@@ -130,7 +130,11 @@ export type ChannelOutboundAdapter = {
     kind: "tool" | "block" | "final";
     text?: string;
   }) => boolean;
+  /**
+   * @deprecated Use shouldPreferFinalAssistantVisibleText instead.
+   */
   preferFinalAssistantVisibleText?: boolean;
+  shouldPreferFinalAssistantVisibleText?: () => boolean;
   targetsMatchForReplySuppression?: (params: {
     originTarget: string;
     targetKey: string;

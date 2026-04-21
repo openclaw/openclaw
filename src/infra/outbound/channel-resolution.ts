@@ -1,7 +1,9 @@
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { resolveCurrentChannelTargetFromMessaging } from "../../channels/plugins/target-parsing.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -49,6 +51,31 @@ function resolveDirectFromActiveRegistry(
   return undefined;
 }
 
+function resolveOutboundChannelMessaging(params: {
+  channel?: string | null;
+  cfg?: OpenClawConfig;
+}) {
+  const normalized = normalizeOptionalString(params.channel);
+  if (!normalized) {
+    return undefined;
+  }
+  return resolveOutboundChannelPlugin({
+    channel: normalized,
+    cfg: params.cfg,
+  })?.messaging;
+}
+
+function resolveOutboundChannelAdapter(params: { channel?: string | null; cfg?: OpenClawConfig }) {
+  const normalized = normalizeOptionalString(params.channel);
+  if (!normalized) {
+    return undefined;
+  }
+  return resolveOutboundChannelPlugin({
+    channel: normalized,
+    cfg: params.cfg,
+  })?.outbound;
+}
+
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -71,4 +98,49 @@ export function resolveOutboundChannelPlugin(params: {
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
   return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
+}
+
+export function shouldOutboundChannelPreferFinalAssistantVisibleText(params: {
+  channel?: string | null;
+  cfg?: OpenClawConfig;
+}): boolean {
+  const normalized = normalizeOptionalString(params.channel);
+  if (!normalized) {
+    return false;
+  }
+  const outbound = resolveOutboundChannelAdapter(params);
+  return (
+    outbound?.shouldPreferFinalAssistantVisibleText?.() ??
+    outbound?.preferFinalAssistantVisibleText === true
+  );
+}
+
+export function resolveOutboundCurrentChannelTarget(params: {
+  channel?: string | null;
+  to?: string | null;
+  threadId?: string | number | null;
+  cfg?: OpenClawConfig;
+}): string | undefined {
+  const rawTarget = normalizeOptionalString(params.to);
+  if (!rawTarget) {
+    return undefined;
+  }
+  if (params.threadId == null) {
+    return rawTarget;
+  }
+
+  const normalizedChannel = normalizeOptionalString(params.channel);
+  if (!normalizedChannel) {
+    return rawTarget;
+  }
+  return (
+    resolveCurrentChannelTargetFromMessaging({
+      rawTarget,
+      threadId: params.threadId,
+      messaging: resolveOutboundChannelMessaging({
+        channel: normalizedChannel,
+        cfg: params.cfg,
+      }),
+    }) ?? rawTarget
+  );
 }
