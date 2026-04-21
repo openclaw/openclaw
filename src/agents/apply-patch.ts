@@ -11,7 +11,12 @@ import {
 } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
+import {
+  normalizeBoundaryRoots,
+  resolvePathFromInput,
+  resolvePathWithinRoots,
+  toRelativeSandboxPath,
+} from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -75,6 +80,7 @@ type SandboxApplyPatchConfig = {
 type ApplyPatchOptions = {
   cwd: string;
   sandbox?: SandboxApplyPatchConfig;
+  allowedRoots?: string[];
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
   signal?: AbortSignal;
@@ -87,10 +93,16 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    allowedRoots?: string[];
+    workspaceOnly?: boolean;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
+  const allowedRoots = options.allowedRoots;
   const workspaceOnly = options.workspaceOnly !== false;
 
   return {
@@ -114,6 +126,7 @@ export function createApplyPatchTool(
       const result = await applyPatch(input, {
         cwd,
         sandbox,
+        allowedRoots,
         workspaceOnly,
         signal,
       });
@@ -145,7 +158,6 @@ export async function applyPatch(
     modified: new Set<string>(),
     deleted: new Set<string>(),
   };
-  const fileOps = resolvePatchFileOps(options);
 
   for (const hunk of parsed.hunks) {
     if (options.signal?.aborted) {
@@ -156,32 +168,32 @@ export async function applyPatch(
 
     if (hunk.kind === "add") {
       const target = await resolvePatchPath(hunk.path, options);
-      await ensureDir(target.resolved, fileOps);
-      await fileOps.writeFile(target.resolved, hunk.contents);
+      await ensureDir(target, options);
+      await writeResolvedPatchFile(target, hunk.contents, options);
       recordSummary(summary, seen, "added", target.display);
       continue;
     }
 
     if (hunk.kind === "delete") {
       const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
-      await fileOps.remove(target.resolved);
+      await removeResolvedPatchFile(target, options);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
     const target = await resolvePatchPath(hunk.path, options);
     const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
-      readFile: (path) => fileOps.readFile(path),
+      readFile: async (_filePath) => await readResolvedPatchFile(target, options),
     });
 
     if (hunk.movePath) {
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
-      await ensureDir(moveTarget.resolved, fileOps);
-      await fileOps.writeFile(moveTarget.resolved, applied);
-      await fileOps.remove(target.resolved);
+      await ensureDir(moveTarget, options);
+      await writeResolvedPatchFile(moveTarget, applied, options);
+      await removeResolvedPatchFile(target, options);
       recordSummary(summary, seen, "modified", moveTarget.display);
     } else {
-      await fileOps.writeFile(target.resolved, applied);
+      await writeResolvedPatchFile(target, applied, options);
       recordSummary(summary, seen, "modified", target.display);
     }
   }
@@ -223,131 +235,196 @@ function formatSummary(summary: ApplyPatchSummary): string {
   return lines.join("\n");
 }
 
-type PatchFileOps = {
-  readFile: (filePath: string) => Promise<string>;
-  writeFile: (filePath: string, content: string) => Promise<void>;
-  remove: (filePath: string) => Promise<void>;
-  mkdirp: (dir: string) => Promise<void>;
+type ResolvedPatchTarget = {
+  resolved: string;
+  display: string;
+  boundaryRoot?: string;
 };
 
-function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
-  if (options.sandbox) {
-    const { root, bridge } = options.sandbox;
-    return {
-      readFile: async (filePath) => {
-        const buf = await bridge.readFile({ filePath, cwd: root });
-        return buf.toString("utf8");
-      },
-      writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
-      remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
-      mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
-    };
-  }
-  const workspaceOnly = options.workspaceOnly !== false;
-  return {
-    readFile: async (filePath) => {
-      if (!workspaceOnly) {
-        return await fs.readFile(filePath, "utf8");
-      }
-      const opened = await openBoundaryFile({
-        absolutePath: filePath,
-        rootPath: options.cwd,
-        boundaryLabel: "workspace root",
-      });
-      assertBoundaryRead(opened, filePath);
-      try {
-        return syncFs.readFileSync(opened.fd, "utf8");
-      } finally {
-        syncFs.closeSync(opened.fd);
-      }
-    },
-    writeFile: async (filePath, content) => {
-      if (!workspaceOnly) {
-        await fs.writeFile(filePath, content, "utf8");
-        return;
-      }
-      const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await writeFileWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-        data: content,
-        encoding: "utf8",
-      });
-    },
-    remove: async (filePath) => {
-      if (!workspaceOnly) {
-        await fs.rm(filePath);
-        return;
-      }
-      const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await removePathWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-      });
-    },
-    mkdirp: async (dir) => {
-      if (!workspaceOnly) {
-        await fs.mkdir(dir, { recursive: true });
-        return;
-      }
-      const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
-      await mkdirPathWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-        allowRoot: true,
-      });
-    },
-  };
-}
-
-async function ensureDir(filePath: string, ops: PatchFileOps) {
-  const parent = path.dirname(filePath);
+async function ensureDir(target: ResolvedPatchTarget, options: ApplyPatchOptions) {
+  const parent = path.dirname(target.resolved);
   if (!parent || parent === ".") {
     return;
   }
-  await ops.mkdirp(parent);
+  if (options.sandbox) {
+    await options.sandbox.bridge.mkdirp({ filePath: parent, cwd: options.sandbox.root });
+    return;
+  }
+  if (options.workspaceOnly === false) {
+    await fs.mkdir(parent, { recursive: true });
+    return;
+  }
+  const boundaryRoot = target.boundaryRoot ?? options.cwd;
+  const relative = toRelativeSandboxPath(boundaryRoot, parent, { allowRoot: true });
+  await mkdirPathWithinRoot({
+    rootDir: boundaryRoot,
+    relativePath: relative,
+    allowRoot: true,
+  });
+}
+
+async function readResolvedPatchFile(
+  target: ResolvedPatchTarget,
+  options: ApplyPatchOptions,
+): Promise<string> {
+  if (options.sandbox) {
+    const buf = await options.sandbox.bridge.readFile({
+      filePath: target.resolved,
+      cwd: options.sandbox.root,
+    });
+    return buf.toString("utf8");
+  }
+  if (options.workspaceOnly === false) {
+    return await fs.readFile(target.resolved, "utf8");
+  }
+  const boundaryRoot = target.boundaryRoot ?? options.cwd;
+  const opened = await openBoundaryFile({
+    absolutePath: target.resolved,
+    rootPath: boundaryRoot,
+    boundaryLabel: "workspace root",
+  });
+  assertBoundaryRead(opened, target.resolved);
+  try {
+    return syncFs.readFileSync(opened.fd, "utf8");
+  } finally {
+    syncFs.closeSync(opened.fd);
+  }
+}
+
+async function writeResolvedPatchFile(
+  target: ResolvedPatchTarget,
+  content: string,
+  options: ApplyPatchOptions,
+) {
+  if (options.sandbox) {
+    await options.sandbox.bridge.writeFile({
+      filePath: target.resolved,
+      cwd: options.sandbox.root,
+      data: content,
+    });
+    return;
+  }
+  if (options.workspaceOnly === false) {
+    await fs.writeFile(target.resolved, content, "utf8");
+    return;
+  }
+  const boundaryRoot = target.boundaryRoot ?? options.cwd;
+  const relative = toRelativeSandboxPath(boundaryRoot, target.resolved);
+  await writeFileWithinRoot({
+    rootDir: boundaryRoot,
+    relativePath: relative,
+    data: content,
+    encoding: "utf8",
+  });
+}
+
+async function removeResolvedPatchFile(target: ResolvedPatchTarget, options: ApplyPatchOptions) {
+  if (options.sandbox) {
+    await options.sandbox.bridge.remove({
+      filePath: target.resolved,
+      cwd: options.sandbox.root,
+      force: false,
+    });
+    return;
+  }
+  if (options.workspaceOnly !== false) {
+    const boundaryRoot = target.boundaryRoot ?? options.cwd;
+    const relative = toRelativeSandboxPath(boundaryRoot, target.resolved);
+    await removePathWithinRoot({
+      rootDir: boundaryRoot,
+      relativePath: relative,
+    });
+    return;
+  }
+  await fs.rm(target.resolved);
 }
 
 async function resolvePatchPath(
   filePath: string,
   options: ApplyPatchOptions,
   aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
-): Promise<{ resolved: string; display: string }> {
+): Promise<ResolvedPatchTarget> {
+  const allowedRoots = normalizeBoundaryRoots([options.cwd, ...(options.allowedRoots ?? [])]);
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,
       cwd: options.cwd,
     });
     if (options.workspaceOnly !== false && resolved.hostPath) {
-      await assertSandboxPath({
-        filePath: resolved.hostPath,
-        cwd: options.cwd,
-        root: options.cwd,
-        allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
-        allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
-      });
-    }
-    return {
-      resolved: resolved.hostPath ?? resolved.containerPath,
-      display: resolved.relativePath || resolved.containerPath,
-    };
-  }
-
-  const workspaceOnly = options.workspaceOnly !== false;
-  const resolved = workspaceOnly
-    ? (
+      if (allowedRoots.length <= 1) {
         await assertSandboxPath({
-          filePath,
+          filePath: resolved.hostPath,
           cwd: options.cwd,
           root: options.cwd,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
-        })
-      ).resolved
-    : resolvePathFromInput(filePath, options.cwd);
+        });
+      } else {
+        const match = resolvePathWithinRoots(allowedRoots, resolved.hostPath, {
+          cwd: options.cwd,
+          boundaryLabel: "allowed work roots",
+        });
+        await assertSandboxPath({
+          filePath: match.resolved,
+          cwd: match.root,
+          root: match.root,
+          allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+          allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
+        });
+        return {
+          resolved: match.resolved,
+          display: resolved.relativePath || resolved.containerPath,
+          boundaryRoot: match.root,
+        };
+      }
+    }
+    return {
+      resolved: resolved.hostPath ?? resolved.containerPath,
+      display: resolved.relativePath || resolved.containerPath,
+      boundaryRoot:
+        options.workspaceOnly !== false && resolved.hostPath ? allowedRoots[0] : undefined,
+    };
+  }
+
+  const workspaceOnly = options.workspaceOnly !== false;
+  if (!workspaceOnly) {
+    const resolved = resolvePathFromInput(filePath, options.cwd);
+    return {
+      resolved,
+      display: toDisplayPath(resolved, options.cwd),
+    };
+  }
+  if (allowedRoots.length <= 1) {
+    const resolved = (
+      await assertSandboxPath({
+        filePath,
+        cwd: options.cwd,
+        root: options.cwd,
+        allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+        allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
+      })
+    ).resolved;
+    return {
+      resolved,
+      display: toDisplayPath(resolved, options.cwd),
+      boundaryRoot: allowedRoots[0],
+    };
+  }
+  const match = resolvePathWithinRoots(allowedRoots, filePath, {
+    cwd: options.cwd,
+    boundaryLabel: "allowed work roots",
+  });
+  await assertSandboxPath({
+    filePath: match.resolved,
+    cwd: match.root,
+    root: match.root,
+    allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+    allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
+  });
   return {
-    resolved,
-    display: toDisplayPath(resolved, options.cwd),
+    resolved: match.resolved,
+    display: toDisplayPath(match.resolved, options.cwd),
+    boundaryRoot: match.root,
   };
 }
 

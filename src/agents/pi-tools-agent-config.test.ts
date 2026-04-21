@@ -233,6 +233,55 @@ describe("Agent-specific tool filtering", () => {
     );
   });
 
+  it("allows apply_patch inside includedWorkDirs when workspace-only is enabled", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-apply-patch-ws-"));
+    const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-apply-patch-extra-"));
+    const target = path.join(includedDir, "included.txt");
+    const relativeTarget = path.relative(workspaceDir, target);
+
+    try {
+      const cfg: OpenClawConfig = {
+        tools: {
+          allow: ["read", "write", "exec"],
+          fs: { workspaceOnly: true },
+          exec: {
+            applyPatch: {
+              enabled: true,
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "main", workspace: workspaceDir, includedWorkDirs: [includedDir] }],
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        agentDir: "/tmp/agent",
+        modelProvider: "openai",
+        modelId: "gpt-5.2",
+      });
+
+      const applyPatchTool = tools.find((candidate) => candidate.name === "apply_patch");
+      if (!applyPatchTool) {
+        throw new Error("apply_patch tool missing");
+      }
+
+      const patch = `*** Begin Patch
+*** Add File: ${relativeTarget}
++included
+*** End Patch`;
+
+      await applyPatchTool.execute("tc-included", { input: patch });
+      expect(await fs.readFile(target, "utf8")).toBe("included\n");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(includedDir, { recursive: true, force: true });
+    }
+  });
+
   it("should apply agent-specific tool policy", () => {
     const cfg: OpenClawConfig = {
       tools: {

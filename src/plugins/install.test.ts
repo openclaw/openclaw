@@ -4,6 +4,7 @@ import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { clearSkillScanCacheForTest } from "../security/skill-scanner.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import { expectInstallUsesIgnoreScripts } from "../test-utils/npm-spec-install-test-helpers.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
@@ -562,6 +563,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetGlobalHookRunner();
+  clearSkillScanCacheForTest();
   vi.clearAllMocks();
   const run = vi.mocked(runCommandWithTimeout);
   run.mockReset();

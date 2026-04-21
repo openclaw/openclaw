@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  createRebindableDirectoryAlias,
+  withRealpathSymlinkRebindRace,
+} from "../test-utils/symlink-rebind-race.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/pi-tools-fs-helpers.js";
@@ -218,6 +222,125 @@ describe("workspace path resolution", () => {
       }
     });
   });
+
+  it("allows includedWorkDirs when workspaceOnly is enabled", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-extra-", async (includedDir) => {
+        const cfg: OpenClawConfig = {
+          tools: { fs: { workspaceOnly: true } },
+          agents: {
+            list: [{ id: "main", workspace: workspaceDir, includedWorkDirs: [includedDir] }],
+          },
+        };
+        const tools = createOpenClawCodingTools({
+          config: cfg,
+          sessionKey: "agent:main:main",
+          workspaceDir,
+        });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+        const target = path.join(includedDir, "included.txt");
+        await fs.writeFile(target, "hello world", "utf8");
+
+        const readResult = await readTool.execute("included-read", { path: target });
+        expect(getTextContent(readResult)).toContain("hello world");
+
+        await writeTool.execute("included-write", {
+          path: target,
+          content: "hello openclaw",
+        });
+        expect(await fs.readFile(target, "utf8")).toBe("hello openclaw");
+
+        await editTool.execute("included-edit", {
+          path: target,
+          edits: [{ oldText: "openclaw", newText: "workflow" }],
+        });
+        expect(await fs.readFile(target, "utf8")).toBe("hello workflow");
+      });
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps includedWorkDirs writes and edits pinned when an alias is rebound after validation",
+    async () => {
+      await withTempDir("openclaw-ws-", async (workspaceDir) => {
+        await withTempDir("openclaw-extra-", async (includedDir) => {
+          const inside = path.join(includedDir, "inside");
+          const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extra-outside-"));
+          const slot = path.join(includedDir, "slot");
+          const insideTarget = path.join(inside, "safe.txt");
+          const outsideTarget = path.join(outside, "safe.txt");
+          await fs.mkdir(inside, { recursive: true });
+          await fs.writeFile(insideTarget, "safe\n", "utf8");
+          await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          await createRebindableDirectoryAlias({
+            aliasPath: slot,
+            targetPath: inside,
+          });
+
+          const cfg: OpenClawConfig = {
+            tools: { fs: { workspaceOnly: true } },
+            agents: {
+              list: [{ id: "main", workspace: workspaceDir, includedWorkDirs: [includedDir] }],
+            },
+          };
+          const tools = createOpenClawCodingTools({
+            config: cfg,
+            sessionKey: "agent:main:main",
+            workspaceDir,
+          });
+          const { writeTool, editTool } = expectReadWriteEditTools(tools);
+          const target = path.join(slot, "safe.txt");
+
+          try {
+            await withRealpathSymlinkRebindRace({
+              shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "safe.txt")),
+              symlinkPath: slot,
+              symlinkTarget: outside,
+              timing: "after-realpath",
+              run: async () => {
+                await expect(
+                  writeTool.execute("included-write-race", {
+                    path: target,
+                    content: "mutated\n",
+                  }),
+                ).rejects.toThrow(
+                  /allowed work roots|workspace root|outside|under root|sandbox|path alias escape blocked/i,
+                );
+              },
+            });
+            expect(await fs.readFile(outsideTarget, "utf8")).toBe("outside\n");
+            expect(await fs.readFile(insideTarget, "utf8")).toBe("safe\n");
+
+            await createRebindableDirectoryAlias({
+              aliasPath: slot,
+              targetPath: inside,
+            });
+            await withRealpathSymlinkRebindRace({
+              shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "safe.txt")),
+              symlinkPath: slot,
+              symlinkTarget: outside,
+              timing: "after-realpath",
+              run: async () => {
+                await expect(
+                  editTool.execute("included-edit-race", {
+                    path: target,
+                    edits: [{ oldText: "safe", newText: "mutated" }],
+                  }),
+                ).rejects.toThrow(
+                  /allowed work roots|workspace root|outside|under root|sandbox|path alias escape blocked/i,
+                );
+              },
+            });
+            expect(await fs.readFile(outsideTarget, "utf8")).toBe("outside\n");
+            expect(await fs.readFile(insideTarget, "utf8")).toBe("safe\n");
+          } finally {
+            await fs.rm(outside, { recursive: true, force: true });
+          }
+        });
+      });
+    },
+  );
 });
 
 describe("sandboxed workspace paths", () => {

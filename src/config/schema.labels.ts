@@ -55,6 +55,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
   "agents.list.*.identity.avatar": "Identity Avatar",
   "agents.list.*.skills": "Agent Skill Filter",
+  "agents.list[].includedWorkDirs": "Agent Included Work Dirs",
   "agents.list[].runtime": "Agent Runtime",
   "agents.list[].runtime.type": "Agent Runtime Type",
   "agents.list[].runtime.acp": "Agent ACP Runtime",
@@ -349,7 +350,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "broadcast.*": "Broadcast Destination List",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
-  "agents.defaults.skills": "Skills",
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.contextInjection": "Context Injection",
@@ -811,6 +811,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.mattermost.oncharPrefixes": "Mattermost Onchar Prefixes",
   "channels.mattermost.requireMention": "Mattermost Require Mention",
   "agents.list[].skills": "Agent Skill Filter",
+  "agents.defaults.skills": "Default Agent Skill Filter",
   "agents.list[].identity.avatar": "Agent Avatar",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",

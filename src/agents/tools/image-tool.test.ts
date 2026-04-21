@@ -24,6 +24,7 @@ type MockOpenClawToolsOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  includedWorkDirs?: string[];
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
@@ -150,6 +151,7 @@ vi.mock("../openclaw-tools.js", async () => {
         config: options?.config,
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
+        includedWorkDirs: options?.includedWorkDirs,
         sandbox:
           options?.sandboxRoot && options?.sandboxFsBridge
             ? {
@@ -1072,6 +1074,32 @@ describe("image tool implicit imageModel config", () => {
         expect(fetch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows includedWorkDirs for non-sandbox image paths when workspaceOnly is enabled", async () => {
+    const fetch = stubMinimaxOkFetch();
+    await withTempAgentDir(async (agentDir) => {
+      const cfg = createMinimaxImageConfig();
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-ws-"));
+      const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-extra-"));
+      const includedImage = path.join(includedDir, "secret.png");
+      await fs.writeFile(includedImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          workspaceDir,
+          includedWorkDirs: [includedDir],
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, includedImage);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(includedDir, { recursive: true, force: true });
       }
     });
   });

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeBoundaryRoots, resolvePathWithinRoots } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -6,6 +7,7 @@ export type SandboxedBridgeMediaPathConfig = {
   root: string;
   bridge: SandboxFsBridge;
   workspaceOnly?: boolean;
+  allowedRoots?: string[];
 };
 
 export function createSandboxBridgeReadFile(params: {
@@ -26,14 +28,30 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   const normalizeFileUrl = (rawPath: string) =>
     rawPath.startsWith("file://") ? rawPath.slice("file://".length) : rawPath;
   const filePath = normalizeFileUrl(params.mediaPath);
+  const allowedRoots = normalizeBoundaryRoots([
+    params.sandbox.root,
+    ...(params.sandbox.allowedRoots ?? []),
+  ]);
   const enforceWorkspaceBoundary = async (hostPath: string) => {
     if (!params.sandbox.workspaceOnly) {
       return;
     }
-    await assertSandboxPath({
-      filePath: hostPath,
+    if (allowedRoots.length <= 1) {
+      await assertSandboxPath({
+        filePath: hostPath,
+        cwd: params.sandbox.root,
+        root: params.sandbox.root,
+      });
+      return;
+    }
+    const match = resolvePathWithinRoots(allowedRoots, hostPath, {
       cwd: params.sandbox.root,
-      root: params.sandbox.root,
+      boundaryLabel: "allowed work roots",
+    });
+    await assertSandboxPath({
+      filePath: match.resolved,
+      cwd: match.root,
+      root: match.root,
     });
   };
 

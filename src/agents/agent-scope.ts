@@ -44,7 +44,6 @@ function stripNullBytes(s: string): string {
 }
 
 export { resolveAgentIdFromSessionKey };
-
 export function resolveSessionAgentIds(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
@@ -176,6 +175,29 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
+export function resolveAgentIncludedWorkDirs(cfg: OpenClawConfig, agentId: string): string[] {
+  const id = normalizeAgentId(agentId);
+  const configured = resolveAgentConfig(cfg, id)?.includedWorkDirs;
+  if (!Array.isArray(configured)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const included: string[] = [];
+  for (const entry of configured) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const resolved = path.resolve(stripNullBytes(resolveUserPath(trimmed)));
+    const key = normalizePathForComparison(resolved);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    included.push(resolved);
+  }
+  return included;
+}
 function normalizePathForComparison(input: string): string {
   const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
   let normalized = resolved;
@@ -203,19 +225,31 @@ export function resolveAgentIdsByWorkspacePath(
 ): string[] {
   const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
   const ids = listAgentIds(cfg);
-  const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
+  const matches: Array<{ id: string; rootDir: string; order: number }> = [];
 
   for (let index = 0; index < ids.length; index += 1) {
     const id = ids[index];
-    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
-    if (!isPathWithinRoot(normalizedWorkspacePath, workspaceDir)) {
+    const candidateRoots = [
+      resolveAgentWorkspaceDir(cfg, id),
+      ...resolveAgentIncludedWorkDirs(cfg, id),
+    ].map((root) => normalizePathForComparison(root));
+    let bestRoot: string | undefined;
+    for (const rootDir of candidateRoots) {
+      if (!isPathWithinRoot(normalizedWorkspacePath, rootDir)) {
+        continue;
+      }
+      if (!bestRoot || rootDir.length > bestRoot.length) {
+        bestRoot = rootDir;
+      }
+    }
+    if (!bestRoot) {
       continue;
     }
-    matches.push({ id, workspaceDir, order: index });
+    matches.push({ id, rootDir: bestRoot, order: index });
   }
 
   matches.sort((left, right) => {
-    const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
+    const workspaceLengthDelta = right.rootDir.length - left.rootDir.length;
     if (workspaceLengthDelta !== 0) {
       return workspaceLengthDelta;
     }

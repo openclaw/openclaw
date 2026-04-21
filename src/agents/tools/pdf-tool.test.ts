@@ -182,6 +182,38 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("allows includedWorkDirs for non-sandbox pdf paths when workspaceOnly is enabled", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
+      const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-extra-"));
+      try {
+        const { loadSpy } = await stubPdfToolInfra(agentDir, { modelFound: false });
+        const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+        const tool = requirePdfTool(
+          createPdfTool({
+            config: cfg,
+            agentDir,
+            workspaceDir,
+            includedWorkDirs: [includedDir],
+            fsPolicy: { workspaceOnly: true },
+          }),
+        );
+
+        const includedPdf = path.join(includedDir, "included.pdf");
+        await fs.writeFile(includedPdf, "%PDF-1.4 fake");
+
+        await expect(
+          tool.execute("t-included", { prompt: "test", pdf: includedPdf }),
+        ).rejects.toThrow(/Unknown model/i);
+        expect(loadSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(includedDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("rejects unsupported scheme references", async () => {
     await withConfiguredPdfTool(async (tool) => {
       const result = await tool.execute("t1", {

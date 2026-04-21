@@ -39,6 +39,7 @@ describe("normalizeConfigPaths", () => {
             {
               id: "main",
               workspace: "~/ws-agent",
+              includedWorkDirs: ["~/repo-a", "~/repo-b"],
               agentDir: "~/.openclaw/agents/main",
               identity: {
                 name: "~not-a-path",
@@ -65,6 +66,10 @@ describe("normalizeConfigPaths", () => {
       );
       expect(cfg.agents?.defaults?.workspace).toBe(path.join(home, "ws-default"));
       expect(cfg.agents?.list?.[0]?.workspace).toBe(path.join(home, "ws-agent"));
+      expect(cfg.agents?.list?.[0]?.includedWorkDirs).toEqual([
+        path.join(home, "repo-a"),
+        path.join(home, "repo-b"),
+      ]);
       expect(cfg.agents?.list?.[0]?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main"));
       expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(path.join(home, "sandbox-root"));
 

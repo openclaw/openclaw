@@ -459,6 +459,29 @@ describe("applyPatch", () => {
     });
   });
 
+  it("allows writes into explicitly allowed roots", async () => {
+    await withTempDir(async (dir) => {
+      const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-allowed-"));
+      const allowedPath = path.join(includedDir, "allowed.txt");
+      const relativeAllowed = path.relative(dir, allowedPath);
+      const patch = `*** Begin Patch
+*** Add File: ${relativeAllowed}
++allowed
+*** End Patch`;
+
+      try {
+        const result = await applyPatch(patch, {
+          cwd: dir,
+          allowedRoots: [includedDir],
+        });
+        expect(result.summary.added).toEqual([allowedPath]);
+        expect(await fs.readFile(allowedPath, "utf8")).toBe("allowed\n");
+      } finally {
+        await fs.rm(includedDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
@@ -563,6 +586,105 @@ describe("applyPatch", () => {
             code: "ENOENT",
           });
         } finally {
+          await fs.rm(outside, { recursive: true, force: true });
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps allowed-root deletes pinned when a validated alias is rebound afterward",
+    async () => {
+      await withTempDir(async (dir) => {
+        const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-allowed-"));
+        const inside = path.join(includedDir, "inside");
+        const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-outside-"));
+        const slot = path.join(includedDir, "slot");
+        await fs.mkdir(inside, { recursive: true });
+        await fs.writeFile(path.join(inside, "target.txt"), "inside\n", "utf8");
+        const outsideTarget = path.join(outside, "target.txt");
+        await fs.writeFile(outsideTarget, "outside\n", "utf8");
+        await createRebindableDirectoryAlias({
+          aliasPath: slot,
+          targetPath: inside,
+        });
+
+        const patch = `*** Begin Patch
+*** Delete File: ${path.relative(dir, path.join(slot, "target.txt"))}
+*** End Patch`;
+
+        try {
+          await withRealpathSymlinkRebindRace({
+            shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
+            symlinkPath: slot,
+            symlinkTarget: outside,
+            timing: "after-realpath",
+            run: async () => {
+              await expect(
+                applyPatch(patch, {
+                  cwd: dir,
+                  allowedRoots: [includedDir],
+                }),
+              ).rejects.toThrow(
+                /under root|outside workspace|invalid path|symlink|sandbox|path alias escape blocked/i,
+              );
+            },
+          });
+          await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside\n");
+          await expect(fs.readFile(path.join(inside, "target.txt"), "utf8")).resolves.toBe(
+            "inside\n",
+          );
+        } finally {
+          await fs.rm(includedDir, { recursive: true, force: true });
+          await fs.rm(outside, { recursive: true, force: true });
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps allowed-root mkdir pinned when a validated alias is rebound afterward",
+    async () => {
+      await withTempDir(async (dir) => {
+        const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-allowed-"));
+        const inside = path.join(includedDir, "inside");
+        const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-outside-"));
+        const slot = path.join(includedDir, "slot");
+        await fs.mkdir(inside, { recursive: true });
+        await createRebindableDirectoryAlias({
+          aliasPath: slot,
+          targetPath: inside,
+        });
+
+        const relativeTarget = path.relative(dir, path.join(slot, "nested", "deep", "file.txt"));
+        const patch = `*** Begin Patch
+*** Add File: ${relativeTarget}
++safe
+*** End Patch`;
+
+        try {
+          await withRealpathSymlinkRebindRace({
+            shouldFlip: (realpathInput) =>
+              realpathInput.endsWith(path.join("slot", "nested", "deep", "file.txt")),
+            symlinkPath: slot,
+            symlinkTarget: outside,
+            timing: "after-realpath",
+            run: async () => {
+              await expect(
+                applyPatch(patch, {
+                  cwd: dir,
+                  allowedRoots: [includedDir],
+                }),
+              ).rejects.toThrow(
+                /under root|outside workspace|invalid path|symlink|sandbox|path alias escape blocked/i,
+              );
+            },
+          });
+          await expect(fs.stat(path.join(outside, "nested"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        } finally {
+          await fs.rm(includedDir, { recursive: true, force: true });
           await fs.rm(outside, { recursive: true, force: true });
         }
       });

@@ -72,6 +72,8 @@ export type AgentConfig = {
   default?: boolean;
   name?: string;
   workspace?: string;
+  /** Optional additional work directories available to this agent. */
+  includedWorkDirs?: string[];
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */
   systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];

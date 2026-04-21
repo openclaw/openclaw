@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "./types.js";
 const PATH_VALUE_RE = /^~(?=$|[\\/])/;
 
 const PATH_KEY_RE = /(dir|path|paths|file|root|workspace)$/i;
-const PATH_LIST_KEYS = new Set(["paths", "pathPrepend"]);
+const PATH_LIST_KEYS = new Set(["includedWorkDirs", "paths", "pathPrepend"]);
 
 function normalizeStringValue(key: string | undefined, value: string): string {
   if (!PATH_VALUE_RE.test(value.trim())) {
