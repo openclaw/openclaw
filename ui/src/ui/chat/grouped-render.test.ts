@@ -1598,4 +1598,58 @@ describe("grouped chat rendering", () => {
       }),
     );
   });
+
+  it("keeps structured streaming assistant messages with their message payload", () => {
+    const streamMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Reasoning:\nInspecting state" },
+        { type: "text", text: "Structured reply" },
+      ],
+      timestamp: 1,
+    };
+
+    const items = buildChatItems({
+      sessionKey: "main",
+      messages: [],
+      toolMessages: [],
+      streamSegments: [],
+      stream: streamMessage,
+      streamStartedAt: 1,
+      showToolCalls: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      message: streamMessage,
+      text: "Structured reply",
+    });
+  });
+
+  it("adds thinking-only streaming assistant messages to the timeline", () => {
+    const streamMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "Reasoning:\nCalculating simple arithmetic" }],
+      timestamp: 1,
+    };
+
+    const items = buildChatItems({
+      sessionKey: "main",
+      messages: [],
+      toolMessages: [],
+      streamSegments: [],
+      stream: streamMessage,
+      streamStartedAt: 1,
+      showToolCalls: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      message: streamMessage,
+      text: "",
+    });
+  });
+
 });

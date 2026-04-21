@@ -11,8 +11,8 @@ export type BuildChatItemsProps = {
   sessionKey: string;
   messages: unknown[];
   toolMessages: unknown[];
-  streamSegments: Array<{ text: string; ts: number }>;
-  stream: string | null;
+  streamSegments: Array<{ text: string; ts: number; message?: unknown }>;
+  stream: string | Record<string, unknown> | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
   searchOpen?: boolean;
@@ -278,11 +278,15 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
   for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length && segments[i].text.trim().length > 0) {
+    if (
+      i < segments.length &&
+      (segments[i].text.trim().length > 0 || Boolean(segments[i].message))
+    ) {
       items.push({
         kind: "stream",
         key: `stream-seg:${props.sessionKey}:${i}`,
         text: segments[i].text,
+        ...(segments[i].message ? { message: segments[i].message } : {}),
         startedAt: segments[i].ts,
       });
     }
@@ -297,11 +301,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    const hasStreamText = typeof props.stream === "string" && props.stream.trim().length > 0;
+    const hasStreamMessage = !!props.stream && typeof props.stream === "object";
+    if (hasStreamText || hasStreamMessage) {
       items.push({
         kind: "stream",
         key,
-        text: props.stream,
+        text: typeof props.stream === "string" ? props.stream : extractTextCached(props.stream) ?? "",
+        ...(hasStreamMessage ? { message: props.stream } : {}),
         startedAt: props.streamStartedAt ?? Date.now(),
       });
     } else {

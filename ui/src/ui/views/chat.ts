@@ -193,6 +193,13 @@ export function resetChatViewState() {
 
 export const cleanupChatModuleState = resetChatViewState;
 
+export function resolveStreamingReasoningLevel(
+  sessionReasoningLevel: string | null | undefined,
+  thinkingLevel: string | null | undefined,
+): string {
+  return sessionReasoningLevel ?? thinkingLevel ?? "off";
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
@@ -793,7 +800,10 @@ export function renderChat(props: ChatProps) {
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
+  const reasoningLevel = resolveStreamingReasoningLevel(
+    activeSession?.reasoningLevel,
+    props.thinkingLevel,
+  );
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
