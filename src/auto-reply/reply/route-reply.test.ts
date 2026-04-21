@@ -169,7 +169,11 @@ describe("routeReply", () => {
       ]),
     );
     mocks.deliverOutboundPayloads.mockReset();
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.deliverOutboundPayloads.mockResolvedValue({
+      results: [],
+      cancelledCount: 0,
+      allCancelledByHook: false,
+    });
   });
 
   afterEach(() => {

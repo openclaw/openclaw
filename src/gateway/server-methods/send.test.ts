@@ -188,7 +188,11 @@ function expectDeliverySessionMirror(params: { agentId: string; sessionKey: stri
 }
 
 function mockDeliverySuccess(messageId: string) {
-  mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
+  mocks.deliverOutboundPayloads.mockResolvedValue({
+    results: [{ messageId, channel: "slack" }],
+    cancelledCount: 0,
+    allCancelledByHook: false,
+  });
 }
 
 describe("gateway send mirroring", () => {
@@ -540,7 +544,11 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not mirror when delivery returns no results", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.deliverOutboundPayloads.mockResolvedValue({
+      results: [],
+      cancelledCount: 0,
+      allCancelledByHook: false,
+    });
 
     await runSend({
       to: "channel:C1",
@@ -845,9 +853,11 @@ describe("gateway send mirroring", () => {
 
   it("recovers cold plugin resolution for threaded sends", async () => {
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "123" });
-    mocks.deliverOutboundPayloads.mockResolvedValue([
-      { messageId: "m-threaded", channel: "slack" },
-    ]);
+    mocks.deliverOutboundPayloads.mockResolvedValue({
+      results: [{ messageId: "m-threaded", channel: "slack" }],
+      cancelledCount: 0,
+      allCancelledByHook: false,
+    });
     const outboundPlugin = { outbound: { sendPoll: mocks.sendPoll } };
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)

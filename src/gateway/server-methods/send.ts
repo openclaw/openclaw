@@ -509,7 +509,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId: effectiveAgentId,
           sessionKey: outboundSessionKey,
         });
-        const results = await deliverOutboundPayloads({
+        const { results, allCancelledByHook } = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
           to: deliveryTarget,
@@ -530,6 +530,22 @@ export const sendHandlers: GatewayRequestHandlers = {
               }
             : undefined,
         });
+
+        if (allCancelledByHook) {
+          // Hook cancellation is intentional policy, not a transport failure — surface
+          // as a successful no-op so gateway callers can distinguish it from UNAVAILABLE (#57766).
+          const payload: Record<string, unknown> = {
+            runId: idem,
+            channel,
+            cancelledByHook: true,
+          };
+          cacheGatewayDedupeSuccess({ context, dedupeKey, payload });
+          return {
+            ok: true,
+            payload,
+            meta: { channel, cancelledByHook: true },
+          };
+        }
 
         const result = results.at(-1);
         if (!result) {

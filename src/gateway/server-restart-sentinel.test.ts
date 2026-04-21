@@ -38,7 +38,11 @@ const mocks = vi.hoisted(() => ({
     ok: true as const,
     to: "+15550002",
   })),
-  deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
+  deliverOutboundPayloads: vi.fn(async () => ({
+    results: [{ channel: "whatsapp", messageId: "msg-1" }],
+    cancelledCount: 0,
+    allCancelledByHook: false,
+  })),
   enqueueDelivery: vi.fn(async () => "queue-1"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
@@ -156,7 +160,11 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.resolveOutboundTarget.mockReset();
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "+15550002" });
     mocks.deliverOutboundPayloads.mockReset();
-    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]);
+    mocks.deliverOutboundPayloads.mockResolvedValue({
+      results: [{ channel: "whatsapp", messageId: "msg-1" }],
+      cancelledCount: 0,
+      allCancelledByHook: false,
+    });
     mocks.enqueueDelivery.mockReset();
     mocks.enqueueDelivery.mockResolvedValue("queue-1");
     mocks.ackDelivery.mockClear();
@@ -208,7 +216,11 @@ describe("scheduleRestartSentinelWake", () => {
     vi.useFakeTimers();
     mocks.deliverOutboundPayloads
       .mockRejectedValueOnce(new Error("transport not ready"))
-      .mockResolvedValueOnce([{ channel: "whatsapp", messageId: "msg-2" }]);
+      .mockResolvedValueOnce({
+        results: [{ channel: "whatsapp", messageId: "msg-2" }],
+        cancelledCount: 0,
+        allCancelledByHook: false,
+      });
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
     await Promise.resolve();
