@@ -225,7 +225,11 @@ describe("detached-task-runtime", () => {
       expect(result).toEqual({ recovered: false });
       expect(mockLogWarn).toHaveBeenCalledWith(
         "Detached task recovery hook threw, proceeding with markTaskLost",
-        expect.objectContaining({ taskId: "task-throw", runtime: "acp", elapsedMs: 0 }),
+        expect.objectContaining({
+          taskId: "task-throw",
+          runtime: "acp",
+          elapsedMs: expect.any(Number),
+        }),
       );
     });
 

@@ -346,6 +346,49 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("allows webchat pure-image turns when image content is carried outside MediaPath", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        JSON.stringify({ provider: "webchat", chat_id: "webchat:local" }, null, 2),
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        opts: {
+          images: [
+            {
+              type: "input_image",
+              image_url: "data:image/png;base64,AAAA",
+            },
+          ] as never,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.prompt).toContain("webchat:local");
+    expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPreparedReply(
       baseParams({

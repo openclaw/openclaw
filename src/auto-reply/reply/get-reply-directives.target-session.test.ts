@@ -89,6 +89,7 @@ function parseInlineDirectivesForTest(body: string) {
 async function resolveHelloWithModelDefaults(params: {
   defaultThinking: "off" | "low";
   defaultReasoning: "on";
+  sessionEntry?: SessionEntry;
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
@@ -119,7 +120,7 @@ async function resolveHelloWithModelDefaults(params: {
       CommandBody: "hello",
       Provider: "whatsapp",
     } as TemplateContext,
-    sessionEntry: makeSessionEntry(),
+    sessionEntry: params.sessionEntry ?? makeSessionEntry(),
     sessionStore: {},
     sessionKey: "agent:main:whatsapp:+2000",
     storePath: "/tmp/sessions.json",
@@ -425,6 +426,23 @@ describe("resolveReplyDirectives", () => {
       }),
     });
     expect(resolveDefaultReasoningLevel).toHaveBeenCalledOnce();
+  });
+
+  it("does not re-enable model reasoning when thinking was explicitly disabled", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: makeSessionEntry({ thinkingLevel: "off" }),
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedThinkLevel: "off",
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
   });
 
   it("skips the model reasoning default when thinking is active", async () => {
