@@ -359,6 +359,21 @@ const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
     sessionKey: params.sessionKey,
   });
 
+const invokeAgentsListBearer = async () =>
+  await postToolsInvoke({
+    port: sharedPort,
+    headers: {
+      authorization: "Bearer secret",
+      "content-type": "application/json",
+    },
+    body: {
+      tool: "agents_list",
+      action: "json",
+      args: {},
+      sessionKey: "main",
+    },
+  });
+
 const invokeToolAuthed = async (params: {
   tool: string;
   args?: Record<string, unknown>;
@@ -475,19 +490,7 @@ describe("POST /tools/invoke", () => {
       method: "token",
     });
 
-    const res = await postToolsInvoke({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: {
-        tool: "agents_list",
-        action: "json",
-        args: {},
-        sessionKey: "main",
-      },
-    });
+    const res = await invokeAgentsListBearer();
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });
@@ -589,7 +592,7 @@ describe("POST /tools/invoke", () => {
     const denyRes = await invokeAgentsListAuthed({ sessionKey: "main" });
     expect(denyRes.status).toBe(404);
     expect(loggerMocks.logDebug).toHaveBeenCalledWith(
-      expect.stringContaining('decision=deny matchedBy=agents.main.tools.allow rule="agents_list"'),
+      expect.stringContaining('decision=deny matchedBy=agents.main.tools.deny rule="agents_list"'),
     );
 
     allowAgentsListForMain();
@@ -843,19 +846,7 @@ describe("POST /tools/invoke", () => {
       method: "token",
     });
 
-    const res = await postToolsInvoke({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: {
-        tool: "agents_list",
-        action: "json",
-        args: {},
-        sessionKey: "main",
-      },
-    });
+    const res = await invokeAgentsListBearer();
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });
