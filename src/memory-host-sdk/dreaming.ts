@@ -264,7 +264,7 @@ function normalizeStringArrayLoose(value: unknown, fallback: readonly string[]):
   }
   const normalized: string[] = [];
   for (const entry of value) {
-    const trimmed = normalizeTrimmedString(entry);
+    const trimmed = normalizeOptionalLowercaseString(entry);
     if (trimmed && !normalized.includes(trimmed)) {
       normalized.push(trimmed);
     }
