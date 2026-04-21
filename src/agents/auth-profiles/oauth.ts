@@ -452,6 +452,15 @@ export async function resolveApiKeyForProfile(
       agentDir: params.agentDir,
     });
     if (!result) {
+      // If refresh returned null (e.g. provider has no refreshOAuth implementation)
+      // but the token hasn't actually expired yet, fall back to the existing token.
+      if (Date.now() < oauthCred.expires) {
+        return await buildOAuthProfileResult({
+          provider: oauthCred.provider,
+          credentials: oauthCred,
+          email: oauthCred.email,
+        });
+      }
       return null;
     }
     return buildApiKeyProfileResult({
