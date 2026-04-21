@@ -9,6 +9,7 @@ let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSes
 let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
+let waitForSessionWriteLockRelease: typeof import("./session-write-lock.js").waitForSessionWriteLockRelease;
 
 vi.mock("../shared/pid-alive.js", async () => {
   const original =
@@ -101,6 +102,7 @@ describe("acquireSessionWriteLock", () => {
       cleanStaleLockFiles,
       resetSessionWriteLockStateForTest,
       resolveSessionLockMaxHoldFromTimeout,
+      waitForSessionWriteLockRelease,
     } = await import("./session-write-lock.js"));
   });
 
@@ -453,5 +455,110 @@ describe("acquireSessionWriteLock", () => {
       process.off("SIGINT", keepAlive);
       process.kill = originalKill;
     }
+  });
+
+  it("waits for a live lock to release before continuing", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const waiter = waitForSessionWriteLockRelease({
+        sessionFile,
+        timeoutMs: 1_000,
+        pollIntervalMs: 10,
+      });
+
+      setTimeout(() => {
+        void lock.release();
+      }, 50);
+
+      await expect(waiter).resolves.toBeUndefined();
+    });
+  });
+
+  it("returns immediately for the current process reentrant holder", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await expect(
+        waitForSessionWriteLockRelease({
+          sessionFile,
+          timeoutMs: 20,
+          pollIntervalMs: 10,
+        }),
+      ).resolves.toBeUndefined();
+      await lock.release();
+    });
+  });
+
+  describe("TOCTOU regression: synthetic inbound must atomically wait-and-acquire", () => {
+    it("acquireSessionWriteLock succeeds immediately when same process already holds lock (reentrant)", async () => {
+      await withTempSessionLockFile(async ({ sessionFile }) => {
+        // Simulate the gateway acquiring the lock (like pi-embedded-runner does)
+        const gatewayLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+        // Simulate the Telegram handler calling acquireSessionWriteLock for a
+        // synthetic update targeting the same session. This MUST succeed
+        // immediately via reentrancy — NOT poll the filesystem (which would
+        // introduce a TOCTOU window between wait returning and dispatch).
+        const before = Date.now();
+        const handlerLock = await acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 500, // intentionally short; should not need to wait
+        });
+        const elapsed = Date.now() - before;
+
+        // Must succeed without needing the full timeout
+        expect(elapsed).toBeLessThan(50);
+
+        // Release in reverse order (handler first, then gateway)
+        await handlerLock.release();
+        await gatewayLock.release();
+      });
+    });
+
+    it("filesystem lock is NOT released until outermost release (reentrant count drops to 0)", async () => {
+      await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+        // Gateway acquires lock (count = 1)
+        const gatewayLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+        await expect(fs.access(lockPath)).resolves.toBeUndefined();
+
+        // Handler acquires reentrant lock (count = 2); filesystem lock persists
+        const handlerLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+        await expect(fs.access(lockPath)).resolves.toBeUndefined();
+
+        // Handler releases (count = 1); filesystem lock still held by gateway
+        await handlerLock.release();
+        await expect(fs.access(lockPath)).resolves.toBeUndefined();
+
+        // Gateway releases (count = 0); filesystem lock is now removed
+        await gatewayLock.release();
+        await expect(fs.access(lockPath)).rejects.toThrow();
+      });
+    });
+
+    it("contrasts with waitForSessionWriteLockRelease: returns but does NOT acquire, creating TOCTOU window", async () => {
+      await withTempSessionLockFile(async ({ sessionFile }) => {
+        // Gateway holds the lock
+        const gatewayLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+        // waitForSessionWriteLockRelease returns immediately (process already holds)
+        await expect(
+          waitForSessionWriteLockRelease({ sessionFile, timeoutMs: 20, pollIntervalMs: 5 }),
+        ).resolves.toBeUndefined(); // returns right away — no indication a lock is held
+
+        // Critically: HELD_LOCKS still has the entry (gateway holds reentrant lock).
+        // If a subsequent call to acquireSessionWriteLock happens here from the SAME
+        // process it would succeed via reentrancy. But if HELD_LOCKS were somehow
+        // cleared (e.g. async cleanup race), a new caller would have to wait/poll.
+        // This test documents the semantic difference: wait-and-release does NOT
+        // give you the lock; acquireSessionWriteLock does.
+        const before = Date.now();
+        await expect(
+          acquireSessionWriteLock({ sessionFile, timeoutMs: 200, allowReentrant: true }),
+        ).resolves.toBeDefined();
+        const elapsed = Date.now() - before;
+        expect(elapsed).toBeLessThan(50); // reentrant — no wait
+
+        await gatewayLock.release();
+      });
+    });
   });
 });

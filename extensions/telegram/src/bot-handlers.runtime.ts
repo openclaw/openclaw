@@ -1,4 +1,5 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import { acquireSessionWriteLock } from "openclaw/plugin-sdk/agent-harness";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -1828,16 +1829,37 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      await processInboundMessage({
-        ctx: event.ctx,
-        msg: event.msg,
+      const sessionState = resolveTelegramSessionState({
         chatId: event.chatId,
+        isGroup: event.isGroup,
+        isForum: event.isForum,
+        messageThreadId: event.messageThreadId,
         resolvedThreadId,
-        dmThreadId,
-        storeAllowFrom,
-        sendOversizeWarning: event.sendOversizeWarning,
-        oversizeLogMessage: event.oversizeLogMessage,
+        senderId: event.senderId,
       });
+      const existingSessionFile = sessionState.sessionEntry?.sessionFile;
+      let sessionLockRelease: { release(): Promise<void> } | undefined;
+      if (existingSessionFile) {
+        sessionLockRelease = await acquireSessionWriteLock({
+          sessionFile: existingSessionFile,
+          timeoutMs: 60_000,
+        });
+      }
+
+      try {
+        await processInboundMessage({
+          ctx: event.ctx,
+          msg: event.msg,
+          chatId: event.chatId,
+          resolvedThreadId,
+          dmThreadId,
+          storeAllowFrom,
+          sendOversizeWarning: event.sendOversizeWarning,
+          oversizeLogMessage: event.oversizeLogMessage,
+        });
+      } finally {
+        await sessionLockRelease?.release();
+      }
     } catch (err) {
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
     }
