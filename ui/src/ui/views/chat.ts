@@ -1081,6 +1081,7 @@ export function renderChat(props: ChatProps) {
     ),
   });
   const isBusy = activity.isBusy;
+  const queuesOnSend = props.sending || Boolean(props.runId);
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
@@ -1631,8 +1632,8 @@ export function renderChat(props: ChatProps) {
                       props.onSend();
                     }}
                     ?disabled=${!props.connected}
-                    title=${isBusy ? "Queue" : "Send"}
-                    aria-label=${isBusy ? "Queue message" : "Send message"}
+                    title=${queuesOnSend ? "Queue" : "Send"}
+                    aria-label=${queuesOnSend ? "Queue message" : "Send message"}
                   >
                     ${icons.send}
                   </button>
