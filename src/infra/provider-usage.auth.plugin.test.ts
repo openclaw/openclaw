@@ -6,17 +6,19 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
 );
+const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 const ensureAuthProfileStoreMock = vi.fn(() => ({
   profiles: {},
 }));
+const resolveAuthProfileOrderMock = vi.fn((_params: unknown): string[] => []);
 
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
-  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSource: () => hasAnyAuthProfileStoreSourceMock(),
   listProfilesForProvider: () => [],
   resolveApiKeyForProfile: async () => null,
-  resolveAuthProfileOrder: () => [],
+  resolveAuthProfileOrder: (params: unknown) => resolveAuthProfileOrderMock(params),
 }));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
@@ -46,7 +48,14 @@ describe("resolveProviderAuths plugin boundary", () => {
   });
 
   beforeEach(() => {
+    hasAnyAuthProfileStoreSourceMock.mockReset();
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(false);
     ensureAuthProfileStoreMock.mockClear();
+    ensureAuthProfileStoreMock.mockReturnValue({
+      profiles: {},
+    });
+    resolveAuthProfileOrderMock.mockReset();
+    resolveAuthProfileOrderMock.mockReturnValue([]);
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
@@ -114,6 +123,84 @@ describe("resolveProviderAuths plugin boundary", () => {
       }),
     );
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy plugin credential sources provider-specific", async () => {
+    await withTempHome(async (homeDir) => {
+      fs.mkdirSync(path.join(homeDir, ".pi", "agent"), { recursive: true });
+      fs.writeFileSync(
+        path.join(homeDir, ".pi", "agent", "auth.json"),
+        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } })}\n`,
+      );
+      resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+        token: "legacy-zai-token",
+      });
+
+      await expect(
+        resolveProviderAuths({
+          providers: ["anthropic", "zai"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "zai",
+          token: "legacy-zai-token",
+        },
+      ]);
+    });
+
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "zai",
+      }),
+    );
+  });
+
+  it("keeps auth-profile credential sources provider-specific", async () => {
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    ensureAuthProfileStoreMock.mockReturnValue({
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ant",
+        },
+      },
+    });
+    resolveAuthProfileOrderMock.mockImplementation((params: unknown) => {
+      const provider =
+        params && typeof params === "object" && "provider" in params
+          ? (params as { provider?: unknown }).provider
+          : undefined;
+      return provider === "anthropic" ? ["anthropic:default"] : [];
+    });
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "plugin-anthropic-token",
+    });
+
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuths({
+          providers: ["anthropic", "zai"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "anthropic",
+          token: "plugin-anthropic-token",
+        },
+      ]);
+    });
+
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+      }),
+    );
   });
 
   it("skips plugin usage auth per provider when only another provider has direct credentials", async () => {

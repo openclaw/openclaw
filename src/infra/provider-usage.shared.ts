@@ -75,14 +75,6 @@ function resolveLegacyPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveRequiredHomeDir(env, os.homedir), ".pi", "agent", "auth.json");
 }
 
-export function hasLegacyPiAgentAuthSource(env: NodeJS.ProcessEnv): boolean {
-  try {
-    return fs.existsSync(resolveLegacyPiAgentAuthPath(env));
-  } catch {
-    return false;
-  }
-}
-
 export function resolveLegacyPiAgentAccessToken(
   env: NodeJS.ProcessEnv,
   providerIds: string[],
