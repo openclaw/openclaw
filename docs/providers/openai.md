@@ -514,7 +514,8 @@ Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the 
     OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints differently from generic OpenAI-compatible `/v1` proxies:
 
     **Native routes** (`openai/*`, `openai-codex/*`, Azure OpenAI):
-    - Keep `reasoning: { effort: "none" }` intact when reasoning is explicitly disabled
+    - Keep `reasoning: { effort: "none" }` only for models that support the OpenAI `none` effort
+    - Omit disabled reasoning for models or proxies that reject `reasoning.effort: "none"`
     - Default tool schemas to strict mode
     - Attach hidden attribution headers on verified native hosts only
     - Keep OpenAI-only request shaping (`service_tier`, `store`, reasoning-compat, prompt-cache hints)

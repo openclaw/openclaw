@@ -44,11 +44,11 @@ TIMEOUT_INSTALL_S=420
 TIMEOUT_UPDATE_S=300
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
-TIMEOUT_ONBOARD_S=240
+TIMEOUT_ONBOARD_S=600
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
 # verify_gateway_reachable runs six 30s probes plus short retry sleeps.
-TIMEOUT_GATEWAY_S=240
-TIMEOUT_AGENT_S=360
+TIMEOUT_GATEWAY_S=420
+TIMEOUT_AGENT_S=600
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -860,6 +860,10 @@ else:
 PY
 }
 
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
+}
+
 acquire_build_lock() {
   local owner_pid=""
   while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
@@ -887,7 +891,7 @@ ensure_current_build() {
   acquire_build_lock
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
-  if [[ "$build_commit" == "$head" ]]; then
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
     release_build_lock
     return
   fi

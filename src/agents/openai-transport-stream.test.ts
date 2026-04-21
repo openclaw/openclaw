@@ -566,6 +566,62 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { reasoning?: unknown; include?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "none" });
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("omits disabled OpenAI Responses reasoning when the model does not support none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { reasoning?: unknown; include?: unknown };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
   it("maps minimal shared reasoning to low for OpenAI Responses", () => {
     const params = buildOpenAIResponsesParams(
       {
