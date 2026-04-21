@@ -1,6 +1,6 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TtsAutoMode, TtsProvider } from "../config/types.tts.js";
+import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
 import type {
   SpeechProviderConfig,
   SpeechVoiceOption,
