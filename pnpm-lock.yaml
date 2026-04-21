@@ -595,13 +595,13 @@ importers:
   extensions/googlechat:
     dependencies:
       gaxios:
-        specifier: ^7.1.4
+        specifier: 7.1.4
         version: 7.1.4
       google-auth-library:
-        specifier: ^10.6.2
+        specifier: 10.6.2
         version: 10.6.2
       zod:
-        specifier: ^4.3.6
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':

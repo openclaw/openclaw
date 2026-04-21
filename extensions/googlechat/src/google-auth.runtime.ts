@@ -419,7 +419,7 @@ export function createGoogleAuthFetch(
     });
     try {
       const body = await readGoogleAuthResponseBytes(response);
-      return new Response(body, {
+      return new Response(new Blob([body]), {
         headers: response.headers,
         status: response.status,
         statusText: response.statusText,
