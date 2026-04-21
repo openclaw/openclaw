@@ -292,13 +292,18 @@ describe("whatsapp react action messageId resolution", () => {
     expect((err as Error).name).toBe("ToolInputError");
   });
 
-  it("defaults participant to requesterSenderId for group reactions", async () => {
+  it("defaults participant to requesterSenderId for group reactions when messageId comes from context", async () => {
     await handleWhatsAppReactAction({
       action: "react",
-      params: { emoji: "👍", to: "120363401234567890@g.us", messageId: "msg-1" },
+      params: { emoji: "👍", to: "120363401234567890@g.us" },
       cfg: baseCfg,
       accountId: "default",
       requesterSenderId: "15551234567@s.whatsapp.net",
+      toolContext: {
+        currentChannelId: "whatsapp:120363401234567890@g.us",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-1",
+      },
     });
 
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(

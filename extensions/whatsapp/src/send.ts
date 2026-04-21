@@ -10,6 +10,10 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  looksLikePdfArchiveCandidate,
+  maybeShoarchiveOutboundPdf,
+} from "openclaw/plugin-sdk/shoarchive";
+import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
@@ -23,7 +27,6 @@ import {
   resolveWhatsAppOutboundMediaUrls,
 } from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
-import { looksLikePdfArchiveCandidate, maybeShoarchiveOutboundPdf } from "./pdf-shoarchive.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");

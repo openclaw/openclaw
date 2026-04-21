@@ -81,7 +81,7 @@ vi.mock("./text-runtime.js", async () => {
   };
 });
 
-vi.mock("./pdf-shoarchive.js", () => ({
+vi.mock("openclaw/plugin-sdk/shoarchive", () => ({
   looksLikePdfArchiveCandidate: hoisted.looksLikePdfArchiveCandidate,
   maybeShoarchiveOutboundPdf: hoisted.maybeShoarchiveOutboundPdf,
 }));

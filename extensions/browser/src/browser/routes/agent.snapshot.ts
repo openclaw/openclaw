@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { registerCreatedPdfInShoarchive } from "../../../../whatsapp/src/pdf-shoarchive.js";
+import { registerCreatedPdfInShoarchive } from "openclaw/plugin-sdk/shoarchive";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";

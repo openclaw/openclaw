@@ -13,6 +13,7 @@
   "runtime-logger",
   "proxy-capture",
   "runtime-secret-resolution",
+  "shoarchive",
   "setup",
   "setup-adapter-runtime",
   "setup-runtime",

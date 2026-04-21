@@ -1,7 +1,7 @@
 import {
   archiveOutboundPdfToShoarchive,
   registerCreatedPdfInShoarchive,
-} from "../extensions/whatsapp/src/pdf-shoarchive.js";
+} from "../src/shoarchive/pdf-shoarchive.js";
 
 type Args = {
   pdf?: string;

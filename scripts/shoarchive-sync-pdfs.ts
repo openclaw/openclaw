@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { registerCreatedPdfInShoarchive } from "../extensions/whatsapp/src/pdf-shoarchive.js";
+import { registerCreatedPdfInShoarchive } from "../src/shoarchive/pdf-shoarchive.js";
 
 async function collectPdfs(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
