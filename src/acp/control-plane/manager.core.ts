@@ -14,6 +14,7 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
+  AcpRuntimeErrorCode,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
@@ -738,7 +739,7 @@ export class AcpSessionManager {
         type BackendAttempt = {
           backend: string;
           error: string;
-          code: string;
+          code: AcpRuntimeErrorCode;
         };
         const backendAttempts: BackendAttempt[] = [];
 
