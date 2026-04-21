@@ -104,9 +104,6 @@ importers:
       file-type:
         specifier: 22.0.1
         version: 22.0.1
-      gaxios:
-        specifier: 7.1.4
-        version: 7.1.4
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0

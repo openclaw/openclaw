@@ -2,7 +2,6 @@ import { createRequire } from "node:module";
 import type { ConnectionOptions } from "node:tls";
 import { pathToFileURL } from "node:url";
 import type { Dispatcher } from "undici";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
 
 type ProxyRule = RegExp | URL | string;
 type TlsCert = ConnectionOptions["cert"];
@@ -44,6 +43,10 @@ type UndiciRuntimeDeps = {
   UndiciAgent: typeof import("undici").Agent;
   ProxyAgent: typeof import("undici").ProxyAgent;
 };
+
+function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
 
 function hasDispatcher(value: unknown): value is Dispatcher {
   const record = asNullableObjectRecord(value);
@@ -287,7 +290,7 @@ export function createGaxiosCompatFetch(
   };
 }
 
-export async function installGaxiosFetchCompat(): Promise<void> {
+export async function installGoogleAuthGaxiosFetchCompat(): Promise<void> {
   if (installState !== "not-installed" || typeof globalThis.fetch !== "function") {
     return;
   }
@@ -327,7 +330,7 @@ export async function installGaxiosFetchCompat(): Promise<void> {
 }
 
 export const __testing = {
-  resetGaxiosFetchCompatForTests(): void {
+  resetGoogleAuthGaxiosFetchCompatForTests(): void {
     installState = "not-installed";
   },
 };

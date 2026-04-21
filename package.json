@@ -1547,7 +1547,6 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "file-type": "22.0.1",
-    "gaxios": "7.1.4",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",

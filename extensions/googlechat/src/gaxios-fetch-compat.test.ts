@@ -6,25 +6,25 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 let ProxyAgent: typeof import("undici").ProxyAgent;
 let __testing: typeof import("./gaxios-fetch-compat.js").__testing;
 let createGaxiosCompatFetch: typeof import("./gaxios-fetch-compat.js").createGaxiosCompatFetch;
-let installGaxiosFetchCompat: typeof import("./gaxios-fetch-compat.js").installGaxiosFetchCompat;
+let installGoogleAuthGaxiosFetchCompat: typeof import("./gaxios-fetch-compat.js").installGoogleAuthGaxiosFetchCompat;
 
 beforeAll(async () => {
   const require = createRequire(import.meta.url);
   ({ ProxyAgent } = require("undici") as typeof import("undici"));
-  ({ __testing, createGaxiosCompatFetch, installGaxiosFetchCompat } =
+  ({ __testing, createGaxiosCompatFetch, installGoogleAuthGaxiosFetchCompat } =
     await import("./gaxios-fetch-compat.js"));
 });
 
 beforeEach(() => {
   vi.useRealTimers();
   vi.doUnmock("undici");
-  __testing.resetGaxiosFetchCompatForTests();
+  __testing.resetGoogleAuthGaxiosFetchCompatForTests();
 });
 
-describe("gaxios fetch compat", () => {
+describe("googlechat gaxios fetch compat", () => {
   afterEach(() => {
     Reflect.deleteProperty(globalThis as object, TEST_GAXIOS_CONSTRUCTOR_OVERRIDE);
-    __testing.resetGaxiosFetchCompatForTests();
+    __testing.resetGoogleAuthGaxiosFetchCompatForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -64,7 +64,7 @@ describe("gaxios fetch compat", () => {
 
     (globalThis as Record<string, unknown>)[TEST_GAXIOS_CONSTRUCTOR_OVERRIDE] = MockGaxios;
 
-    await installGaxiosFetchCompat();
+    await installGoogleAuthGaxiosFetchCompat();
 
     const res = await new MockGaxiosCtor().request({
       responseType: "text",
@@ -82,9 +82,9 @@ describe("gaxios fetch compat", () => {
     Reflect.deleteProperty(globalThis as object, "window");
     (globalThis as Record<string, unknown>)[TEST_GAXIOS_CONSTRUCTOR_OVERRIDE] = null;
     try {
-      await expect(installGaxiosFetchCompat()).resolves.toBeUndefined();
+      await expect(installGoogleAuthGaxiosFetchCompat()).resolves.toBeUndefined();
       expect((globalThis as { window?: { fetch?: FetchLike } }).window?.fetch).toBe(fetch);
-      await expect(installGaxiosFetchCompat()).resolves.toBeUndefined();
+      await expect(installGoogleAuthGaxiosFetchCompat()).resolves.toBeUndefined();
     } finally {
       Reflect.deleteProperty(globalThis as object, "window");
       if (originalWindowDescriptor) {

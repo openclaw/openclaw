@@ -1,7 +1,7 @@
-import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { installGoogleAuthGaxiosFetchCompat } from "./gaxios-fetch-compat.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
@@ -12,10 +12,53 @@ const CHAT_CERTS_URL =
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
-const authCache = new Map<string, { key: string; auth: GoogleAuth }>();
-const verifyClient = new OAuth2Client();
+type GoogleAuthModule = typeof import("google-auth-library");
+type GoogleAuthRuntime = {
+  GoogleAuth: GoogleAuthModule["GoogleAuth"];
+  OAuth2Client: GoogleAuthModule["OAuth2Client"];
+};
+type GoogleAuthInstance = InstanceType<GoogleAuthRuntime["GoogleAuth"]>;
+type OAuth2ClientInstance = InstanceType<GoogleAuthRuntime["OAuth2Client"]>;
+
+const authCache = new Map<string, { key: string; auth: GoogleAuthInstance }>();
 
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
+let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
+let verifyClientPromise: Promise<OAuth2ClientInstance> | null = null;
+
+async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
+  if (!googleAuthRuntimePromise) {
+    googleAuthRuntimePromise = (async () => {
+      try {
+        await installGoogleAuthGaxiosFetchCompat();
+        const mod = await import("google-auth-library");
+        return {
+          GoogleAuth: mod.GoogleAuth,
+          OAuth2Client: mod.OAuth2Client,
+        };
+      } catch (error) {
+        googleAuthRuntimePromise = null;
+        throw error;
+      }
+    })();
+  }
+  return await googleAuthRuntimePromise;
+}
+
+async function getVerifyClient(): Promise<OAuth2ClientInstance> {
+  if (!verifyClientPromise) {
+    verifyClientPromise = (async () => {
+      try {
+        const { OAuth2Client } = await loadGoogleAuthRuntime();
+        return new OAuth2Client();
+      } catch (error) {
+        verifyClientPromise = null;
+        throw error;
+      }
+    })();
+  }
+  return await verifyClientPromise;
+}
 
 function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   if (account.credentialsFile) {
@@ -27,12 +70,13 @@ function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   return "none";
 }
 
-function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
+async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<GoogleAuthInstance> {
   const key = buildAuthKey(account);
   const cached = authCache.get(account.accountId);
   if (cached && cached.key === key) {
     return cached.auth;
   }
+  const { GoogleAuth } = await loadGoogleAuthRuntime();
 
   const evictOldest = () => {
     if (authCache.size > MAX_AUTH_CACHE_SIZE) {
@@ -66,7 +110,7 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
 export async function getGoogleChatAccessToken(
   account: ResolvedGoogleChatAccount,
 ): Promise<string> {
-  const auth = getAuthInstance(account);
+  const auth = await getAuthInstance(account);
   const client = await auth.getClient();
   const access = await client.getAccessToken();
   const token = typeof access === "string" ? access : access?.token;
@@ -117,6 +161,7 @@ export async function verifyGoogleChatRequest(params: {
 
   if (audienceType === "app-url") {
     try {
+      const verifyClient = await getVerifyClient();
       const ticket = await verifyClient.verifyIdToken({
         idToken: bearer,
         audience,
@@ -153,6 +198,7 @@ export async function verifyGoogleChatRequest(params: {
 
   if (audienceType === "project-number") {
     try {
+      const verifyClient = await getVerifyClient();
       const certs = await fetchChatCerts();
       await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
       return { ok: true };
