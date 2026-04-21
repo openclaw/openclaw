@@ -90,6 +90,25 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
+  it("ignores pnpm npm_execpath and falls back to npm", () => {
+    const execPath = "/opt/node/bin/node";
+    const npmCliPath = "/opt/node/lib/node_modules/npm/bin/npm-cli.js";
+    const runner = resolveBundledRuntimeDepsNpmRunner({
+      env: {
+        npm_execpath: "/home/runner/setup-pnpm/node_modules/.bin/pnpm.cjs",
+      },
+      execPath,
+      existsSync: (candidate) => candidate === npmCliPath,
+      npmArgs: ["install", "acpx@0.5.3"],
+      platform: "linux",
+    });
+
+    expect(runner).toEqual({
+      command: execPath,
+      args: [npmCliPath, "install", "acpx@0.5.3"],
+    });
+  });
+
   it("falls back to npm.cmd through shell on Windows", () => {
     const runner = resolveBundledRuntimeDepsNpmRunner({
       env: {},

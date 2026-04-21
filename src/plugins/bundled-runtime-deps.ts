@@ -233,6 +233,11 @@ function resolvePathEnvKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): s
   return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path";
 }
 
+function isNpmCliPath(candidate: string): boolean {
+  const normalized = candidate.replaceAll("\\", "/").toLowerCase();
+  return normalized.endsWith("/npm-cli.js") || normalized.endsWith("/npm/bin/npm-cli.js");
+}
+
 export function resolveBundledRuntimeDepsNpmRunner(params: {
   npmArgs: string[];
   env?: NodeJS.ProcessEnv;
@@ -246,9 +251,10 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
   const platform = params.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const nodeDir = pathImpl.dirname(execPath);
-  const npmExecPath = normalizeOptionalLowercaseString(env.npm_execpath)
+  const rawNpmExecPath = normalizeOptionalLowercaseString(env.npm_execpath)
     ? env.npm_execpath
     : undefined;
+  const npmExecPath = rawNpmExecPath && isNpmCliPath(rawNpmExecPath) ? rawNpmExecPath : undefined;
 
   const npmCliCandidates = [
     npmExecPath,
