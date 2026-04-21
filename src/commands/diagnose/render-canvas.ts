@@ -174,9 +174,10 @@ var rawMarkdown = ${JSON.stringify(markdown)};
 document.getElementById('report').innerHTML = md2html(rawMarkdown);
 
 function copyReport() {
+  var btn = document.querySelector('.toolbar button');
   navigator.clipboard.writeText(rawMarkdown).then(function() {
-    event.target.textContent = 'Copied!';
-    setTimeout(function() { event.target.textContent = 'Copy Markdown'; }, 1500);
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy Markdown'; }, 1500);
   });
 }
 </script>

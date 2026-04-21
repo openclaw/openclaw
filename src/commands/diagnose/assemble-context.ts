@@ -100,23 +100,20 @@ function assembleGatewayLog(maxEntries: number): {
   allParsed: ParsedLogEntry[];
 } {
   const logDir = resolveLogDir();
-  const logPath = path.join(logDir, todayLogFileName());
+  const datedPath = path.join(logDir, todayLogFileName());
+  const fallbackPath = path.join(logDir, "openclaw.log");
+  const datedExists = fs.existsSync(datedPath);
+  const fallbackExists = fs.existsSync(fallbackPath);
 
-  if (!fs.existsSync(logPath)) {
-    // Fall back to the non-dated log file.
-    const fallback = path.join(logDir, "openclaw.log");
-    if (!fs.existsSync(fallback)) {
-      return {
-        section: "## Gateway Log\nLog file not found — gateway may not have run today.\n",
-        entryCount: 0,
-        allParsed: [],
-      };
-    }
+  if (!datedExists && !fallbackExists) {
+    return {
+      section: "## Gateway Log\nLog file not found — gateway may not have run today.\n",
+      entryCount: 0,
+      allParsed: [],
+    };
   }
 
-  const actualPath = fs.existsSync(path.join(logDir, todayLogFileName()))
-    ? path.join(logDir, todayLogFileName())
-    : path.join(logDir, "openclaw.log");
+  const actualPath = datedExists ? datedPath : fallbackPath;
 
   try {
     const content = fs.readFileSync(actualPath, { encoding: "utf-8" });
