@@ -161,6 +161,7 @@ describe("Zalo polling media replies", () => {
     const { account, config } = createLifecycleMonitorSetup({
       accountId: "acct-zalo-polling-direct-media",
       dmPolicy: "open",
+      webhookUrl: "",
     });
     const run = monitorZaloProvider({
       token: "zalo-token",
