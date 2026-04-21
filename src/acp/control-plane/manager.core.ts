@@ -1007,7 +1007,7 @@ export class AcpSessionManager {
               .map((a) => `${a.backend}: ${a.error}`)
               .join(" | ");
             const lastError = new AcpRuntimeError(
-              lastAttempt.code as typeof lastAttempt.code,
+              lastAttempt.code as AcpRuntimeError["code"],
               `All ACP backends failed (${backendAttempts.length}): ${summary}`,
             );
             this.recordTurnCompletion({
