@@ -529,6 +529,41 @@ describe("memory cli", () => {
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Dreaming: 15 2 * * *"));
   });
 
+  it("fills missing dreaming phase toggles with defaults in status output", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: true,
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 4 * * *",
+                phases: {
+                  light: { enabled: false },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Dreaming: 0 4 * * * · light off · deep on · rem on"),
+    );
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
