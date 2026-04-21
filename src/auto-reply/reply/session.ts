@@ -437,13 +437,18 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
+  const canReuseExistingEntry =
+    Boolean(entry?.sessionId) &&
+    typeof entry?.updatedAt === "number" &&
+    Number.isFinite(entry.updatedAt);
   // Forcing freshEntry=true prevents accidental data loss on automated system events.
   const entryFreshness = entry
     ? isSystemEvent
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
     : undefined;
-  const freshEntry = entryFreshness?.fresh ?? false;
+  const freshEntry =
+    (entryFreshness?.fresh ?? false) || (softReset.matched && canReuseExistingEntry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
@@ -460,11 +465,6 @@ export async function initSessionState(params: {
     sessionKey,
     previousSessionId: previousSessionEntry?.sessionId,
   });
-
-  const canReuseExistingEntry =
-    Boolean(entry?.sessionId) &&
-    typeof entry?.updatedAt === "number" &&
-    Number.isFinite(entry.updatedAt);
 
   if (!isNewSession && freshEntry && canReuseExistingEntry) {
     sessionId = entry.sessionId;
