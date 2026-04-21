@@ -61,6 +61,7 @@ describe("launchTuiCli", () => {
     await launchTuiCli({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
+      password: "test-password",
       deliver: false,
     });
 
@@ -76,6 +77,8 @@ describe("launchTuiCli", () => {
         "ws://127.0.0.1:18789",
         "--token",
         "test-token",
+        "--password",
+        "test-password",
       ],
       expect.objectContaining({ stdio: "inherit" }),
     );

@@ -425,9 +425,6 @@ export async function finalizeSetupWizard(
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
       try {
         await launchTuiCli({
-          url: links.wsUrl,
-          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-          password: settings.authMode === "password" ? resolvedGatewayPassword : "",
           // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
           deliver: false,
           message: hasBootstrap ? "Wake up, my friend!" : undefined,
