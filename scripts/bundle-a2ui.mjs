@@ -12,10 +12,8 @@ const hashFile = path.join(rootDir, "src", "canvas-host", "a2ui", ".bundle.hash"
 const outputFile = path.join(rootDir, "src", "canvas-host", "a2ui", "a2ui.bundle.js");
 const a2uiRendererDir = path.join(rootDir, "vendor", "a2ui", "renderers", "lit");
 const a2uiAppDir = path.join(rootDir, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI");
-const rootPackageFile = path.join(rootDir, "package.json");
-const pnpmLockFile = path.join(rootDir, "pnpm-lock.yaml");
 const uiPackageFile = path.join(rootDir, "ui", "package.json");
-const repoInputPaths = [rootPackageFile, pnpmLockFile, uiPackageFile, a2uiRendererDir, a2uiAppDir];
+const repoInputPaths = [uiPackageFile, a2uiRendererDir, a2uiAppDir];
 const ignoredBundleHashInputPrefixes = ["vendor/a2ui/renderers/lit/dist"];
 const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
   normalizePath(path.relative(rootDir, inputPath)),
@@ -67,8 +65,6 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
 
 export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   return [
-    path.join(repoRoot, "package.json"),
-    path.join(repoRoot, "pnpm-lock.yaml"),
     path.join(repoRoot, "ui", "package.json"),
     path.join(repoRoot, "vendor", "a2ui", "renderers", "lit"),
     path.join(repoRoot, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI"),

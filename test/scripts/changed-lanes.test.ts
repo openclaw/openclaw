@@ -190,6 +190,17 @@ describe("scripts/changed-lanes", () => {
     expect(plan.runFullTests).toBe(false);
   });
 
+  it("does not route generated A2UI artifacts as direct Vitest targets", () => {
+    const result = detectChangedLanes([
+      "src/canvas-host/a2ui/.bundle.hash",
+      "test/scripts/bundle-a2ui.test.ts",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.testTargets).toEqual(["test/scripts/bundle-a2ui.test.ts"]);
+    expect(plan.runChangedTestsBroad).toBe(false);
+  });
+
   it("routes changed extension Vitest configs to only their owning shard", () => {
     const result = detectChangedLanes(["test/vitest/vitest.extension-discord.config.ts"]);
     const plan = createChangedCheckPlan(result);

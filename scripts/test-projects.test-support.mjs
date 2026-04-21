@@ -201,6 +201,10 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
 ]);
+const GENERATED_CHANGED_TEST_TARGETS = new Set([
+  "src/canvas-host/a2ui/.bundle.hash",
+  "src/canvas-host/a2ui/a2ui.bundle.js",
+]);
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -404,6 +408,9 @@ function resolveToolingChangedTestTargets(changedPaths) {
 }
 
 function isRoutableChangedTarget(changedPath) {
+  if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
+    return false;
+  }
   return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
 }
 
