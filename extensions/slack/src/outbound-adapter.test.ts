@@ -201,4 +201,45 @@ describe("slackOutbound", () => {
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
+
+  it("sends a top-level payload when threadId is missing", async () => {
+    sendMessageSlackMock.mockResolvedValue({ messageId: "m-final" });
+
+    const result = await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "final text",
+        channelData: {
+          slack: {
+            blocks: [
+              {
+                type: "section",
+                text: { type: "plain_text", text: "Block body" },
+              },
+            ],
+          },
+        },
+      },
+      accountId: "default",
+      replyToId: "msg-internal-1",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "final text",
+      expect.objectContaining({
+        cfg,
+        threadTs: undefined,
+        blocks: [
+          {
+            type: "section",
+            text: { type: "plain_text", text: "Block body" },
+          },
+        ],
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-final" });
+  });
 });
