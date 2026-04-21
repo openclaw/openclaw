@@ -1,3 +1,10 @@
+---
+summary: "ACP thread-bound follow-up orchestration, parent assistant should rewrite shorthand follow-ups before sending to child session"
+title: "ACP follow-up orchestration"
+read_when:
+  - ACP session is thread-bound and you need to handle user follow-ups
+---
+
 # ACP follow-up orchestration
 
 ## Rule
@@ -13,7 +20,7 @@ For a follow-up like:
 - "do that"
 - "continue with what you suggested"
 - "ok implement phase 2"
-- "bắt nó làm tiếp như m suggest đi"
+- "have it continue with what you suggested"
 
 The parent assistant should:
 
@@ -27,7 +34,7 @@ Exact forwarding should happen only when the user explicitly asks for it, for ex
 
 - "send this exact prompt"
 - "forward this verbatim"
-- "gửi nguyên văn block này"
+- "send this block verbatim"
 
 ## Why
 
