@@ -930,8 +930,29 @@ export class AcpSessionManager {
               continue;
             }
 
-            // If there are no fallback backends, throw the original error immediately
+            // If there are no fallback backends, record and throw the original error
             if (candidateBackends.length <= 1) {
+              this.recordTurnCompletion({
+                startedAt: turnStartedAt,
+                errorCode: acpError.code,
+              });
+              if (taskContext) {
+                this.markBackgroundTaskTerminal(taskContext.runId, {
+                  sessionKey,
+                  status: resolveBackgroundTaskFailureStatus(acpError),
+                  endedAt: Date.now(),
+                  lastEventAt: Date.now(),
+                  error: acpError.message,
+                  progressSummary: taskProgressSummary || null,
+                  terminalSummary: null,
+                });
+              }
+              await this.setSessionState({
+                cfg: input.cfg,
+                sessionKey,
+                state: "error",
+                lastError: acpError.message,
+              });
               throw acpError;
             }
 
