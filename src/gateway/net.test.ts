@@ -290,6 +290,10 @@ describe("resolveClientIp", () => {
 });
 
 describe("resolveGatewayListenHosts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     {
       name: "non-loopback host passthrough",
@@ -312,10 +316,27 @@ describe("resolveGatewayListenHosts", () => {
       expected: ["127.0.0.1"],
     },
   ] as const)("resolves listen hosts: $name", async ({ host, canBindToHost, expected }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const hosts = await resolveGatewayListenHosts(host, {
       canBindToHost,
     });
     expect(hosts).toEqual(expected);
+  });
+
+  it("skips ::1 on Windows even when IPv6 is bindable", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const canBindToHost = vi.fn().mockResolvedValue(true);
+    const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
+    expect(hosts).toEqual(["127.0.0.1"]);
+    expect(canBindToHost).not.toHaveBeenCalled();
+  });
+
+  it("skips ::1 on Windows for non-loopback host passthrough", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const canBindToHost = vi.fn().mockResolvedValue(true);
+    const hosts = await resolveGatewayListenHosts("0.0.0.0", { canBindToHost });
+    expect(hosts).toEqual(["0.0.0.0"]);
+    expect(canBindToHost).not.toHaveBeenCalled();
   });
 });
 
