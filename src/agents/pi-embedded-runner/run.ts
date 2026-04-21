@@ -749,7 +749,7 @@ export async function runEmbeddedPiAgent(
           }
           if (decision.annotations && Object.keys(decision.annotations).length > 0) {
             const sortedAnnotations = Object.fromEntries(
-              Object.entries(decision.annotations).sort(([a], [b]) => a.localeCompare(b)),
+              Object.entries(decision.annotations).toSorted(([a], [b]) => a.localeCompare(b)),
             );
             details.push(`annotations: ${JSON.stringify(sortedAnnotations)}`);
           }
@@ -1796,6 +1796,16 @@ export async function runEmbeddedPiAgent(
             advanceAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
+          const assistantTransitionProposedAction =
+            assistantFailoverOutcome.action === "retry"
+              ? "continue"
+              : assistantFailoverOutcome.action === "throw"
+                ? assistantFailoverDecision.action === "fallback_model"
+                  ? "fallback_model"
+                  : "surface_error"
+                : assistantForFailover?.stopReason === "error"
+                  ? "surface_error"
+                  : "noop";
           const assistantTransitionDecision = await resolvePassTransitionDecision({
             passIndex,
             passKind,
@@ -1803,31 +1813,18 @@ export async function runEmbeddedPiAgent(
             provider,
             modelId,
             source: "assistant",
-            proposedAction:
-              assistantFailoverOutcome.action === "retry"
-                ? "continue"
-                : assistantFailoverOutcome.action === "throw"
-                  ? "halt"
-                  : "noop",
+            proposedAction: assistantTransitionProposedAction,
             proposedReason:
-              assistantFailoverOutcome.action === "retry" ||
-              assistantFailoverOutcome.action === "throw"
-                ? assistantFailoverReason
-                : undefined,
+              assistantTransitionProposedAction !== "noop" ? assistantFailoverReason : undefined,
           });
           throwIfTransitionHalted({
             decision: assistantTransitionDecision,
             source: "assistant",
-            proposedAction:
-              assistantFailoverOutcome.action === "retry"
-                ? "continue"
-                : assistantFailoverOutcome.action === "throw"
-                  ? "halt"
-                  : "noop",
+            proposedAction: assistantTransitionProposedAction,
           });
           if (
             assistantTransitionDecision.next === "continue" &&
-            assistantFailoverOutcome.action === "throw"
+            assistantTransitionProposedAction !== "noop"
           ) {
             await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
             continue;

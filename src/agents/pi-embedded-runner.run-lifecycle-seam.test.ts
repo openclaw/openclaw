@@ -2,6 +2,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./pi-embedded-runner/run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedClassifyFailoverReason,
+  mockedIsFailoverAssistantError,
+  mockedIsRateLimitAssistantError,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
@@ -222,6 +225,10 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
   });
 
   it("continues assistant halt transitions in decide mode by retrying the run", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedIsFailoverAssistantError.mockReturnValue(true);
+    mockedIsRateLimitAssistantError.mockReturnValue(true);
+
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         makeAttemptResult({
