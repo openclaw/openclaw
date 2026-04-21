@@ -46,11 +46,11 @@ import {
   resolveCronStyleNow,
   resolveDefaultAgentId,
   resolveHookExternalContentSource,
+  isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
   resolveSessionTranscriptPath,
   resolveThinkingDefault,
   setSessionRuntimeModel,
-  supportsXHighThinking,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
@@ -500,13 +500,7 @@ async function prepareCronRunContext(params: {
       catalog: await loadCatalog(),
     });
   }
-  if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    logWarn(
-      `[cron:${input.job.id}] Thinking level "xhigh" is not supported for ${provider}/${model}; downgrading to "high".`,
-    );
-    thinkLevel = "high";
-  }
-  if (thinkLevel === "max") {
+  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel })) {
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
@@ -514,7 +508,7 @@ async function prepareCronRunContext(params: {
     });
     if (fallbackThinkLevel !== thinkLevel) {
       logWarn(
-        `[cron:${input.job.id}] Thinking level "max" is not supported for ${provider}/${model}; downgrading to "${fallbackThinkLevel}".`,
+        `[cron:${input.job.id}] Thinking level "${thinkLevel}" is not supported for ${provider}/${model}; downgrading to "${fallbackThinkLevel}".`,
       );
       thinkLevel = fallbackThinkLevel;
     }

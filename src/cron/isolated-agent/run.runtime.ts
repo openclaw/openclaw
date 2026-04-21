@@ -13,9 +13,9 @@ export { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 export { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 export { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/workspace.js";
 export {
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
-  supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { setSessionRuntimeModel } from "../../config/sessions/types.js";

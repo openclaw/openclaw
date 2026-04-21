@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 
@@ -8,22 +9,13 @@ type ThinkingProviderPlugin = {
   id: string;
   aliases?: string[];
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  supportsAdaptiveThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
-  supportsMaxThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  resolveThinkingProfile?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => ProviderThinkingProfile | null | undefined;
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
-  ) =>
-    | "off"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "adaptive"
-    | "max"
-    | null
-    | undefined;
+  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
 };
 
 const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
@@ -73,16 +65,10 @@ export function resolveProviderXHighThinking(
   return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
 }
 
-export function resolveProviderAdaptiveThinking(
-  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
+export function resolveProviderThinkingProfile(
+  params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.supportsAdaptiveThinking?.(params.context);
-}
-
-export function resolveProviderMaxThinking(
-  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
-) {
-  return resolveActiveThinkingProvider(params.provider)?.supportsMaxThinking?.(params.context);
+  return resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(params.context);
 }
 
 export function resolveProviderDefaultThinkingLevel(

@@ -34,10 +34,9 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
   vi.fn<ResolveConfiguredBindingRoute>(() => createUnboundConfiguredRouteResult()),
 );
 const providerThinkingMocks = vi.hoisted(() => ({
-  resolveProviderAdaptiveThinking: vi.fn(),
   resolveProviderBinaryThinking: vi.fn(),
   resolveProviderDefaultThinkingLevel: vi.fn(),
-  resolveProviderMaxThinking: vi.fn(),
+  resolveProviderThinkingProfile: vi.fn(),
   resolveProviderXHighThinking: vi.fn(),
 }));
 const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
@@ -129,10 +128,9 @@ let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").r
 async function loadDiscordThinkAutocompleteModulesForTest() {
   vi.resetModules();
   vi.doMock("../../../../src/plugins/provider-thinking.js", () => ({
-    resolveProviderAdaptiveThinking: providerThinkingMocks.resolveProviderAdaptiveThinking,
     resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
     resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
-    resolveProviderMaxThinking: providerThinkingMocks.resolveProviderMaxThinking,
+    resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
     resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
   }));
   const commandAuth = await import("openclaw/plugin-sdk/command-auth");
@@ -147,9 +145,8 @@ async function loadDiscordThinkAutocompleteModulesForTest() {
 describe("discord native /think autocomplete", () => {
   beforeAll(async () => {
     providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderAdaptiveThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderMaxThinking.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
         ? true
@@ -176,14 +173,10 @@ describe("discord native /think autocomplete", () => {
     resolveConfiguredBindingRouteMock.mockReturnValue(createUnboundConfiguredRouteResult());
     providerThinkingMocks.resolveProviderBinaryThinking.mockReset();
     providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderAdaptiveThinking.mockReset();
-    providerThinkingMocks.resolveProviderAdaptiveThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReset();
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
-    providerThinkingMocks.resolveProviderMaxThinking.mockReset();
-    providerThinkingMocks.resolveProviderMaxThinking.mockImplementation(({ provider, context }) =>
-      provider === "anthropic" && context.modelId === "claude-opus-4-7" ? true : undefined,
-    );
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderXHighThinking.mockReset();
     providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
@@ -275,6 +268,12 @@ describe("discord native /think autocomplete", () => {
   });
 
   it("includes max only for provider-advertised models", async () => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "anthropic" && context.modelId === "claude-opus-4-7"
+          ? { levels: [{ id: "off" }, { id: "max" }] }
+          : undefined,
+    );
     fs.writeFileSync(
       STORE_PATH,
       JSON.stringify({
