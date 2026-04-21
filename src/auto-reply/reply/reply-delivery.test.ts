@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import {
   createBlockReplyDeliveryHandler,
@@ -124,6 +125,20 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("parses lowercase media directives in block replies before path normalization", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "media: ./report.pdf" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload).toMatchObject({
+      text: undefined,
+      mediaUrl: "./report.pdf",
+      mediaUrls: ["./report.pdf"],
+    });
+  });
+
   it("passes normalized media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
@@ -157,6 +172,43 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: false,
       replyToTag: false,
       audioAsVoice: false,
+    });
+  });
+
+  it("preserves reply payload metadata across block-reply normalization", async () => {
+    const enqueue = vi.fn();
+    const blockReplyPipeline = {
+      enqueue,
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => ({ ...payload, replyToTag: true }),
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
+
+    await handler(payload);
+
+    const enqueuedPayload = enqueue.mock.calls[0]?.[0];
+    expect(enqueuedPayload).toEqual({
+      text: "Alpha",
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: true,
+      audioAsVoice: false,
+      mediaUrls: undefined,
+    });
+    expect(getReplyPayloadMetadata(enqueuedPayload)).toEqual({
+      assistantMessageIndex: 7,
     });
   });
 });

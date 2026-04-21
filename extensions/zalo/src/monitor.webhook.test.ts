@@ -12,11 +12,15 @@ import {
   postWebhookReplay,
 } from "../test-support/lifecycle-test-support.js";
 import { handleZaloWebhookRequest } from "./monitor.js";
+import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
+  handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget,
+  type ZaloWebhookProcessUpdate,
+  ZaloRetryableWebhookError,
 } from "./monitor.webhook.js";
 import type { ResolvedZaloAccount } from "./types.js";
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
@@ -27,13 +31,19 @@ const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   config: {},
 };
 
-const webhookRequestHandler: RequestListener = async (req, res) => {
-  const handled = await handleZaloWebhookRequest(req, res);
-  if (!handled) {
-    res.statusCode = 404;
-    res.end("not found");
-  }
-};
+function createWebhookRequestHandler(processUpdate?: ZaloWebhookProcessUpdate): RequestListener {
+  return async (req, res) => {
+    const handled = processUpdate
+      ? await handleZaloWebhookRequestInternal(req, res, processUpdate)
+      : await handleZaloWebhookRequest(req, res);
+    if (!handled) {
+      res.statusCode = 404;
+      res.end("not found");
+    }
+  };
+}
+
+const webhookRequestHandler = createWebhookRequestHandler();
 
 function registerTarget(params: {
   path: string;
@@ -42,16 +52,20 @@ function registerTarget(params: {
   account?: ResolvedZaloAccount;
   config?: OpenClawConfig;
   core?: PluginRuntime;
+  runtime?: Partial<ZaloRuntimeEnv>;
 }): () => void {
   return registerZaloWebhookTarget({
     token: "tok",
     account: params.account ?? DEFAULT_ACCOUNT,
     config: params.config ?? ({} as OpenClawConfig),
-    runtime: {},
+    runtime: (params.runtime ?? {}) as ZaloRuntimeEnv,
     core: params.core ?? ({} as PluginRuntime),
     secret: params.secret ?? "secret",
     path: params.path,
+    webhookUrl: `https://example.com${params.path}`,
+    webhookPath: params.path,
     mediaMaxMb: 5,
+    canHostMedia: true,
     statusSink: params.statusSink,
   });
 }
@@ -109,6 +123,44 @@ async function postUntilRateLimited(params: {
     }
   }
   return false;
+}
+
+async function postWebhookJson(params: {
+  baseUrl: string;
+  path: string;
+  secret: string;
+  payload: unknown;
+}) {
+  return fetch(`${params.baseUrl}${params.path}`, {
+    method: "POST",
+    headers: {
+      "x-bot-api-secret-token": params.secret,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(params.payload),
+  });
+}
+
+async function expectTwoWebhookPostsOk(params: {
+  baseUrl: string;
+  first: { path: string; secret: string; payload: unknown };
+  second: { path: string; secret: string; payload: unknown };
+}) {
+  const first = await postWebhookJson({
+    baseUrl: params.baseUrl,
+    path: params.first.path,
+    secret: params.first.secret,
+    payload: params.first.payload,
+  });
+  const second = await postWebhookJson({
+    baseUrl: params.baseUrl,
+    path: params.second.path,
+    secret: params.second.secret,
+    payload: params.second.payload,
+  });
+
+  expect(first.status).toBe(200);
+  expect(second.status).toBe(200);
 }
 
 describe("handleZaloWebhookRequest", () => {
@@ -215,6 +267,55 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
   });
+
+  it("allows a retry after processUpdate throws a retryable replay error", async () => {
+    const error = vi.fn();
+    const unregister = registerTarget({
+      path: "/hook-retry-after-failure",
+      runtime: { error },
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-retry-after-failure-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+    let attempts = 0;
+    const processUpdate = vi.fn<ZaloWebhookProcessUpdate>(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new ZaloRetryableWebhookError("boom");
+      }
+    });
+
+    try {
+      await withServer(createWebhookRequestHandler(processUpdate), async (baseUrl) => {
+        const first = await postWebhookJson({
+          baseUrl,
+          path: "/hook-retry-after-failure",
+          secret: "secret",
+          payload,
+        });
+
+        expect(first.status).toBe(200);
+        await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
+
+        const second = await postWebhookJson({
+          baseUrl,
+          path: "/hook-retry-after-failure",
+          secret: "secret",
+          payload,
+        });
+
+        expect(second.status).toBe(200);
+        await vi.waitFor(() => expect(processUpdate).toHaveBeenCalledTimes(2));
+      });
+    } finally {
+      unregister();
+    }
+  });
+
   it("keeps replay dedupe isolated per authenticated target", async () => {
     const sinkA = vi.fn();
     const sinkB = vi.fn();
@@ -242,25 +343,11 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay-scope`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret-a",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
+        await expectTwoWebhookPostsOk({
+          baseUrl,
+          first: { path: "/hook-replay-scope", secret: "secret-a", payload },
+          second: { path: "/hook-replay-scope", secret: "secret-b", payload },
         });
-        const second = await fetch(`${baseUrl}/hook-replay-scope`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret-b",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
       });
 
       expect(sinkA).toHaveBeenCalledTimes(1);
@@ -291,25 +378,11 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay-chat-scope`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(firstPayload),
+        await expectTwoWebhookPostsOk({
+          baseUrl,
+          first: { path: "/hook-replay-chat-scope", secret: "secret", payload: firstPayload },
+          second: { path: "/hook-replay-chat-scope", secret: "secret", payload: secondPayload },
         });
-        const second = await fetch(`${baseUrl}/hook-replay-chat-scope`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(secondPayload),
-        });
-
-        expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
       });
 
       expect(sink).toHaveBeenCalledTimes(2);
@@ -338,25 +411,11 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay-sender-scope`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(firstPayload),
+        await expectTwoWebhookPostsOk({
+          baseUrl,
+          first: { path: "/hook-replay-sender-scope", secret: "secret", payload: firstPayload },
+          second: { path: "/hook-replay-sender-scope", secret: "secret", payload: secondPayload },
         });
-        const second = await fetch(`${baseUrl}/hook-replay-sender-scope`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(secondPayload),
-        });
-
-        expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
       });
 
       expect(sink).toHaveBeenCalledTimes(2);
@@ -429,25 +488,11 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay-collision:a`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret-a",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
+        await expectTwoWebhookPostsOk({
+          baseUrl,
+          first: { path: "/hook-replay-collision:a", secret: "secret-a", payload },
+          second: { path: "/hook-replay-collision", secret: "secret-b", payload },
         });
-        const second = await fetch(`${baseUrl}/hook-replay-collision`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret-b",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
       });
 
       expect(sinkA).toHaveBeenCalledTimes(1);
@@ -482,25 +527,11 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay-scope-a`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": sharedSecret,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
+        await expectTwoWebhookPostsOk({
+          baseUrl,
+          first: { path: "/hook-replay-scope-a", secret: sharedSecret, payload },
+          second: { path: "/hook-replay-scope-b", secret: sharedSecret, payload },
         });
-        const second = await fetch(`${baseUrl}/hook-replay-scope-b`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": sharedSecret,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
       });
 
       expect(sinkA).toHaveBeenCalledTimes(1);

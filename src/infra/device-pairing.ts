@@ -137,6 +137,7 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
     case "bootstrap-scope-not-allowed":
       return `bootstrap profile does not allow scope: ${result.scope ?? "unknown"}`;
   }
+  throw new Error("Unsupported device pairing forbidden reason");
 }
 
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
@@ -321,7 +322,10 @@ function refreshPendingDevicePairingRequest(
     // If either request is interactive, keep the pending request visible for approval.
     silent: Boolean(existing.silent && incoming.silent),
     isRepair: existing.isRepair || isRepair,
-    ts: Date.now(),
+    // Preserve the original creation timestamp so that reconnects cannot bump this
+    // request's queue position. Using Date.now() here would let an attacker silently
+    // refresh recency and win the implicit --latest approval race.
+    ts: existing.ts,
   };
 }
 

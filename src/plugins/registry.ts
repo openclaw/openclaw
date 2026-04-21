@@ -1,10 +1,18 @@
 import path from "node:path";
+import {
+  getRegisteredAgentHarness,
+  registerAgentHarness as registerGlobalAgentHarness,
+} from "../agents/harness/registry.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { registerContextEngineForOwner } from "../context-engine/registry.js";
-import type { OperatorScope } from "../gateway/method-scopes.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import {
+  clearContextEnginesForOwner,
+  registerContextEngineForOwner,
+} from "../context-engine/registry.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { registerInternalHook } from "../hooks/internal-hooks.js";
+import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
@@ -12,20 +20,28 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+  getDetachedTaskLifecycleRuntimeRegistration,
+  registerDetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
+import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive-registry.js";
+import {
+  clearPluginInteractiveHandlersForPlugin,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -47,6 +63,7 @@ import type {
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
+  PluginAgentHarnessRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -56,6 +73,7 @@ import type {
   PluginReloadRegistration,
   PluginSecurityAuditCollectorRegistration,
   PluginServiceRegistration,
+  PluginTextTransformsRegistration,
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -85,7 +103,6 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
-  PluginDiagnostic,
   PluginHookHandlerMap,
   PluginHookName,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -119,6 +136,7 @@ export type {
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
+  PluginAgentHarnessRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -128,6 +146,7 @@ export type {
   PluginReloadRegistration,
   PluginSecurityAuditCollectorRegistration,
   PluginServiceRegistration,
+  PluginTextTransformsRegistration,
   PluginToolRegistration,
   PluginSpeechProviderRegistration,
   PluginRealtimeTranscriptionProviderRegistration,
@@ -160,9 +179,18 @@ const constrainLegacyPromptInjectionHook = (
 
 export { createEmptyPluginRegistry } from "./registry-empty.js";
 
+const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
+const activePluginHookRegistrations = resolveGlobalSingleton<
+  Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
+>(ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY, () => new Map());
+
+type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
+type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
+  const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -276,9 +304,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
 
+    const previousRegistrations = activePluginHookRegistrations.get(name) ?? [];
+    for (const registration of previousRegistrations) {
+      unregisterInternalHook(registration.event, registration.handler);
+    }
+
+    const nextRegistrations: Array<{
+      event: string;
+      handler: Parameters<typeof registerInternalHook>[1];
+    }> = [];
     for (const event of normalizedEvents) {
       registerInternalHook(event, handler);
+      nextRegistrations.push({ event, handler });
     }
+    activePluginHookRegistrations.set(name, nextRegistrations);
+    const rollbackEntries = pluginHookRollback.get(record.id) ?? [];
+    rollbackEntries.push({
+      name,
+      previousRegistrations: [...previousRegistrations],
+    });
+    pluginHookRollback.set(record.id, rollbackEntries);
   };
 
   const registerGatewayMethod = (
@@ -423,18 +468,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
         ? (registration as OpenClawPluginChannelRegistration)
         : { plugin: registration as ChannelPlugin };
-    const plugin = normalized.plugin;
-    const id =
-      normalizeOptionalString(plugin?.id) ?? normalizeStringifiedOptionalString(plugin?.id) ?? "";
-    if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "channel registration missing id",
-      });
+    const plugin = normalizeRegisteredChannelPlugin({
+      pluginId: record.id,
+      source: record.source,
+      plugin: normalized.plugin,
+      pushDiagnostic,
+    });
+    if (!plugin) {
       return;
     }
+    const id = plugin.id;
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
     if (mode !== "setup-only" && existingRuntime) {
       pushDiagnostic({
@@ -507,6 +550,55 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
+    const id = harness.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent harness registration missing id",
+      });
+      return;
+    }
+    const existing =
+      registryParams.activateGlobalSideEffects === false
+        ? registry.agentHarnesses.find((entry) => entry.harness.id === id)
+        : getRegisteredAgentHarness(id);
+    if (existing) {
+      const ownerPluginId =
+        "ownerPluginId" in existing
+          ? existing.ownerPluginId
+          : "pluginId" in existing
+            ? existing.pluginId
+            : undefined;
+      const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent harness already registered: ${id}${ownerDetail}`,
+      });
+      return;
+    }
+    const normalizedHarness = {
+      ...harness,
+      id,
+      pluginId: harness.pluginId ?? record.id,
+    };
+    if (registryParams.activateGlobalSideEffects !== false) {
+      registerGlobalAgentHarness(normalizedHarness, { ownerPluginId: record.id });
+    }
+    record.agentHarnessIds.push(id);
+    registry.agentHarnesses.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      harness: normalizedHarness,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
     const id = backend.id.trim();
     if (!id) {
@@ -541,14 +633,36 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.cliBackendIds.push(id);
   };
 
-  const registerUniqueProviderLike = <
-    T extends { id: string },
-    R extends PluginOwnedProviderRegistration<T>,
-  >(params: {
+  const registerTextTransforms = (
+    record: PluginRecord,
+    transforms: PluginTextTransformsRegistration["transforms"],
+  ) => {
+    if (
+      (!transforms.input || transforms.input.length === 0) &&
+      (!transforms.output || transforms.output.length === 0)
+    ) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: "text transform registration has no input or output replacements",
+      });
+      return;
+    }
+    registry.textTransforms.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      transforms,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerUniqueProviderLike = <T extends { id: string }>(params: {
     record: PluginRecord;
     provider: T;
     kindLabel: string;
-    registrations: R[];
+    registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
   }) => {
     const id = params.provider.id.trim();
@@ -581,7 +695,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       provider: params.provider,
       source: record.source,
       rootDir: record.rootDir,
-    } as R);
+    });
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -849,6 +963,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const existing = registry.services.find((entry) => entry.service.id === id);
     if (existing) {
+      // Idempotent: the same plugin can hit registration twice across snapshot vs
+      // activating loads (see #62033). Keep the first registration.
+      if (existing.pluginId === record.id) {
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -1053,6 +1172,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerHook(record, events, handler, opts, params.config),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
+              registerAgentHarness: (harness) => registerAgentHarness(record, harness),
+              registerDetachedTaskRuntime: (runtime) => {
+                const existing = getDetachedTaskLifecycleRuntimeRegistration();
+                if (existing && existing.pluginId !== record.id) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `detached task runtime already registered by ${existing.pluginId}`,
+                  });
+                  return;
+                }
+                registerDetachedTaskLifecycleRuntime(record.id, runtime);
+              },
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
               registerRealtimeTranscriptionProvider: (provider) =>
                 registerRealtimeTranscriptionProvider(record, provider),
@@ -1072,6 +1205,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
+              registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),
               registerNodeHostCommand: (command) => registerNodeHostCommand(record, command),
               registerSecurityAuditCollector: (collector) =>
@@ -1113,6 +1247,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     source: record.source,
                     message: `context engine already registered: ${id} (${result.existingOwner})`,
                   });
+                  return;
+                }
+                if (!record.contextEngineIds?.includes(id)) {
+                  record.contextEngineIds = [...(record.contextEngineIds ?? []), id];
                 }
               },
               registerCompactionProvider: (
@@ -1306,14 +1444,46 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const rollbackPluginGlobalSideEffects = (pluginId: string) => {
+    if (registryParams.activateGlobalSideEffects === false) {
+      return;
+    }
+
+    clearPluginCommandsForPlugin(pluginId);
+    clearPluginInteractiveHandlersForPlugin(pluginId);
+    clearContextEnginesForOwner(`plugin:${pluginId}`);
+
+    const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];
+    for (const entry of hookRollbackEntries.toReversed()) {
+      const activeRegistrations = activePluginHookRegistrations.get(entry.name) ?? [];
+      for (const registration of activeRegistrations) {
+        unregisterInternalHook(registration.event, registration.handler);
+      }
+
+      if (entry.previousRegistrations.length === 0) {
+        activePluginHookRegistrations.delete(entry.name);
+        continue;
+      }
+
+      for (const registration of entry.previousRegistrations) {
+        registerInternalHook(registration.event, registration.handler);
+      }
+      activePluginHookRegistrations.set(entry.name, [...entry.previousRegistrations]);
+    }
+    pluginHookRollback.delete(pluginId);
+  };
+
   return {
     registry,
     createApi,
+    rollbackPluginGlobalSideEffects,
     pushDiagnostic,
     registerTool,
     registerChannel,
     registerProvider,
+    registerAgentHarness,
     registerCliBackend,
+    registerTextTransforms,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,

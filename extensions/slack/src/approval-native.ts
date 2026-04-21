@@ -9,6 +9,7 @@ import {
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
+import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -96,6 +97,7 @@ function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOrigin
   const sessionTarget = resolveApprovalRequestSessionConversation({
     request,
     channel: "slack",
+    bundledFallback: false,
   });
   if (!sessionTarget) {
     return null;
@@ -147,7 +149,9 @@ const resolveSlackApproverDmTargets = createChannelApproverDmTargetResolver({
 export const slackApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "slack",
   channelLabel: "Slack",
-  describeExecApprovalSetup: ({ accountId }) => {
+  describeExecApprovalSetup: ({
+    accountId,
+  }: Parameters<NonNullable<ChannelApprovalCapability["describeExecApprovalSetup"]>>[0]) => {
     const prefix =
       accountId && accountId !== "default"
         ? `channels.slack.accounts.${accountId}`

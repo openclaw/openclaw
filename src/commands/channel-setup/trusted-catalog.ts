@@ -3,8 +3,8 @@ import {
   listChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEnableState } from "../../plugins/config-state.js";
 
 function resolveEffectiveTrustConfig(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): OpenClawConfig {
@@ -53,11 +53,14 @@ export function getTrustedChannelPluginCatalogEntry(
   });
 }
 
-export function listTrustedChannelPluginCatalogEntries(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ChannelPluginCatalogEntry[] {
+function listChannelPluginCatalogEntriesWithTrustedFallback(
+  params: {
+    cfg: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+  onMissingFallback: (entry: ChannelPluginCatalogEntry) => ChannelPluginCatalogEntry[],
+): ChannelPluginCatalogEntry[] {
   const unfiltered = listChannelPluginCatalogEntries({
     workspaceDir: params.workspaceDir,
   });
@@ -72,8 +75,16 @@ export function listTrustedChannelPluginCatalogEntries(params: {
       return [entry];
     }
     const fallback = fallbackById.get(entry.id);
-    return fallback ? [fallback] : [];
+    return fallback ? [fallback] : onMissingFallback(entry);
   });
+}
+
+export function listTrustedChannelPluginCatalogEntries(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ChannelPluginCatalogEntry[] {
+  return listChannelPluginCatalogEntriesWithTrustedFallback(params, () => []);
 }
 
 export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
@@ -81,20 +92,5 @@ export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ChannelPluginCatalogEntry[] {
-  const unfiltered = listChannelPluginCatalogEntries({
-    workspaceDir: params.workspaceDir,
-  });
-  const fallbackById = new Map(
-    listChannelPluginCatalogEntries({
-      workspaceDir: params.workspaceDir,
-      excludeWorkspace: true,
-    }).map((entry) => [entry.id, entry]),
-  );
-  return unfiltered.flatMap((entry) => {
-    if (isTrustedWorkspaceChannelCatalogEntry(entry, params.cfg, params.env)) {
-      return [entry];
-    }
-    const fallback = fallbackById.get(entry.id);
-    return fallback ? [fallback] : [entry];
-  });
+  return listChannelPluginCatalogEntriesWithTrustedFallback(params, (entry) => [entry]);
 }

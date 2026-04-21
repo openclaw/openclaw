@@ -5,7 +5,7 @@ import type {
   ChannelConfigRuntimeParseResult,
   ChannelConfigSchema,
   ChannelConfigUiHint,
-} from "./types.plugin.js";
+} from "./types.config.js";
 
 type ZodSchemaWithToJsonSchema = ZodTypeAny & {
   toJSONSchema?: (params?: Record<string, unknown>) => unknown;
@@ -18,9 +18,7 @@ type ExtendableZodObject = ZodTypeAny & {
 export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
-export function buildNestedDmConfigSchema<TExtraShape extends ZodRawShape = {}>(
-  extraShape?: TExtraShape,
-) {
+export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
   const baseShape = {
     enabled: z.boolean().optional(),
     policy: DmPolicySchema.optional(),

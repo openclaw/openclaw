@@ -65,7 +65,7 @@ describe("browser plugin", () => {
 
   it("forwards per-session browser options into the tool factory", async () => {
     const { api, registerTool } = createApi();
-    await registerBrowserPlugin(api);
+    registerBrowserPlugin(api);
 
     const tool = registerTool.mock.calls[0]?.[0];
     if (typeof tool !== "function") {

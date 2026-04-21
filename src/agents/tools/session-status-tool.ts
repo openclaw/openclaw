@@ -5,7 +5,6 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -13,6 +12,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
@@ -22,6 +22,7 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import type { BuildStatusTextParams } from "../../status/status-text.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -54,12 +55,15 @@ const SessionStatusToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
 });
 
-let commandsStatusRuntimePromise: Promise<
-  typeof import("../../auto-reply/reply/commands-status.runtime.js")
-> | null = null;
+type CommandsStatusRuntimeModule = {
+  buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
+};
 
-function loadCommandsStatusRuntime() {
-  commandsStatusRuntimePromise ??= import("../../auto-reply/reply/commands-status.runtime.js");
+let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
+
+function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
+  commandsStatusRuntimePromise ??=
+    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
   return commandsStatusRuntimePromise;
 }
 

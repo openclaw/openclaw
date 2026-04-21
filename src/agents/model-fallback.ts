@@ -1,19 +1,14 @@
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
-import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import { ensureAuthProfileStore, loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
-import {
-  getSoonestCooldownExpiry,
-  isProfileInCooldown,
-  resolveProfilesUnavailableReason,
-} from "./auth-profiles/usage.js";
+import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   FailoverError,
@@ -30,16 +25,15 @@ import {
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
-  modelKey,
-  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
-} from "./model-selection.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+} from "./model-selection-resolve.js";
+import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
+import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -145,6 +139,15 @@ type ModelFallbackRunResult<T> = {
   model: string;
   attempts: FallbackAttempt[];
 };
+
+type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
+
+let modelFallbackAuthRuntimePromise: Promise<ModelFallbackAuthRuntime> | undefined;
+
+async function loadModelFallbackAuthRuntime() {
+  modelFallbackAuthRuntimePromise ??= import("./model-fallback-auth.runtime.js");
+  return await modelFallbackAuthRuntimePromise;
+}
 
 function buildFallbackSuccess<T>(params: {
   result: T;
@@ -282,29 +285,30 @@ function throwFallbackFailureSummary(params: {
 }
 
 function resolveFallbackSoonestCooldownExpiry(params: {
-  authStore: ReturnType<typeof ensureAuthProfileStore> | null;
+  authRuntime: ModelFallbackAuthRuntime | null;
+  authStore: AuthProfileStore | null;
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
   candidates: ModelCandidate[];
 }): number | null {
-  if (!params.authStore) {
+  if (!params.authRuntime || !params.authStore) {
     return null;
   }
 
   // Refresh from persisted state because embedded attempts can update auth
   // cooldowns through a separate store instance while the fallback loop runs.
-  const refreshedStore = loadAuthProfileStoreForRuntime(params.agentDir, {
+  const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
   });
   let soonest: number | null = null;
   for (const candidate of params.candidates) {
-    const ids = resolveAuthProfileOrder({
+    const ids = params.authRuntime.resolveAuthProfileOrder({
       cfg: params.cfg,
       store: refreshedStore,
       provider: candidate.provider,
     });
-    const candidateSoonest = getSoonestCooldownExpiry(refreshedStore, ids, {
+    const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {
       forModel: candidate.model,
     });
     if (
@@ -337,7 +341,7 @@ function resolveImageFallbackCandidates(params: {
 
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw,
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
@@ -371,6 +375,25 @@ function resolveImageFallbackCandidates(params: {
   return candidates;
 }
 
+function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
+  const configuredPrimary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
+  if (configuredPrimary?.trim()) {
+    const aliasIndex = buildModelAliasIndex({
+      cfg: cfg ?? {},
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const resolved = resolveModelRefFromString({
+      raw: configuredPrimary,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (resolved?.ref.provider) {
+      return resolved.ref.provider;
+    }
+  }
+  return DEFAULT_PROVIDER;
+}
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -387,8 +410,8 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const providerRaw = normalizeOptionalString(String(params.provider ?? "")) || defaultProvider;
-  const modelRaw = normalizeOptionalString(String(params.model ?? "")) || defaultModel;
+  const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
+  const modelRaw = normalizeOptionalString(params.model) || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
   const aliasIndex = buildModelAliasIndex({
@@ -415,7 +438,7 @@ function resolveFallbackCandidates(params: {
     if (normalizedPrimary.provider !== configuredPrimary.provider) {
       const isConfiguredFallback = configuredFallbacks.some((raw) => {
         const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
+          raw,
           defaultProvider,
           aliasIndex,
         });
@@ -429,7 +452,7 @@ function resolveFallbackCandidates(params: {
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw,
       defaultProvider,
       aliasIndex,
     });
@@ -456,7 +479,7 @@ const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
-  const scope = normalizeOptionalString(String(agentDir ?? "")) ?? "";
+  const scope = normalizeOptionalString(agentDir) ?? "";
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
@@ -502,7 +525,8 @@ function shouldProbePrimaryDuringCooldown(params: {
   hasFallbackCandidates: boolean;
   now: number;
   throttleKey: string;
-  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  authRuntime: ModelFallbackAuthRuntime;
+  authStore: AuthProfileStore;
   profileIds: string[];
   model: string;
 }): boolean {
@@ -514,7 +538,7 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds, {
+  const soonest = params.authRuntime.getSoonestCooldownExpiry(params.authStore, params.profileIds, {
     now: params.now,
     forModel: params.model,
   });
@@ -558,7 +582,8 @@ function resolveCooldownDecision(params: {
   hasFallbackCandidates: boolean;
   now: number;
   probeThrottleKey: string;
-  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  authRuntime: ModelFallbackAuthRuntime;
+  authStore: AuthProfileStore;
   profileIds: string[];
 }): CooldownDecision {
   const shouldProbe = shouldProbePrimaryDuringCooldown({
@@ -566,13 +591,14 @@ function resolveCooldownDecision(params: {
     hasFallbackCandidates: params.hasFallbackCandidates,
     now: params.now,
     throttleKey: params.probeThrottleKey,
+    authRuntime: params.authRuntime,
     authStore: params.authStore,
     profileIds: params.profileIds,
     model: params.candidate.model,
   });
 
   const inferredReason =
-    resolveProfilesUnavailableReason({
+    params.authRuntime.resolveProfilesUnavailableReason({
       store: params.authStore,
       profileIds: params.profileIds,
       now: params.now,
@@ -640,8 +666,12 @@ export async function runWithModelFallback<T>(params: {
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
   });
-  const authStore = params.cfg
-    ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
+  const authRuntime =
+    params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
+      ? await loadModelFallbackAuthRuntime()
+      : null;
+  const authStore = authRuntime
+    ? authRuntime.ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
@@ -657,14 +687,14 @@ export async function runWithModelFallback<T>(params: {
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authStore) {
-      const profileIds = resolveAuthProfileOrder({
+    if (authRuntime && authStore) {
+      const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,
         provider: candidate.provider,
       });
       const isAnyProfileAvailable = profileIds.some(
-        (id) => !isProfileInCooldown(authStore, id, undefined, candidate.model),
+        (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
       );
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
@@ -678,6 +708,7 @@ export async function runWithModelFallback<T>(params: {
           hasFallbackCandidates,
           now,
           probeThrottleKey,
+          authRuntime,
           authStore,
           profileIds,
         });
@@ -883,7 +914,7 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
@@ -893,6 +924,7 @@ export async function runWithModelFallback<T>(params: {
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
     soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+      authRuntime,
       authStore,
       agentDir: params.agentDir,
       cfg: params.cfg,
@@ -909,7 +941,7 @@ export async function runWithImageModelFallback<T>(params: {
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider: resolveImageFallbackDefaultProvider(params.cfg),
     modelOverride: params.modelOverride,
   });
   if (candidates.length === 0) {
@@ -945,7 +977,7 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,

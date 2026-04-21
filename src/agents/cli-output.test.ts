@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { extractCliErrorMessage, parseCliJson, parseCliJsonl } from "./cli-output.js";
+import {
+  createCliJsonlStreamingParser,
+  extractCliErrorMessage,
+  parseCliJson,
+  parseCliJsonl,
+} from "./cli-output.js";
+import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -118,6 +124,39 @@ describe("parseCliJson", () => {
       },
     });
   });
+
+  it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "openai-session-123",
+        response: "OpenAI says hello",
+        usage: {
+          input_tokens: 15,
+          output_tokens: 4,
+          input_tokens_details: {
+            cached_tokens: 6,
+          },
+        },
+      }),
+      {
+        command: "codex",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "OpenAI says hello",
+      sessionId: "openai-session-123",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
 });
 
 describe("parseCliJsonl", () => {
@@ -154,6 +193,33 @@ describe("parseCliJsonl", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("parses Claude stream-json result events for an explicit backend dialect", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-dialect" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-dialect",
+          result: "dialect says hello",
+          usage: { input_tokens: 5, output_tokens: 2 },
+        }),
+      ].join("\n"),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result).toMatchObject({
+      text: "dialect says hello",
+      sessionId: "session-dialect",
+      usage: { input: 5, output: 2 },
     });
   });
 
@@ -248,39 +314,43 @@ describe("parseCliJsonl", () => {
   });
 
   it("extracts nested Claude API errors from failed stream-json output", () => {
-    const message =
-      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
-    const apiError = `API Error: 400 ${JSON.stringify({
-      type: "error",
-      error: {
-        type: "invalid_request_error",
-        message,
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    const result = extractCliErrorMessage(jsonl);
+
+    expect(result).toBe(message);
+  });
+});
+
+describe("createCliJsonlStreamingParser", () => {
+  it("streams Claude stream-json deltas for an explicit backend dialect", () => {
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
       },
-      request_id: "req_011CZqHuXhFetYCnr8325DQc",
-    })}`;
-    const result = extractCliErrorMessage(
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    parser.push(
       [
-        JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
         JSON.stringify({
-          type: "assistant",
-          message: {
-            model: "<synthetic>",
-            role: "assistant",
-            content: [{ type: "text", text: apiError }],
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "hello" },
           },
-          session_id: "session-api-error",
-          error: "unknown",
-        }),
-        JSON.stringify({
-          type: "result",
-          subtype: "success",
-          is_error: true,
-          result: apiError,
-          session_id: "session-api-error",
         }),
       ].join("\n"),
     );
+    parser.finish();
 
-    expect(result).toBe(message);
+    expect(deltas).toEqual([
+      { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
+    ]);
   });
 });

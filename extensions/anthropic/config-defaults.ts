@@ -87,7 +87,7 @@ function resolveAnthropicPrimaryModelRef(raw?: string): string | null {
   }
   const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
   if (aliasKey === "opus") {
-    return "anthropic/claude-opus-4-6";
+    return "anthropic/claude-opus-4-7";
   }
   if (aliasKey === "sonnet") {
     return "anthropic/claude-sonnet-4-6";
@@ -157,6 +157,16 @@ export function normalizeAnthropicProviderConfig<T extends { api?: string; model
     return providerConfig;
   }
   return { ...providerConfig, api: ANTHROPIC_PROVIDER_API };
+}
+
+export function normalizeAnthropicProviderConfigForProvider<
+  T extends { api?: string; models?: unknown[] },
+>(params: { provider: string; providerConfig: T }): T {
+  const provider = normalizeProviderId(params.provider);
+  if (provider !== "anthropic" && provider !== CLAUDE_CLI_BACKEND_ID) {
+    return params.providerConfig;
+  }
+  return normalizeAnthropicProviderConfig(params.providerConfig);
 }
 
 export function applyAnthropicConfigDefaults(params: {

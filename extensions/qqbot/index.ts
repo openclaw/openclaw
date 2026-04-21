@@ -95,7 +95,7 @@ export default defineBundledChannelEntry({
   description: "QQ Bot channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "qqbotPlugin",
   },
   runtime: {
@@ -190,7 +190,7 @@ export default defineBundledChannelEntry({
             } catch {
               // File send failed; the text summary is still returned below.
             }
-            return { text: String(result.text) };
+            return { text: result.text };
           }
 
           return {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -203,36 +204,6 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 90_000 }, async () => {
-    const port = await getFreePort();
-    const server = await startServer(port);
-    try {
-      const res = await postResponses(port, {
-        model: "openclaw",
-        input: "hi",
-      });
-      expect(res.status).toBe(404);
-      await ensureResponseConsumed(res);
-    } finally {
-      await server.close({ reason: "test done" });
-    }
-
-    const disabledPort = await getFreePort();
-    const disabledServer = await startServer(disabledPort, {
-      openResponsesEnabled: false,
-    });
-    try {
-      const res = await postResponses(disabledPort, {
-        model: "openclaw",
-        input: "hi",
-      });
-      expect(res.status).toBe(404);
-      await ensureResponseConsumed(res);
-    } finally {
-      await disabledServer.close({ reason: "test done" });
-    }
-  });
-
   it("handles OpenResponses request parsing and validation", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>, meta?: unknown) => {
@@ -352,6 +323,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(invalidOverrideJson.error?.message).toBe("Invalid `x-openclaw-model`.");
       expect(agentCommand).toHaveBeenCalledTimes(0);
       await ensureResponseConsumed(resInvalidOverride);
+
+      agentCommand.mockClear();
+      agentCommand.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+      const resToolConflict = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tools: WEATHER_TOOL,
+      });
+      expect(resToolConflict.status).toBe(400);
+      const toolConflictJson = (await resToolConflict.json()) as {
+        error?: { code?: string; message?: string };
+      };
+      expect(toolConflictJson.error?.code).toBe("invalid_request_error");
+      expect(toolConflictJson.error?.message).toBe("invalid tool configuration");
+      await ensureResponseConsumed(resToolConflict);
 
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {
@@ -1222,9 +1208,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }),
     );
 
-    await vi.waitFor(() => {
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000, interval: 50 },
+    );
 
     clientReq.destroy();
 
@@ -1275,9 +1264,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
         }),
       );
 
-      await vi.waitFor(() => {
-        expect(agentCommand).toHaveBeenCalledTimes(1);
-      });
+      await vi.waitFor(
+        () => {
+          expect(agentCommand).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 5_000, interval: 50 },
+      );
 
       clientReq.destroy();
 

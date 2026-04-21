@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
-import { maybeWakeNodeWithApns, nodeHandlers } from "./nodes.js";
+import {
+  clearNodeWakeState,
+  maybeSendNodeWakeNudge,
+  maybeWakeNodeWithApns,
+  nodeHandlers,
+} from "./nodes.js";
 
 type MockNodeCommandPolicyParams = {
   command: string;
@@ -311,6 +316,48 @@ describe("node.invoke APNs wake path", () => {
     });
     expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(2);
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+  });
+
+  it("clears wake and nudge throttle state when a node disconnects", async () => {
+    mockDirectWakeConfig("ios-node-clear-wake");
+    mocks.sendApnsAlert.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+
+    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+      path: "sent",
+      throttled: false,
+    });
+    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+      sent: true,
+      throttled: false,
+    });
+    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+      path: "throttled",
+      throttled: true,
+    });
+    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+      sent: false,
+      throttled: true,
+    });
+
+    clearNodeWakeState("ios-node-clear-wake");
+
+    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+      path: "sent",
+      throttled: false,
+    });
+    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+      sent: true,
+      throttled: false,
+    });
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
+    expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
   });
 
   it("wakes and retries invoke after the node reconnects", async () => {

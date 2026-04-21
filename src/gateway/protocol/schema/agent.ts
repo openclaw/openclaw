@@ -35,6 +35,55 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const MessageActionToolContextSchema = Type.Object(
+  {
+    currentChannelId: Type.Optional(Type.String()),
+    currentGraphChannelId: Type.Optional(Type.String()),
+    currentChannelProvider: Type.Optional(Type.String()),
+    currentThreadTs: Type.Optional(Type.String()),
+    currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    replyToMode: Type.Optional(
+      Type.Union([
+        Type.Literal("off"),
+        Type.Literal("first"),
+        Type.Literal("all"),
+        Type.Literal("batched"),
+      ]),
+    ),
+    hasRepliedRef: Type.Optional(
+      Type.Object(
+        {
+          value: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    skipCrossContextDecoration: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const MessageActionParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    action: NonEmptyString,
+    params: Type.Record(Type.String(), Type.Unknown()),
+    accountId: Type.Optional(Type.String()),
+    requesterSenderId: Type.Optional(Type.String()),
+    // Honored only when the RPC caller has the full operator scope set
+    // (shared-secret bearer or `operator.admin`). For narrowly-scoped
+    // callers (e.g. `operator.write`-only) the gateway forces this to
+    // `false` regardless of the value sent here.
+    senderIsOwner: Type.Optional(Type.Boolean()),
+    sessionKey: Type.Optional(Type.String()),
+    sessionId: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+    toolContext: Type.Optional(MessageActionToolContextSchema),
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const SendParamsSchema = Type.Object(
   {
     to: NonEmptyString,
@@ -147,5 +196,5 @@ export const WakeParamsSchema = Type.Object(
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
   },
-  { additionalProperties: false },
+  { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

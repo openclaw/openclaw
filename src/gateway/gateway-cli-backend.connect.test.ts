@@ -80,7 +80,7 @@ describe("gateway cli backend connect", () => {
           token,
           deviceIdentity,
         });
-        const health = await client.request<{ ok?: boolean }>("health", undefined, {
+        const health = await client.request("health", undefined, {
           timeoutMs: 5_000,
         });
         expect(health).toMatchObject({

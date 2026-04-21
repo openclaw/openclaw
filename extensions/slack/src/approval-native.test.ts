@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
 import { slackApprovalCapability, slackNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
@@ -30,6 +30,38 @@ const STORE_PATH = path.join(os.tmpdir(), "openclaw-slack-approval-native-test.j
 function writeStore(store: Record<string, unknown>) {
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   clearSessionStoreCacheForTest();
+}
+
+function createExecApprovalRequest(
+  overrides: Partial<{
+    turnSourceThreadId: string;
+    sessionKey: string;
+  }> = {},
+) {
+  return {
+    id: "req-1",
+    request: {
+      command: "echo hi",
+      turnSourceChannel: "slack",
+      turnSourceTo: "channel:C123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: overrides.turnSourceThreadId ?? "1712345678.123456",
+      sessionKey: overrides.sessionKey ?? "agent:main:slack:channel:c123:thread:1712345678.123456",
+    },
+    createdAtMs: 0,
+    expiresAtMs: 1000,
+  };
+}
+
+async function resolveExecOriginTarget(
+  requestOverrides: Parameters<typeof createExecApprovalRequest>[0] = {},
+) {
+  return await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+    cfg: buildConfig(),
+    accountId: "default",
+    approvalKind: "exec",
+    request: createExecApprovalRequest(requestOverrides),
+  });
 }
 
 describe("slack native approval adapter", () => {
@@ -128,24 +160,7 @@ describe("slack native approval adapter", () => {
   });
 
   it("resolves origin targets from slack turn source", async () => {
-    const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
-      cfg: buildConfig(),
-      accountId: "default",
-      approvalKind: "exec",
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "slack",
-          turnSourceTo: "channel:C123",
-          turnSourceAccountId: "default",
-          turnSourceThreadId: "1712345678.123456",
-          sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
+    const target = await resolveExecOriginTarget();
 
     expect(target).toEqual({
       to: "channel:C123",
@@ -154,28 +169,14 @@ describe("slack native approval adapter", () => {
   });
 
   it("keeps origin delivery when session and turn source thread ids differ only by Slack timestamp precision", async () => {
-    const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
-      cfg: buildConfig(),
-      accountId: "default",
-      approvalKind: "exec",
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "slack",
-          turnSourceTo: "channel:C123",
-          turnSourceAccountId: "default",
-          turnSourceThreadId: "1712345678.123456",
-          sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
+    const target = await resolveExecOriginTarget({
+      turnSourceThreadId: "1712345678.1234567",
+      sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
     });
 
     expect(target).toEqual({
       to: "channel:C123",
-      threadId: "1712345678.123456",
+      threadId: "1712345678.1234567",
     });
   });
 

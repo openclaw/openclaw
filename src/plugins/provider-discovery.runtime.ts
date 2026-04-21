@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
@@ -57,10 +57,9 @@ function resolveProviderDiscoveryEntryPlugins(params: {
     try {
       const moduleExport = loadSource(manifest.providerDiscoverySource!) as ProviderDiscoveryModule;
       providers.push(
-        ...normalizeDiscoveryModule(moduleExport).map((provider) => ({
-          ...provider,
-          pluginId: manifest.id,
-        })),
+        ...normalizeDiscoveryModule(moduleExport).map((provider) =>
+          Object.assign({}, provider, { pluginId: manifest.id }),
+        ),
       );
     } catch {
       // Discovery fast path is optional. Fall back to the full plugin loader

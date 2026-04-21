@@ -1,7 +1,8 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   patchCodexNativeWebSearchPayload,
@@ -12,12 +13,14 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "../openai-responses-payload-policy.js";
+import { resolveOpenAITextVerbosity, type OpenAITextVerbosity } from "../openai-text-verbosity.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { log } from "./logger.js";
+import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
-type OpenAITextVerbosity = "low" | "medium" | "high";
+export { resolveOpenAITextVerbosity };
 
 function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
@@ -102,29 +105,6 @@ export function resolveOpenAIServiceTier(
   if (raw !== undefined && normalized === undefined) {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
     log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
-  }
-  return normalized;
-}
-
-function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "low" || normalized === "medium" || normalized === "high") {
-    return normalized;
-  }
-  return undefined;
-}
-
-export function resolveOpenAITextVerbosity(
-  extraParams: Record<string, unknown> | undefined,
-): OpenAITextVerbosity | undefined {
-  const raw = extraParams?.textVerbosity ?? extraParams?.text_verbosity;
-  const normalized = normalizeOpenAITextVerbosity(raw);
-  if (raw !== undefined && normalized === undefined) {
-    const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    log.warn(`ignoring invalid OpenAI text verbosity param: ${rawSummary}`);
   }
   return normalized;
 }
@@ -246,6 +226,43 @@ export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefi
   };
 }
 
+export function createOpenAIThinkingLevelWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (!thinkingLevel) {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (!shouldApplyOpenAIReasoningCompatibility(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const existingReasoning = payloadObj.reasoning;
+      if (thinkingLevel === "off") {
+        if (existingReasoning !== undefined) {
+          delete payloadObj.reasoning;
+        }
+        return;
+      }
+
+      if (existingReasoning === "none") {
+        payloadObj.reasoning = { effort: mapThinkingLevelToReasoningEffort(thinkingLevel) };
+        return;
+      }
+      if (
+        existingReasoning &&
+        typeof existingReasoning === "object" &&
+        !Array.isArray(existingReasoning)
+      ) {
+        (existingReasoning as Record<string, unknown>).effort =
+          mapThinkingLevelToReasoningEffort(thinkingLevel);
+      }
+    });
+  };
+}
+
 export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -335,18 +352,18 @@ export function createCodexNativeWebSearchWrapper(
     if (activation.state !== "native_active") {
       if (activation.codexNativeEnabled) {
         log.debug(
-          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${String(
-            model.provider ?? "unknown",
-          )}/${String(model.id ?? "unknown")}`,
+          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${
+            model.provider ?? "unknown"
+          }/${model.id ?? "unknown"}`,
         );
       }
       return underlying(model, context, options);
     }
 
     log.debug(
-      `activating Codex native web search (${activation.codexMode}) for ${String(
-        model.provider ?? "unknown",
-      )}/${String(model.id ?? "unknown")}`,
+      `activating Codex native web search (${activation.codexMode}) for ${
+        model.provider ?? "unknown"
+      }/${model.id ?? "unknown"}`,
     );
 
     const originalOnPayload = options?.onPayload;

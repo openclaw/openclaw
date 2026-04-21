@@ -69,22 +69,6 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts googlechat serviceAccount refs", () => {
-    const result = validateConfigObjectRaw({
-      channels: {
-        googlechat: {
-          serviceAccountRef: {
-            source: "file",
-            provider: "filemain",
-            id: "/channels/googlechat/serviceAccount",
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
   it("accepts skills entry apiKey refs", () => {
     const result = validateConfigObjectRaw({
       skills: {

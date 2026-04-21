@@ -1,9 +1,15 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { callGateway } from "../../gateway/call.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { normalizeOptionalStringifiedId } from "../../shared/string-coerce.js";
-import { SessionListRow } from "./sessions-helpers.js";
+import type { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+
+async function callGatewayLazy<T = unknown>(opts: CallGatewayOptions): Promise<T> {
+  const { callGateway } = await import("../../gateway/call.js");
+  return callGateway<T>(opts);
+}
 
 export async function resolveAnnounceTarget(params: {
   sessionKey: string;
@@ -12,6 +18,10 @@ export async function resolveAnnounceTarget(params: {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
   const fallback = parsed ?? parsedDisplay ?? null;
+  const fallbackThreadId =
+    fallback?.threadId ??
+    parseThreadSessionSuffix(params.sessionKey).threadId ??
+    parseThreadSessionSuffix(params.displayKey).threadId;
 
   if (fallback) {
     const normalized = normalizeChannelId(fallback.channel);
@@ -22,7 +32,7 @@ export async function resolveAnnounceTarget(params: {
   }
 
   try {
-    const list = await callGateway<{ sessions: Array<SessionListRow> }>({
+    const list = await callGatewayLazy<{ sessions: Array<SessionListRow> }>({
       method: "sessions.list",
       params: {
         includeGlobal: true,
@@ -55,7 +65,7 @@ export async function resolveAnnounceTarget(params: {
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
       (typeof origin?.accountId === "string" ? origin.accountId : undefined);
     const threadId = normalizeOptionalStringifiedId(
-      deliveryContext?.threadId ?? match?.lastThreadId,
+      deliveryContext?.threadId ?? match?.lastThreadId ?? origin?.threadId ?? fallbackThreadId,
     );
     if (channel && to) {
       return { channel, to, accountId, threadId };

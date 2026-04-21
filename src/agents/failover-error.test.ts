@@ -19,6 +19,8 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
+  '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
 const TOGETHER_MONTHLY_SPEND_CAP_MESSAGE =
   "The account associated with this API key has reached its maximum allowed monthly spending limit.";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
@@ -195,6 +197,14 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("classifies JSON-wrapped OpenRouter stealth-model 404s as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: OPENROUTER_MODEL_NOT_FOUND_PAYLOAD,
+      }),
+    ).toBe("model_not_found");
+  });
+
   it("classifies generic model-does-not-exist messages as model_not_found", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -322,6 +332,26 @@ describe("failover-error", () => {
         message: "prompt is too long: 150000 tokens > 128000 maximum",
       }),
     ).toEqual({ kind: "context_overflow" });
+  });
+
+  it("treats invalid-model HTTP 400 payloads as model_not_found instead of format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "openrouter/__invalid_test_model__ is not a valid model ID",
+      }),
+    ).toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "HTTP 400: openrouter/__invalid_test_model__ is not a valid model ID",
+      }),
+    ).toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "invalid model: openrouter/__invalid_test_model__",
+      }),
+    ).toBe("model_not_found");
   });
 
   it("treats HTTP 422 as format error", () => {
@@ -480,8 +510,13 @@ describe("failover-error", () => {
 
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EAI_AGAIN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EHOSTUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EHOSTDOWN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENETRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
   });
 
@@ -508,6 +543,11 @@ describe("failover-error", () => {
   });
 
   it("infers timeout from connection/network error messages", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "model_cooldown: All credentials for model gpt-5 are cooling down",
+      }),
+    ).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
@@ -567,6 +607,16 @@ describe("failover-error", () => {
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-6");
+  });
+
+  it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {
+    const err = coerceToFailoverError(OPENROUTER_MODEL_NOT_FOUND_PAYLOAD, {
+      provider: "openrouter",
+      model: "openrouter/healer-alpha",
+    });
+
+    expect(err?.reason).toBe("model_not_found");
+    expect(err?.status).toBe(404);
   });
 
   it("maps overloaded to a 503 fallback status", () => {

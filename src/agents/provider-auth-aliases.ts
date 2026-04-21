@@ -1,8 +1,11 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import {
+  isWorkspacePluginAllowedByConfig,
+  normalizePluginConfigId,
+} from "../plugins/plugin-config-trust.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -31,6 +34,18 @@ function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined
   return PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 
+function isWorkspacePluginTrustedForAuthAliases(
+  plugin: PluginManifestRecord,
+  config: OpenClawConfig | undefined,
+): boolean {
+  return isWorkspacePluginAllowedByConfig({
+    config,
+    isImplicitlyAllowed: (pluginId) =>
+      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+    plugin,
+  });
+}
+
 function shouldUsePluginAuthAliases(
   plugin: PluginManifestRecord,
   params: ProviderAuthAliasLookupParams | undefined,
@@ -38,13 +53,7 @@ function shouldUsePluginAuthAliases(
   if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins === true) {
     return true;
   }
-  const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
-  return resolveEffectiveEnableState({
-    id: plugin.id,
-    origin: plugin.origin,
-    config: normalizedConfig,
-    rootConfig: params?.config,
-  }).enabled;
+  return isWorkspacePluginTrustedForAuthAliases(plugin, params?.config);
 }
 
 export function resolveProviderAuthAliasMap(

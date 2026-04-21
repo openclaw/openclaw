@@ -20,6 +20,7 @@ vi.mock("./graph-upload.js", () => {
 
 import {
   buildActivity,
+  buildConversationReference,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
   type MSTeamsAdapter,
@@ -196,18 +197,21 @@ describe("msteams messenger", () => {
       serviceUrl: "https://service.example.com",
     };
 
-    async function sendAndCaptureRevokeFallbackReference(
-      conversation: StoredConversationReference["conversation"],
-    ) {
+    async function sendAndCaptureRevokeFallbackReference(params: {
+      conversation: StoredConversationReference["conversation"];
+      activityId?: string;
+      threadId?: string;
+    }) {
       const proactiveSent: string[] = [];
       let capturedReference: unknown;
       const conversationRef: StoredConversationReference = {
-        activityId: "activity456",
+        activityId: params.activityId ?? "activity456",
         user: { id: "user123", name: "User" },
         agent: { id: "bot123", name: "Bot" },
-        conversation,
+        conversation: params.conversation,
         channelId: "msteams",
         serviceUrl: "https://service.example.com",
+        ...(params.threadId ? { threadId: params.threadId } : {}),
       };
       const adapter: MSTeamsAdapter = {
         continueConversation: async (_appId, reference, logic) => {
@@ -387,6 +391,65 @@ describe("msteams messenger", () => {
       expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
     });
 
+    it("retries full activity preparation when media upload fails transiently", async () => {
+      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-retry-"));
+      const localFile = path.join(tmpDir, "retry.txt");
+      await writeFile(localFile, "hello");
+
+      try {
+        const attempts: string[] = [];
+        const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
+        let uploadAttempts = 0;
+        graphUploadMockState.uploadAndShareOneDrive.mockImplementation(async () => {
+          uploadAttempts += 1;
+          if (uploadAttempts === 1) {
+            throw Object.assign(new Error("transient upload failure"), { statusCode: 429 });
+          }
+          return {
+            itemId: "item123",
+            webUrl: "https://onedrive.example.com/item123",
+            shareUrl: "https://onedrive.example.com/share/item123",
+            name: "retry.txt",
+          };
+        });
+
+        const ctx = {
+          sendActivity: createRecordedSendActivity(attempts),
+          updateActivity: noopUpdateActivity,
+          deleteActivity: noopDeleteActivity,
+        };
+        const adapter = createNoopAdapter();
+
+        const ids = await sendMSTeamsMessages({
+          replyStyle: "thread",
+          adapter,
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            conversation: {
+              ...baseRef.conversation,
+              conversationType: "channel",
+            },
+          },
+          context: ctx,
+          messages: [{ text: "one", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+          onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+        });
+
+        expect(uploadAttempts).toBe(2);
+        expect(attempts).toHaveLength(1);
+        expect(attempts[0]).toContain("📎 [retry.txt]");
+        expect(ids).toEqual([`id:${attempts[0]}`]);
+        expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("does not retry thread sends on client errors (4xx)", async () => {
       const ctx = {
         sendActivity: async () => {
@@ -452,8 +515,10 @@ describe("msteams messenger", () => {
 
     it("reconstructs threaded conversation ID for channel revoke fallback", async () => {
       const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
-        id: "19:abc@thread.tacv2;messageid=deadbeef",
-        conversationType: "channel",
+        conversation: {
+          id: "19:abc@thread.tacv2;messageid=deadbeef",
+          conversationType: "channel",
+        },
       });
 
       expect(proactiveSent).toEqual(["hello"]);
@@ -464,8 +529,10 @@ describe("msteams messenger", () => {
 
     it("does not add thread suffix for group chat revoke fallback", async () => {
       const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
-        id: "19:group123@thread.v2",
-        conversationType: "groupChat",
+        conversation: {
+          id: "19:group123@thread.v2",
+          conversationType: "groupChat",
+        },
       });
 
       expect(proactiveSent).toEqual(["hello"]);
@@ -475,99 +542,35 @@ describe("msteams messenger", () => {
     });
 
     it("uses threadId instead of activityId for channel revoke fallback (#58030)", async () => {
-      const proactiveSent: string[] = [];
-      let capturedReference: unknown;
-
-      const channelRef: StoredConversationReference = {
+      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
         activityId: "current-message-id",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: {
           id: "19:abc@thread.tacv2",
           conversationType: "channel",
         },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
         // threadId is the thread root, which differs from activityId (current message)
         threadId: "thread-root-msg-id",
-      };
-
-      const ctx = createRevokedThreadContext();
-      const adapter: MSTeamsAdapter = {
-        continueConversation: async (_appId, reference, logic) => {
-          capturedReference = reference;
-          await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
-            updateActivity: noopUpdateActivity,
-            deleteActivity: noopDeleteActivity,
-          });
-        },
-        process: async () => {},
-        updateActivity: noopUpdateActivity,
-        deleteActivity: noopDeleteActivity,
-      };
-
-      await sendMSTeamsMessages({
-        replyStyle: "thread",
-        adapter,
-        appId: "app123",
-        conversationRef: channelRef,
-        context: ctx,
-        messages: [{ text: "hello" }],
       });
 
       expect(proactiveSent).toEqual(["hello"]);
-      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
       // Should use threadId (thread root), NOT activityId (current message)
-      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
-      expect(ref.activityId).toBeUndefined();
+      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
+      expect(reference.activityId).toBeUndefined();
     });
 
     it("falls back to activityId when threadId is not set (backward compat)", async () => {
-      const proactiveSent: string[] = [];
-      let capturedReference: unknown;
-
-      const channelRef: StoredConversationReference = {
+      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
         activityId: "legacy-activity-id",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: {
           id: "19:abc@thread.tacv2",
           conversationType: "channel",
         },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
         // No threadId — older stored references may not have it
-      };
-
-      const ctx = createRevokedThreadContext();
-      const adapter: MSTeamsAdapter = {
-        continueConversation: async (_appId, reference, logic) => {
-          capturedReference = reference;
-          await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
-            updateActivity: noopUpdateActivity,
-            deleteActivity: noopDeleteActivity,
-          });
-        },
-        process: async () => {},
-        updateActivity: noopUpdateActivity,
-        deleteActivity: noopDeleteActivity,
-      };
-
-      await sendMSTeamsMessages({
-        replyStyle: "thread",
-        adapter,
-        appId: "app123",
-        conversationRef: channelRef,
-        context: ctx,
-        messages: [{ text: "hello" }],
       });
 
       expect(proactiveSent).toEqual(["hello"]);
-      const ref = capturedReference as { conversation?: { id?: string } };
       // Falls back to activityId when threadId is missing
-      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
     });
 
     it("does not add thread suffix for top-level replyStyle even with threadId set", async () => {
@@ -764,6 +767,98 @@ describe("msteams messenger", () => {
       const activity = await buildActivity({ text: "hello" }, baseRef);
       const channelData = activity.channelData as Record<string, unknown>;
       expect(channelData.feedbackLoopEnabled).toBe(false);
+    });
+  });
+
+  // Regression coverage for #58774: proactive Teams sends fail with HTTP 403
+  // when the Bot Framework connector does not see `tenantId` / `aadObjectId`
+  // on the outbound conversation reference.
+  describe("buildConversationReference tenant/aad forwarding (#58774)", () => {
+    const storedWithChannelDataTenant: StoredConversationReference = {
+      activityId: "activity-1",
+      user: { id: "user123", name: "User", aadObjectId: "aad-user-123" },
+      agent: { id: "bot123", name: "Bot" },
+      conversation: {
+        id: "19:abc@thread.tacv2",
+        conversationType: "channel",
+      },
+      // Canonical channelData source captured by message-handler inbound code.
+      tenantId: "tenant-abc",
+      aadObjectId: "aad-user-123",
+      channelId: "msteams",
+      serviceUrl: "https://smba.trafficmanager.net/amer/",
+    };
+
+    it("forwards top-level tenantId and aadObjectId onto the outbound reference", () => {
+      const reference = buildConversationReference(storedWithChannelDataTenant);
+      expect(reference.tenantId).toBe("tenant-abc");
+      expect(reference.aadObjectId).toBe("aad-user-123");
+      expect(reference.conversation.tenantId).toBe("tenant-abc");
+      expect(reference.user?.aadObjectId).toBe("aad-user-123");
+    });
+
+    it("falls back to conversation.tenantId when no top-level tenantId is stored (legacy ref)", () => {
+      const legacy: StoredConversationReference = {
+        activityId: "activity-legacy",
+        user: { id: "user-legacy", name: "Legacy", aadObjectId: "aad-legacy" },
+        agent: { id: "bot-legacy", name: "Bot" },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-legacy",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(legacy);
+      expect(reference.tenantId).toBe("tenant-legacy");
+      expect(reference.aadObjectId).toBe("aad-legacy");
+    });
+
+    it("omits tenantId and aadObjectId when neither source is available", () => {
+      const minimal: StoredConversationReference = {
+        activityId: "activity-2",
+        user: { id: "user456", name: "User" },
+        agent: { id: "bot456", name: "Bot" },
+        conversation: { id: "19:xyz@thread.tacv2", conversationType: "channel" },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(minimal);
+      expect(reference.tenantId).toBeUndefined();
+      expect(reference.aadObjectId).toBeUndefined();
+      expect(reference.conversation.tenantId).toBeUndefined();
+    });
+
+    it("propagates tenantId/aadObjectId through sendMSTeamsMessages proactive path", async () => {
+      let capturedReference:
+        | { tenantId?: string; aadObjectId?: string; user?: { aadObjectId?: string } }
+        | undefined;
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference as typeof capturedReference;
+          await logic({
+            sendActivity: async () => ({ id: "ok" }),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        adapter,
+        appId: "app123",
+        conversationRef: storedWithChannelDataTenant,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(capturedReference?.tenantId).toBe("tenant-abc");
+      expect(capturedReference?.aadObjectId).toBe("aad-user-123");
+      expect(capturedReference?.user?.aadObjectId).toBe("aad-user-123");
     });
   });
 });

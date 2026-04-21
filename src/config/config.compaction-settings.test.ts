@@ -1,139 +1,88 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadConfig, resetConfigRuntimeState } from "./config.js";
-import { withTempHomeConfig } from "./test-helpers.js";
+import { describe, expect, it } from "vitest";
+import { applyCompactionDefaults } from "./defaults.js";
+import type { OpenClawConfig } from "./types.js";
+
+function materializeCompactionConfig(
+  compaction: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"],
+) {
+  const cfg = applyCompactionDefaults({
+    agents: {
+      defaults: {
+        compaction,
+      },
+    },
+  });
+  return cfg.agents?.defaults?.compaction;
+}
 
 describe("config compaction settings", () => {
-  beforeEach(() => {
-    resetConfigRuntimeState();
+  it("preserves memory flush config values", () => {
+    const compaction = materializeCompactionConfig({
+      mode: "safeguard",
+      reserveTokensFloor: 12_345,
+      identifierPolicy: "custom",
+      identifierInstructions: "Keep ticket IDs unchanged.",
+      qualityGuard: {
+        enabled: true,
+        maxRetries: 2,
+      },
+      memoryFlush: {
+        enabled: false,
+        softThresholdTokens: 1234,
+        prompt: "Write notes.",
+        systemPrompt: "Flush memory now.",
+      },
+    });
+
+    expect(compaction?.reserveTokensFloor).toBe(12_345);
+    expect(compaction?.mode).toBe("safeguard");
+    expect(compaction?.reserveTokens).toBeUndefined();
+    expect(compaction?.keepRecentTokens).toBeUndefined();
+    expect(compaction?.identifierPolicy).toBe("custom");
+    expect(compaction?.identifierInstructions).toBe("Keep ticket IDs unchanged.");
+    expect(compaction?.qualityGuard?.enabled).toBe(true);
+    expect(compaction?.qualityGuard?.maxRetries).toBe(2);
+    expect(compaction?.memoryFlush?.enabled).toBe(false);
+    expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
+    expect(compaction?.memoryFlush?.prompt).toBe("Write notes.");
+    expect(compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
   });
 
-  afterEach(() => {
-    resetConfigRuntimeState();
+  it("preserves pi compaction override values", () => {
+    const compaction = materializeCompactionConfig({
+      reserveTokens: 15_000,
+      keepRecentTokens: 12_000,
+    });
+
+    expect(compaction?.reserveTokens).toBe(15_000);
+    expect(compaction?.keepRecentTokens).toBe(12_000);
   });
 
-  it("preserves memory flush config values", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              reserveTokensFloor: 12_345,
-              identifierPolicy: "custom",
-              identifierInstructions: "Keep ticket IDs unchanged.",
-              qualityGuard: {
-                enabled: true,
-                maxRetries: 2,
-              },
-              memoryFlush: {
-                enabled: false,
-                softThresholdTokens: 1234,
-                prompt: "Write notes.",
-                systemPrompt: "Flush memory now.",
-              },
-            },
-          },
-        },
-      },
-      async () => {
-        const cfg = loadConfig();
+  it("defaults compaction mode to safeguard", () => {
+    const compaction = materializeCompactionConfig({
+      reserveTokensFloor: 9000,
+    });
 
-        expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
-        expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
-        expect(cfg.agents?.defaults?.compaction?.reserveTokens).toBeUndefined();
-        expect(cfg.agents?.defaults?.compaction?.keepRecentTokens).toBeUndefined();
-        expect(cfg.agents?.defaults?.compaction?.identifierPolicy).toBe("custom");
-        expect(cfg.agents?.defaults?.compaction?.identifierInstructions).toBe(
-          "Keep ticket IDs unchanged.",
-        );
-        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.enabled).toBe(true);
-        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(2);
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(false);
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe("Write notes.");
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe(
-          "Flush memory now.",
-        );
-      },
-    );
+    expect(compaction?.mode).toBe("safeguard");
+    expect(compaction?.reserveTokensFloor).toBe(9000);
   });
 
-  it("preserves pi compaction override values", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              reserveTokens: 15_000,
-              keepRecentTokens: 12_000,
-            },
-          },
-        },
-      },
-      async () => {
-        const cfg = loadConfig();
-        expect(cfg.agents?.defaults?.compaction?.reserveTokens).toBe(15_000);
-        expect(cfg.agents?.defaults?.compaction?.keepRecentTokens).toBe(12_000);
-      },
-    );
+  it("preserves recent turn safeguard values during materialization", () => {
+    const compaction = materializeCompactionConfig({
+      mode: "safeguard",
+      recentTurnsPreserve: 4,
+    });
+
+    expect(compaction?.recentTurnsPreserve).toBe(4);
   });
 
-  it("defaults compaction mode to safeguard", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              reserveTokensFloor: 9000,
-            },
-          },
-        },
+  it("preserves oversized quality guard retry values for runtime clamping", () => {
+    const compaction = materializeCompactionConfig({
+      qualityGuard: {
+        maxRetries: 99,
       },
-      async () => {
-        const cfg = loadConfig();
+    });
 
-        expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
-        expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(9000);
-      },
-    );
-  });
-
-  it("preserves recent turn safeguard values through loadConfig()", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              recentTurnsPreserve: 4,
-            },
-          },
-        },
-      },
-      async () => {
-        const cfg = loadConfig();
-        expect(cfg.agents?.defaults?.compaction?.recentTurnsPreserve).toBe(4);
-      },
-    );
-  });
-
-  it("preserves oversized quality guard retry values for runtime clamping", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              qualityGuard: {
-                maxRetries: 99,
-              },
-            },
-          },
-        },
-      },
-      async () => {
-        const cfg = loadConfig();
-        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(99);
-      },
-    );
+    expect(compaction?.qualityGuard?.maxRetries).toBe(99);
   });
 });

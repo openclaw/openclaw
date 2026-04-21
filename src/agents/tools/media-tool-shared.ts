@@ -1,12 +1,13 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { ToolInputError, readStringArrayParam, readStringParam } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
@@ -160,10 +161,10 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   });
 }
 
-export function resolveCapabilityModelCandidatesForTool<T extends CapabilityProvider>(params: {
+export function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
-  providers: T[];
+  providers: CapabilityProvider[];
 }): string[] {
   const providerDefaults = new Map<string, string>();
   for (const provider of params.providers) {
@@ -205,11 +206,11 @@ export function resolveCapabilityModelCandidatesForTool<T extends CapabilityProv
   return orderedRefs;
 }
 
-export function resolveCapabilityModelConfigForTool<T extends CapabilityProvider>(params: {
+export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   modelConfig?: AgentModelConfig;
-  providers: T[];
+  providers: CapabilityProvider[];
 }): ToolModelConfig | null {
   const explicit = coerceToolModelConfig(params.modelConfig);
   if (hasToolModelConfig(explicit)) {
@@ -400,9 +401,13 @@ export function resolveModelFromRegistry(params: {
   provider: string;
   modelId: string;
 }): Model<Api> {
-  const model = params.modelRegistry.find(params.provider, params.modelId) as Model<Api> | null;
+  const resolvedRef = normalizeModelRef(params.provider, params.modelId);
+  const model = params.modelRegistry.find(
+    resolvedRef.provider,
+    resolvedRef.model,
+  ) as Model<Api> | null;
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
+    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   return model;
 }

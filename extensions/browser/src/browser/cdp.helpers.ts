@@ -1,12 +1,19 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
-import { type SsrFPolicy, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
+import {
+  SsrFBlockedError,
+  type SsrFPolicy,
+  resolvePinnedHostnameWithPolicy,
+} from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
+import { withAllowedHostname } from "./ssrf-policy-helpers.js";
 
 export { isLoopbackHost };
 
@@ -26,6 +33,11 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
         ? 443
         : 80;
 
+  // WHATWG URL rejects invalid ports (non-numeric, negative, >65535), and
+  // the ternary above falls back to 80/443 for empty or zero parsed.port,
+  // so this defensive guard is unreachable at runtime. Kept as a
+  // belt-and-braces check against parser drift.
+  /* c8 ignore next 3 */
   if (Number.isNaN(port) || port <= 0 || port > 65535) {
     throw new Error(`${label} has invalid port: ${parsed.port}`);
   }
@@ -51,6 +63,37 @@ export function isWebSocketUrl(url: string): boolean {
   }
 }
 
+/**
+ * Returns true when `url` is a ws/wss URL with a `/devtools/<kind>/<id>`
+ * path segment — i.e. a handshake-ready per-browser or per-target CDP
+ * endpoint that can be opened directly without HTTP discovery.
+ *
+ * Bare ws roots (`ws://host:port`, `ws://host:port/`) and any other
+ * non-`/devtools/...` paths are NOT direct endpoints: Chrome's debug
+ * port only accepts WebSocket upgrades on the specific path returned
+ * by `GET /json/version`. Callers with a bare ws root must normalise
+ * it to http for discovery instead of attempting a root handshake that
+ * Chrome will reject with HTTP 400.
+ */
+export function isDirectCdpWebSocketEndpoint(url: string): boolean {
+  if (!isWebSocketUrl(url)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
+      parsed.pathname,
+    );
+    // isWebSocketUrl above already parsed the same URL successfully, so
+    // new URL(url) cannot throw here. Kept for structural symmetry with
+    // the other try/catch URL helpers.
+    /* c8 ignore start */
+  } catch {
+    return false;
+  }
+  /* c8 ignore stop */
+}
+
 export async function assertCdpEndpointAllowed(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
@@ -62,9 +105,16 @@ export async function assertCdpEndpointAllowed(
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: ssrfPolicy,
-  });
+  try {
+    const policy = isLoopbackHost(parsed.hostname)
+      ? withAllowedHostname(ssrfPolicy, parsed.hostname)
+      : ssrfPolicy;
+    await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+      policy,
+    });
+  } catch (error) {
+    throw new BrowserCdpEndpointBlockedError({ cause: error });
+  }
 }
 
 export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
@@ -152,6 +202,11 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
   }
 }
 
+type CdpFetchResult = {
+  response: Response;
+  release: () => Promise<void>;
+};
+
 function createCdpSender(ws: WebSocket) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
@@ -182,6 +237,11 @@ function createCdpSender(ws: WebSocket) {
   };
 
   ws.on("error", (err) => {
+    // The `err instanceof Error` guard is defensive: Node's `ws` library
+    // always emits Error instances on the 'error' event. Triggering the
+    // non-Error branch would require synthetically emitting on the socket,
+    // which the library treats as an unhandled error and hangs the test.
+    /* c8 ignore next */
     closeWithError(err instanceof Error ? err : new Error(String(err)));
   });
 
@@ -217,23 +277,51 @@ export async function fetchJson<T>(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<T> {
-  const res = await fetchCdpChecked(url, timeoutMs, init);
-  return (await res.json()) as T;
+  const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  try {
+    return (await response.json()) as T;
+  } finally {
+    await release();
+  }
 }
 
 export async function fetchCdpChecked(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
-): Promise<Response> {
+  ssrfPolicy?: SsrFPolicy,
+): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  let guardedRelease: (() => Promise<void>) | undefined;
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    clearTimeout(t);
+    await guardedRelease?.();
+  };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await withNoProxyForCdpUrl(url, () =>
-      fetch(url, { ...init, headers, signal: ctrl.signal }),
-    );
+    const res = await withNoProxyForCdpUrl(url, async () => {
+      const parsedUrl = new URL(url);
+      const policy = isLoopbackHost(parsedUrl.hostname)
+        ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
+        : (ssrfPolicy ?? { allowPrivateNetwork: true });
+      const guarded = await fetchWithSsrFGuard({
+        url,
+        init: { ...init, headers },
+        signal: ctrl.signal,
+        policy,
+        auditContext: "browser-cdp",
+      });
+      guardedRelease = guarded.release;
+      return guarded.response;
+    });
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -241,9 +329,13 @@ export async function fetchCdpChecked(
       }
       throw new Error(`HTTP ${res.status}`);
     }
-    return res;
-  } finally {
-    clearTimeout(t);
+    return { response: res, release };
+  } catch (error) {
+    await release();
+    if (error instanceof SsrFBlockedError) {
+      throw new BrowserCdpEndpointBlockedError({ cause: error });
+    }
+    throw error;
   }
 }
 
@@ -251,8 +343,10 @@ export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<void> {
-  await fetchCdpChecked(url, timeoutMs, init);
+  const { release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  await release();
 }
 
 export function openCdpWebSocket(
@@ -289,6 +383,11 @@ export async function withCdpSocket<T>(
   try {
     await openPromise;
   } catch (err) {
+    // openPromise is only rejected via `ws.once('error', err => reject(err))`
+    // or the close event's `new Error(...)`; the former always carries an
+    // Error from Node's `ws` library, the latter is already an Error. The
+    // non-Error wrap is defensive and structurally unreachable.
+    /* c8 ignore next */
     closeWithError(err instanceof Error ? err : new Error(String(err)));
     throw err;
   }

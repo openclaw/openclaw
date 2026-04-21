@@ -7,6 +7,7 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -17,8 +18,8 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
-import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
@@ -89,7 +90,7 @@ function shouldUseDiscoveryCache(env: NodeJS.ProcessEnv): boolean {
   return resolveDiscoveryCacheMs(env) > 0;
 }
 
-function buildDiscoveryCacheKey(params: {
+function buildScopedDiscoveryCacheKey(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
@@ -101,10 +102,20 @@ function buildDiscoveryCacheKey(params: {
     env: params.env,
   });
   const workspaceKey = roots.workspace ?? "";
+  const bundledRoot = roots.stock ?? "";
+  const ownershipUid = params.ownershipUid ?? currentUid();
+  return `scoped::${workspaceKey}::${bundledRoot}::${ownershipUid ?? "none"}::${JSON.stringify(loadPaths)}`;
+}
+
+function buildSharedDiscoveryCacheKey(params: {
+  ownershipUid?: number | null;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const roots = resolvePluginSourceRoots({ env: params.env });
   const configExtensionsRoot = roots.global ?? "";
   const bundledRoot = roots.stock ?? "";
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
+  return `shared::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}`;
 }
 
 function currentUid(overrideUid?: number | null): number | null {
@@ -341,6 +352,49 @@ function resolvesToSameDirectory(left?: string, right?: string): boolean {
     return leftRealPath === rightRealPath;
   }
   return path.resolve(left) === path.resolve(right);
+}
+
+function createDiscoveryResult(): PluginDiscoveryResult {
+  return {
+    candidates: [],
+    diagnostics: [],
+  };
+}
+
+function mergeDiscoveryResult(
+  target: PluginDiscoveryResult,
+  source: PluginDiscoveryResult,
+  seenSources: Set<string>,
+): void {
+  for (const candidate of source.candidates) {
+    const key = candidate.source;
+    if (seenSources.has(key)) {
+      continue;
+    }
+    seenSources.add(key);
+    target.candidates.push(candidate);
+  }
+  target.diagnostics.push(...source.diagnostics);
+}
+
+function getCachedDiscoveryResult(params: {
+  cacheEnabled: boolean;
+  cacheKey: string;
+  env: NodeJS.ProcessEnv;
+  load: () => PluginDiscoveryResult;
+}): PluginDiscoveryResult {
+  const ttl = resolveDiscoveryCacheMs(params.env);
+  if (params.cacheEnabled) {
+    const cached = discoveryCache.get(params.cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.result;
+    }
+  }
+  const result = params.load();
+  if (params.cacheEnabled && ttl > 0) {
+    discoveryCache.set(params.cacheKey, { expiresAt: Date.now() + ttl, result });
+  }
+  return result;
 }
 
 function readPackageManifest(dir: string, rejectHardlinks = true): PackageManifest | null {
@@ -868,91 +922,95 @@ export function discoverOpenClawPlugins(params: {
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
   const cacheEnabled = params.cache !== false && shouldUseDiscoveryCache(env);
-  const cacheKey = buildDiscoveryCacheKey({
-    workspaceDir: params.workspaceDir,
-    extraPaths: params.extraPaths,
-    ownershipUid: params.ownershipUid,
-    env,
-  });
-  if (cacheEnabled) {
-    const cached = discoveryCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.result;
-    }
-  }
-
-  const candidates: PluginCandidate[] = [];
-  const diagnostics: PluginDiagnostic[] = [];
-  const seen = new Set<string>();
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
-
-  const extra = params.extraPaths ?? [];
-  for (const extraPath of extra) {
-    if (typeof extraPath !== "string") {
-      continue;
-    }
-    const trimmed = extraPath.trim();
-    if (!trimmed) {
-      continue;
-    }
-    discoverFromPath({
-      rawPath: trimmed,
-      origin: "config",
+  const scopedResult = getCachedDiscoveryResult({
+    cacheEnabled,
+    cacheKey: buildScopedDiscoveryCacheKey({
+      workspaceDir: params.workspaceDir,
+      extraPaths: params.extraPaths,
       ownershipUid: params.ownershipUid,
-      workspaceDir,
       env,
-      candidates,
-      diagnostics,
-      seen,
-    });
-  }
-  const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
-
-  if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
-    // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
-    // Recursively scanning the full workspace treats arbitrary project folders as
-    // plugin candidates and causes noisy "plugin manifest not found" validation failures.
-    discoverInDirectory({
-      dir: roots.workspace,
-      origin: "workspace",
-      ownershipUid: params.ownershipUid,
-      workspaceDir: workspaceRoot,
-      candidates,
-      diagnostics,
-      seen,
-    });
-  }
-
-  if (roots.stock) {
-    discoverInDirectory({
-      dir: roots.stock,
-      origin: "bundled",
-      ownershipUid: params.ownershipUid,
-      candidates,
-      diagnostics,
-      seen,
-    });
-  }
-
-  // Keep auto-discovered global extensions behind bundled plugins.
-  // Users can still intentionally override via plugins.load.paths (origin=config).
-  discoverInDirectory({
-    dir: roots.global,
-    origin: "global",
-    ownershipUid: params.ownershipUid,
-    candidates,
-    diagnostics,
-    seen,
+    }),
+    env,
+    load: () => {
+      const result = createDiscoveryResult();
+      const seen = new Set<string>();
+      const extra = params.extraPaths ?? [];
+      for (const extraPath of extra) {
+        if (typeof extraPath !== "string") {
+          continue;
+        }
+        const trimmed = extraPath.trim();
+        if (!trimmed) {
+          continue;
+        }
+        discoverFromPath({
+          rawPath: trimmed,
+          origin: "config",
+          ownershipUid: params.ownershipUid,
+          workspaceDir,
+          env,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+        });
+      }
+      const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
+      if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
+        // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
+        // Recursively scanning the full workspace treats arbitrary project folders as
+        // plugin candidates and causes noisy "plugin manifest not found" validation failures.
+        discoverInDirectory({
+          dir: roots.workspace,
+          origin: "workspace",
+          ownershipUid: params.ownershipUid,
+          workspaceDir: workspaceRoot,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+        });
+      }
+      return result;
+    },
   });
-
-  const result = { candidates, diagnostics };
-  if (cacheEnabled) {
-    const ttl = resolveDiscoveryCacheMs(env);
-    if (ttl > 0) {
-      discoveryCache.set(cacheKey, { expiresAt: Date.now() + ttl, result });
-    }
-  }
+  const sharedResult = getCachedDiscoveryResult({
+    cacheEnabled,
+    cacheKey: buildSharedDiscoveryCacheKey({
+      ownershipUid: params.ownershipUid,
+      env,
+    }),
+    env,
+    load: () => {
+      const result = createDiscoveryResult();
+      const seen = new Set<string>();
+      if (roots.stock) {
+        discoverInDirectory({
+          dir: roots.stock,
+          origin: "bundled",
+          ownershipUid: params.ownershipUid,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+        });
+      }
+      // Keep auto-discovered global extensions behind bundled plugins.
+      // Users can still intentionally override via plugins.load.paths (origin=config).
+      discoverInDirectory({
+        dir: roots.global,
+        origin: "global",
+        ownershipUid: params.ownershipUid,
+        candidates: result.candidates,
+        diagnostics: result.diagnostics,
+        seen,
+      });
+      return result;
+    },
+  });
+  const result = createDiscoveryResult();
+  const seenSources = new Set<string>();
+  mergeDiscoveryResult(result, scopedResult, seenSources);
+  mergeDiscoveryResult(result, sharedResult, seenSources);
   return result;
 }

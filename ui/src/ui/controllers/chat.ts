@@ -1,7 +1,7 @@
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
@@ -11,6 +11,11 @@ import {
 } from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
+  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
+const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
+const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
@@ -51,6 +56,48 @@ function isAssistantSilentReply(message: unknown): boolean {
   }
   const text = extractText(message);
   return typeof text === "string" && isSilentReplyStream(text);
+}
+
+function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "toolresult") {
+    return false;
+  }
+  const text = extractText(message);
+  return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
+}
+
+function shouldHideHistoryMessage(message: unknown): boolean {
+  return isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message);
+}
+
+function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
+  if (!(err instanceof GatewayRequestError)) {
+    return false;
+  }
+  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
+    return false;
+  }
+  const details = err.details;
+  if (!details || typeof details !== "object") {
+    return true;
+  }
+  const detailMethod = (details as { method?: unknown }).method;
+  return typeof detailMethod !== "string" || detailMethod === method;
+}
+
+function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
+  const retryAfterMs =
+    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
+  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export type ChatState = {
@@ -95,21 +142,42 @@ export async function loadChatHistory(state: ChatState) {
   }
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
+  const startedAt = Date.now();
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey,
-        limit: 200,
-      },
-    );
+    let res: { messages?: Array<unknown>; thinkingLevel?: string };
+    for (;;) {
+      try {
+        res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
+          "chat.history",
+          {
+            sessionKey,
+            limit: 200,
+          },
+        );
+        break;
+      } catch (err) {
+        if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+          return;
+        }
+        const withinStartupRetryWindow =
+          Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
+        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
+          await sleep(resolveStartupRetryDelayMs(err));
+          if (!state.client || !state.connected) {
+            return;
+          }
+          continue;
+        }
+        throw err;
+      }
+    }
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -140,6 +208,38 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
     return null;
   }
   return { mimeType: match[1], content: match[2] };
+}
+
+function buildApiAttachments(attachments?: ChatAttachment[]) {
+  const hasAttachments = attachments && attachments.length > 0;
+  return hasAttachments
+    ? attachments
+        .map((att) => {
+          const parsed = dataUrlToBase64(att.dataUrl);
+          if (!parsed) {
+            return null;
+          }
+          return {
+            type: "image",
+            mimeType: parsed.mimeType,
+            content: parsed.content,
+          };
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null)
+    : undefined;
+}
+
+async function requestChatSend(
+  state: ChatState,
+  params: { message: string; attachments?: ChatAttachment[]; runId: string },
+) {
+  await state.client!.request("chat.send", {
+    sessionKey: state.sessionKey,
+    message: params.message,
+    deliver: false,
+    idempotencyKey: params.runId,
+    attachments: buildApiAttachments(params.attachments),
+  });
 }
 
 type AssistantMessageNormalizationOptions = {
@@ -238,31 +338,8 @@ export async function sendChatMessage(
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
-  // Convert attachments to API format
-  const apiAttachments = hasAttachments
-    ? attachments
-        .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: "image",
-            mimeType: parsed.mimeType,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
-
   try {
-    await state.client.request("chat.send", {
-      sessionKey: state.sessionKey,
-      message: msg,
-      deliver: false,
-      idempotencyKey: runId,
-      attachments: apiAttachments,
-    });
+    await requestChatSend(state, { message: msg, attachments, runId });
     return runId;
   } catch (err) {
     const error = formatConnectError(err);
@@ -281,6 +358,30 @@ export async function sendChatMessage(
     return null;
   } finally {
     state.chatSending = false;
+  }
+}
+
+export async function sendDetachedChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
+  state.lastError = null;
+  const runId = generateUUID();
+  try {
+    await requestChatSend(state, { message: msg, attachments, runId });
+    return runId;
+  } catch (err) {
+    state.lastError = formatConnectError(err);
+    return null;
   }
 }
 

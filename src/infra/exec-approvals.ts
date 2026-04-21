@@ -709,7 +709,7 @@ export function resolveExecApprovalsFromFile(params: {
       defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
@@ -744,9 +744,8 @@ export function resolveExecApprovalsFromFile(params: {
     security: resolvedAgentSecurity.value,
     ask: resolvedAgentAsk.value,
     askFallback: resolvedAgentAskFallback.value,
-    autoAllowSkills: Boolean(
+    autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
-    ),
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
@@ -855,13 +854,12 @@ export function recordAllowlistUse(
   const nextAllowlist = allowlist.map((item) =>
     item.pattern === entry.pattern &&
     (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
-      ? {
-          ...item,
+      ? Object.assign({}, item, {
           id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
-        }
+        })
       : item,
   );
   agents[target] = { ...existing, allowlist: nextAllowlist };

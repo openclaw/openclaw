@@ -1,21 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-vi.unmock("../../plugins/provider-runtime.js");
-vi.unmock("../../plugins/provider-runtime.runtime.js");
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderCacheTtlEligibility: () => undefined,
+}));
 
-let isCacheTtlEligibleProvider: typeof import("./cache-ttl.js").isCacheTtlEligibleProvider;
+import { isCacheTtlEligibleProvider } from "./cache-ttl.js";
 
 describe("kilocode cache-ttl eligibility", () => {
-  beforeEach(async () => {
-    vi.doUnmock("../../plugins/provider-runtime.js");
-    vi.doUnmock("../../plugins/provider-runtime.runtime.js");
-    vi.resetModules();
-    const { resetProviderRuntimeHookCacheForTest } =
-      await import("../../plugins/provider-runtime.js");
-    resetProviderRuntimeHookCacheForTest();
-    ({ isCacheTtlEligibleProvider } = await import("./cache-ttl.js"));
-  });
-
   it("allows anthropic models", () => {
     for (const modelId of ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4"] as const) {
       expect(isCacheTtlEligibleProvider("kilocode", modelId)).toBe(true);

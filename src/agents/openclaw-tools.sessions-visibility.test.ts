@@ -58,7 +58,7 @@ describe("sessions tools visibility", () => {
         return { sessions: [{ key: "subagent:child-1" }] };
       }
       if (req.method === "sessions.resolve") {
-        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        const key = typeof req.params?.key === "string" ? req.params.key : "";
         return { key };
       }
       return undefined;
@@ -67,7 +67,7 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const denied = await tool.execute("call1", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
 
@@ -86,10 +86,10 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const result = await tool.execute("call3", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
     expect(result.details).toMatchObject({
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
   });
 

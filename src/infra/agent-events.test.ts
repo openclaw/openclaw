@@ -78,7 +78,7 @@ describe("agent-events sequencing", () => {
   test("omits sessionKey for runs hidden from Control UI", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
       isControlUiVisible: false,
     });
 
@@ -90,7 +90,7 @@ describe("agent-events sequencing", () => {
       runId: "run-hidden",
       stream: "assistant",
       data: { text: "hi" },
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
     });
     stop();
 
@@ -231,4 +231,28 @@ describe("agent-events sequencing", () => {
       { runId: "run-active", seq: 2 },
     ]);
   });
+});
+
+test("clearAgentRunContext also cleans up seqByRun to prevent memory leak (#63643)", () => {
+  // Regression test: seqByRun entries were never deleted when a run ended,
+  // causing unbounded growth over time.
+  registerAgentRunContext("run-leak", { sessionKey: "main" });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+
+  // After clearing run context, the sequence counter should also be removed.
+  clearAgentRunContext("run-leak");
+
+  // Emitting a new event on the same runId should start seq from 1 again,
+  // proving the old entry was deleted.
+  const seqs: number[] = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.runId === "run-leak") {
+      seqs.push(evt.seq);
+    }
+  });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  stop();
+
+  expect(seqs).toEqual([1]);
 });

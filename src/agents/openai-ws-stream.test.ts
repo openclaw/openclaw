@@ -213,6 +213,11 @@ const { MockManager } = vi.hoisted(() => {
   return { MockManager: TrackedMockManager };
 });
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderTransportTurnStateWithPlugin: () => undefined,
+  resolveProviderWebSocketSessionPolicyWithPlugin: () => undefined,
+}));
+
 // Track if streamSimple (HTTP fallback) was called
 const streamSimpleCalls: Array<{ model: unknown; context: unknown; options?: unknown }> = [];
 const mockStreamSimple = vi.fn((model: unknown, context: unknown, options?: unknown) => {
@@ -1075,6 +1080,37 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(tc.name).toBe("exec");
     expect(tc.id).toBe("call_abc|item_2");
     expect(tc.arguments).toEqual({ arg: "value" });
+  });
+
+  it("preserves malformed function-call arguments as the raw string", () => {
+    const response: ResponseObject = {
+      id: "resp_malformed",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.4",
+      output: [
+        {
+          type: "function_call",
+          id: "item_bad_args",
+          call_id: "call_bad",
+          name: "exec",
+          arguments: "not valid json",
+        },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const tc = msg.content.find((c) => c.type === "toolCall") as {
+      type: string;
+      name: string;
+      arguments: unknown;
+    };
+
+    expect(tc).toBeDefined();
+    expect(tc.name).toBe("exec");
+    expect(tc.arguments).toBe("not valid json");
   });
 
   it("sets stopReason to 'toolUse' when tool calls are present", () => {
@@ -2495,6 +2531,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
   it("keeps websocket degraded for the session until the cool-down expires", async () => {
     openAIWsStreamTesting.setWsDegradeCooldownMsForTest(50);
     MockManager.globalConnectShouldFail = true;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
 
     try {
       const sessionId = "sess-degraded-cooldown";
@@ -2529,7 +2566,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       expect(MockManager.instances).toHaveLength(2);
       expect(cooledManager.connectCallCount).toBe(0);
 
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      nowSpy.mockReturnValue(1_060);
 
       const thirdStream = streamFn(
         modelStub as Parameters<typeof streamFn>[0],
@@ -2548,6 +2585,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       });
       await new Promise((resolve) => setImmediate(resolve));
     } finally {
+      nowSpy.mockRestore();
       MockManager.globalConnectShouldFail = false;
       openAIWsStreamTesting.setWsDegradeCooldownMsForTest();
       releaseWsSession("sess-degraded-cooldown");
@@ -3103,7 +3141,57 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "medium" });
   });
 
-  it("omits response.create reasoning when reasoningEffort is none", async () => {
+  it("maps minimal shared reasoning to low in response.create", () => {
+    const sent = buildOpenAIWebSocketResponseCreatePayload({
+      model: modelStub as never,
+      context: contextStub as never,
+      options: { reasoning: "minimal" } as never,
+      turnInput: { inputItems: [] },
+      tools: [],
+    });
+
+    expect(sent.reasoning).toEqual({ effort: "low" });
+  });
+
+  it("maps low reasoning to medium for Codex mini websocket requests", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-codex-mini");
+    const opts = { reasoning: "low" };
+    const stream = streamFn(
+      {
+        ...modelStub,
+        id: "gpt-5.1-codex-mini",
+        name: "gpt-5.1-codex-mini",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+      } as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-codex-mini", "Mini thought"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.reasoning).toEqual({ effort: "medium" });
+  });
+
+  it("sends response.create reasoning none when the model supports it", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
     const opts = { reasoningEffort: "none" };
     const stream = streamFn(
@@ -3130,7 +3218,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
     const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
     expect(sent.type).toBe("response.create");
-    expect(sent).not.toHaveProperty("reasoning");
+    expect(sent.reasoning).toEqual({ effort: "none" });
   });
 
   it("applies onPayload mutations before sending response.create", async () => {

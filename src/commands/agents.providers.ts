@@ -5,9 +5,9 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { AgentBinding } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type ProviderAccountStatus = {
@@ -21,6 +21,14 @@ type ProviderAccountStatus = {
 
 function providerAccountKey(provider: ChannelId, accountId?: string) {
   return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
+}
+
+function isUnresolvedSecretRefResolutionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    typeof error.message === "string" &&
+    /unresolved SecretRef/i.test(error.message)
+  );
 }
 
 function formatChannelAccountLabel(params: {
@@ -43,6 +51,17 @@ function formatProviderState(entry: ProviderAccountStatus): string {
   return parts.join(", ");
 }
 
+async function resolveReadOnlyAccount(params: {
+  plugin: ReturnType<typeof listChannelPlugins>[number];
+  cfg: OpenClawConfig;
+  accountId: string;
+}): Promise<unknown> {
+  if (params.plugin.config.inspectAccount) {
+    return await Promise.resolve(params.plugin.config.inspectAccount(params.cfg, params.accountId));
+  }
+  return params.plugin.config.resolveAccount(params.cfg, params.accountId);
+}
+
 export async function buildProviderStatusIndex(
   cfg: OpenClawConfig,
 ): Promise<Map<string, ProviderAccountStatus>> {
@@ -51,7 +70,24 @@ export async function buildProviderStatusIndex(
   for (const plugin of listChannelPlugins()) {
     const accountIds = plugin.config.listAccountIds(cfg);
     for (const accountId of accountIds) {
-      const account = plugin.config.resolveAccount(cfg, accountId);
+      let account: unknown;
+      try {
+        account = await resolveReadOnlyAccount({ plugin, cfg, accountId });
+      } catch (error) {
+        if (!isUnresolvedSecretRefResolutionError(error)) {
+          throw error;
+        }
+        map.set(providerAccountKey(plugin.id, accountId), {
+          provider: plugin.id,
+          accountId,
+          state: "not configured",
+          configured: false,
+        });
+        continue;
+      }
+      if (!account) {
+        continue;
+      }
       const snapshot = plugin.config.describeAccount?.(account, cfg);
       const enabled = plugin.config.isEnabled
         ? plugin.config.isEnabled(account, cfg)

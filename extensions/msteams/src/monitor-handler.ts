@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { formatUnknownError } from "./errors.js";
@@ -6,9 +8,11 @@ import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from ".
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
+import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 export type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { getPendingUploadFs, removePendingUploadFs } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -54,10 +58,17 @@ function serializeAdaptiveCardActionValue(value: unknown): string | null {
   }
 }
 
-async function isFeedbackInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
+async function isInvokeAuthorized(params: {
+  context: MSTeamsTurnContext;
+  deps: MSTeamsMessageHandlerDeps;
+  deniedLogs: {
+    dm: string;
+    channel: string;
+    group: string;
+  };
+  includeInvokeName?: boolean;
+}): Promise<boolean> {
+  const { context, deps, deniedLogs, includeInvokeName = false } = params;
   const resolved = await resolveMSTeamsSenderAccess({
     cfg: deps.cfg,
     activity: context.activity,
@@ -67,10 +78,13 @@ async function isFeedbackInvokeAuthorized(
     return true;
   }
 
+  const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
+
   if (isDirectMessage && resolved.access.decision !== "allow") {
-    deps.log.debug?.("dropping feedback invoke (dm sender not allowlisted)", {
+    deps.log.debug?.(deniedLogs.dm, {
       sender: senderId,
       conversationId,
+      ...maybeInvokeName,
     });
     return false;
   }
@@ -80,23 +94,56 @@ async function isFeedbackInvokeAuthorized(
     resolved.channelGate.allowlistConfigured &&
     !resolved.channelGate.allowed
   ) {
-    deps.log.debug?.("dropping feedback invoke (not in team/channel allowlist)", {
+    deps.log.debug?.(deniedLogs.channel, {
       conversationId,
       teamKey: resolved.channelGate.teamKey ?? "none",
       channelKey: resolved.channelGate.channelKey ?? "none",
+      ...maybeInvokeName,
     });
     return false;
   }
 
   if (!isDirectMessage && !resolved.senderGroupAccess.allowed) {
-    deps.log.debug?.("dropping feedback invoke (group sender not allowlisted)", {
+    deps.log.debug?.(deniedLogs.group, {
       sender: senderId,
       conversationId,
+      ...maybeInvokeName,
     });
     return false;
   }
 
   return true;
+}
+
+async function isFeedbackInvokeAuthorized(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): Promise<boolean> {
+  return isInvokeAuthorized({
+    context,
+    deps,
+    deniedLogs: {
+      dm: "dropping feedback invoke (dm sender not allowlisted)",
+      channel: "dropping feedback invoke (not in team/channel allowlist)",
+      group: "dropping feedback invoke (group sender not allowlisted)",
+    },
+  });
+}
+
+async function isSigninInvokeAuthorized(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): Promise<boolean> {
+  return isInvokeAuthorized({
+    context,
+    deps,
+    deniedLogs: {
+      dm: "dropping signin invoke (dm sender not allowlisted)",
+      channel: "dropping signin invoke (not in team/channel allowlist)",
+      group: "dropping signin invoke (group sender not allowlisted)",
+    },
+    includeInvokeName: true,
+  });
 }
 
 /**
@@ -123,7 +170,20 @@ async function handleFileConsentInvoke(
     typeof consentResponse.context?.uploadId === "string"
       ? consentResponse.context.uploadId
       : undefined;
-  const pendingFile = getPendingUpload(uploadId);
+  // Prefer the in-memory store (same-process reply path); fall back to the
+  // FS-backed store so CLI `message send --media` flows work even when the
+  // invoke callback is delivered to a different process.
+  const inMemoryFile = getPendingUpload(uploadId);
+  const fsFile = inMemoryFile ? undefined : await getPendingUploadFs(uploadId);
+  const pendingFile:
+    | {
+        buffer: Buffer;
+        filename: string;
+        contentType?: string;
+        conversationId: string;
+        consentCardActivityId?: string;
+      }
+    | undefined = inMemoryFile ?? fsFile;
   if (pendingFile) {
     const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
     const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
@@ -164,10 +224,31 @@ async function handleFileConsentInvoke(
           fileType: consentResponse.uploadInfo.fileType,
         });
 
-        await context.sendActivity({
-          type: "message",
-          attachments: [fileInfoCard],
-        });
+        // Only send a new file info message if we can't replace the consent card in-place
+        if (!pendingFile.consentCardActivityId) {
+          await context.sendActivity({
+            type: "message",
+            attachments: [fileInfoCard],
+          });
+        }
+
+        // Replace the original FileConsentCard with the file info card so the
+        // consent prompt no longer shows as pending in the chat
+        if (pendingFile.consentCardActivityId) {
+          try {
+            await context.updateActivity({
+              id: pendingFile.consentCardActivityId,
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          } catch {
+            // Non-fatal fallback: if update fails, send as new message
+            await context.sendActivity({
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          }
+        }
 
         log.info("file upload complete", {
           uploadId,
@@ -179,6 +260,7 @@ async function handleFileConsentInvoke(
         await context.sendActivity("File upload failed. Please try again.");
       } finally {
         removePendingUpload(uploadId);
+        await removePendingUploadFs(uploadId);
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
@@ -188,6 +270,7 @@ async function handleFileConsentInvoke(
     // User declined
     log.debug?.("user declined file consent", { uploadId });
     removePendingUpload(uploadId);
+    await removePendingUploadFs(uploadId);
   }
 
   return true;
@@ -307,10 +390,8 @@ async function handleFeedbackInvoke(
     const storePath = core.channel.session.resolveStorePath(deps.cfg.session?.store, {
       agentId: route.agentId,
     });
-    const fs = await import("node:fs/promises");
-    const pathMod = await import("node:path");
     const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const transcriptFile = pathMod.join(storePath, `${safeKey}.jsonl`);
+    const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
     await fs.appendFile(transcriptFile, JSON.stringify(feedbackEvent) + "\n", "utf-8").catch(() => {
       // Best effort — transcript dir may not exist yet
     });
@@ -374,6 +455,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   deps: MSTeamsMessageHandlerDeps,
 ): T {
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
+  const handleReaction = createMSTeamsReactionHandler(deps);
 
   // Wrap the original run method to intercept invokes
   const originalRun = handler.run;
@@ -441,6 +523,10 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         // Always ack immediately — silently dropping the invoke causes
         // the Teams card UI to report "Something went wrong".
         await ctx.sendActivity({ type: "invokeResponse", value: { status: 200, body: {} } });
+
+        if (!(await isSigninInvokeAuthorized(ctx, deps))) {
+          return;
+        }
 
         if (!deps.sso) {
           deps.log.debug?.("signin invoke received but msteams.sso is not configured", {
@@ -573,6 +659,24 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       } else {
         deps.log.debug?.("member added", { member: member.id });
       }
+    }
+    await next();
+  });
+
+  handler.onReactionsAdded(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "added");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+    }
+    await next();
+  });
+
+  handler.onReactionsRemoved(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "removed");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });

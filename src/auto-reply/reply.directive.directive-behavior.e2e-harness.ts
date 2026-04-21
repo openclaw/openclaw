@@ -11,11 +11,18 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
+  clearSessionAuthProfileOverrideMock,
   compactEmbeddedPiSessionMock,
   loadModelCatalogMock,
+  resolveCommandSecretRefsViaGatewayMock,
+  resolveSessionAuthProfileOverrideMock,
+  runDirectiveBehaviorReplyAgent,
   runEmbeddedPiAgentMock,
+  runDirectiveBehaviorPreparedReply,
+  runPreparedReplyMock,
+  runReplyAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
-import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig, withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
@@ -32,6 +39,7 @@ export const DEFAULT_TEST_MODEL_CATALOG: Array<{
   { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", provider: "openai" },
   { id: "gpt-5.4-nano", name: "GPT-5.4 Nano", provider: "openai" },
   { id: "gpt-5.4", name: "GPT-5.4 (Codex)", provider: "openai-codex" },
+  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro (Codex)", provider: "openai-codex" },
   { id: "gpt-5.4-mini", name: "GPT-5.4 Mini (Codex)", provider: "openai-codex" },
   { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
 ];
@@ -48,6 +56,7 @@ const OPENAI_XHIGH_MODEL_IDS = [
 
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
   "gpt-5.4",
+  "gpt-5.4-pro",
   "gpt-5.4-mini",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
@@ -140,7 +149,7 @@ export function makeWhatsAppDirectiveConfig(
   defaults: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) {
-  return withFullRuntimeReplyConfig({
+  return withFastReplyConfig({
     agents: {
       defaults: {
         workspace: path.join(home, "openclaw"),
@@ -211,6 +220,21 @@ export function installDirectiveBehaviorE2EHooks() {
     runEmbeddedPiAgentMock.mockReset();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+    resolveCommandSecretRefsViaGatewayMock.mockReset();
+    resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    }));
+    clearSessionAuthProfileOverrideMock.mockReset();
+    clearSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthProfileOverrideMock.mockReset();
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    runReplyAgentMock.mockReset();
+    runReplyAgentMock.mockImplementation(runDirectiveBehaviorReplyAgent);
+    runPreparedReplyMock.mockReset();
+    runPreparedReplyMock.mockImplementation(runDirectiveBehaviorPreparedReply);
   });
 
   afterEach(async () => {
@@ -250,7 +274,33 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
   vi.doMock("../agents/model-catalog.js", () => ({
     loadModelCatalog: loadModelCatalogMock,
   }));
+  vi.doMock("../cli/command-secret-gateway.js", () => ({
+    resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
+      resolveCommandSecretRefsViaGatewayMock(...args),
+  }));
+  vi.doMock("../agents/auth-profiles/session-override.js", () => ({
+    clearSessionAuthProfileOverride: (...args: unknown[]) =>
+      clearSessionAuthProfileOverrideMock(...args),
+    resolveSessionAuthProfileOverride: (...args: unknown[]) =>
+      resolveSessionAuthProfileOverrideMock(...args),
+  }));
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: () => undefined,
+  }));
+  vi.doMock("./reply/agent-runner.runtime.js", () => ({
+    runReplyAgent: (...args: unknown[]) => runReplyAgentMock(...args),
+  }));
+  vi.doMock("./reply/get-reply-run.js", () => ({
+    runPreparedReply: (...args: unknown[]) => runPreparedReplyMock(...args),
+  }));
   if (params?.runPreparedReply || params?.onActualRunPreparedReply) {
+    if (params.runPreparedReply && !params.onActualRunPreparedReply) {
+      vi.doMock("./reply/get-reply-run.js", () => ({
+        runPreparedReply: (...args: Parameters<RunPreparedReply>) =>
+          params.runPreparedReply?.(...args),
+      }));
+      return;
+    }
     vi.doMock("./reply/get-reply-run.js", async () => {
       const actual = await vi.importActual<typeof import("./reply/get-reply-run.js")>(
         "./reply/get-reply-run.js",

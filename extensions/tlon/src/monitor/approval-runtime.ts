@@ -352,6 +352,7 @@ export function createTlonApprovalRuntime(params: {
         return true;
       }
     }
+    throw new Error("Unsupported Tlon admin command");
   };
 
   return {

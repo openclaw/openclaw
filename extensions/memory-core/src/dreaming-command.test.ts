@@ -20,7 +20,7 @@ function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> 
 }
 
 function createHarness(initialConfig: OpenClawConfig = {}) {
-  let command: OpenClawPluginCommandDefinition | undefined;
+  const registered: { command?: OpenClawPluginCommandDefinition } = {};
   let runtimeConfig: OpenClawConfig = initialConfig;
 
   const runtime = {
@@ -35,18 +35,18 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
   const api = {
     runtime,
     registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
-      command = definition;
+      registered.command = definition;
     }),
   } as unknown as OpenClawPluginApi;
 
   registerDreamingCommand(api);
 
-  if (!command) {
+  if (!registered.command) {
     throw new Error("memory-core did not register /dreaming");
   }
 
   return {
-    command,
+    command: registered.command,
     runtime,
     getRuntimeConfig: () => runtimeConfig,
   };

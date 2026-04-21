@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { readConnectPairingRequiredMessage } from "../../gateway/protocol/connect-error-details.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -53,13 +53,13 @@ async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
   requestId: string,
 ): Promise<OperatorScope[]> {
-  const pairing = await callGatewayTool<{
+  const pairing: {
     pending?: Array<{
       requestId?: string;
       commands?: unknown;
       requiredApproveScopes?: unknown;
     }>;
-  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
+  } = await callGatewayTool("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
   const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
   const match = pending.find((entry) => entry?.requestId === requestId);
   if (Array.isArray(match?.requiredApproveScopes)) {
@@ -72,20 +72,6 @@ async function resolveNodePairApproveScopes(
     }
   }
   return resolveApproveScopes(match?.commands);
-}
-
-function isPairingRequiredMessage(message: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(message);
-  return lower.includes("pairing required") || lower.includes("not_paired");
-}
-
-function extractPairingRequestId(message: string): string | null {
-  const match = message.match(/\(requestId:\s*([^)]+)\)/i);
-  if (!match) {
-    return null;
-  }
-  const value = (match[1] ?? "").trim();
-  return value.length > 0 ? value : null;
 }
 
 // Flattened schema: runtime validates per-action requirements.
@@ -307,8 +293,9 @@ export function createNodesTool(options?: {
             : "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
-        if (action === "invoke" && isPairingRequiredMessage(message)) {
-          const requestId = extractPairingRequestId(message);
+        const pairing = action === "invoke" ? readConnectPairingRequiredMessage(message) : null;
+        if (pairing) {
+          const requestId = pairing.requestId ?? null;
           const approveHint = requestId
             ? `Approve pairing request ${requestId} and retry.`
             : "Approve the pending pairing request and retry.";
