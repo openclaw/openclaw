@@ -569,7 +569,6 @@ describe("createModelSelectionState auto-failover override self-healing", () => 
     });
 
     // Provider/model should revert to the configured primary, not the fallback.
-    // Provider/model should revert to the configured primary, not the fallback.
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe(defaultModel);
     // The auto override should be cleared from session state.
@@ -579,6 +578,45 @@ describe("createModelSelectionState auto-failover override self-healing", () => 
     // resetModelOverride must NOT be set — it triggers a "Model override not allowed"
     // system event which is incorrect for auto-heal (the override was valid).
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("clears a disallowed auto-failover override without reporting an allowlist reset", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: `${defaultProvider}/${defaultModel}` },
+          models: {
+            [`${defaultProvider}/${defaultModel}`]: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
   });
 
   it("resets in-memory provider/model even when caller pre-loaded the fallback", async () => {
