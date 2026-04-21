@@ -465,7 +465,7 @@ describe("openai codex provider", () => {
 
     expect(model).toMatchObject({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 
@@ -491,7 +491,7 @@ describe("openai codex provider", () => {
 
     expect(model).toMatchObject({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 
@@ -506,7 +506,7 @@ describe("openai codex provider", () => {
       } as never),
     ).toEqual({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 });

@@ -31,6 +31,12 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
+Bundled cost estimates for current Moonshot-hosted K2 models use Moonshot's
+published pay-as-you-go rates: Kimi K2.6 is $0.16/MTok cache hit,
+$0.95/MTok input, and $4.00/MTok output; Kimi K2.5 is $0.10/MTok cache hit,
+$0.60/MTok input, and $3.00/MTok output. Other legacy catalog entries keep
+zero-cost placeholders unless you override them in config.
+
 ## Getting started
 
 Choose your provider and follow the setup steps.
@@ -73,6 +79,25 @@ Choose your provider and follow the setup steps.
         openclaw models list --provider moonshot
         ```
       </Step>
+      <Step title="Run a live smoke test">
+        Use an isolated state dir when you want to verify model access and cost
+        tracking without touching your normal sessions:
+
+        ```bash
+        OPENCLAW_CONFIG_PATH=/tmp/openclaw-kimi/openclaw.json \
+        OPENCLAW_STATE_DIR=/tmp/openclaw-kimi \
+        openclaw agent --local \
+          --session-id live-kimi-cost \
+          --message 'Reply exactly: KIMI_LIVE_OK' \
+          --thinking off \
+          --json
+        ```
+
+        The JSON response should report `provider: "moonshot"` and
+        `model: "kimi-k2.6"`. The assistant transcript entry stores normalized
+        token usage plus estimated cost under `usage.cost` when Moonshot returns
+        usage metadata.
+      </Step>
     </Steps>
 
     ### Config example
@@ -108,7 +133,7 @@ Choose your provider and follow the setup steps.
                 name: "Kimi K2.6",
                 reasoning: false,
                 input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
@@ -117,7 +142,7 @@ Choose your provider and follow the setup steps.
                 name: "Kimi K2.5",
                 reasoning: false,
                 input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
@@ -329,6 +354,12 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     shared `openai-completions` transport. OpenClaw keys that off endpoint
     capabilities, so compatible custom provider ids targeting the same native
     Moonshot hosts inherit the same streaming-usage behavior.
+
+    With the bundled K2.6 pricing, streamed usage that includes input, output,
+    and cache-read tokens is also converted into local estimated USD cost for
+    `/status`, `/usage full`, `/usage cost`, and transcript-backed session
+    accounting.
+
   </Accordion>
 
   <Accordion title="Endpoint and model ref reference">

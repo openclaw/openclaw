@@ -40,6 +40,11 @@ function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
   return cfg.memory?.backend === "qmd";
 }
 
+async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
+  const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
+  return hasInternalHookListeners("gateway", "startup");
+}
+
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
@@ -232,7 +237,9 @@ export async function startGatewaySidecars(params: {
     }
   });
 
-  if (internalHooksConfigured) {
+  const shouldDispatchGatewayStartupInternalHook =
+    internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
+  if (shouldDispatchGatewayStartupInternalHook) {
     setTimeout(() => {
       void import("../hooks/internal-hooks.js").then(
         ({ createInternalHookEvent, triggerInternalHook }) => {
