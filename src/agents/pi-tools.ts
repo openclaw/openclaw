@@ -387,10 +387,10 @@ export function createOpenClawCodingTools(options?: {
     ...(profileAlsoAllow ?? []),
     ...runtimeProfileAlsoAllow,
   ]);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
+    ...(providerProfileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey =
