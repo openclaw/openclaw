@@ -108,6 +108,23 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 
+// Write-on-check metadata fields under plugins.installs.*. These are
+// rewritten every time a plugin resolves or installs (for example the
+// openclaw-web-search refresh cycle) and must not trigger a gateway
+// restart — runtime behavior is unaffected.
+const PLUGIN_INSTALLS_METADATA_FIELDS = ["resolvedAt", "installedAt"] as const;
+
+function isPluginInstallsMetadataPath(path: string): boolean {
+  if (!path.startsWith("plugins.installs.")) {
+    return false;
+  }
+  const segments = path.split(".");
+  if (segments.length !== 4) {
+    return false;
+  }
+  return (PLUGIN_INSTALLS_METADATA_FIELDS as readonly string[]).includes(segments[3]);
+}
+
 function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
   if (registry !== cachedRegistry) {
@@ -170,6 +187,9 @@ function listReloadRules(): ReloadRule[] {
 }
 
 function matchRule(path: string): ReloadRule | null {
+  if (isPluginInstallsMetadataPath(path)) {
+    return { prefix: path, kind: "none" };
+  }
   for (const rule of listReloadRules()) {
     if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
       return rule;

@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/CSP: tighten `img-src` to `'self' data:` only, and make Control UI avatar helpers drop remote `http(s)` and protocol-relative URLs so the UI falls back to the built-in logo/badge instead of issuing arbitrary remote image fetches. Same-origin avatar routes (relative paths) and `data:image/...` avatars still render. (#69773)
 - CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
 - Synology Chat: validate outbound webhook `file_url` values against the shared SSRF policy before forwarding to the NAS, rejecting malformed URLs, non-`http(s)` schemes, and private/blocked network targets so the NAS cannot be used as a confused deputy to fetch internal addresses. (#69784) Thanks @eleqtrizit.
+- Gateway/config reload: stop restarting the gateway when a plugin rewrites its `plugins.installs.*.resolvedAt` or `plugins.installs.*.installedAt` metadata timestamps (for example the `openclaw-web-search` refresh cycle). These write-on-check fields have no runtime effect and now classify as hot no-ops, so long-running gateways no longer SIGTERM every few hours solely because plugin metadata was touched.
 
 ## 2026.4.20
 
