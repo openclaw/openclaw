@@ -18,6 +18,8 @@ const withBundledPluginAllowlistCompatMock = vi.fn();
 const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
+const readCompatibilityNoticesCacheMock = vi.fn();
+const writeCompatibilityNoticesCacheMock = vi.fn();
 let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
 let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
@@ -76,8 +78,9 @@ vi.mock("../agents/workspace.js", () => ({
 }));
 
 vi.mock("./compatibility-notices-cache.js", () => ({
-  readCompatibilityNoticesCache: () => null,
-  writeCompatibilityNoticesCache: () => undefined,
+  readCompatibilityNoticesCache: (...args: unknown[]) => readCompatibilityNoticesCacheMock(...args),
+  writeCompatibilityNoticesCache: (...args: unknown[]) =>
+    writeCompatibilityNoticesCacheMock(...args),
 }));
 
 function setPluginLoadResult(overrides: Partial<ReturnType<typeof createPluginLoadResult>>) {
@@ -341,6 +344,9 @@ describe("plugin status reports", () => {
     withBundledPluginEnablementCompatMock.mockReset();
     listImportedBundledPluginFacadeIdsMock.mockReset();
     listImportedRuntimePluginIdsMock.mockReset();
+    readCompatibilityNoticesCacheMock.mockReset();
+    writeCompatibilityNoticesCacheMock.mockReset();
+    readCompatibilityNoticesCacheMock.mockReturnValue(null);
     loadConfigMock.mockReturnValue({});
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
@@ -480,6 +486,54 @@ describe("plugin status reports", () => {
 
   it("preserves raw config activation context when compatibility notices build their own report", () => {
     expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
+  });
+
+  it("short-circuits to cached compatibility notices without loading plugins", () => {
+    const cached = [
+      createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
+    ];
+    readCompatibilityNoticesCacheMock.mockReturnValue(cached);
+
+    expect(buildPluginCompatibilityNotices({ config: {} })).toEqual(cached);
+
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
+    expect(writeCompatibilityNoticesCacheMock).not.toHaveBeenCalled();
+  });
+
+  it("writes compatibility notices to the cache on a miss", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "demo",
+        name: "Demo",
+        description: "Legacy plugin",
+        origin: "bundled",
+        hookCount: 1,
+      }),
+      {
+        typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
+      },
+    );
+
+    const notices = buildPluginCompatibilityNotices({ config: {} });
+
+    expect(notices.length).toBeGreaterThan(0);
+    expect(writeCompatibilityNoticesCacheMock).toHaveBeenCalledWith(
+      expect.objectContaining({ notices }),
+    );
+  });
+
+  it("bypasses the cache when a diagnostics report is passed in", () => {
+    const report = buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
+    readCompatibilityNoticesCacheMock.mockReturnValue([
+      createCompatibilityNotice({ pluginId: "stale", code: "hook-only" }),
+    ]);
+
+    buildPluginCompatibilityNotices({ config: {}, report });
+
+    expect(readCompatibilityNoticesCacheMock).not.toHaveBeenCalled();
+    expect(writeCompatibilityNoticesCacheMock).not.toHaveBeenCalled();
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {

@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import path from "node:path";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginCompatibilityNotice } from "./compatibility-notice-types.js";
 import { normalizePluginsConfig } from "./config-state.js";
 
-const CACHE_ENVELOPE_VERSION = 1;
+// Bump when the cache key shape changes so pre-existing files miss cleanly.
+const CACHE_ENVELOPE_VERSION = 2;
 const CACHE_DIRNAME = ".openclaw";
 const CACHE_FILENAME = "plugin-compat-cache.json";
 
@@ -36,25 +37,59 @@ function stableStringify(value: unknown): string {
   return `{${body}}`;
 }
 
+function isValidNotice(value: unknown): value is PluginCompatibilityNotice {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const notice = value as Partial<PluginCompatibilityNotice>;
+  return (
+    typeof notice.pluginId === "string" &&
+    (notice.code === "legacy-before-agent-start" || notice.code === "hook-only") &&
+    (notice.severity === "warn" || notice.severity === "info") &&
+    typeof notice.message === "string"
+  );
+}
+
 export function resolveCompatibilityNoticesCacheKey(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string {
   const env = params.env ?? process.env;
-  const plugins = normalizePluginsConfig(params.config?.plugins);
+  const rawConfig = params.config ?? ({} as OpenClawConfig);
+  const normalizedPlugins = normalizePluginsConfig(rawConfig.plugins);
+  // Plugin auto-enable reads from channels/auth/models/tools/agents beyond
+  // `plugins`. Hash the full non-plugins config so any input that can change the
+  // active plugin set invalidates the cache, and keep normalized `plugins`
+  // separately so plugin-id aliases still collapse to the same key.
+  const { plugins: _omitPlugins, ...restConfig } = rawConfig as {
+    plugins?: unknown;
+  } & Record<string, unknown>;
   const payload = stableStringify({
     v: CACHE_ENVELOPE_VERSION,
     openclaw: resolveCompatibilityHostVersion(env),
-    plugins,
+    plugins: normalizedPlugins,
+    rest: restConfig,
   });
   return createHash("sha256").update(payload).digest("hex");
 }
 
+export function resolveCompatibilityNoticesCacheWorkspaceDir(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): string {
+  if (params.workspaceDir) {
+    return params.workspaceDir;
+  }
+  const config = params.config ?? ({} as OpenClawConfig);
+  return resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+}
+
 export function resolveCompatibilityNoticesCachePath(params: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
-  const dir = params.workspaceDir ?? resolveDefaultAgentWorkspaceDir(params.env);
+  const dir = resolveCompatibilityNoticesCacheWorkspaceDir(params);
   return path.join(dir, CACHE_DIRNAME, CACHE_FILENAME);
 }
 
@@ -82,7 +117,8 @@ export function readCompatibilityNoticesCache(params: {
       typeof parsed === "object" &&
       parsed.version === CACHE_ENVELOPE_VERSION &&
       typeof parsed.key === "string" &&
-      Array.isArray(parsed.notices)
+      Array.isArray(parsed.notices) &&
+      parsed.notices.every(isValidNotice)
     ) {
       envelope = parsed;
     }
