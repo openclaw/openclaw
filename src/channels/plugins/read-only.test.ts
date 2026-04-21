@@ -366,7 +366,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it("treats process env maps with option-like keys as env maps", () => {
+  it("accepts option-like env keys through the explicit env option", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       pluginId: "external-chat-plugin",
       channelId: "external-chat",
@@ -379,12 +379,14 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
         },
       } as never,
       {
-        ...process.env,
-        cache: "true",
-        env: "prod",
-        EXTERNAL_CHAT_TOKEN: "configured",
-        workspaceDir: "workspace-env-value",
-      } as NodeJS.ProcessEnv,
+        env: {
+          ...process.env,
+          cache: "true",
+          env: "prod",
+          EXTERNAL_CHAT_TOKEN: "configured",
+          workspaceDir: "workspace-env-value",
+        },
+      },
     );
 
     const plugin = plugins.find((entry) => entry.id === "external-chat");

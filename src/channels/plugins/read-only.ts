@@ -27,61 +27,6 @@ type ReadOnlyChannelPluginResolution = {
   missingConfiguredChannelIds: string[];
 };
 
-const READ_ONLY_CHANNEL_PLUGIN_OPTION_KEYS = new Set([
-  "env",
-  "workspaceDir",
-  "activationSourceConfig",
-  "includePersistedAuthState",
-  "cache",
-]);
-
-function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
-function isRecordLike(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isReadOnlyChannelPluginOptions(
-  value: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
-): value is ReadOnlyChannelPluginOptions {
-  const record = value as Record<string, unknown>;
-  if (hasOwnRecordKey(record, "env")) {
-    return record.env === undefined || isRecordLike(record.env);
-  }
-  if (hasOwnRecordKey(record, "activationSourceConfig")) {
-    return (
-      record.activationSourceConfig === undefined || isRecordLike(record.activationSourceConfig)
-    );
-  }
-  if (hasOwnRecordKey(record, "includePersistedAuthState")) {
-    return (
-      record.includePersistedAuthState === undefined ||
-      typeof record.includePersistedAuthState === "boolean"
-    );
-  }
-  if (hasOwnRecordKey(record, "cache")) {
-    return record.cache === undefined || typeof record.cache === "boolean";
-  }
-  if (hasOwnRecordKey(record, "workspaceDir")) {
-    return Object.keys(record).every((key) => READ_ONLY_CHANNEL_PLUGIN_OPTION_KEYS.has(key));
-  }
-  return false;
-}
-
-function resolveReadOnlyChannelPluginOptions(
-  envOrOptions?: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
-): ReadOnlyChannelPluginOptions {
-  if (!envOrOptions) {
-    return {};
-  }
-  if (isReadOnlyChannelPluginOptions(envOrOptions)) {
-    return envOrOptions;
-  }
-  return { env: envOrOptions };
-}
-
 function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
   plugins: Iterable<ChannelPlugin | undefined>,
@@ -397,24 +342,15 @@ function resolveExternalReadOnlyChannelPluginIds(params: {
 
 export function listReadOnlyChannelPluginsForConfig(
   cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): ChannelPlugin[];
-export function listReadOnlyChannelPluginsForConfig(
-  cfg: OpenClawConfig,
   options?: ReadOnlyChannelPluginOptions,
-): ChannelPlugin[];
-export function listReadOnlyChannelPluginsForConfig(
-  cfg: OpenClawConfig,
-  envOrOptions?: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
 ): ChannelPlugin[] {
-  return resolveReadOnlyChannelPluginsForConfig(cfg, envOrOptions).plugins;
+  return resolveReadOnlyChannelPluginsForConfig(cfg, options).plugins;
 }
 
 export function resolveReadOnlyChannelPluginsForConfig(
   cfg: OpenClawConfig,
-  envOrOptions?: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
+  options: ReadOnlyChannelPluginOptions = {},
 ): ReadOnlyChannelPluginResolution {
-  const options = resolveReadOnlyChannelPluginOptions(envOrOptions);
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
   const externalManifestRecords = listExternalChannelManifestRecords({
