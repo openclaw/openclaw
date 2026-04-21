@@ -181,6 +181,14 @@ const TelegramCustomCommandSchema = z
   })
   .strict();
 
+const TelegramReplyToModeByChatTypeSchema = z
+  .object({
+    direct: ReplyToModeSchema.optional(),
+    group: ReplyToModeSchema.optional(),
+    channel: ReplyToModeSchema.optional(),
+  })
+  .strict();
+
 const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
   ctx: z.RefinementCtx,
@@ -225,6 +233,7 @@ export const TelegramAccountSchemaBase = z
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     botToken: SecretInputSchema.optional().register(sensitive),
     tokenFile: z.string().optional(),
+    replyToModeByChatType: TelegramReplyToModeByChatTypeSchema.optional(),
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),

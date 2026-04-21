@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
+  createReplyToModeFilter,
   resolveConfiguredReplyToMode,
   resolveReplyToMode,
   resolveReplyToModeWithThreading,
@@ -58,6 +59,8 @@ describe("resolveReplyToMode", () => {
       expected: "off" | "all" | "first";
     }> = [
       { cfg: emptyCfg, channel: "telegram", expected: "all" },
+      { cfg: emptyCfg, channel: "telegram", chatType: "direct", expected: "off" },
+      { cfg: emptyCfg, channel: "telegram", chatType: "group", expected: "all" },
       { cfg: emptyCfg, channel: "discord", expected: "all" },
       { cfg: emptyCfg, channel: "slack", expected: "all" },
       { cfg: emptyCfg, channel: undefined, expected: "all" },
@@ -127,5 +130,31 @@ describe("resolveConfiguredReplyToMode", () => {
     expect(resolveConfiguredReplyToMode(cfg, "slack", "group")).toBe("first");
     expect(resolveConfiguredReplyToMode(cfg, "slack", "channel")).toBe("off");
     expect(resolveConfiguredReplyToMode(cfg, "slack", undefined)).toBe("off");
+  });
+
+  it("uses Telegram per-chat-type replyToMode overrides", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "off", group: "all", channel: "first" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveConfiguredReplyToMode(cfg, "telegram", "direct")).toBe("off");
+    expect(resolveConfiguredReplyToMode(cfg, "telegram", "group")).toBe("all");
+    expect(resolveConfiguredReplyToMode(cfg, "telegram", "channel")).toBe("first");
+  });
+});
+
+describe("createReplyToModeFilter", () => {
+  it("applies first-mode per distinct replyToId", () => {
+    const filter = createReplyToModeFilter("first");
+
+    expect(filter({ text: "a1", replyToId: "a" }).replyToId).toBe("a");
+    expect(filter({ text: "a2", replyToId: "a" }).replyToId).toBeUndefined();
+    expect(filter({ text: "b1", replyToId: "b" }).replyToId).toBe("b");
+    expect(filter({ text: "b2", replyToId: "b" }).replyToId).toBeUndefined();
   });
 });

@@ -311,6 +311,29 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     ]);
   });
+
+  it("resolves [[reply_to_current]] into replyToId when currentMessageId is provided", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery(
+        [
+          {
+            text: "[[reply_to_current]] hello",
+          },
+        ],
+        { currentMessageId: "12345" },
+      ),
+    ).toEqual([
+      {
+        text: "hello",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToCurrent: true,
+        replyToId: "12345",
+        replyToTag: true,
+        audioAsVoice: false,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {

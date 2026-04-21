@@ -15,6 +15,7 @@ import {
   resolveConfiguredFromCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -35,7 +36,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import {
+  resolveTelegramAccount,
+  resolveTelegramReplyToMode,
+  type ResolvedTelegramAccount,
+} from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
@@ -1000,6 +1005,23 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   threading: {
     topLevelReplyToMode: "telegram",
+    resolveReplyToMode: createScopedAccountReplyToModeResolver<ResolvedTelegramAccount>({
+      resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
+      resolveReplyToMode: (account, chatType) => {
+        const normalizedChatType =
+          chatType === "direct" || chatType === "group" || chatType === "channel"
+            ? chatType
+            : undefined;
+        if (normalizedChatType && account.config.replyToModeByChatType?.[normalizedChatType]) {
+          return account.config.replyToModeByChatType[normalizedChatType];
+        }
+        return resolveTelegramReplyToMode(
+          { channels: { telegram: account.config } } as OpenClawConfig,
+          account.accountId,
+          normalizedChatType,
+        );
+      },
+    }),
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
   },

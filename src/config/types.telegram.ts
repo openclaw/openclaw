@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import type {
   ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
@@ -121,6 +122,8 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Optional per-chat-type reply threading overrides. */
+  replyToModeByChatType?: Partial<Record<ChatType, ReplyToMode>>;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;

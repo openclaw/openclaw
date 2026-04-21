@@ -89,11 +89,16 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
-function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadPlan | null {
+function createOutboundPayloadPlanEntry(
+  payload: ReplyPayload,
+  options: { currentMessageId?: string } = {},
+): OutboundPayloadPlan | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "");
+  const parsed = parseReplyDirectives(payload.text ?? "", {
+    currentMessageId: options.currentMessageId,
+  });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
   const mergedMedia = mergeMediaUrls(
@@ -138,13 +143,14 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
 
 export function createOutboundPayloadPlan(
   payloads: readonly ReplyPayload[],
+  options: { currentMessageId?: string } = {},
 ): OutboundPayloadPlan[] {
   // Intentionally scoped to channel-agnostic normalization and projection inputs.
   // Transport concerns (queueing, hooks, retries), channel transforms, and
   // heartbeat-specific token semantics remain outside this plan boundary.
   const plan: OutboundPayloadPlan[] = [];
   for (const payload of payloads) {
-    const entry = createOutboundPayloadPlanEntry(payload);
+    const entry = createOutboundPayloadPlanEntry(payload, options);
     if (!entry) {
       continue;
     }
@@ -230,8 +236,9 @@ export function summarizeOutboundPayloadForTransport(
 
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
+  options: { currentMessageId?: string } = {},
 ): ReplyPayload[] {
-  return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
+  return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads, options));
 }
 
 export function normalizeOutboundPayloads(

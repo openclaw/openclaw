@@ -440,7 +440,8 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =
     opts.groupAllowFrom ?? telegramCfg.groupAllowFrom ?? telegramCfg.allowFrom ?? allowFrom;
-  const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "off";
+  const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode;
+  const processorReplyToMode = replyToMode ?? "off";
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "telegram",
     providerSetting: telegramCfg.commands?.native,
@@ -573,7 +574,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     loadFreshConfig: () => telegramDeps.loadConfig(),
     sendChatActionHandler,
     runtime,
-    replyToMode,
+    replyToMode: processorReplyToMode,
     streamMode,
     textLimit,
     opts,

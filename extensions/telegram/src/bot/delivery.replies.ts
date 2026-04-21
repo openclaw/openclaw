@@ -18,6 +18,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { normalizeReplyPayloadsForDelivery } from "../../../../src/infra/outbound/payloads.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
@@ -581,6 +582,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
+  currentMessageId?: string;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -590,7 +592,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
@@ -615,12 +617,16 @@ export async function deliverReplies(params: {
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const effectiveReplyToMode =
+    params.replyToMode ?? (params.thread?.scope === "dm" ? "off" : "all");
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
-  for (const originalReply of params.replies) {
+  for (const originalReply of normalizeReplyPayloadsForDelivery(params.replies, {
+    currentMessageId: params.currentMessageId,
+  })) {
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
@@ -667,8 +673,11 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
+      const explicitReplyOverride = Boolean(reply.replyToTag) || Boolean(reply.replyToCurrent);
       const replyToId =
-        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+        effectiveReplyToMode === "off" && !explicitReplyOverride
+          ? undefined
+          : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
@@ -686,7 +695,7 @@ export async function deliverReplies(params: {
           linkPreview: params.linkPreview,
           silent: params.silent,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       } else {
@@ -707,7 +716,7 @@ export async function deliverReplies(params: {
           replyQuoteText: params.replyQuoteText,
           replyMarkup,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       }
