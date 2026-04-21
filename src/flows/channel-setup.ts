@@ -267,6 +267,11 @@ export async function setupChannels(
       selection.push(channel);
     }
   };
+  const isRenderedChannelChoice = (
+    value: unknown,
+    entries: Array<{ id: ChannelChoice }>,
+  ): value is ChannelChoice =>
+    typeof value === "string" && entries.some((entry) => entry.id === value);
 
   const resolveConfigDisabledHint = (channel: ChannelChoice): string | undefined => {
     if (next.plugins?.enabled === false) {
@@ -599,7 +604,7 @@ export async function setupChannels(
       ],
       initialValue: quickstartDefault,
     });
-    if (choice !== "__skip__") {
+    if (choice !== "__skip__" && isRenderedChannelChoice(choice, entries)) {
       await handleChannelChoice(choice);
     }
   } else {

@@ -545,4 +545,71 @@ describe("setupChannels workspace shadow exclusion", () => {
       "Channel setup",
     );
   });
+
+  it("treats an undefined quickstart selection as skip", async () => {
+    listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
+    isChannelConfigured.mockReturnValue(false);
+    const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
+      cfg: {
+        ...cfg,
+        channels: {
+          "external-chat": { token: "secret" },
+        },
+      } as never,
+    }));
+    const setupWizard = {
+      channel: "external-chat",
+      getStatus: vi.fn(async () => ({
+        channel: "external-chat",
+        configured: false,
+        statusLines: [],
+      })),
+      configure,
+    } as ChannelSetupPlugin["setupWizard"];
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard,
+    });
+    const installedCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
+      pluginId: "external-chat",
+      origin: "bundled",
+    });
+    resolveChannelSetupEntries.mockReturnValue(
+      externalChatSetupEntries({
+        installedCatalogEntries: [installedCatalogEntry],
+        installedCatalogById: new Map([["external-chat", installedCatalogEntry]]),
+      }),
+    );
+    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(
+      makePluginRegistry({
+        channels: [
+          {
+            pluginId: "external-chat",
+            source: "bundled",
+            plugin: externalChatPlugin,
+          },
+        ],
+      }),
+    );
+
+    const next = await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select: vi.fn(async () => undefined),
+      } as never,
+      {
+        quickstartDefaults: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(configure).not.toHaveBeenCalled();
+    expect(next).toEqual({});
+  });
 });
