@@ -581,6 +581,23 @@ non-runtime inputs. If the check needs full config resolution or the real
 channel runtime, keep that logic in the plugin `config.hasConfiguredState`
 hook instead.
 
+## Discovery precedence (duplicate plugin ids)
+
+OpenClaw discovers plugins from several roots (bundled, global install, workspace, explicit config-selected paths). If two discoveries share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it.
+
+Precedence, highest to lowest:
+
+1. **Config-selected** — a path explicitly pinned in `plugins.entries.<id>`
+2. **Bundled** — plugins shipped with OpenClaw
+3. **Global install** — plugins installed into the global OpenClaw plugin root
+4. **Workspace** — plugins discovered relative to the current workspace
+
+Implications:
+
+- A forked or stale copy of a bundled plugin sitting in the workspace will not shadow the bundled build.
+- To actually override a bundled plugin with a local one, pin it via `plugins.entries.<id>` so it wins by precedence rather than relying on workspace discovery.
+- Duplicate drops are logged so Doctor and startup diagnostics can point at the discarded copy.
+
 ## JSON Schema requirements
 
 - **Every plugin must ship a JSON Schema**, even if it accepts no config.

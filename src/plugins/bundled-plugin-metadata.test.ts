@@ -175,6 +175,16 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Discord's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
       expect.objectContaining({
