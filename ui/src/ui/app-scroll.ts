@@ -1,5 +1,9 @@
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
+/** Small upward movement should stop auto-follow before the user fully leaves the old threshold. */
+const MANUAL_SCROLL_RELEASE_THRESHOLD = 24;
+/** Re-enable follow only once the user is effectively back at the bottom. */
+const FOLLOW_REACQUIRE_THRESHOLD = 24;
 
 type ScrollHost = {
   updateComplete: Promise<unknown>;
@@ -9,26 +13,61 @@ type ScrollHost = {
   chatScrollTimeout: number | null;
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
+  chatFollowLocked: boolean;
+  chatSmoothAutoScrolling: boolean;
+  chatSmoothInterrupted: boolean;
+  chatLastScrollTop: number;
   chatNewMessagesBelow: boolean;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
 };
 
-function queryHost(host: Partial<ScrollHost>, selectors: string): Element | null {
-  return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
-}
-
-export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
-  if (host.chatScrollFrame) {
+function cancelPendingChatScroll(host: ScrollHost) {
+  if (host.chatScrollFrame != null) {
     cancelAnimationFrame(host.chatScrollFrame);
+    host.chatScrollFrame = null;
   }
   if (host.chatScrollTimeout != null) {
     clearTimeout(host.chatScrollTimeout);
     host.chatScrollTimeout = null;
   }
+}
+
+function canConsumeVerticalWheelDelta(node: HTMLElement, deltaY: number) {
+  const overflowY = getComputedStyle(node).overflowY;
+  const hasVerticalScrollRange = node.scrollHeight - node.clientHeight > 1;
+  const canScrollVertically =
+    (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+    hasVerticalScrollRange;
+  if (!canScrollVertically) {
+    return false;
+  }
+  if (deltaY < 0) {
+    return node.scrollTop > 1;
+  }
+  return node.scrollTop + node.clientHeight < node.scrollHeight - 1;
+}
+
+function hasNestedScrollableAncestor(
+  target: EventTarget | null,
+  container: HTMLElement,
+  deltaY: number,
+) {
+  let node = target instanceof HTMLElement ? target : null;
+  while (node && node !== container) {
+    if (canConsumeVerticalWheelDelta(node, deltaY)) {
+      return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
+  cancelPendingChatScroll(host);
   const pickScrollTarget = () => {
-    const container = queryHost(host, ".chat-thread") as HTMLElement | null;
+    const container = host.querySelector(".chat-thread") as HTMLElement | null;
     if (container) {
       const overflowY = getComputedStyle(container).overflowY;
       const canScroll =
@@ -49,13 +88,15 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       if (!target) {
         return;
       }
-      const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-
       // force=true only overrides when we haven't auto-scrolled yet (initial load).
       // After initial load, respect the user's scroll position.
       const effectiveForce = force && !host.chatHasAutoScrolled;
+      const hasVerticalScrollRange = target.scrollHeight - target.clientHeight > 1;
       const shouldStick =
-        effectiveForce || host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+        effectiveForce ||
+        (host.chatUserNearBottom && !host.chatFollowLocked && !host.chatSmoothInterrupted) ||
+        // No scroll range means locking cannot keep the view away from bottom.
+        !hasVerticalScrollRange;
 
       if (!shouldStick) {
         // User is scrolled up — flag that new content arrived below.
@@ -65,11 +106,11 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       if (effectiveForce) {
         host.chatHasAutoScrolled = true;
       }
-      const smoothEnabled =
-        smooth &&
-        (typeof window === "undefined" ||
-          typeof window.matchMedia !== "function" ||
-          !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      const reducedMotion =
+        typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const smoothEnabled = smooth && !reducedMotion;
       const scrollTop = target.scrollHeight;
       if (typeof target.scrollTo === "function") {
         target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
@@ -77,6 +118,12 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         target.scrollTop = scrollTop;
       }
       host.chatUserNearBottom = true;
+      host.chatFollowLocked = false;
+      host.chatSmoothAutoScrolling = smoothEnabled;
+      host.chatSmoothInterrupted = false;
+      host.chatLastScrollTop = smoothEnabled
+        ? Math.max(target.scrollTop, 0)
+        : Math.max(0, target.scrollHeight - target.clientHeight);
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
       host.chatScrollTimeout = window.setTimeout(() => {
@@ -85,30 +132,31 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         if (!latest) {
           return;
         }
-        const latestDistanceFromBottom =
-          latest.scrollHeight - latest.scrollTop - latest.clientHeight;
         const shouldStickRetry =
           effectiveForce ||
-          host.chatUserNearBottom ||
-          latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+          (host.chatUserNearBottom && !host.chatFollowLocked && !host.chatSmoothInterrupted);
         if (!shouldStickRetry) {
           return;
         }
         latest.scrollTop = latest.scrollHeight;
         host.chatUserNearBottom = true;
+        host.chatFollowLocked = false;
+        host.chatSmoothAutoScrolling = false;
+        host.chatSmoothInterrupted = false;
+        host.chatLastScrollTop = Math.max(0, latest.scrollHeight - latest.clientHeight);
       }, retryDelay);
     });
   });
 }
 
 export function scheduleLogsScroll(host: ScrollHost, force = false) {
-  if (host.logsScrollFrame) {
+  if (host.logsScrollFrame != null) {
     cancelAnimationFrame(host.logsScrollFrame);
   }
   void host.updateComplete.then(() => {
     host.logsScrollFrame = requestAnimationFrame(() => {
       host.logsScrollFrame = null;
-      const container = queryHost(host, ".log-stream") as HTMLElement | null;
+      const container = host.querySelector(".log-stream") as HTMLElement | null;
       if (!container) {
         return;
       }
@@ -128,12 +176,74 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
+  const currentScrollTop = container.scrollTop;
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  const nearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  const scrollingUp = currentScrollTop < host.chatLastScrollTop;
+  const backAtBottom = distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD;
+  if (
+    currentScrollTop !== host.chatLastScrollTop &&
+    (scrollingUp || host.chatSmoothInterrupted || host.chatFollowLocked)
+  ) {
+    cancelPendingChatScroll(host);
+  }
+
+  if (host.chatSmoothAutoScrolling) {
+    if (scrollingUp && distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD) {
+      host.chatSmoothAutoScrolling = false;
+      host.chatSmoothInterrupted = true;
+      host.chatUserNearBottom = false;
+      host.chatFollowLocked = true;
+    } else if (host.chatSmoothInterrupted && scrollingUp) {
+      host.chatSmoothAutoScrolling = false;
+      host.chatUserNearBottom = false;
+      host.chatFollowLocked = true;
+    } else if (backAtBottom || !scrollingUp) {
+      host.chatSmoothAutoScrolling = false;
+    }
+  } else if (host.chatSmoothInterrupted && scrollingUp) {
+    host.chatSmoothInterrupted = false;
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+  } else if (
+    host.chatUserNearBottom &&
+    scrollingUp &&
+    distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD
+  ) {
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+  } else if (backAtBottom && (!host.chatFollowLocked || !scrollingUp)) {
+    host.chatUserNearBottom = true;
+    host.chatFollowLocked = false;
+    host.chatSmoothInterrupted = false;
+  } else if (!host.chatFollowLocked && nearBottom) {
+    // Fallback for hosts that start out-of-sync before the scroll-state invariant settles.
+    host.chatUserNearBottom = true;
+    host.chatSmoothInterrupted = false;
+  }
+
+  host.chatLastScrollTop = Math.max(currentScrollTop, 0);
   // Clear the "new messages below" indicator when user scrolls back to bottom.
-  if (host.chatUserNearBottom) {
+  if (host.chatUserNearBottom && !host.chatFollowLocked) {
     host.chatNewMessagesBelow = false;
   }
+}
+
+export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
+  if (event.deltaY >= 0) {
+    return;
+  }
+  const container = event.currentTarget as HTMLElement | null;
+  if (!container || container.scrollHeight - container.clientHeight <= 1) {
+    return;
+  }
+  if (hasNestedScrollableAncestor(event.target, container, event.deltaY)) {
+    return;
+  }
+  if (!host.chatUserNearBottom && host.chatFollowLocked) {
+    return;
+  }
+  host.chatSmoothInterrupted = true;
 }
 
 export function handleLogsScroll(host: ScrollHost, event: Event) {
@@ -148,6 +258,10 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
 export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
+  host.chatFollowLocked = false;
+  host.chatSmoothAutoScrolling = false;
+  host.chatSmoothInterrupted = false;
+  host.chatLastScrollTop = 0;
   host.chatNewMessagesBelow = false;
 }
 
@@ -169,7 +283,7 @@ export function observeTopbar(host: ScrollHost) {
   if (typeof ResizeObserver === "undefined") {
     return;
   }
-  const topbar = queryHost(host, ".topbar");
+  const topbar = host.querySelector(".topbar");
   if (!topbar) {
     return;
   }
