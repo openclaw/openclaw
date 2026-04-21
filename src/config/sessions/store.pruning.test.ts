@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
@@ -72,6 +73,14 @@ describe("capEntryCount", () => {
     expect(store.mid).toBeDefined();
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
+  });
+});
+
+describe("resolveMaintenanceConfigFromInput", () => {
+  it("defaults to enforcing session maintenance", () => {
+    const maintenance = resolveMaintenanceConfigFromInput();
+
+    expect(maintenance.mode).toBe("enforce");
   });
 });
 

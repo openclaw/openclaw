@@ -10,6 +10,11 @@ export type BlueBubblesGroupConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this group. */
   tools?: { allow?: string[]; deny?: string[] };
+  /**
+   * Free-form directive appended to the system prompt on every turn that
+   * handles a message in this group.
+   */
+  systemPrompt?: string;
 };
 
 export type BlueBubblesActionConfig = {
