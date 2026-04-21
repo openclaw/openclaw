@@ -232,7 +232,7 @@ export function renderChatControls(state: AppViewState) {
     </svg>
   `;
   return html`
-    <div class="chat-controls">
+    <div class="chat-controls"><span style="display:inline-flex;align-items:center;transform:scale(0.8);transform-origin:left center;">
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}

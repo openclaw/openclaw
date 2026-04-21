@@ -940,6 +940,17 @@
   padding: 8px;
 }
 
+.chat-controls .btn--sm.btn--icon {
+  width: 26px;
+  height: 26px;
+  padding: 3px;
+}
+
+.chat-controls .btn--sm.btn--icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* Light theme thinking indicator override */
 :root[data-theme-mode="light"] .chat-controls__thinking {
   background: rgba(255, 255, 255, 0.9);
