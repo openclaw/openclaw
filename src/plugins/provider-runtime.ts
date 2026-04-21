@@ -650,6 +650,16 @@ export function resolveProviderAdaptiveThinking(params: {
   return resolveProviderRuntimePlugin(params)?.supportsAdaptiveThinking?.(params.context);
 }
 
+export function resolveProviderMaxThinking(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderThinkingPolicyContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.supportsMaxThinking?.(params.context);
+}
+
 export function resolveProviderDefaultThinkingLevel(params: {
   provider: string;
   config?: OpenClawConfig;
