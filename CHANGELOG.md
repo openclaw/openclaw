@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/startup: narrow Matrix runtime registration and defer setup/doctor surfaces so cold plugin registration spends about 1.8s less in `setChannelRuntime`. (#69782) Thanks @gumadeiras.
 - QQBot: extract a self-contained `engine/` architecture with QR-code onboarding, native approval handling via `/bot-approve`, per-account isolated resource stacks and multi-account logger, credential backup/restore, shared `~/.openclaw/media` payload root, and unified API/bridge/gateway modules. (#67960) Thanks @cxyhhhhh.
 - Telegram/plugin startup: load Telegram's bundled runtime setter through a narrow sidecar and let built sidecars use native loading before falling back to jiti, cutting the measured setup-runtime registration path by about 14s while preserving runtime API compatibility. (#69786) thanks @gumadeiras.
+- Discord/plugin startup: load Discord's bundled runtime setter through a narrow sidecar so setup-runtime registration avoids the broad runtime barrel, cutting measured registration time by about 98% (18.5s to 0.44s) while preserving runtime API compatibility. (#69791) thanks @gumadeiras.
 
 ### Fixes
 
@@ -22,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/CSP: tighten `img-src` to `'self' data:` only, and make Control UI avatar helpers drop remote `http(s)` and protocol-relative URLs so the UI falls back to the built-in logo/badge instead of issuing arbitrary remote image fetches. Same-origin avatar routes (relative paths) and `data:image/...` avatars still render. (#69773)
 - CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
 - Synology Chat: validate outbound webhook `file_url` values against the shared SSRF policy before forwarding to the NAS, rejecting malformed URLs, non-`http(s)` schemes, and private/blocked network targets so the NAS cannot be used as a confused deputy to fetch internal addresses. (#69784) Thanks @eleqtrizit.
+- Gateway/Control UI: require gateway auth on the Control UI avatar route (`GET /avatar/<agentId>` and `?meta=1` metadata) when auth is configured, matching the sibling assistant-media route, and propagate the existing gateway token through the UI avatar fetch (bearer header + authenticated blob URL) so authenticated dashboards still load local avatars. (#69775)
 
 ## 2026.4.20
 
