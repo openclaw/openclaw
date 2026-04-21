@@ -6,6 +6,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
@@ -38,6 +39,29 @@ type ChatWebhookPayload = {
   file_url?: string;
   user_ids?: number[];
 };
+
+function isAllowedWebhookFileUrlProtocol(protocol: string): boolean {
+  return protocol === "http:" || protocol === "https:";
+}
+
+function isSafeWebhookFileUrl(fileUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(fileUrl);
+  } catch {
+    return false;
+  }
+
+  if (!isAllowedWebhookFileUrlProtocol(parsed.protocol)) {
+    return false;
+  }
+
+  if (!parsed.hostname || isPrivateOrLoopbackHost(parsed.hostname)) {
+    return false;
+  }
+
+  return true;
+}
 
 const ChatUserSchema = z
   .object({
@@ -131,6 +155,9 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = false,
 ): Promise<boolean> {
+  if (!isSafeWebhookFileUrl(fileUrl)) {
+    return false;
+  }
   const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   try {

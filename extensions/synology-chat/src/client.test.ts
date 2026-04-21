@@ -33,7 +33,7 @@ type MockRequestHandler = (
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
   const res = new EventEmitter() as Partial<IncomingMessage>;
   res.statusCode = statusCode;
-  return res as IncomingMessage;
+  return res;
 }
 
 function createMockRequestEmitter(): ClientRequest {
@@ -41,7 +41,7 @@ function createMockRequestEmitter(): ClientRequest {
   req.write = vi.fn() as ClientRequest["write"];
   req.end = vi.fn() as ClientRequest["end"];
   req.destroy = vi.fn() as ClientRequest["destroy"];
-  return req as ClientRequest;
+  return req;
 }
 
 async function settleTimers<T>(promise: Promise<T>): Promise<T> {
@@ -155,6 +155,30 @@ describe("sendFileUrl", () => {
     );
     const httpsRequest = vi.mocked(https.request);
     expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("blocks loopback file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "http://127.0.0.1:8080/api/internal"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks private-network file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "http://192.168.1.10/admin/config.json"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-http file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "file:///etc/passwd"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 });
 
