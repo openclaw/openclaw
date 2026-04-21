@@ -2,15 +2,18 @@ import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveWebhookPath } from "./runtime-api.js";
 
 const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
-const ZALO_OUTBOUND_MEDIA_DIR = join(tmpdir(), "openclaw-zalo-outbound-media");
+const ZALO_OUTBOUND_MEDIA_DIR = join(
+  resolvePreferredOpenClawTmpDir(),
+  "openclaw-zalo-outbound-media",
+);
 const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 
 type HostedZaloMediaMetadata = {
