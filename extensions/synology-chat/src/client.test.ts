@@ -170,6 +170,23 @@ describe("sendFileUrl", () => {
     expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
 
+  it("respects the shared send interval before posting a file URL", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "hello"));
+    vi.mocked(https.request).mockClear();
+
+    const promise = sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png");
+    await Promise.resolve();
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await promise;
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects malformed file URLs before making a request", async () => {
     const result = await settleTimers(sendFileUrl("https://nas.example.com/incoming", "not-a-url"));
     expect(result).toBe(false);

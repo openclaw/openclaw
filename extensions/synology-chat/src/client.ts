@@ -138,6 +138,13 @@ export async function sendFileUrl(
   try {
     const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
     const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
+
+    const now = Date.now();
+    const elapsed = now - lastSendTime;
+    if (elapsed < MIN_SEND_INTERVAL_MS) {
+      await sleep(MIN_SEND_INTERVAL_MS - elapsed);
+    }
+
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
     lastSendTime = Date.now();
     return ok;
