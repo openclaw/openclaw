@@ -197,6 +197,8 @@ describe("resolveGatewayConnection", () => {
         ...expected,
         allowInsecureLocalOperatorUi: false,
       });
+      expect(process.env.OPENCLAW_TUI_LAUNCH_GATEWAY_TOKEN).toBeUndefined();
+      expect(process.env.OPENCLAW_TUI_LAUNCH_GATEWAY_PASSWORD).toBeUndefined();
     });
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
