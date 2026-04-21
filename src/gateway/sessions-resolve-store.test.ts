@@ -46,7 +46,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
       await saveSessionStore(storePath, {
-        "agent:main:discord:direct:u1": {
+        "agent:main:guildchat:direct:u1": {
           sessionId: "sess-stale-main",
           label: "stale-main",
           updatedAt: 1,
