@@ -67,10 +67,178 @@ function addChannelPlugins(
   }
 }
 
+function rebindChannelScopedString(
+  value: string,
+  sourceChannelId: string,
+  targetChannelId: string,
+): string {
+  const sourcePrefix = `channels.${sourceChannelId}`;
+  if (value === sourcePrefix) {
+    return `channels.${targetChannelId}`;
+  }
+  if (value.startsWith(`${sourcePrefix}.`)) {
+    return `channels.${targetChannelId}${value.slice(sourcePrefix.length)}`;
+  }
+  return value;
+}
+
+function rebindChannelConfig(
+  cfg: OpenClawConfig,
+  sourceChannelId: string,
+  targetChannelId: string,
+): OpenClawConfig {
+  if (sourceChannelId === targetChannelId || !cfg.channels) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      [sourceChannelId]: (cfg.channels as Record<string, unknown>)[targetChannelId],
+    },
+  };
+}
+
+function restoreReboundChannelConfig(params: {
+  original: OpenClawConfig;
+  updated: OpenClawConfig;
+  sourceChannelId: string;
+  targetChannelId: string;
+}): OpenClawConfig {
+  if (params.sourceChannelId === params.targetChannelId || !params.updated.channels) {
+    return params.updated;
+  }
+  const nextChannels = { ...params.updated.channels };
+  if (Object.prototype.hasOwnProperty.call(nextChannels, params.sourceChannelId)) {
+    nextChannels[params.targetChannelId] = nextChannels[params.sourceChannelId];
+  } else {
+    delete nextChannels[params.targetChannelId];
+  }
+  if (
+    params.original.channels &&
+    Object.prototype.hasOwnProperty.call(params.original.channels, params.sourceChannelId)
+  ) {
+    nextChannels[params.sourceChannelId] = params.original.channels[params.sourceChannelId];
+  } else {
+    delete nextChannels[params.sourceChannelId];
+  }
+  return {
+    ...params.updated,
+    channels: nextChannels,
+  };
+}
+
+function rebindChannelPluginConfig(
+  config: ChannelPlugin["config"],
+  sourceChannelId: string,
+  targetChannelId: string,
+): ChannelPlugin["config"] {
+  const rebind = (cfg: OpenClawConfig) =>
+    rebindChannelConfig(cfg, sourceChannelId, targetChannelId);
+  return {
+    ...config,
+    listAccountIds: (cfg) => config.listAccountIds(rebind(cfg)),
+    resolveAccount: (cfg, accountId) => config.resolveAccount(rebind(cfg), accountId),
+    inspectAccount: config.inspectAccount
+      ? (cfg, accountId) => config.inspectAccount?.(rebind(cfg), accountId)
+      : undefined,
+    defaultAccountId: config.defaultAccountId
+      ? (cfg) => config.defaultAccountId?.(rebind(cfg)) ?? ""
+      : undefined,
+    setAccountEnabled: config.setAccountEnabled
+      ? (params) =>
+          restoreReboundChannelConfig({
+            original: params.cfg,
+            updated:
+              config.setAccountEnabled?.({ ...params, cfg: rebind(params.cfg) }) ?? params.cfg,
+            sourceChannelId,
+            targetChannelId,
+          })
+      : undefined,
+    deleteAccount: config.deleteAccount
+      ? (params) =>
+          restoreReboundChannelConfig({
+            original: params.cfg,
+            updated: config.deleteAccount?.({ ...params, cfg: rebind(params.cfg) }) ?? params.cfg,
+            sourceChannelId,
+            targetChannelId,
+          })
+      : undefined,
+    isEnabled: config.isEnabled
+      ? (account, cfg) => config.isEnabled?.(account, rebind(cfg)) ?? false
+      : undefined,
+    disabledReason: config.disabledReason
+      ? (account, cfg) => config.disabledReason?.(account, rebind(cfg)) ?? ""
+      : undefined,
+    isConfigured: config.isConfigured
+      ? (account, cfg) => config.isConfigured?.(account, rebind(cfg)) ?? false
+      : undefined,
+    unconfiguredReason: config.unconfiguredReason
+      ? (account, cfg) => config.unconfiguredReason?.(account, rebind(cfg)) ?? ""
+      : undefined,
+    describeAccount: config.describeAccount
+      ? (account, cfg) => config.describeAccount!(account, rebind(cfg))
+      : undefined,
+    resolveAllowFrom: config.resolveAllowFrom
+      ? (params) => config.resolveAllowFrom?.({ ...params, cfg: rebind(params.cfg) })
+      : undefined,
+    formatAllowFrom: config.formatAllowFrom
+      ? (params) => config.formatAllowFrom?.({ ...params, cfg: rebind(params.cfg) }) ?? []
+      : undefined,
+    hasConfiguredState: config.hasConfiguredState
+      ? (params) => config.hasConfiguredState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
+      : undefined,
+    hasPersistedAuthState: config.hasPersistedAuthState
+      ? (params) => config.hasPersistedAuthState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
+      : undefined,
+    resolveDefaultTo: config.resolveDefaultTo
+      ? (params) => config.resolveDefaultTo?.({ ...params, cfg: rebind(params.cfg) })
+      : undefined,
+  };
+}
+
+function rebindChannelPluginSecrets(
+  secrets: ChannelPlugin["secrets"],
+  sourceChannelId: string,
+  targetChannelId: string,
+): ChannelPlugin["secrets"] {
+  if (!secrets) {
+    return undefined;
+  }
+  return {
+    ...secrets,
+    secretTargetRegistryEntries: secrets.secretTargetRegistryEntries?.map((entry) => ({
+      ...entry,
+      id: rebindChannelScopedString(entry.id, sourceChannelId, targetChannelId),
+      pathPattern: rebindChannelScopedString(entry.pathPattern, sourceChannelId, targetChannelId),
+      ...(entry.refPathPattern
+        ? {
+            refPathPattern: rebindChannelScopedString(
+              entry.refPathPattern,
+              sourceChannelId,
+              targetChannelId,
+            ),
+          }
+        : {}),
+    })),
+    unsupportedSecretRefSurfacePatterns: secrets.unsupportedSecretRefSurfacePatterns?.map(
+      (pattern) => rebindChannelScopedString(pattern, sourceChannelId, targetChannelId),
+    ),
+    collectRuntimeConfigAssignments: secrets.collectRuntimeConfigAssignments
+      ? (params) =>
+          secrets.collectRuntimeConfigAssignments?.({
+            ...params,
+            config: rebindChannelConfig(params.config, sourceChannelId, targetChannelId),
+          })
+      : undefined,
+  };
+}
+
 function cloneChannelPluginForChannelId(plugin: ChannelPlugin, channelId: string): ChannelPlugin {
   if (plugin.id === channelId && plugin.meta.id === channelId) {
     return plugin;
   }
+  const sourceChannelId = plugin.id;
   return {
     ...plugin,
     id: channelId,
@@ -78,6 +246,8 @@ function cloneChannelPluginForChannelId(plugin: ChannelPlugin, channelId: string
       ...plugin.meta,
       id: channelId,
     },
+    config: rebindChannelPluginConfig(plugin.config, sourceChannelId, channelId),
+    secrets: rebindChannelPluginSecrets(plugin.secrets, sourceChannelId, channelId),
   };
 }
 

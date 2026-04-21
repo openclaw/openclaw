@@ -81,7 +81,10 @@ module.exports = {
         capabilities: { chatTypes: ["direct"] },
         config: {
           listAccountIds: () => ["default"],
-          resolveAccount: () => ({ accountId: "default", token: "configured" }),
+          resolveAccount: (cfg) => ({
+            accountId: "default",
+            token: cfg.channels?.[${JSON.stringify(channelId)}]?.token ?? "configured",
+          }),
         },
         outbound: { deliveryMode: "direct" },
         secrets: {
@@ -122,7 +125,10 @@ module.exports = {
     capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["default"],
-      resolveAccount: () => ({ accountId: "default", token: "configured" }),
+      resolveAccount: (cfg) => ({
+        accountId: "default",
+        token: cfg.channels?.[${JSON.stringify(setupChannelId)}]?.token ?? "configured",
+      }),
     },
     outbound: { deliveryMode: "direct" },
     secrets: {
@@ -246,6 +252,19 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(betaPlugin?.meta.id).toBe("beta-chat");
     expect(alphaPlugin?.meta.blurb).toBe("setup entry");
     expect(betaPlugin?.meta.blurb).toBe("setup entry");
+    expect(
+      betaPlugin?.secrets?.secretTargetRegistryEntries?.some(
+        (entry) => entry.id === "channels.beta-chat.token",
+      ),
+    ).toBe(true);
+    expect(
+      betaPlugin?.config.resolveAccount({
+        channels: {
+          "alpha-chat": { token: "alpha-token" },
+          "beta-chat": { token: "beta-token" },
+        },
+      } as never),
+    ).toMatchObject({ token: "beta-token" });
     expect(fs.existsSync(setupMarker)).toBe(true);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
