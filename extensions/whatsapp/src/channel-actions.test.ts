@@ -113,6 +113,29 @@ describe("whatsapp channel action helpers", () => {
     expect(level).toBe("extensive");
     expect(guidance.join("\n")).toContain("Allowed WhatsApp reaction emojis: 👨🏻‍💻 💯");
     expect(guidance.join("\n")).toContain("default acknowledgment reaction is 👨🏻‍💻");
+    expect(guidance.join("\n")).toContain("Reactions apply in every WhatsApp session");
+    expect(guidance.join("\n")).toContain("formal working groups");
+  });
+
+  it("always emits the cross-session reaction reminder when WhatsApp is configured", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const guidance = resolveWhatsAppAgentReactionExtraGuidance({ cfg, accountId: "default" });
+    expect(guidance.join("\n")).toContain("Reactions apply in every WhatsApp session");
+  });
+
+  it("emits no guidance strings when WhatsApp is not configured", () => {
+    const guidance = resolveWhatsAppAgentReactionExtraGuidance({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+    });
+    expect(guidance).toEqual([]);
   });
 
   it("omits reaction guidance when WhatsApp reactions are disabled", () => {

@@ -88,6 +88,9 @@ export function resolveWhatsAppAgentReactionExtraGuidance(params: {
       `For clear work intake that will require tools, source changes, document work, backend work, or waiting on the WhatsApp frontend, the default acknowledgment reaction is ${workIntakeReaction.emoji}.`,
     );
   }
+  guidance.push(
+    "Reactions apply in every WhatsApp session without exception: owner DMs, casual group chats, and formal working groups (project rooms, meeting rooms, accountability rooms) alike. A per-group custom system prompt does not suppress this. When a message genuinely lands (humor, warmth, sharp take, agreement, surprise, small win, confirmation, clear work intake), pick the emoji from the allowed set that fits the vibe and react. A well-timed reaction is preferred over silence or a filler acknowledgement line, even in formal contexts. Do not chase coverage: skip routine turns, skip your own replies, and respect the per-sender cooldown.",
+  );
   return guidance;
 }
 
