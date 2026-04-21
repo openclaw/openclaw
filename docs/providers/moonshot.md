@@ -31,6 +31,12 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
+Bundled cost estimates for current Moonshot-hosted K2 models use Moonshot's
+published pay-as-you-go rates: Kimi K2.6 is $0.16/MTok cache hit,
+$0.95/MTok input, and $4.00/MTok output; Kimi K2.5 is $0.10/MTok cache hit,
+$0.60/MTok input, and $3.00/MTok output. Other legacy catalog entries keep
+zero-cost placeholders unless you override them in config.
+
 ## Getting started
 
 Choose your provider and follow the setup steps.
@@ -108,7 +114,7 @@ Choose your provider and follow the setup steps.
                 name: "Kimi K2.6",
                 reasoning: false,
                 input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
@@ -117,7 +123,7 @@ Choose your provider and follow the setup steps.
                 name: "Kimi K2.5",
                 reasoning: false,
                 input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
