@@ -42,30 +42,12 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
     return;
   }
 
-  const devDependencies = manifest.devDependencies;
-  if (!isObjectRecord(devDependencies)) {
-    return;
-  }
-
-  const filteredEntries = Object.entries(devDependencies).filter(([, rawSpec]) => {
-    const spec = typeof rawSpec === "string" ? rawSpec.trim() : "";
-    return !spec.startsWith("workspace:");
-  });
-  if (filteredEntries.length === Object.keys(devDependencies).length) {
-    return;
-  }
-
-  if (filteredEntries.length === 0) {
-    delete manifest.devDependencies;
-  } else {
-    manifest.devDependencies = Object.fromEntries(filteredEntries);
-  }
-
   // Strip the host openclaw from peerDependencies to prevent npm 7+ from
   // installing a nested copy (~800 MB bloat). The host already satisfies
   // this peer at runtime via its own resolve path. We target only this
   // specific peer rather than using --omit=peer (which would drop *all*
   // peers and cause MODULE_NOT_FOUND for legitimate runtime peer imports).
+  // Placed before devDependencies processing so it always runs for valid manifests.
   const peerDeps = manifest.peerDependencies;
   if (isObjectRecord(peerDeps)) {
     const filteredPeers = Object.entries(peerDeps).filter(
@@ -76,6 +58,27 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
     } else if (filteredPeers.length < Object.keys(peerDeps).length) {
       manifest.peerDependencies = Object.fromEntries(filteredPeers);
     }
+  }
+
+  const devDependencies = manifest.devDependencies;
+  if (!isObjectRecord(devDependencies)) {
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    return;
+  }
+
+  const filteredEntries = Object.entries(devDependencies).filter(([, rawSpec]) => {
+    const spec = typeof rawSpec === "string" ? rawSpec.trim() : "";
+    return !spec.startsWith("workspace:");
+  });
+  if (filteredEntries.length === Object.keys(devDependencies).length) {
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    return;
+  }
+
+  if (filteredEntries.length === 0) {
+    delete manifest.devDependencies;
+  } else {
+    manifest.devDependencies = Object.fromEntries(filteredEntries);
   }
 
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
