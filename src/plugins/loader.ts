@@ -30,6 +30,11 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import {
+  ensureBundledPluginRuntimeDeps,
+  resolveBundledRuntimeDependencyInstallRoot,
+  type BundledRuntimeDepsInstallParams,
+} from "./bundled-runtime-deps.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import {
   clearCompactionProviders,
@@ -53,7 +58,7 @@ import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import { loadPluginManifest, type PluginManifestContracts } from "./manifest.js";
 import {
   clearMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
@@ -136,6 +141,7 @@ export type PluginLoadOptions = {
   activate?: boolean;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
+  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
 };
 
 const CLI_METADATA_ENTRY_BASENAMES = [
@@ -448,18 +454,12 @@ function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResol
   const jitiLoaders: PluginJitiLoaderCache = new Map();
   return (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const aliasMap = buildPluginLoaderAliasMap(
-      modulePath,
-      process.argv[1],
-      import.meta.url,
-      options.pluginSdkResolution,
-    );
     return getCachedPluginJitiLoader({
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
       jitiFilename: import.meta.url,
-      aliasMap,
+      pluginSdkResolution: options.pluginSdkResolution,
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
       // after build. Disable native loading for source entries so Jiti rewrites
       // those imports against the source graph, while keeping native dist/*.js
@@ -1302,6 +1302,21 @@ function resolveCandidateDuplicateRank(params: {
   return 4;
 }
 
+function resolveCandidatePluginId(params: {
+  candidate: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+}): string | undefined {
+  const manifestId = params.manifestByRoot.get(params.candidate.rootDir)?.id;
+  if (manifestId) {
+    return manifestId;
+  }
+  const manifestResult = loadPluginManifest(
+    params.candidate.rootDir,
+    params.candidate.origin !== "bundled",
+  );
+  return manifestResult.ok ? manifestResult.manifest.id : params.candidate.idHint;
+}
+
 function compareDuplicateCandidateOrder(params: {
   left: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
   right: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
@@ -1309,8 +1324,14 @@ function compareDuplicateCandidateOrder(params: {
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
-  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
+  const leftPluginId = resolveCandidatePluginId({
+    candidate: params.left,
+    manifestByRoot: params.manifestByRoot,
+  });
+  const rightPluginId = resolveCandidatePluginId({
+    candidate: params.right,
+    manifestByRoot: params.manifestByRoot,
+  });
   if (!leftPluginId || leftPluginId !== rightPluginId) {
     return 0;
   }
@@ -1473,9 +1494,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     throw new PluginLoadReentryError(cacheKey);
   }
   inFlightPluginRegistryLoads.add(cacheKey);
-  const previousSnapshotMemoryEmbeddingProviders = shouldActivate
-    ? null
-    : listRegisteredMemoryEmbeddingProviders();
   try {
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
@@ -1485,10 +1503,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       clearPluginInteractiveHandlers();
       clearDetachedTaskLifecycleRuntimeRegistration();
       clearMemoryPluginState();
-    } else {
-      // Snapshot loads should validate registrations in isolation instead of
-      // inheriting process-global memory embedding adapters from earlier loads.
-      clearMemoryEmbeddingProviders();
     }
 
     // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
@@ -1640,6 +1654,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
 
     const seenIds = new Map<string, PluginRecord["origin"]>();
+    const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, string[]>();
     const memorySlot = normalized.slots.memory;
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
@@ -1647,10 +1662,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestByRoot.get(candidate.rootDir);
-      if (!manifestRecord) {
+      const pluginId = resolveCandidatePluginId({
+        candidate,
+        manifestByRoot,
+      });
+      if (!pluginId) {
         continue;
       }
-      const pluginId = manifestRecord.id;
       const matchesRequestedScope = matchesScopedPluginRequest({
         onlyPluginIdSet,
         pluginId,
@@ -1665,11 +1683,31 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
-        enabledByDefault: manifestRecord.enabledByDefault,
+        enabledByDefault: manifestRecord?.enabledByDefault ?? false,
         activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
       });
       const existingOrigin = seenIds.get(pluginId);
+      if (!manifestRecord) {
+        if (!existingOrigin) {
+          continue;
+        }
+        const record = createPluginRecord({
+          id: pluginId,
+          source: candidate.source,
+          rootDir: candidate.rootDir,
+          origin: candidate.origin,
+          workspaceDir: candidate.workspaceDir,
+          enabled: false,
+          activationState,
+          configSchema: false,
+        });
+        record.status = "disabled";
+        record.error = `overridden by ${existingOrigin} plugin`;
+        markPluginActivationDisabled(record, record.error);
+        registry.plugins.push(record);
+        continue;
+      }
       if (existingOrigin) {
         const record = createPluginRecord({
           id: pluginId,
@@ -1738,9 +1776,40 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           message: record.error,
         });
       };
+      const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+
+      if (shouldLoadModules && candidate.origin === "bundled" && enableState.enabled) {
+        try {
+          const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot);
+          const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
+          const depsInstallResult = ensureBundledPluginRuntimeDeps({
+            pluginId: record.id,
+            pluginRoot,
+            env,
+            config: cfg,
+            retainSpecs,
+            installDeps: options.bundledRuntimeDepsInstaller,
+          });
+          if (depsInstallResult.installedSpecs.length > 0) {
+            bundledRuntimeDepsRetainSpecsByInstallRoot.set(
+              installRoot,
+              [...new Set([...retainSpecs, ...depsInstallResult.retainSpecs])].toSorted(
+                (left, right) => left.localeCompare(right),
+              ),
+            );
+            logger.info(
+              `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
+            );
+          }
+        } catch (error) {
+          pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);
+          continue;
+        }
+      }
 
       const registrationMode = enableState.enabled
-        ? !validateOnly &&
+        ? shouldLoadModules &&
+          !validateOnly &&
           shouldLoadChannelPluginInSetupRuntime({
             manifestChannels: manifestRecord.channels,
             setupSource: manifestRecord.setupSource,
@@ -1911,7 +1980,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
       const loadSource =
         (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
         manifestRecord.setupSource
@@ -2229,6 +2297,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
+      const previousMemoryCapability = getMemoryCapabilityRegistration();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
       const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
@@ -2245,6 +2314,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
+            capability: previousMemoryCapability,
             corpusSupplements: previousMemoryCorpusSupplements,
             promptBuilder: previousMemoryPromptBuilder,
             promptSupplements: previousMemoryPromptSupplements,
@@ -2262,6 +2332,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
+          capability: previousMemoryCapability,
           corpusSupplements: previousMemoryCorpusSupplements,
           promptBuilder: previousMemoryPromptBuilder,
           promptSupplements: previousMemoryPromptSupplements,
@@ -2334,9 +2405,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     return registry;
   } finally {
-    if (previousSnapshotMemoryEmbeddingProviders) {
-      restoreRegisteredMemoryEmbeddingProviders(previousSnapshotMemoryEmbeddingProviders);
-    }
     inFlightPluginRegistryLoads.delete(cacheKey);
   }
 }

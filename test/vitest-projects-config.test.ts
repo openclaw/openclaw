@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import bundledConfig from "./vitest/vitest.bundled.config.ts";
@@ -16,6 +17,12 @@ import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
+
+const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
+
+afterEach(() => {
+  patternFiles.cleanup();
+});
 
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {
@@ -54,6 +61,25 @@ describe("projects vitest config", () => {
 
     expect(config.test.include).toEqual([
       "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
+    ]);
+  });
+
+  it("intersects contract include-file shards with the config family", () => {
+    const includeFile = patternFiles.writePatternFile("include.json", [
+      "src/channels/plugins/contracts/surfaces-only.registry-backed-shard-b.contract.test.ts",
+      "src/channels/plugins/contracts/surfaces-only.registry-backed-shard-d.contract.test.ts",
+      "src/channels/plugins/contracts/directory.registry-backed-shard-a.contract.test.ts",
+    ]);
+
+    const config = createContractsVitestConfig(
+      ["src/channels/plugins/contracts/*-shard-a.contract.test.ts"],
+      {
+        OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+      },
+    );
+
+    expect(config.test.include).toEqual([
+      "src/channels/plugins/contracts/directory.registry-backed-shard-a.contract.test.ts",
     ]);
   });
 
