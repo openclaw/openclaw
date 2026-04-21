@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
@@ -232,17 +233,25 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       fileName: fileKey,
     });
 
-    const response = await fetch(uploadUrl, {
-      method: "PUT",
-      body: params.blob,
-      headers: {
-        "Cache-Control": "public, max-age=3600",
-        "Content-Type": contentType,
+    const { response, release } = await fetchWithSsrFGuard({
+      url: uploadUrl,
+      init: {
+        method: "PUT",
+        body: params.blob,
+        headers: {
+          "Cache-Control": "public, max-age=3600",
+          "Content-Type": contentType,
+        },
       },
+      auditContext: "tlon-memex-upload",
     });
 
-    if (!response.ok) {
-      throw new Error(`Upload failed: ${response.status}`);
+    try {
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status}`);
+      }
+    } finally {
+      await release();
     }
 
     return { url: hostedUrl };
