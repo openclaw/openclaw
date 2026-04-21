@@ -80,11 +80,15 @@ function assertConfiguredAnnounceChannel(params: {
 function assertConfiguredAnnounceAccount(params: {
   cfg: OpenClawConfig;
   resolvedChannel?: string;
+  explicitChannel?: boolean;
   accountId?: string;
   field: "delivery.accountId" | "delivery.failureDestination.accountId";
 }) {
   const accountId = normalizeOptionalString(params.accountId);
   if (!accountId) {
+    return;
+  }
+  if (!params.explicitChannel) {
     return;
   }
   if (!params.resolvedChannel) {
@@ -127,6 +131,7 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
     assertConfiguredAnnounceAccount({
       cfg: params.cfg,
       resolvedChannel: resolvedDeliveryChannel,
+      explicitChannel: normalizeMessageChannel(params.delivery.channel) !== undefined,
       accountId: params.delivery.accountId,
       field: "delivery.accountId",
     });
@@ -142,6 +147,7 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
     assertConfiguredAnnounceAccount({
       cfg: params.cfg,
       resolvedChannel: resolvedFailureDestinationChannel,
+      explicitChannel: normalizeMessageChannel(failureDestination.channel) !== undefined,
       accountId: failureDestination.accountId,
       field: "delivery.failureDestination.accountId",
     });

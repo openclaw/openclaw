@@ -1179,6 +1179,47 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("allows explicit accountId when announce channel is omitted", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-implicit-last-account-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          botToken: "telegram-default-token",
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "implicit last announce account",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          accountId: "nonexistent_bot_xyz",
+        },
+      });
+
+      expect(addRes.ok).toBe(true);
+      expectCronJobIdFromResponse(addRes);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("writes cron run history and auto-runs due jobs", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-log-",
