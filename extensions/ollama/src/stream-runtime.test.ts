@@ -56,6 +56,22 @@ describe("buildOllamaChatRequest", () => {
       model: "qwen3:14b-q8_0",
     });
   });
+
+  it("leaves bare Ollama model IDs unchanged", () => {
+    const request = buildOllamaChatRequest({
+      modelId: "llama3.1:8b",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(request.model).toBe("llama3.1:8b");
+  });
+
+  it("does not strip non-ollama provider prefixes", () => {
+    const request = buildOllamaChatRequest({
+      modelId: "some_org/custom-model:latest",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(request.model).toBe("some_org/custom-model:latest");
+  });
 });
 
 describe("createConfiguredOllamaCompatStreamWrapper", () => {
