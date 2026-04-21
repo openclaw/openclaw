@@ -15,8 +15,8 @@
       "method": "oauth",
       "choiceId": "openai-codex",
       "deprecatedChoiceIds": ["codex-cli"],
-      "choiceLabel": "OpenAI Codex Login",
-      "choiceHint": "Browser sign-in",
+      "choiceLabel": "OpenAI Codex Browser Login",
+      "choiceHint": "Sign in with OpenAI in your browser",
       "assistantPriority": -30,
       "groupId": "openai",
       "groupLabel": "OpenAI",
@@ -37,8 +37,8 @@
       "provider": "openai-codex",
       "method": "import-codex-cli",
       "choiceId": "openai-codex-import",
-      "choiceLabel": "OpenAI Codex",
-      "choiceHint": "Import existing ~/.codex login once",
+      "choiceLabel": "Import Existing Codex Login",
+      "choiceHint": "Import an existing ~/.codex login",
       "assistantPriority": -20,
       "groupId": "openai",
       "groupLabel": "OpenAI",
@@ -48,7 +48,7 @@
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",
-      "choiceLabel": "OpenAI API key",
+      "choiceLabel": "OpenAI API Key",
       "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
@@ -56,7 +56,7 @@
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
       "cliOption": "--openai-api-key <key>",
-      "cliDescription": "OpenAI API key"
+      "cliDescription": "OpenAI API Key"
     }
   ],
   "contracts": {

@@ -49,10 +49,13 @@ const OPENAI_WIZARD_GROUP = {
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_IMPORT_ASSISTANT_PRIORITY = -20;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
-const OPENAI_CODEX_LOGIN_LABEL = "OpenAI Codex Login";
-const OPENAI_CODEX_IMPORT_LABEL = "OpenAI Codex";
-const OPENAI_CODEX_IMPORT_DETECTED_SUFFIX = "~/.codex existing key detected";
+const OPENAI_CODEX_LOGIN_LABEL = "OpenAI Codex Browser Login";
+const OPENAI_CODEX_LOGIN_HINT = "Sign in with OpenAI in your browser";
+const OPENAI_CODEX_IMPORT_LABEL = "Import Existing Codex Login";
+const OPENAI_CODEX_IMPORT_HINT = "Import an existing ~/.codex login";
+const OPENAI_CODEX_IMPORT_DETECTED_SUFFIX = "~/.codex detected";
 const OPENAI_CODEX_DEVICE_PAIRING_LABEL = "OpenAI Codex Device Pairing";
+const OPENAI_CODEX_DEVICE_PAIRING_HINT = "Pair in browser with a device code";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
@@ -378,9 +381,11 @@ async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
     store: ensureAuthProfileStoreForLocalUpdate(ctx.agentDir),
   });
   if (!profile) {
-    throw new Error(
-      "No compatible Codex CLI OAuth login found. Sign in with `codex` first or use ChatGPT OAuth instead.",
-    );
+    const message =
+      "No compatible ~/.codex ChatGPT login found. Use Browser Login or Device Pairing instead.";
+    ctx.runtime.error(message);
+    await ctx.prompter.note(message, OPENAI_CODEX_IMPORT_LABEL);
+    return { profiles: [] };
   }
 
   return {
@@ -424,15 +429,16 @@ function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   return "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.";
 }
 
-function buildOpenAICodexImportWizardLabel() {
-  if (!hasOpenAICodexCliOAuthCredential()) {
+function buildOpenAICodexImportWizardLabel(hasCodexCliCredential: boolean) {
+  if (!hasCodexCliCredential) {
     return OPENAI_CODEX_IMPORT_LABEL;
   }
   return `${OPENAI_CODEX_IMPORT_LABEL} (${OPENAI_CODEX_IMPORT_DETECTED_SUFFIX})`;
 }
 
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
-  const importWizardLabel = buildOpenAICodexImportWizardLabel();
+  const hasCodexCliCredential = hasOpenAICodexCliOAuthCredential();
+  const importWizardLabel = buildOpenAICodexImportWizardLabel(hasCodexCliCredential);
   return {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
@@ -441,12 +447,12 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       {
         id: "oauth",
         label: OPENAI_CODEX_LOGIN_LABEL,
-        hint: "Browser sign-in",
+        hint: OPENAI_CODEX_LOGIN_HINT,
         kind: "oauth",
         wizard: {
           choiceId: "openai-codex",
           choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
-          choiceHint: "Browser sign-in",
+          choiceHint: OPENAI_CODEX_LOGIN_HINT,
           assistantPriority: OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY,
           ...OPENAI_WIZARD_GROUP,
         },
@@ -455,12 +461,12 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       {
         id: "device-code",
         label: OPENAI_CODEX_DEVICE_PAIRING_LABEL,
-        hint: "Pair in browser with a device code",
+        hint: OPENAI_CODEX_DEVICE_PAIRING_HINT,
         kind: "device_code",
         wizard: {
           choiceId: "openai-codex-device-code",
           choiceLabel: OPENAI_CODEX_DEVICE_PAIRING_LABEL,
-          choiceHint: "Pair in browser with a device code",
+          choiceHint: OPENAI_CODEX_DEVICE_PAIRING_HINT,
           assistantPriority: OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY,
           ...OPENAI_WIZARD_GROUP,
         },
@@ -475,13 +481,14 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       {
         id: "import-codex-cli",
         label: importWizardLabel,
-        hint: "Import existing ~/.codex login once",
+        hint: OPENAI_CODEX_IMPORT_HINT,
         kind: "oauth",
         wizard: {
           choiceId: "openai-codex-import",
           choiceLabel: importWizardLabel,
-          choiceHint: "Import existing ~/.codex login once",
+          choiceHint: OPENAI_CODEX_IMPORT_HINT,
           assistantPriority: OPENAI_CODEX_IMPORT_ASSISTANT_PRIORITY,
+          assistantVisibility: hasCodexCliCredential ? "visible" : "manual-only",
           ...OPENAI_WIZARD_GROUP,
         },
         run: async (ctx) => await runImportOpenAICodexCliAuth(ctx),

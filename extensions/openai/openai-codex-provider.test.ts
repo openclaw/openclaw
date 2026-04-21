@@ -158,11 +158,11 @@ describe("openai codex provider", () => {
       "import-codex-cli",
     ]);
     expect(provider.auth?.find((method) => method.id === "oauth")).toMatchObject({
-      label: "OpenAI Codex Login",
-      hint: "Browser sign-in",
+      label: "OpenAI Codex Browser Login",
+      hint: "Sign in with OpenAI in your browser",
       wizard: {
         choiceId: "openai-codex",
-        choiceLabel: "OpenAI Codex Login",
+        choiceLabel: "OpenAI Codex Browser Login",
         assistantPriority: -30,
       },
     });
@@ -177,13 +177,14 @@ describe("openai codex provider", () => {
       },
     });
     expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
-      label: "OpenAI Codex",
-      hint: "Import existing ~/.codex login once",
+      label: "Import Existing Codex Login",
+      hint: "Import an existing ~/.codex login",
       kind: "oauth",
       wizard: {
         choiceId: "openai-codex-import",
-        choiceLabel: "OpenAI Codex",
+        choiceLabel: "Import Existing Codex Login",
         assistantPriority: -20,
+        assistantVisibility: "manual-only",
       },
     });
   });
@@ -194,11 +195,46 @@ describe("openai codex provider", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
-      label: "OpenAI Codex (~/.codex existing key detected)",
+      label: "Import Existing Codex Login (~/.codex detected)",
       wizard: {
-        choiceLabel: "OpenAI Codex (~/.codex existing key detected)",
+        choiceLabel: "Import Existing Codex Login (~/.codex detected)",
+        assistantVisibility: "visible",
       },
     });
+  });
+
+  it("soft-fails import when no compatible ~/.codex login exists", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const importMethod = provider.auth?.find((method) => method.id === "import-codex-cli");
+    const note = vi.fn(async () => {});
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    readOpenAICodexCliOAuthProfileMock.mockReturnValueOnce(null);
+
+    const result = await importMethod?.run({
+      config: {},
+      env: process.env,
+      prompter: {
+        note,
+        progress: vi.fn(),
+      } as never,
+      runtime: runtime as never,
+      isRemote: false,
+      openUrl: async () => {},
+      oauth: { createVpsAwareHandlers: (() => ({})) as never },
+    });
+
+    expect(result).toEqual({ profiles: [] });
+    expect(runtime.error).toHaveBeenCalledWith(
+      "No compatible ~/.codex ChatGPT login found. Use Browser Login or Device Pairing instead.",
+    );
+    expect(note).toHaveBeenCalledWith(
+      "No compatible ~/.codex ChatGPT login found. Use Browser Login or Device Pairing instead.",
+      "Import Existing Codex Login",
+    );
   });
 
   it("stores device-code logins as OpenAI Codex oauth profiles", async () => {

@@ -451,21 +451,21 @@ describe("buildAuthChoiceOptions", () => {
     resolveProviderWizardOptions.mockReturnValue([
       {
         value: "openai-api-key",
-        label: "OpenAI API key",
+        label: "OpenAI API Key",
         groupId: "openai",
         groupLabel: "OpenAI",
         assistantPriority: -40,
       },
       {
         value: "openai-codex",
-        label: "OpenAI Codex Login",
+        label: "OpenAI Codex Browser Login",
         groupId: "openai",
         groupLabel: "OpenAI",
         assistantPriority: -30,
       },
       {
         value: "openai-codex-import",
-        label: "OpenAI Codex (~/.codex existing key detected)",
+        label: "Import Existing Codex Login (~/.codex detected)",
         groupId: "openai",
         groupLabel: "OpenAI",
         assistantPriority: -20,
