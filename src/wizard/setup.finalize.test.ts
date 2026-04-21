@@ -345,6 +345,7 @@ describe("finalizeSetupWizard", () => {
         message: undefined,
       },
       {
+        authSource: "config",
         gatewayUrl: "ws://127.0.0.1:18789",
       },
     );

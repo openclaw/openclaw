@@ -431,6 +431,7 @@ export async function finalizeSetupWizard(
             message: hasBootstrap ? "Wake up, my friend!" : undefined,
           },
           {
+            authSource: "config",
             gatewayUrl: links.wsUrl,
           },
         );

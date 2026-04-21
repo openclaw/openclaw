@@ -2,9 +2,11 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
+import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type { TuiOptions } from "./tui.js";
 
 type TuiLaunchOptions = {
+  authSource?: "config";
   gatewayUrl?: string;
 };
 
@@ -77,9 +79,16 @@ export async function launchTuiCli(
   launchOptions: TuiLaunchOptions = {},
 ): Promise<void> {
   const args = buildTuiCliArgs(opts);
-  const env = launchOptions.gatewayUrl
-    ? { ...process.env, OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl }
-    : process.env;
+  const env =
+    launchOptions.gatewayUrl || launchOptions.authSource
+      ? {
+          ...process.env,
+          ...(launchOptions.gatewayUrl ? { OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl } : {}),
+          ...(launchOptions.authSource === "config"
+            ? { [TUI_SETUP_AUTH_SOURCE_ENV]: TUI_SETUP_AUTH_SOURCE_CONFIG }
+            : {}),
+        }
+      : process.env;
   const stdinWasPaused =
     typeof process.stdin.isPaused === "function" ? process.stdin.isPaused() : false;
 
