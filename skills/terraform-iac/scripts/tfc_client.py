@@ -386,14 +386,14 @@ Best practices enforced:
     policies = preset["policies"][:]
 
     if perm_choice == "8":
-        custom_arn = prompt_raw("Managed policy ARN")
+        custom_arn = sanitize_hcl(prompt_raw("Managed policy ARN"))
         policies = [custom_arn]
 
     # Additional policies
     if perm_choice != "1":
         add_more = prompt("Attach additional policies?", default="no", choices=["yes", "no"])
         while add_more == "yes":
-            extra_arn = prompt_raw("Policy ARN")
+            extra_arn = sanitize_hcl(prompt_raw("Policy ARN"))
             policies.append(extra_arn)
             add_more = prompt("Add another?", default="no", choices=["yes", "no"])
 
@@ -1044,10 +1044,10 @@ echo "=== Testing Lambda: {name} ==="
 # Direct invoke
 echo "\n--- Direct Invoke ---"
 aws lambda invoke \\
-  --function-name {name} \\
+  --function-name "{name}" \\
   --payload '{{"version":"2.0","rawPath":"/","requestContext":{{"http":{{"method":"GET","path":"/"}}}}}}' \\
   --cli-binary-format raw-in-base64-out \\
-  --region {region} \\
+  --region "{region}" \\
   /tmp/lambda-response.json
 cat /tmp/lambda-response.json
 echo
@@ -1422,8 +1422,8 @@ Best practice:
     # Core accounts
     print("\n  Core accounts:")
     print("    These are created under the Security OU.")
-    log_email   = prompt_raw("Log Archive account email (must be unique, not used by any AWS account)")
-    audit_email = prompt_raw("Audit/Security account email (must be unique)")
+    log_email   = sanitize_hcl(prompt_raw("Log Archive account email (must be unique, not used by any AWS account)"))
+    audit_email = sanitize_hcl(prompt_raw("Audit/Security account email (must be unique)"))
 
     # Guardrails / SCPs
     print("\n  Service Control Policies (guardrails):")
@@ -1523,7 +1523,7 @@ Best practice:
     vending_budget = "100"
     vending_email_domain = ""
     if enable_vending:
-        vending_email_domain = prompt_raw("Email domain for new accounts (e.g. marsmovers.com)")
+        vending_email_domain = sanitize_hcl(prompt_raw("Email domain for new accounts (e.g. marsmovers.com)"))
         vending_budget = prompt_num("Default monthly budget per account (USD)", default=100, min_val=1)
 
     # Summary
@@ -2499,12 +2499,12 @@ Common alarm patterns:
     print("    Alarms need an SNS topic to send alerts.")
     sns_choice = prompt("Create new SNS topic or use existing?", default="new", choices=["new", "existing"])
     if sns_choice == "existing":
-        sns_arn = prompt_raw("Existing SNS topic ARN")
+        sns_arn = sanitize_hcl(prompt_raw("Existing SNS topic ARN"))
         sns_block = ""
         sns_ref = f'"{sns_arn}"'
     else:
         sns_topic_name = f"{name}-alerts"
-        email = prompt_raw("Alert email address")
+        email = sanitize_hcl(prompt_raw("Alert email address"))
         sns_block = f"""
 resource "aws_sns_topic" "alerts" {{
   name = "{sns_topic_name}"
@@ -3033,7 +3033,7 @@ resource "aws_iam_role_policy" "cloudtrail_cw" {{
     include_management_events = true
     data_resource {
       type   = "AWS::S3::Object"
-      values = ["arn:aws:s3"]
+      values = ["arn:aws:s3:::"]
     }
   }
 """
@@ -3184,11 +3184,11 @@ alert at 50%, 80%, and 100% thresholds.
     notify_type = prompt("Notification type", default="1", choices=["1", "2"])
 
     if notify_type == "1":
-        email = prompt_raw("Alert email address")
+        email = sanitize_hcl(prompt_raw("Alert email address"))
         sns_block = ""
         subscriber_line = f'      subscriber_email_addresses = ["{email}"]'
     else:
-        sns_arn = prompt_raw("SNS topic ARN (e.g. arn:aws:sns:us-east-1:123456789:alerts)")
+        sns_arn = sanitize_hcl(prompt_raw("SNS topic ARN (e.g. arn:aws:sns:us-east-1:123456789:alerts)"))
         sns_block = ""
         subscriber_line = f'      subscriber_sns_topic_arns  = ["{sns_arn}"]'
 
@@ -3712,6 +3712,7 @@ resource "aws_iam_role_policy" "flow_log" {{
 }}
 
 output "vpc_id"          {{ value = aws_vpc.this.id }}
+output "vpc_cidr_block"  {{ value = aws_vpc.this.cidr_block }}
 output "public_subnets"  {{ value = [{pub_subnet_ids}] }}
 output "private_subnets" {{ value = [{priv_subnet_ids}] }}
 """
