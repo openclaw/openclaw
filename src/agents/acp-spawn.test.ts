@@ -831,6 +831,45 @@ describe("spawnAcpDirect", () => {
     expect(failed.error).toContain("max active children");
   });
 
+  it("does not double-count duplicate ACP task rows for the same child session", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    });
+    hoisted.listTasksForOwnerKeyMock.mockReturnValueOnce([
+      {
+        runtime: "acp",
+        status: "running",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+      {
+        runtime: "acp",
+        status: "queued",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+    ]);
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        streamTo: "parent",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+  });
+
   it("rejects ACP spawns to agents outside the subagent allowlist", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,

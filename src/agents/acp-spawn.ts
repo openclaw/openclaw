@@ -258,15 +258,18 @@ function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): numb
       )
       .map((task) => normalizeOptionalString(task.childSessionKey) as string),
   );
-  return tasks.filter((task) => {
-    const childSessionKey = normalizeOptionalString(task.childSessionKey);
-    return (
-      task.runtime === "acp" &&
-      isActiveTaskStatus(task.status) &&
-      childSessionKey !== undefined &&
-      !trackedChildSessionKeys.has(childSessionKey)
-    );
-  }).length;
+  const activeAcpChildSessionKeys = new Set(
+    tasks.flatMap((task) => {
+      const childSessionKey = normalizeOptionalString(task.childSessionKey);
+      return task.runtime === "acp" &&
+        isActiveTaskStatus(task.status) &&
+        childSessionKey !== undefined &&
+        !trackedChildSessionKeys.has(childSessionKey)
+        ? [childSessionKey]
+        : [];
+    }),
+  );
+  return activeAcpChildSessionKeys.size;
 }
 
 type AcpSpawnBootstrapDeliveryPlan = {
