@@ -1,7 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
-  formatThinkingLevels as formatThinkingLevelsFallback,
-  listThinkingLevelLabels as listThinkingLevelLabelsFallback,
   listThinkingLevels as listThinkingLevelsFallback,
   resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
 } from "./thinking.shared.js";
@@ -31,6 +29,7 @@ export type {
   VerboseLevel,
 } from "./thinking.shared.js";
 import {
+  resolveProviderAdaptiveThinking,
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking,
@@ -82,10 +81,33 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   return false;
 }
 
+export function supportsAdaptiveThinking(provider?: string | null, model?: string | null): boolean {
+  const modelKey = normalizeOptionalLowercaseString(model);
+  if (!modelKey) {
+    return false;
+  }
+  const providerRaw = normalizeOptionalString(provider);
+  const providerKey = providerRaw ? normalizeProviderId(providerRaw) : "";
+  if (!providerKey) {
+    return false;
+  }
+  const pluginDecision = resolveProviderAdaptiveThinking({
+    provider: providerKey,
+    context: {
+      provider: providerKey,
+      modelId: modelKey,
+    },
+  });
+  return pluginDecision === true;
+}
+
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
   const levels = listThinkingLevelsFallback(provider, model);
   if (supportsXHighThinking(provider, model)) {
-    levels.splice(levels.length - 1, 0, "xhigh");
+    levels.push("xhigh");
+  }
+  if (supportsAdaptiveThinking(provider, model)) {
+    levels.push("adaptive");
   }
   return levels;
 }
@@ -94,10 +116,7 @@ export function listThinkingLevelLabels(provider?: string | null, model?: string
   if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
   }
-  if (supportsXHighThinking(provider, model)) {
-    return listThinkingLevels(provider, model);
-  }
-  return listThinkingLevelLabelsFallback(provider, model);
+  return listThinkingLevels(provider, model);
 }
 
 export function formatThinkingLevels(
@@ -105,9 +124,7 @@ export function formatThinkingLevels(
   model?: string | null,
   separator = ", ",
 ): string {
-  return supportsXHighThinking(provider, model)
-    ? listThinkingLevelLabels(provider, model).join(separator)
-    : formatThinkingLevelsFallback(provider, model, separator);
+  return listThinkingLevelLabels(provider, model).join(separator);
 }
 
 export function resolveThinkingDefaultForModel(params: {

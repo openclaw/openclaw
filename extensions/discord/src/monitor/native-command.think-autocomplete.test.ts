@@ -34,6 +34,7 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
   vi.fn<ResolveConfiguredBindingRoute>(() => createUnboundConfiguredRouteResult()),
 );
 const providerThinkingMocks = vi.hoisted(() => ({
+  resolveProviderAdaptiveThinking: vi.fn(),
   resolveProviderBinaryThinking: vi.fn(),
   resolveProviderDefaultThinkingLevel: vi.fn(),
   resolveProviderXHighThinking: vi.fn(),
@@ -127,6 +128,7 @@ let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").r
 async function loadDiscordThinkAutocompleteModulesForTest() {
   vi.resetModules();
   vi.doMock("../../../../src/plugins/provider-thinking.js", () => ({
+    resolveProviderAdaptiveThinking: providerThinkingMocks.resolveProviderAdaptiveThinking,
     resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
     resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
     resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
@@ -143,6 +145,7 @@ async function loadDiscordThinkAutocompleteModulesForTest() {
 describe("discord native /think autocomplete", () => {
   beforeAll(async () => {
     providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderAdaptiveThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
@@ -170,6 +173,8 @@ describe("discord native /think autocomplete", () => {
     resolveConfiguredBindingRouteMock.mockReturnValue(createUnboundConfiguredRouteResult());
     providerThinkingMocks.resolveProviderBinaryThinking.mockReset();
     providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderAdaptiveThinking.mockReset();
+    providerThinkingMocks.resolveProviderAdaptiveThinking.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReset();
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderXHighThinking.mockReset();
@@ -258,6 +263,7 @@ describe("discord native /think autocomplete", () => {
     });
     const values = choices.map((choice) => choice.value);
     expect(values).toContain("xhigh");
+    expect(values).not.toContain("adaptive");
   });
 
   it("falls back when a configured binding is unavailable", async () => {

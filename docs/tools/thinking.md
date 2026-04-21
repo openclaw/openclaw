@@ -16,10 +16,11 @@ title: "Thinking Levels"
   - medium → “think harder”
   - high → “ultrathink” (max budget)
   - xhigh → “ultrathink+” (GPT-5.2 + Codex models and Anthropic Claude Opus 4.7 effort)
-  - adaptive → provider-managed adaptive thinking (supported for Anthropic Claude 4.6 and Opus 4.7)
+  - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock and Anthropic Claude Opus 4.7)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest`, `max` map to `high`.
 - Provider notes:
+  - `adaptive` is only advertised in native command menus and pickers for providers/models that declare adaptive thinking support. It remains accepted as a typed directive for compatibility with existing configs and aliases.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.7 does not default to adaptive thinking. Its API effort default remains provider-owned unless you explicitly set a thinking level.
   - Anthropic Claude Opus 4.7 maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus 4.7 effort setting.
@@ -109,7 +110,8 @@ title: "Thinking Levels"
 - Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
 - The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model: `adaptive` for Claude 4.6 on Anthropic, `off` for Anthropic Claude Opus 4.7 unless configured, `low` for other reasoning-capable models, `off` otherwise.
 - The picker stays provider-aware:
-  - most providers show `off | minimal | low | medium | high | adaptive`
+  - most providers show `off | minimal | low | medium | high`
+  - Anthropic/Bedrock Claude 4.6 shows `off | minimal | low | medium | high | adaptive`
   - Anthropic Claude Opus 4.7 shows `off | minimal | low | medium | high | xhigh | adaptive`
   - Z.AI shows binary `off | on`
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
