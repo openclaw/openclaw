@@ -163,7 +163,8 @@ describe("synology-chat core", () => {
 
   it("rejects private publicOrigin values during setup validation", () => {
     expect(
-      synologyChatSetupAdapter.validateInput({
+      synologyChatSetupAdapter.validateInput?.({
+        cfg: {} as OpenClawConfig,
         accountId: "default",
         input: {
           token: "synology-token",
@@ -176,7 +177,8 @@ describe("synology-chat core", () => {
 
   it("validates publicOrigin even when webhookPath is also provided", () => {
     expect(
-      synologyChatSetupAdapter.validateInput({
+      synologyChatSetupAdapter.validateInput?.({
+        cfg: {} as OpenClawConfig,
         accountId: "default",
         input: {
           token: "synology-token",
