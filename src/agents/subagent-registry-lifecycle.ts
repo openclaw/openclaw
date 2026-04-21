@@ -509,6 +509,25 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!beginSubagentCleanup(runId)) {
       return false;
     }
+    // Persistent (spawnMode="session") sessions must not receive any internal
+    // A2A/announce traffic — the same invariant enforced at the sessions_send
+    // entry point. Without this short-circuit, subagent natural completion
+    // routes a completion event through runSubagentAnnounceFlow, which is
+    // delivered into the persistent session as an inbound user message and
+    // triggers a stray model reply ("Background task <runId>...") in the main
+    // session via the announce queue.
+    if (entry.spawnMode === "session") {
+      void finalizeSubagentCleanup(runId, entry.cleanup, false).catch((err) => {
+        defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+        const current = params.runs.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        params.persist();
+      });
+      return true;
+    }
     const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
     const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
       void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
