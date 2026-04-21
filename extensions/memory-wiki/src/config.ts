@@ -256,7 +256,13 @@ export function expandVaultPathTemplate(
   templatePath: string,
   ctx: VaultPathTemplateContext,
 ): string {
-  if (!containsVaultPathTemplate(templatePath)) {
+  // Short-circuit on paths with no `{...}` placeholder AT ALL. The broader
+  // check is required — gating on the narrow four-known-tokens regex would
+  // let a path like `"{tenant}/wiki"` or a typo like `"{workspaceDIR}/wiki"`
+  // skip the unresolved-placeholder guard below and be returned as a literal
+  // string, which would then hit `fs.mkdir(..., { recursive: true })` in the
+  // write flow and create a brace-named directory under CWD.
+  if (!VAULT_PATH_ANY_PLACEHOLDER.test(templatePath)) {
     return templatePath;
   }
   const expanded = templatePath.replace(
@@ -278,15 +284,18 @@ export function expandVaultPathTemplate(
 
 /**
  * Return a {@link ResolvedMemoryWikiConfig} with `vault.path` expanded against
- * the supplied invocation context. If the path has no template tokens the
- * input config is returned unchanged (identity) so the fast path allocates
- * nothing.
+ * the supplied invocation context. If the path contains no `{...}`
+ * placeholder at all the input config is returned unchanged (identity) so
+ * the fast path allocates nothing. The check uses the broader any-placeholder
+ * regex so unknown placeholders (typos like `{tenant}` / `{workspaceDIR}`)
+ * still flow through `expandVaultPathTemplate` and surface as a config error
+ * instead of silently being returned as a literal vault path.
  */
 export function resolveMemoryWikiConfigForCtx(
   base: ResolvedMemoryWikiConfig,
   ctx: VaultPathTemplateContext,
 ): ResolvedMemoryWikiConfig {
-  if (!containsVaultPathTemplate(base.vault.path)) {
+  if (!VAULT_PATH_ANY_PLACEHOLDER.test(base.vault.path)) {
     return base;
   }
   return {

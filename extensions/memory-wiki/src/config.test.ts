@@ -172,6 +172,39 @@ describe("vault path templating", () => {
     ).toThrow(/unresolved placeholder\(s\) \{tenant\}/);
   });
 
+  it("throws on paths whose only placeholder is unknown (no known tokens ever trigger expansion)", () => {
+    // Regression: the prior early-return gated on the narrow
+    // known-tokens regex, so a path like `{tenant}/wiki` exited
+    // `expandVaultPathTemplate` before the unresolved-placeholder guard
+    // could fire, returning the literal string. Downstream writes via
+    // `fs.mkdir(..., { recursive: true })` would then create a literal
+    // `{tenant}/wiki` directory under CWD.
+    expect(() => expandVaultPathTemplate("{tenant}/wiki", { workspaceDir: "/tmp/w" })).toThrow(
+      /unresolved placeholder\(s\) \{tenant\}/,
+    );
+
+    // A case-typo of a known token (`{workspaceDIR}` instead of
+    // `{workspaceDir}`) is indistinguishable from an unknown placeholder
+    // at this layer and must throw for the same reason.
+    expect(() =>
+      expandVaultPathTemplate("{workspaceDIR}/wiki", { workspaceDir: "/tmp/w" }),
+    ).toThrow(/unresolved placeholder\(s\) \{workspaceDIR\}/);
+  });
+
+  it("propagates the unknown-only throw through resolveMemoryWikiConfigForCtx's identity fast path", () => {
+    // The identity fast path previously used the narrow known-tokens
+    // regex, so a config with only unknown placeholders would return the
+    // base config unchanged — tool factories would then use the literal
+    // `{tenant}/wiki` as the resolved vault path.
+    const base = resolveMemoryWikiConfig(
+      { vault: { path: "{tenant}/wiki" } },
+      { homedir: "/Users/tester" },
+    );
+    expect(() => resolveMemoryWikiConfigForCtx(base, { workspaceDir: "/tmp/w" })).toThrow(
+      /unresolved placeholder\(s\) \{tenant\}/,
+    );
+  });
+
   it("lists all unresolved placeholders in the error message, deduplicated and sorted", () => {
     // Multiple missing tokens should be reported together so the operator
     // can fix the config in one pass instead of re-running the tool four
