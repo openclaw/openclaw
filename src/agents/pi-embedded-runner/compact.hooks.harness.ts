@@ -545,7 +545,9 @@ export async function loadCompactHooksHarness(): Promise<{
     );
     return {
       ...actual,
-      normalizeMessageChannel: vi.fn(() => undefined),
+      // Keep the real normalization behavior so hook-context provider
+      // resolution matches production when tests pass messageChannel.
+      normalizeMessageChannel: vi.fn((raw?: string | null) => actual.normalizeMessageChannel(raw)),
     };
   });
 
