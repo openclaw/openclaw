@@ -353,6 +353,33 @@ describe("capability cli", () => {
     );
   });
 
+  it("forwards runtime fallback attempts in the model run envelope", async () => {
+    const attempts = [
+      {
+        provider: "openrouter",
+        model: "openrouter/auto",
+        error: "Provider openrouter is in cooldown (all profiles unavailable)",
+        reason: "auth" as const,
+      },
+    ];
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "local reply" }],
+      meta: {
+        agentMeta: { provider: "openai", model: "gpt-5.4" },
+        fallbackAttempts: attempts,
+      },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: "model.run", attempts }),
+    );
+  });
+
   it("defaults tts status to gateway transport", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
