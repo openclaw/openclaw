@@ -60,10 +60,14 @@ async function createPngDataUrl(width: number, height: number): Promise<string> 
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
-async function createFixture(stateDir: string, options?: { sessionKey?: string }) {
-  const attachmentId = "att-123";
+async function createFixture(
+  stateDir: string,
+  options?: { sessionKey?: string; attachmentId?: string; filename?: string },
+) {
+  const attachmentId = options?.attachmentId ?? "att-123";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
-  const originalPath = path.join(stateDir, "files", "cat-full.png");
+  const filename = options?.filename ?? `${attachmentId}-cat-full.png`;
+  const originalPath = path.join(stateDir, "files", filename);
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
   await fs.writeFile(originalPath, Buffer.from("original-image"));
   const record: Record<string, unknown> = {
@@ -551,5 +555,37 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       retainedCount: 1,
     });
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("does not delete files still referenced by other sessions during session-scoped cleanup", async () => {
+    const retainedFixture = await createFixture(stateDir, {
+      sessionKey: "agent:other:session",
+      attachmentId: "att-keep",
+    });
+    const deletedFixture = await createFixture(stateDir, {
+      sessionKey: "agent:main:main",
+      attachmentId: "att-delete",
+    });
+
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: {
+        sessionId: sessionKey === retainedFixture.sessionKey ? "sess-other" : "sess-main",
+        sessionFile: "/tmp/session.jsonl",
+      },
+    }));
+    readSessionMessagesMock.mockReturnValue([]);
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: deletedFixture.sessionKey,
+      forceDeleteSessionRecords: true,
+    });
+
+    expect(result).toMatchObject({
+      deletedRecordCount: 1,
+      retainedCount: 1,
+    });
+    await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
   });
 });

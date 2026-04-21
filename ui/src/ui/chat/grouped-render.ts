@@ -149,6 +149,19 @@ function imageDisplayStyle(img: ImageBlock): string {
   return `${styles.join("; ")};`;
 }
 
+function isImageLikeLegacyMediaPath(value: string): boolean {
+  if (/^data:image\//i.test(value)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(value, "https://openclaw.invalid");
+    const pathname = parsed.pathname.toLowerCase();
+    return /\.(avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -195,13 +208,17 @@ function extractImages(message: unknown): ImageBlock[] {
   }
 
   const mediaPath = m.MediaPath;
-  if (typeof mediaPath === "string" && mediaPath.trim()) {
+  if (typeof mediaPath === "string" && mediaPath.trim() && isImageLikeLegacyMediaPath(mediaPath)) {
     images.push({ url: mediaPath });
   }
   const mediaPaths = m.MediaPaths;
   if (Array.isArray(mediaPaths)) {
     for (const candidate of mediaPaths) {
-      if (typeof candidate === "string" && candidate.trim()) {
+      if (
+        typeof candidate === "string" &&
+        candidate.trim() &&
+        isImageLikeLegacyMediaPath(candidate)
+      ) {
         images.push({ url: candidate });
       }
     }
@@ -767,7 +784,11 @@ function resolveManagedImageUrl(
   if (!rawUrl) {
     return null;
   }
-  const safeUrl = resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
+  const absoluteBaseUrl = new URL(
+    opts.basePath ?? window.location.href,
+    window.location.href,
+  ).toString();
+  const safeUrl = resolveSafeExternalUrl(rawUrl, absoluteBaseUrl, {
     allowDataImage: opts.allowDataImage ?? true,
   });
   if (!safeUrl || safeUrl.startsWith("data:") || safeUrl.startsWith("blob:")) {
