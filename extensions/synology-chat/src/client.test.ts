@@ -31,13 +31,13 @@ type MockRequestHandler = (
 ) => ClientRequest;
 
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
-  const res = new EventEmitter() as Partial<IncomingMessage>;
+  const res = new EventEmitter() as IncomingMessage;
   res.statusCode = statusCode;
   return res;
 }
 
 function createMockRequestEmitter(): ClientRequest {
-  const req = new EventEmitter() as Partial<ClientRequest>;
+  const req = new EventEmitter() as ClientRequest;
   req.write = vi.fn() as ClientRequest["write"];
   req.end = vi.fn() as ClientRequest["end"];
   req.destroy = vi.fn() as ClientRequest["destroy"];
