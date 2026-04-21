@@ -5,6 +5,7 @@ import type {
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { TtsConfig } from "../config/types.tts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
@@ -30,6 +31,7 @@ export type ResolvedAgentConfig = {
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
+  tts?: TtsConfig;
   subagents?: AgentEntry["subagents"];
   embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
@@ -127,6 +129,7 @@ export function resolveAgentConfig(
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
+    tts: typeof entry.tts === "object" && entry.tts ? entry.tts : undefined,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     embeddedPi:
       typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
