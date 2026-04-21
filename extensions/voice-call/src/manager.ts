@@ -299,6 +299,18 @@ export class CallManager {
     // is actually available; otherwise speak immediately on answered.
     const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
     if (mode === "conversation") {
+      // Realtime conversations own their greeting path end-to-end: the
+      // realtime handler consumes `metadata.initialMessage`, builds greeting
+      // instructions, and fires `triggerGreeting` over the WebSocket once the
+      // bridge is ready. The legacy `speakInitialMessage` path posts a
+      // `<Say>` TwiML via Twilio's REST API, which races the
+      // `<Connect><Stream>` TwiML returned by the realtime short-circuit.
+      // When the `<Say>` POST wins, Twilio plays it instead of opening the
+      // stream, killing the realtime WS handshake. Skip the legacy path here
+      // so the realtime handler is the single owner of the opening turn.
+      if (this.config.realtime.enabled) {
+        return;
+      }
       const shouldWaitForStreamConnect =
         this.shouldDeferConversationInitialMessageUntilStreamConnect();
       if (shouldWaitForStreamConnect) {

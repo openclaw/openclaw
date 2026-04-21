@@ -47,6 +47,23 @@ function buildGreetingInstructions(
     : `${intro} "${trimmedGreeting}"`;
 }
 
+function buildInitialContextMessage(
+  direction: "inbound" | "outbound",
+  initialMessage: string,
+): string {
+  const trimmed = initialMessage.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (direction === "outbound") {
+    // Outbound: the operator/agent asked us to place this call with a
+    // specific intent. Preserve that intent as persistent context so the
+    // model can both open the call with it and stay on topic afterwards.
+    return `Context for this call: ${trimmed}. You initiated this call. Open the conversation by delivering this intent naturally, then continue the conversation.`;
+  }
+  return `Context for this call: ${trimmed}. Open the conversation by greeting the caller naturally using this as your opening line.`;
+}
+
 type PendingStreamToken = {
   expiry: number;
   from?: string;
@@ -56,6 +73,8 @@ type PendingStreamToken = {
 
 type CallRegistration = {
   callId: string;
+  direction: "inbound" | "outbound";
+  initialMessage?: string;
   initialGreetingInstructions?: string;
 };
 
@@ -68,6 +87,7 @@ type ActiveRealtimeVoiceBridge = Pick<
   | "acknowledgeMark"
   | "close"
   | "triggerGreeting"
+  | "sendSystemContext"
 >;
 
 export class RealtimeCallHandler {
@@ -244,7 +264,7 @@ export class RealtimeCallHandler {
       return null;
     }
 
-    const { callId, initialGreetingInstructions } = registration;
+    const { callId, direction, initialMessage, initialGreetingInstructions } = registration;
     let callEndEmitted = false;
     const emitCallEnd = (reason: "completed" | "error") => {
       if (callEndEmitted) {
@@ -323,7 +343,23 @@ export class RealtimeCallHandler {
         );
       },
       onReady: () => {
-        bridgeRef.current?.triggerGreeting?.(initialGreetingInstructions);
+        const activeBridge = bridgeRef.current;
+        if (!activeBridge) {
+          return;
+        }
+        // Prefer `sendSystemContext` when the bridge supports it: this
+        // injects the call intent as a persistent `conversation.item.create`
+        // (role = system) turn that survives subsequent user turns, and then
+        // fires `response.create` so the model produces the opening reply.
+        // Fall back to `triggerGreeting` (response-scoped instructions) for
+        // older bridges that do not yet implement the context method.
+        if (initialMessage && activeBridge.sendSystemContext) {
+          activeBridge.sendSystemContext(buildInitialContextMessage(direction, initialMessage), {
+            speakFirst: true,
+          });
+          return;
+        }
+        activeBridge.triggerGreeting?.(initialGreetingInstructions);
       },
       onError: (error) => {
         console.error("[voice-call] realtime voice error:", error.message);
@@ -386,6 +422,12 @@ export class RealtimeCallHandler {
     }
 
     const initialGreeting = this.extractInitialGreeting(callRecord);
+    // Resolve the call's direction from the record so outbound-api calls that
+    // didn't carry a `Direction` query param still get the right framing.
+    const resolvedDirection: "inbound" | "outbound" =
+      callRecord.direction === "outbound" || callerMeta.direction === "outbound"
+        ? "outbound"
+        : "inbound";
     if (callRecord.metadata) {
       delete callRecord.metadata.initialMessage;
     }
@@ -399,6 +441,8 @@ export class RealtimeCallHandler {
 
     return {
       callId: callRecord.callId,
+      direction: resolvedDirection,
+      initialMessage: initialGreeting,
       initialGreetingInstructions: buildGreetingInstructions(
         this.config.instructions,
         initialGreeting,

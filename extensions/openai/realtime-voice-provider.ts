@@ -183,6 +183,27 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
   }
 
+  sendSystemContext(context: string, options?: { speakFirst?: boolean }): void {
+    const text = context.trim();
+    if (!text) {
+      return;
+    }
+    // Persistent context turn: survives subsequent user turns so the model
+    // keeps the original call intent in scope. Uses `role: "system"` which
+    // the Realtime API treats as a non-spoken conversation item.
+    this.sendEvent({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text }],
+      },
+    });
+    if (options?.speakFirst !== false) {
+      this.sendEvent({ type: "response.create" });
+    }
+  }
+
   submitToolResult(callId: string, result: unknown): void {
     this.sendEvent({
       type: "conversation.item.create",

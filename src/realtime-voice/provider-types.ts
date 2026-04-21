@@ -59,6 +59,16 @@ export type RealtimeVoiceBridge = {
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(text: string): void;
   triggerGreeting?(instructions?: string): void;
+  /**
+   * Inject a persistent system context turn (not spoken), then optionally
+   * trigger the assistant to produce the opening reply. Used to carry
+   * outbound-call intent or inbound-call metadata into the realtime session
+   * so it survives subsequent user turns. Providers that implement this
+   * should send the context as a `conversation.item.create` with role
+   * `system`, followed by an optional `response.create` when `speakFirst` is
+   * true.
+   */
+  sendSystemContext?(context: string, options?: { speakFirst?: boolean }): void;
   submitToolResult(callId: string, result: unknown): void;
   acknowledgeMark(): void;
   close(): void;
