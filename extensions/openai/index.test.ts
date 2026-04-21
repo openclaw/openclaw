@@ -15,6 +15,7 @@ import {
   OPENAI_GPT5_EXECUTION_BIAS,
   OPENAI_GPT5_OUTPUT_CONTRACT,
   OPENAI_GPT5_TOOL_CALL_STYLE,
+  shouldApplyOpenAIPromptOverlay,
 } from "./prompt-overlay.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -417,9 +418,27 @@ describe("openai plugin", () => {
     expect(
       openaiProvider.resolveSystemPromptContribution?.({
         ...contributionContext,
+        modelId: "openai/gpt-5.4-mini",
+      }),
+    ).toEqual({
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
+      sectionOverrides: {
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+        execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+      },
+    });
+    expect(
+      openaiProvider.resolveSystemPromptContribution?.({
+        ...contributionContext,
         modelId: "gpt-image-1",
       }),
     ).toBeUndefined();
+    expect(shouldApplyOpenAIPromptOverlay({ modelProviderId: "openai", modelId: "gpt-4.1" })).toBe(
+      false,
+    );
+    expect(
+      shouldApplyOpenAIPromptOverlay({ modelProviderId: "anthropic", modelId: "gpt-5.4" }),
+    ).toBe(false);
   });
 
   it("includes stronger execution guidance in the OpenAI prompt overlay", () => {

@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const OPENAI_PROVIDER_IDS = new Set(["openai", "openai-codex"]);
-const OPENAI_GPT5_MODEL_PREFIX = "gpt-5";
+const OPENAI_GPT5_MODEL_ID_PATTERN = /(?:^|[/:])gpt-5(?:[.-]|$)/i;
 
 export const OPENAI_FRIENDLY_PROMPT_OVERLAY = `## Interaction Style
 
@@ -96,7 +96,7 @@ export function shouldApplyOpenAIPromptOverlay(params: {
     return false;
   }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  return normalizedModelId.startsWith(OPENAI_GPT5_MODEL_PREFIX);
+  return OPENAI_GPT5_MODEL_ID_PATTERN.test(normalizedModelId);
 }
 
 export function resolveOpenAISystemPromptContribution(params: {

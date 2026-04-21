@@ -206,13 +206,15 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## Personality overlay
 
-OpenClaw adds a small OpenAI-specific prompt overlay for `openai/*` and `openai-codex/*` runs. The overlay keeps the assistant warm, collaborative, concise, and a little more emotionally expressive without replacing the base system prompt.
+OpenClaw adds an OpenAI-specific GPT-5 prompt contribution for `openai/*` and `openai-codex/*` GPT-5-family runs. It lives in the bundled OpenAI plugin, applies to model ids such as `gpt-5`, `gpt-5.2`, `gpt-5.4`, and `gpt-5.4-mini`, and does not apply to older GPT-4.x models.
 
-| Value                  | Effect                             |
-| ---------------------- | ---------------------------------- |
-| `"friendly"` (default) | Enable the OpenAI-specific overlay |
-| `"on"`                 | Alias for `"friendly"`             |
-| `"off"`                | Use base OpenClaw prompt only      |
+The GPT-5 contribution adds concise output shape, tool-call, and execution-bias guidance by default. The friendly interaction-style layer is configurable.
+
+| Value                  | Effect                                      |
+| ---------------------- | ------------------------------------------- |
+| `"friendly"` (default) | Enable the friendly interaction-style layer |
+| `"on"`                 | Alias for `"friendly"`                      |
+| `"off"`                | Disable only the friendly style layer       |
 
 <Tabs>
   <Tab title="Config">
@@ -234,7 +236,7 @@ OpenClaw adds a small OpenAI-specific prompt overlay for `openai/*` and `openai-
 </Tabs>
 
 <Tip>
-Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the overlay.
+Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the friendly style layer.
 </Tip>
 
 ## Voice and speech
