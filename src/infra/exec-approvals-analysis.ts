@@ -145,7 +145,8 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   const pendingHeredocs: HeredocSpec[] = [];
   let inHeredocBody = false;
   let heredocLine = "";
-  let unquotedHeredocLogicalLine = "";
+  let unquotedHeredocLogicalChunks: string[] = [];
+  let unquotedHeredocLogicalLength = 0;
 
   const pushPart = () => {
     const trimmed = buf.trim();
@@ -213,15 +214,21 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
             }
           } else {
             const continued = stripUnquotedHeredocLineContinuation(line);
-            if (!unquotedHeredocLogicalLine && !continued.continues && line === current.delimiter) {
+            if (
+              !unquotedHeredocLogicalLength &&
+              !continued.continues &&
+              line === current.delimiter
+            ) {
               pendingHeredocs.shift();
             } else {
-              unquotedHeredocLogicalLine += continued.line;
+              unquotedHeredocLogicalChunks.push(continued.line);
+              unquotedHeredocLogicalLength += continued.line.length;
               if (!continued.continues) {
-                if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalLine)) {
+                if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalChunks.join(""))) {
                   return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
                 }
-                unquotedHeredocLogicalLine = "";
+                unquotedHeredocLogicalChunks = [];
+                unquotedHeredocLogicalLength = 0;
               }
             }
           }
@@ -362,7 +369,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     if (
       current.quoted
         ? line === current.delimiter
-        : !unquotedHeredocLogicalLine && line === current.delimiter
+        : !unquotedHeredocLogicalLength && line === current.delimiter
     ) {
       pendingHeredocs.shift();
       if (pendingHeredocs.length === 0) {
