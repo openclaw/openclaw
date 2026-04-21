@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
+import { GatewayRequestError } from "../gateway.ts";
 import { loadChannels } from "./channels.ts";
 import type { ChannelsState } from "./channels.types.ts";
 import type { ChannelsStatusSnapshot } from "../types.ts";
@@ -155,5 +156,38 @@ describe("loadChannels", () => {
     await loadChannels(state, true, { includeAccounts: true });
 
     expect(requestCalls).toEqual([{ probe: true, timeoutMs: 8000 }]);
+  });
+
+  it("retries overview-compatible requests without includeAccounts when an older gateway rejects the field", async () => {
+    const requestCalls: Array<Record<string, unknown>> = [];
+    const state = createState(async (_method, params) => {
+      requestCalls.push(params);
+      if (requestCalls.length === 1) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message:
+            "invalid channels.status params: must NOT have additional properties (includeAccounts)",
+        });
+      }
+      return {
+        ts: 1,
+        channelOrder: ["telegram"],
+        channelLabels: { telegram: "Telegram" },
+        channels: { telegram: { configured: true } },
+        channelAccounts: {
+          telegram: [{ accountId: "default", configured: true }],
+        },
+        channelDefaultAccountId: { telegram: "default" },
+      };
+    });
+
+    await loadChannels(state, false, { includeAccounts: false });
+
+    expect(requestCalls).toEqual([
+      { probe: false, includeAccounts: false, timeoutMs: 8000 },
+      { probe: false, timeoutMs: 8000 },
+    ]);
+    expect(state.channelsSnapshot?.channels.telegram).toEqual({ configured: true });
+    expect(state.channelsError).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { ChannelsStatusSnapshot } from "../types.ts";
+import { GatewayRequestError } from "../gateway.ts";
 import type { ChannelsState } from "./channels.types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -64,6 +65,45 @@ function buildChannelsStatusRequestParams(request: ChannelsRequestStrength): Rec
   };
 }
 
+function buildLegacyChannelsStatusRequestParams(request: ChannelsRequestStrength): Record<string, unknown> {
+  return {
+    probe: request.probe,
+    timeoutMs: 8000,
+  };
+}
+
+function isUnsupportedIncludeAccountsRequestError(err: unknown): boolean {
+  return (
+    err instanceof GatewayRequestError &&
+    err.gatewayCode === "INVALID_REQUEST" &&
+    /includeaccounts|additional properties/i.test(err.message)
+  );
+}
+
+async function requestChannelsStatus(
+  state: ChannelsState,
+  request: ChannelsRequestStrength,
+): Promise<ChannelsStatusSnapshot | null> {
+  const client = state.client;
+  if (!client) {
+    return null;
+  }
+  try {
+    return await client.request<ChannelsStatusSnapshot | null>(
+      "channels.status",
+      buildChannelsStatusRequestParams(request),
+    );
+  } catch (err) {
+    if (request.includeAccounts || !isUnsupportedIncludeAccountsRequestError(err)) {
+      throw err;
+    }
+    return await client.request<ChannelsStatusSnapshot | null>(
+      "channels.status",
+      buildLegacyChannelsStatusRequestParams(request),
+    );
+  }
+}
+
 export async function loadChannels(
   state: ChannelsState,
   probe: boolean,
@@ -92,10 +132,7 @@ export async function loadChannels(
   state.channelsLoading = true;
   state.channelsError = null;
   try {
-    const res = await state.client.request<ChannelsStatusSnapshot | null>(
-      "channels.status",
-      buildChannelsStatusRequestParams(request),
-    );
+    const res = await requestChannelsStatus(state, request);
     const pendingStronger = isStrongerChannelsRequest(privateState.__channelsPending, request);
     if (privateState.__channelsRequestSeq === seq && !pendingStronger) {
       state.channelsSnapshot = res;
