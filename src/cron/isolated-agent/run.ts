@@ -616,6 +616,55 @@ async function prepareCronRunContext(params: {
       };
     }
   }
+  // PR #68939 follow-up (P2.9) — execution-phase nudge suppression.
+  // Sibling to the design-phase check above but mirror-image:
+  //   - `mode !== "executing"` → skip (plan closed OR reverted to
+  //     plan-design OR no plan activity)
+  //   - cycleId mismatch → skip (older executing cycle's nudge)
+  //   - all steps completed/cancelled → skip (close-on-complete
+  //     about to fire; waking agent right before auto-close would
+  //     just generate noise)
+  //
+  // Payload field is `executionCycleId` (distinct from `planCycleId`)
+  // so the two cron classes route to their respective guards without
+  // ambiguity.
+  if (agentPayload?.executionCycleId) {
+    const livePlanMode = cronSession.sessionEntry.planMode;
+    if (!livePlanMode || livePlanMode.mode !== "executing") {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary:
+            "Plan execution-phase nudge skipped: session is no longer in executing state.",
+        }),
+      };
+    }
+    if (livePlanMode.cycleId !== agentPayload.executionCycleId) {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary:
+            "Plan execution-phase nudge skipped: this cron belongs to an older executing cycle.",
+        }),
+      };
+    }
+    const steps = livePlanMode.lastPlanSteps;
+    const hasInFlight =
+      Array.isArray(steps) &&
+      steps.some((s) => s.status === "pending" || s.status === "in_progress");
+    if (!hasInFlight) {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary:
+            "Plan execution-phase nudge skipped: all steps are recorded as completed/cancelled (close-on-complete pending).",
+        }),
+      };
+    }
+  }
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();

@@ -1016,6 +1016,80 @@ export async function applySessionsPatchToStore(params: {
           ...(approvalId ? { approvalId } : {}),
         });
         clearResolvedPlanInteraction(next, approvalId);
+        // PR #68939 follow-up (P2.9) — schedule execution-phase
+        // nudge crons. Mirror of the design-phase scheduling pattern
+        // used by `enter_plan_mode` (which fires from the tool
+        // handler in pi-embedded-subscribe.handlers.tools.ts).
+        // Single site here covers ALL approve paths (manual UI click,
+        // auto-approve from autoApproveIfEnabled, Telegram /plan
+        // accept) without per-channel wiring. Fire-and-forget; the
+        // jobIds persist via a follow-up updateSessionStoreEntry so
+        // close-on-complete cleanup can target them.
+        //
+        // Skipped for "edit" (acceptEdits permission already implies
+        // post-approval execution; a separate execution-phase nudge
+        // class would compete with the agent's self-modification
+        // flow). Only fires for "approve" action.
+        //
+        // Captured locals BEFORE the fire-and-forget so the closure
+        // doesn't read mutating state (next gets rebuilt below).
+        if (action === "approve") {
+          const executionCycleId = next.planMode?.cycleId;
+          const sessionKeyForCron = storeKey;
+          const agentIdForCron = parsedAgent?.agentId;
+          // Resolve storePath now (sync) so the closure doesn't
+          // depend on `target` (which is local to a different
+          // helper scope at line 1071+).
+          const { resolveStorePath } = await import("../config/sessions/paths.js");
+          const storePathForPersist = resolveStorePath(
+            cfg.session?.store,
+            agentIdForCron ? { agentId: agentIdForCron } : {},
+          );
+          void (async () => {
+            try {
+              const { schedulePlanExecutionNudges } = await import(
+                "../agents/plan-mode/plan-execution-nudge-crons.js"
+              );
+              const scheduled = await schedulePlanExecutionNudges({
+                sessionKey: sessionKeyForCron,
+                ...(agentIdForCron ? { agentId: agentIdForCron } : {}),
+                ...(executionCycleId ? { executionCycleId } : {}),
+              });
+              if (scheduled.length === 0) {
+                return;
+              }
+              // Persist the jobIds back to the entry so close-on-
+              // complete cleanup knows what to remove.
+              const { updateSessionStoreEntry } = await import("../config/sessions/store.js");
+              await updateSessionStoreEntry({
+                storePath: storePathForPersist,
+                sessionKey: sessionKeyForCron,
+                update: async (entry) => {
+                  if (!entry?.planMode) {
+                    // Race: close-on-complete fired between schedule
+                    // and persist. Best-effort: cancel the just-
+                    // scheduled crons since they have no owner.
+                    const { cleanupPlanExecutionNudges } = await import(
+                      "../agents/plan-mode/plan-execution-nudge-crons.js"
+                    );
+                    await cleanupPlanExecutionNudges({
+                      jobIds: scheduled.map((s) => s.jobId),
+                    });
+                    return null;
+                  }
+                  return {
+                    planMode: {
+                      ...entry.planMode,
+                      executionNudgeJobIds: scheduled.map((s) => s.jobId),
+                    },
+                  };
+                },
+              });
+            } catch {
+              /* best-effort */
+            }
+          })();
+        }
       } else if (action === "reject") {
         // On reject, agent stays in plan mode and revises.
         const safeFeedback = (feedback ?? "")
@@ -1078,6 +1152,29 @@ export async function applySessionsPatchToStore(params: {
           // now scheduled for cleanup (avoid double-cancel on a
           // subsequent close path).
           next.planMode = { ...next.planMode, nudgeJobIds: undefined };
+        }
+      }
+      // (1.5) Execution-phase nudge cleanup — fires ONLY on the
+      // close-path (mode === "normal"). The approve transition
+      // SCHEDULES execution-phase nudges (above); the close
+      // transition CLEANS them up. Mirror of the design-phase
+      // cleanup pattern at (1) — strip executionNudgeJobIds from
+      // the entry to avoid double-cancel on a subsequent path.
+      if (next.planMode.mode === "normal") {
+        const previousExecutionNudgeIds = next.planMode.executionNudgeJobIds;
+        if (previousExecutionNudgeIds && previousExecutionNudgeIds.length > 0) {
+          const ids = [...previousExecutionNudgeIds];
+          void (async () => {
+            try {
+              const { cleanupPlanExecutionNudges } = await import(
+                "../agents/plan-mode/plan-execution-nudge-crons.js"
+              );
+              await cleanupPlanExecutionNudges({ jobIds: ids });
+            } catch {
+              /* best-effort */
+            }
+          })();
+          next.planMode = { ...next.planMode, executionNudgeJobIds: undefined };
         }
       }
       // (2) planMode-object delete / rebuild — fires ONLY on the

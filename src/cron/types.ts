@@ -117,6 +117,14 @@ type CronAgentTurnPayloadFields = {
   message: string;
   /** Optional plan-mode cycle token for state-aware cron wake-ups. */
   planCycleId?: string;
+  /**
+   * PR #68939 follow-up (P2.9) — execution-phase cycle token for
+   * post-approval nudges. Distinct from `planCycleId` (design-phase)
+   * so the cron-fire-time guard in `cron/isolated-agent/run.ts` can
+   * route to the right suppression check (executing vs plan).
+   * Same UUID value as `planMode.cycleId` at schedule time.
+   */
+  executionCycleId?: string;
   /** Optional model override (provider/model or alias). */
   model?: string;
   /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */

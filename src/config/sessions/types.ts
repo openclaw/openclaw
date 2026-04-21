@@ -388,6 +388,19 @@ export type SessionEntry = {
      */
     nudgeJobIds?: string[];
     /**
+     * PR #68939 follow-up (P2.9) — execution-phase nudge cron ids.
+     * Sibling to `nudgeJobIds` (design-phase). Scheduled by sessions-
+     * patch.ts on the approve transition (mode → executing) at
+     * tighter intervals (1/3/5 min) targeting in_progress steps.
+     * Cleaned up on close-on-complete + /plan off + any path that
+     * leaves executing state.
+     *
+     * Distinct from `nudgeJobIds` so cleanup can target the right
+     * cron set on each transition (design-phase nudges cleared on
+     * approve; execution-phase nudges cleared on close-on-complete).
+     */
+    executionNudgeJobIds?: string[];
+    /**
      * PR-10 auto-mode: when true, future `exit_plan_mode` submissions
      * auto-resolve as "approve" without waiting for the user. The
      * plan-snapshot-persister (gateway/plan-snapshot-persister.ts)
