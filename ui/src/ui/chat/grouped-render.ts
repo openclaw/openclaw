@@ -149,14 +149,17 @@ function imageDisplayStyle(img: ImageBlock): string {
   return `${styles.join("; ")};`;
 }
 
-function isImageLikeLegacyMediaPath(value: string): boolean {
+function isImageLikeLegacyMediaPath(value: string, mediaType?: unknown): boolean {
+  if (typeof mediaType === "string" && mediaType.toLowerCase().startsWith("image/")) {
+    return true;
+  }
   if (/^data:image\//i.test(value)) {
     return true;
   }
   try {
     const parsed = new URL(value, "https://openclaw.invalid");
     const pathname = parsed.pathname.toLowerCase();
-    return /\.(avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(pathname);
+    return /\.(avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|webp)$/i.test(pathname);
   } catch {
     return false;
   }
@@ -208,16 +211,21 @@ function extractImages(message: unknown): ImageBlock[] {
   }
 
   const mediaPath = m.MediaPath;
-  if (typeof mediaPath === "string" && mediaPath.trim() && isImageLikeLegacyMediaPath(mediaPath)) {
+  if (
+    typeof mediaPath === "string" &&
+    mediaPath.trim() &&
+    isImageLikeLegacyMediaPath(mediaPath, m.MediaType)
+  ) {
     images.push({ url: mediaPath });
   }
   const mediaPaths = m.MediaPaths;
+  const mediaTypes = Array.isArray(m.MediaTypes) ? m.MediaTypes : [];
   if (Array.isArray(mediaPaths)) {
-    for (const candidate of mediaPaths) {
+    for (const [index, candidate] of mediaPaths.entries()) {
       if (
         typeof candidate === "string" &&
         candidate.trim() &&
-        isImageLikeLegacyMediaPath(candidate)
+        isImageLikeLegacyMediaPath(candidate, mediaTypes[index])
       ) {
         images.push({ url: candidate });
       }
@@ -777,6 +785,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveBaseHref(basePath?: string): string {
+  return basePath
+    ? new URL(basePath.endsWith("/") ? basePath : `${basePath}/`, window.location.href).toString()
+    : window.location.href;
+}
+
+function resolveImageDisplayUrl(
+  rawUrl: string | null | undefined,
+  opts: { basePath?: string; assistantAttachmentAuthToken?: string | null },
+): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  if (isLocalAssistantAttachmentSource(rawUrl)) {
+    return buildAssistantAttachmentUrl(rawUrl, opts.basePath, opts.assistantAttachmentAuthToken);
+  }
+  return resolveSafeExternalUrl(rawUrl, resolveBaseHref(opts.basePath), {
+    allowDataImage: true,
+  });
+}
+
 function resolveManagedImageUrl(
   rawUrl: string | null | undefined,
   opts: { basePath?: string; authHeader?: string; allowDataImage?: boolean },
@@ -784,12 +813,7 @@ function resolveManagedImageUrl(
   if (!rawUrl) {
     return null;
   }
-  const mountedBaseHref = opts.basePath
-    ? new URL(
-        opts.basePath.endsWith("/") ? opts.basePath : `${opts.basePath}/`,
-        window.location.href,
-      ).toString()
-    : null;
+  const mountedBaseHref = opts.basePath ? resolveBaseHref(opts.basePath) : null;
   const baseHref = mountedBaseHref ?? window.location.href;
   const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, {
     allowDataImage: opts.allowDataImage ?? true,
@@ -911,7 +935,12 @@ async function fetchManagedImageBlobUrl(
 
 async function fetchImageBlob(
   rawUrl: string,
-  opts: { basePath?: string; authHeader?: string; requesterSessionKey?: string },
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
 ): Promise<Blob | null> {
   const managedUrl = resolveManagedImageUrl(rawUrl, {
     basePath: opts.basePath,
@@ -925,8 +954,9 @@ async function fetchImageBlob(
     });
   }
 
-  const safeUrl = resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
-    allowDataImage: true,
+  const safeUrl = resolveImageDisplayUrl(rawUrl, {
+    basePath: opts.basePath,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
   });
   if (!safeUrl) {
     return null;
@@ -1011,7 +1041,12 @@ async function prepareClipboardImageBlob(blob: Blob): Promise<Blob> {
 
 async function copyImageUrl(
   rawUrl: string,
-  opts: { basePath?: string; authHeader?: string; requesterSessionKey?: string },
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
 ): Promise<boolean> {
   if (typeof navigator === "undefined" || !navigator.clipboard) {
     return false;
@@ -1063,6 +1098,7 @@ async function fetchManagedPreviewBlobUrl(
     authHeader?: string;
     requesterSessionKey?: string;
     fallbackRawUrl?: string;
+    assistantAttachmentAuthToken?: string | null;
   },
 ): Promise<string | null> {
   if (!rawUrl) {
@@ -1097,8 +1133,9 @@ async function fetchManagedPreviewBlobUrl(
     }
     return null;
   }
-  return resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
-    allowDataImage: true,
+  return resolveImageDisplayUrl(rawUrl, {
+    basePath: opts.basePath,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
   });
 }
 
@@ -1109,6 +1146,7 @@ function resolveManagedPreviewSource(
     authHeader?: string;
     requesterSessionKey?: string;
     fallbackRawUrl?: string;
+    assistantAttachmentAuthToken?: string | null;
   },
 ): string | Promise<string | null> | null {
   if (!rawUrl) {
@@ -1120,8 +1158,9 @@ function resolveManagedPreviewSource(
     allowDataImage: true,
   });
   if (!managedUrl) {
-    return resolveSafeExternalUrl(rawUrl, opts.basePath ?? window.location.href, {
-      allowDataImage: true,
+    return resolveImageDisplayUrl(rawUrl, {
+      basePath: opts.basePath,
+      assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     });
   }
 
@@ -1157,7 +1196,12 @@ function resolveManagedPreviewSource(
 
 async function openImageUrl(
   rawUrl: string,
-  opts: { basePath?: string; authHeader?: string; requesterSessionKey?: string },
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
 ): Promise<void> {
   const managedUrl = resolveManagedImageUrl(rawUrl, {
     basePath: opts.basePath,
@@ -1182,8 +1226,15 @@ async function openImageUrl(
       return;
     }
   }
-  openExternalUrlSafe(rawUrl, {
-    baseHref: opts.basePath,
+  const safeUrl = resolveImageDisplayUrl(rawUrl, {
+    basePath: opts.basePath,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+  });
+  if (!safeUrl) {
+    return;
+  }
+  openExternalUrlSafe(safeUrl, {
+    baseHref: resolveBaseHref(opts.basePath),
     allowDataImage: true,
   });
 }
@@ -1194,6 +1245,7 @@ function renderMessageImages(
     basePath?: string;
     authHeader?: string;
     requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
     onMediaLoad?: () => void;
   },
 ) {
@@ -1206,6 +1258,7 @@ function renderMessageImages(
       basePath: opts.basePath,
       authHeader: opts.authHeader,
       requesterSessionKey: opts.requesterSessionKey,
+      assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     });
   };
   const copyImage = (img: ImageBlock, button: HTMLButtonElement | null) => {
@@ -1217,6 +1270,7 @@ function renderMessageImages(
       basePath: opts.basePath,
       authHeader: opts.authHeader,
       requesterSessionKey: opts.requesterSessionKey,
+      assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     })
       .then((copied) => {
         if (copied) {
@@ -1279,6 +1333,7 @@ function renderMessageImages(
           authHeader: opts.authHeader,
           requesterSessionKey: opts.requesterSessionKey,
           fallbackRawUrl: img.openUrl,
+          assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
         });
         const displayStyle = imageDisplayStyle(img);
         return html`
@@ -1874,6 +1929,7 @@ function renderGroupedMessage(
     basePath: opts.basePath,
     authHeader: opts.authHeader,
     requesterSessionKey: opts.requesterSessionKey,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     onMediaLoad: opts.onMediaLoad,
   });
   const renderedOrderedContent = html`

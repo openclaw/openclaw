@@ -684,6 +684,8 @@ export async function createManagedOutgoingImageBlocks(params: {
         );
       }
       if (!savedOriginal.contentType?.startsWith("image/")) {
+        await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
+        savedOriginalPath = null;
         continue;
       }
 

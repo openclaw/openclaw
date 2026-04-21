@@ -1724,6 +1724,67 @@ describe("chat view", () => {
     expect(container.innerHTML).not.toContain("/media/not-an-image.mp3");
   });
 
+  it("keeps legacy image media entries when MediaType and MediaTypes mark them as images", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "assistant-legacy-media-types",
+              role: "assistant",
+              content: [{ type: "text", text: "typed legacy paths" }],
+              MediaPath: "/media/legacy-single.bin",
+              MediaType: "image/heic",
+              MediaPaths: ["/media/legacy-list-a.bin", "/media/legacy-list-b.mp3"],
+              MediaTypes: ["image/png", "audio/mpeg"],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const images = Array.from(container.querySelectorAll(".chat-message-images img"));
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "http://localhost:3000/media/legacy-single.bin",
+      "http://localhost:3000/media/legacy-list-a.bin",
+    ]);
+    expect(container.innerHTML).not.toContain("/media/legacy-list-b.mp3");
+  });
+
+  it("routes local legacy image paths through assistant-media URLs", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          messages: [
+            {
+              id: "assistant-local-legacy-media-path",
+              role: "assistant",
+              content: [{ type: "text", text: "local legacy image" }],
+              MediaPath: "/tmp/openclaw/test image.png",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-images img");
+    expect(image?.getAttribute("src")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=session-token",
+    );
+  });
+
   it("renders blocked local assistant files as unavailable with a reason", () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const container = document.createElement("div");

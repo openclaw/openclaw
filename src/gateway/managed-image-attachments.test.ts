@@ -458,6 +458,32 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(blocks[0]?.type).toBe("image");
     expect(blocks[1]).toMatchObject({ type: "text" });
   });
+
+  it("drops downloaded non-image sources without leaving orphaned originals", async () => {
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/pdf");
+      res.end(Buffer.from("%PDF-1.4\n% test\n"));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+
+    try {
+      await expect(
+        createManagedOutgoingImageBlocks({
+          sessionKey: "agent:main:main",
+          mediaUrls: [`http://127.0.0.1:${address.port}/not-an-image`],
+          stateDir,
+        }),
+      ).rejects.toThrow(/could not be prepared/i);
+      const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
+      await expect(fs.readdir(originalsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
 });
 
 describe("attachManagedOutgoingImagesToMessage", () => {
