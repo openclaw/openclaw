@@ -153,8 +153,9 @@ PY
 sanitize_models_json 2>/dev/null || true
 
 # (2) Persistent background watcher — runs for the entire lifetime of the
-# machine. Re-scans every 5 s and heals any corrupted blink.baseUrl in place.
-# Covers three cases the old 60 s-only watcher missed:
+# machine. Re-scans every 2 s (matches the old poll cadence) and heals any
+# corrupted blink.baseUrl in place. Covers three cases the old 60-second-only
+# watcher missed:
 #   a) First-boot: gateway lazy-writes main/models.json > 60 s after start
 #      (rare but observed on slow cold starts).
 #   b) Sub-agent creation: a sessionKey other than `agent:main:main` creates
@@ -162,12 +163,16 @@ sanitize_models_json 2>/dev/null || true
 #      normalization writes with the corrupted /api/v1/ai/v1 baseUrl.
 #   c) Upstream re-persistence: any future OpenClaw upgrade that re-runs the
 #      normalization would re-corrupt the file; this watcher repairs it on
-#      the next 5 s tick before any subsequent LLM call.
+#      the next 2 s tick before any subsequent LLM call.
+# The race window for a freshly-created sub-agent is at most 2 s — the first
+# LLM call may still 404 if it fires in that narrow gap, but the rewrite
+# is in place before the user can retry, and the web UI's always-warm
+# main/ sessionKey is sanitized by the on-boot pass above.
 # Runs disowned so `exec gosu node` below replaces the shell cleanly; the
 # watcher is adopted by init (PID 1) and survives the exec.
 (
   while true; do
-    sleep 5
+    sleep 2
     sanitize_models_json 2>/dev/null || true
   done
 ) </dev/null >/dev/null 2>&1 &
