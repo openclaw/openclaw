@@ -240,6 +240,51 @@ describe("googlechat google auth runtime", () => {
     }
   });
 
+  it("accepts symlinked service-account files used by secret mounts", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "googlechat-auth-link-"));
+    try {
+      const credentialsPath = path.join(tempDir, "service-account.json");
+      const symlinkPath = path.join(tempDir, "service-account-link.json");
+      await fs.writeFile(
+        credentialsPath,
+        JSON.stringify({
+          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+          auth_uri: "https://accounts.google.com/o/oauth2/auth",
+          client_email: "bot@example.iam.gserviceaccount.com",
+          private_key: "key",
+          token_uri: "https://oauth2.googleapis.com/token",
+          type: "service_account",
+          universe_domain: "googleapis.com",
+        }),
+        "utf8",
+      );
+      try {
+        await fs.symlink(credentialsPath, symlinkPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EPERM") {
+          return;
+        }
+        throw error;
+      }
+
+      await expect(
+        resolveValidatedGoogleChatCredentials({
+          accountId: "default",
+          config: {},
+          credentialSource: "file",
+          credentialsFile: symlinkPath,
+          enabled: true,
+        }),
+      ).resolves.toMatchObject({
+        client_email: "bot@example.iam.gserviceaccount.com",
+        token_uri: "https://oauth2.googleapis.com/token",
+        type: "service_account",
+      });
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("does not disclose raw credential paths or OS errors when file reads fail", async () => {
     const missingPath = path.join(os.tmpdir(), "googlechat-auth-missing", "service-account.json");
 

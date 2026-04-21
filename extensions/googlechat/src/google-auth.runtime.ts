@@ -280,16 +280,22 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     throw new Error("Google Chat service account file path is empty");
   }
 
-  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  let loadPath = resolvedPath;
   try {
-    stat = await fs.lstat(resolvedPath);
+    loadPath = await fs.realpath(resolvedPath);
   } catch (error) {
-    throw new Error("Failed to load Google Chat service account file.", { cause: error });
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw new Error("Failed to load Google Chat service account file.", { cause: error });
+    }
   }
 
-  if (stat.isSymbolicLink()) {
-    throw new Error("Google Chat service account file must not be a symlink.");
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(loadPath);
+  } catch {
+    throw new Error("Failed to load Google Chat service account file.");
   }
+
   if (!stat.isFile()) {
     throw new Error("Google Chat service account file must be a regular file.");
   }
@@ -301,16 +307,16 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
 
   let raw: string;
   try {
-    raw = await fs.readFile(resolvedPath, "utf8");
-  } catch (error) {
-    throw new Error("Failed to load Google Chat service account file.", { cause: error });
+    raw = await fs.readFile(loadPath, "utf8");
+  } catch {
+    throw new Error("Failed to load Google Chat service account file.");
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error("Invalid Google Chat service account JSON.", { cause: error });
+  } catch {
+    throw new Error("Invalid Google Chat service account JSON.");
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
