@@ -221,6 +221,18 @@ describe("resolveSynologyWebhookFileUrl", () => {
     expect(origin).toBe("https://openclaw.example.com");
   });
 
+  it("accepts uppercase forwarded proto values when deriving the public origin", () => {
+    const origin = deriveSynologyPublicOrigin({
+      headers: {
+        "x-forwarded-host": "openclaw.example.com",
+        "x-forwarded-proto": "HTTPS",
+      },
+      socket: { remoteAddress: "127.0.0.1" },
+    } as never);
+
+    expect(origin).toBe("https://openclaw.example.com");
+  });
+
   it("rejects forwarded origin learning when the request did not arrive from a local proxy hop", () => {
     const origin = deriveSynologyPublicOrigin({
       headers: {

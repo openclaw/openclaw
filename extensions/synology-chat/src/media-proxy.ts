@@ -222,7 +222,7 @@ export function deriveSynologyPublicOrigin(req: IncomingMessage): string | undef
     return undefined;
   }
 
-  const proto = resolveForwardedHeaderValue(req.headers["x-forwarded-proto"]);
+  const proto = resolveForwardedHeaderValue(req.headers["x-forwarded-proto"])?.toLowerCase();
   if (proto !== "http" && proto !== "https") {
     return undefined;
   }
