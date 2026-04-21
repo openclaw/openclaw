@@ -188,8 +188,8 @@ describe("getCronChannelOptions", () => {
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {
-    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
-    expect(getCronChannelOptions()).toBe("last|telegram|signal");
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "quietchat" }, { id: "forum" }]);
+    expect(getCronChannelOptions()).toBe("last|quietchat|forum");
   });
 });
 

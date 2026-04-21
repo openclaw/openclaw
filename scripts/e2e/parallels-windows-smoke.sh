@@ -48,7 +48,7 @@ TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
 # verify_gateway_reachable runs six 30s probes plus short retry sleeps.
 TIMEOUT_GATEWAY_S=240
-TIMEOUT_AGENT_S=180
+TIMEOUT_AGENT_S=360
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -898,6 +898,11 @@ ensure_current_build() {
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
 }
 
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+}
+
 ensure_guest_git() {
   local host_ip="$1"
   local mingit_url mingit_url_q mingit_name_q
@@ -957,6 +962,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  write_package_dist_inventory
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \

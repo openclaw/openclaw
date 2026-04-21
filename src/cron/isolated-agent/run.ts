@@ -142,7 +142,8 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  if (!deliveryPlan.requested) {
+  const hasMessageTargetContext = deliveryPlan.mode !== "webhook" && deliveryPlan.to !== undefined;
+  if (!deliveryPlan.requested && !hasMessageTargetContext) {
     const resolvedDelivery = {
       ok: false as const,
       channel: undefined,
@@ -595,10 +596,11 @@ async function finalizeCronRun(params: {
     }
     prepared.cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
     prepared.cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+    // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
+    // cumulative run usage, so assign directly instead of accumulating).
+    // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
     if (runEstimatedCostUsd !== undefined) {
-      prepared.cronSession.sessionEntry.estimatedCostUsd =
-        (resolveNonNegativeNumber(prepared.cronSession.sessionEntry.estimatedCostUsd) ?? 0) +
-        runEstimatedCostUsd;
+      prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
     }
     telemetry = {
       model: modelUsed,
@@ -746,7 +748,9 @@ export async function runCronIsolatedAgentTurn(params: {
       lane: params.lane,
       resolvedDelivery: {
         channel: prepared.context.resolvedDelivery.channel,
+        to: prepared.context.resolvedDelivery.to,
         accountId: prepared.context.resolvedDelivery.accountId,
+        threadId: prepared.context.resolvedDelivery.threadId,
       },
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,

@@ -24,7 +24,7 @@ export default defineSingleProviderPluginEntry({
       {
         methodId: "api-key",
         label: "Kimi API key (.ai)",
-        hint: "Kimi K2.5 + Kimi",
+        hint: "Kimi K2.6 + Kimi",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -32,13 +32,13 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfig(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupLabel: "Moonshot AI (Kimi K2.6)",
         },
       },
       {
         methodId: "api-key-cn",
         label: "Kimi API key (.cn)",
-        hint: "Kimi K2.5 + Kimi",
+        hint: "Kimi K2.6 + Kimi",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -46,7 +46,7 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfigCn(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupLabel: "Moonshot AI (Kimi K2.6)",
         },
       },
     ],

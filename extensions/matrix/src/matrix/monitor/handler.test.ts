@@ -1984,6 +1984,54 @@ describe("matrix monitor handler live allowlist reload", () => {
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts a DM sender added as a live-resolved display name", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const resolveLiveUserAllowlist = vi.fn(
+      async (params: { entries?: ReadonlyArray<string | number> }) => {
+        const entries = (params.entries ?? []).map(String);
+        return entries.includes("Alice") ? ["@alice:example.org"] : [];
+      },
+    );
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: [] as string[] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: [],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+      resolveLiveUserAllowlist,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    cfg.channels.matrix.dm.allowFrom = ["Alice"];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(resolveLiveUserAllowlist).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountId: "ops",
+        entries: ["Alice"],
+      }),
+    );
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks a room sender removed from live groupAllowFrom while the group list remains configured", async () => {
     const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {
@@ -2686,19 +2734,25 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
 
     opts.onPartialReply?.({ text: "AlphaBeta" });
-    await vi.waitFor(() => {
-      expect(editMessageMatrixMock).toHaveBeenCalledWith(
-        "!room:example.org",
-        "$draft1",
-        "AlphaBeta",
-        expect.anything(),
-      );
-    });
+    await vi.waitFor(
+      () => {
+        expect(editMessageMatrixMock).toHaveBeenCalledWith(
+          "!room:example.org",
+          "$draft1",
+          "AlphaBeta",
+          expect.anything(),
+        );
+      },
+      { interval: 1 },
+    );
 
     await opts.onBlockReplyQueued?.({ text: "Alpha" });
 
@@ -2710,9 +2764,12 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
     expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Beta");
     expect(editMessageMatrixMock).toHaveBeenCalledWith(
       "!room:example.org",

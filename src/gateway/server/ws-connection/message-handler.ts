@@ -19,6 +19,7 @@ import {
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
+  listApprovedPairedDeviceRoles,
   listDevicePairing,
   listEffectivePairedDeviceRoles,
   requestDevicePairing,
@@ -67,7 +68,11 @@ import {
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
+  buildPairingConnectCloseReason,
+  buildPairingConnectErrorDetails,
+  buildPairingConnectErrorMessage,
   ConnectErrorDetailCodes,
+  type ConnectPairingRequiredReason,
   resolveDeviceAuthConnectErrorDetailCode,
   resolveAuthConnectErrorDetailCode,
 } from "../../protocol/connect-error-details.js";
@@ -860,7 +865,7 @@ export function attachGatewayWsMessageHandler(params: {
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (
-            reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
+            reason: ConnectPairingRequiredReason,
             existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
           ) => {
             const pairingStateAllowsRequestedAccess = (
@@ -1002,6 +1007,27 @@ export function attachGatewayWsMessageHandler(params: {
                 (approved?.status === "approved" || resolvedByConcurrentApproval)
               )
             ) {
+              const exposeApprovedAccess = existingPairedDevice?.publicKey === devicePublicKey;
+              const approvedRoles = exposeApprovedAccess
+                ? listApprovedPairedDeviceRoles(existingPairedDevice)
+                : [];
+              const approvedScopes = exposeApprovedAccess
+                ? Array.isArray(existingPairedDevice.approvedScopes)
+                  ? existingPairedDevice.approvedScopes
+                  : Array.isArray(existingPairedDevice.scopes)
+                    ? existingPairedDevice.scopes
+                    : []
+                : [];
+              const pairingErrorDetails = buildPairingConnectErrorDetails({
+                reason,
+                requestId: recoveryRequestId,
+                deviceId: device.id,
+                requestedRole: role,
+                requestedScopes: scopes,
+                ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
+                ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
+              });
+              const pairingErrorMessage = buildPairingConnectErrorMessage(reason);
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
@@ -1012,15 +1038,19 @@ export function attachGatewayWsMessageHandler(params: {
                 type: "res",
                 id: frame.id,
                 ok: false,
-                error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
-                  details: {
-                    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-                    ...(recoveryRequestId ? { requestId: recoveryRequestId } : {}),
-                    reason,
-                  },
+                error: errorShape(ErrorCodes.NOT_PAIRED, pairingErrorMessage, {
+                  details: pairingErrorDetails,
                 }),
               });
-              close(1008, "pairing required");
+              close(
+                1008,
+                truncateCloseReason(
+                  buildPairingConnectCloseReason({
+                    reason,
+                    requestId: recoveryRequestId,
+                  }),
+                ),
+              );
               return false;
             }
             return true;
@@ -1273,6 +1303,7 @@ export function attachGatewayWsMessageHandler(params: {
           socket,
           connect: connectParams,
           connId,
+          isDeviceTokenAuth: authMethod === "device-token",
           usesSharedGatewayAuth,
           sharedGatewaySessionGeneration,
           presenceKey,

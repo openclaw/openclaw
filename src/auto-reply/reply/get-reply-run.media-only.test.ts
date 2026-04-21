@@ -206,6 +206,15 @@ function baseParams(
   };
 }
 
+function ownerParams(): Parameters<typeof runPreparedReply>[0] {
+  const params = baseParams();
+  params.command = {
+    ...(params.command as Record<string, unknown>),
+    senderIsOwner: true,
+  } as never;
+  return params;
+}
+
 describe("runPreparedReply media-only handling", () => {
   beforeAll(async () => {
     ({ runPreparedReply } = await import("./get-reply-run.js"));
@@ -752,11 +761,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System (untrusted): [t] External webhook payload.",
     );
-    const params = baseParams();
-    params.command = {
-      ...(params.command as Record<string, unknown>),
-      senderIsOwner: true,
-    } as never;
+    const params = ownerParams();
 
     await runPreparedReply(params);
 
@@ -766,11 +771,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("keeps sender ownership when drained system events are trusted", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
-    const params = baseParams();
-    params.command = {
-      ...(params.command as Record<string, unknown>),
-      senderIsOwner: true,
-    } as never;
+    const params = ownerParams();
 
     await runPreparedReply(params);
 
@@ -782,11 +783,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System: [t] Relay text mentions System (untrusted): but event is trusted.",
     );
-    const params = baseParams();
-    params.command = {
-      ...(params.command as Record<string, unknown>),
-      senderIsOwner: true,
-    } as never;
+    const params = ownerParams();
 
     await runPreparedReply(params);
 

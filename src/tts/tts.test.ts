@@ -13,9 +13,20 @@ const createLazyFacadeObjectValue = vi.hoisted(() => {
       },
     ) as T;
 });
+const createLazyFacadeValue = vi.hoisted(() => {
+  return <T extends object, K extends keyof T>(load: () => T, key: K): T[K] =>
+    ((...args: unknown[]) => {
+      const value = load()[key];
+      if (typeof value !== "function") {
+        return value;
+      }
+      return (value as (...innerArgs: unknown[]) => unknown)(...args);
+    }) as T[K];
+});
 
 vi.mock("../plugin-sdk/facade-runtime.js", () => ({
   createLazyFacadeObjectValue,
+  createLazyFacadeValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
   loadBundledPluginPublicSurfaceModuleSync,
 }));
@@ -33,13 +44,7 @@ describe("tts runtime facade", () => {
     return ttsModulePromise;
   }
 
-  it("does not load speech-core on module import", async () => {
-    await importTtsModule();
-
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
-
-  it("loads speech-core lazily on first runtime access", async () => {
+  it("loads speech-core lazily after module import", async () => {
     const buildTtsSystemPromptHint = vi.fn().mockReturnValue("hint");
     loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
       buildTtsSystemPromptHint,
