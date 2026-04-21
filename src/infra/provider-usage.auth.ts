@@ -12,6 +12,15 @@ import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  isActivatedManifestOwner,
+  passesManifestOwnerBasePolicy,
+} from "../plugins/manifest-owner-policy.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRecord,
+} from "../plugins/manifest-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveLegacyPiAgentAccessToken } from "./provider-usage.shared.js";
@@ -108,6 +117,69 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
     return token;
   }
   return undefined;
+}
+
+function normalizeProviderIds(providerIds: Iterable<string | undefined>): string[] {
+  return [
+    ...new Set(
+      [...providerIds]
+        .map((providerId) => (providerId ? normalizeProviderId(providerId) : undefined))
+        .filter((providerId): providerId is string => Boolean(providerId)),
+    ),
+  ];
+}
+
+function isUsageProviderManifestEligible(params: {
+  plugin: PluginManifestRecord;
+  state: UsageAuthState;
+}): boolean {
+  const normalizedConfig = normalizePluginsConfig(params.state.cfg.plugins);
+  if (
+    !passesManifestOwnerBasePolicy({
+      plugin: params.plugin,
+      normalizedConfig,
+    })
+  ) {
+    return false;
+  }
+  if (params.plugin.origin !== "workspace") {
+    return true;
+  }
+  return isActivatedManifestOwner({
+    plugin: params.plugin,
+    normalizedConfig,
+    rootConfig: params.state.cfg,
+  });
+}
+
+function resolveUsageCredentialProviderIds(params: {
+  state: UsageAuthState;
+  provider: UsageProviderId;
+}): string[] {
+  const providerIds = new Set(normalizeProviderIds([params.provider]));
+  const providerIdSet = new Set(providerIds);
+  try {
+    const registry = loadPluginManifestRegistry({
+      config: params.state.cfg,
+      env: params.state.env,
+    });
+    for (const plugin of registry.plugins) {
+      const pluginProviderIds = normalizeProviderIds(plugin.providers);
+      if (!pluginProviderIds.some((providerId) => providerIdSet.has(providerId))) {
+        continue;
+      }
+      if (!isUsageProviderManifestEligible({ plugin, state: params.state })) {
+        continue;
+      }
+      for (const providerId of pluginProviderIds) {
+        providerIds.add(providerId);
+      }
+    }
+  } catch {
+    // Credential-source checks are an optimization gate; preserve usage fallback
+    // behavior if manifest discovery is unavailable in a constrained environment.
+  }
+  return [...providerIds];
 }
 
 async function resolveOAuthToken(params: {
@@ -229,20 +301,27 @@ async function resolveProviderUsageAuthFallback(params: {
 
 function hasAuthProfileCredentialSource(params: {
   state: UsageAuthState;
-  provider: UsageProviderId;
+  providerIds: string[];
 }): boolean {
   const store = ensureAuthProfileStoreWithoutExternalProfiles(params.state.agentDir, {
     allowKeychainPrompt: false,
   });
-  const order = resolveAuthProfileOrder({
-    cfg: params.state.cfg,
-    store,
-    provider: params.provider,
-  });
-  return dedupeProfileIds(order).some((profileId) => {
-    const cred = store.profiles[profileId];
-    return cred?.type === "api_key" || cred?.type === "oauth" || cred?.type === "token";
-  });
+  for (const provider of params.providerIds) {
+    const order = resolveAuthProfileOrder({
+      cfg: params.state.cfg,
+      store,
+      provider,
+    });
+    if (
+      dedupeProfileIds(order).some((profileId) => {
+        const cred = store.profiles[profileId];
+        return cred?.type === "api_key" || cred?.type === "oauth" || cred?.type === "token";
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveLegacyPiAgentProviderIds(provider: UsageProviderId): string[] {
@@ -274,10 +353,14 @@ export async function resolveProviderAuths(params: {
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
+    const credentialProviderIds = resolveUsageCredentialProviderIds({
+      state: { ...stateBase, allowAuthProfileStore: false },
+      provider,
+    });
     const hasDirectCredentialSource = Boolean(
       resolveProviderApiKeyFromConfig({
         state: { ...stateBase, allowAuthProfileStore: false },
-        providerIds: [provider],
+        providerIds: credentialProviderIds,
       }),
     );
     const allowAuthProfileStore =
@@ -286,7 +369,7 @@ export async function resolveProviderAuths(params: {
       (hasAuthProfileStoreSource &&
         hasAuthProfileCredentialSource({
           state: authProfileSourceState,
-          provider,
+          providerIds: credentialProviderIds,
         }));
     const state: UsageAuthState = {
       ...stateBase,

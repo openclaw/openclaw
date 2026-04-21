@@ -213,6 +213,56 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
+  it("keeps plugin usage auth when an owned alias provider has auth-profile credentials", async () => {
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
+      profiles: {
+        "minimax-portal:default": {
+          type: "oauth",
+          provider: "minimax-portal",
+          accessToken: "portal-oauth-token",
+        },
+      },
+    });
+    resolveAuthProfileOrderMock.mockImplementation((params: unknown) => {
+      const provider =
+        params && typeof params === "object" && "provider" in params
+          ? (params as { provider?: unknown }).provider
+          : undefined;
+      return provider === "minimax-portal" ? ["minimax-portal:default"] : [];
+    });
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "plugin-minimax-token",
+    });
+
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuths({
+          providers: ["minimax"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "minimax",
+          token: "plugin-minimax-token",
+        },
+      ]);
+    });
+
+    expect(resolveAuthProfileOrderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-portal",
+      }),
+    );
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+      }),
+    );
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
   it("does not overlay external auth profiles while checking the skip gate", async () => {
     hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
 
