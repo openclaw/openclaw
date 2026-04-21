@@ -53,7 +53,7 @@ function createSsoDeps(params: { fetchImpl: MSTeamsSsoFetch }) {
 function createRegisteredSsoHandler(sso: MSTeamsMessageHandlerDeps["sso"]) {
   const deps = createDepsWithoutSso({ sso });
   const { handler } = createActivityHandler();
-  const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+  const registered = registerMSTeamsHandlers(handler, deps).handler as MSTeamsActivityHandler & {
     run: NonNullable<MSTeamsActivityHandler["run"]>;
   };
   return { deps, registered };
@@ -387,7 +387,7 @@ describe("msteams signin invoke handler registration", () => {
   it("acks signin invokes even when sso is not configured", async () => {
     const deps = createDepsWithoutSso();
     const { handler, run } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+    const registered = registerMSTeamsHandlers(handler, deps).handler as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
 
@@ -429,7 +429,7 @@ describe("msteams signin invoke handler registration", () => {
         const { sso, tokenStore } = createSsoDeps({ fetchImpl });
         const deps = createDepsWithoutSso({ cfg: scenario.cfg, sso });
         const { handler } = createActivityHandler();
-        const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+        const registered = registerMSTeamsHandlers(handler, deps).handler as MSTeamsActivityHandler & {
           run: NonNullable<MSTeamsActivityHandler["run"]>;
         };
 
@@ -539,7 +539,7 @@ describe("msteams signin invoke handler registration", () => {
     const { sso, tokenStore } = createSsoDeps({ fetchImpl });
     const deps = createDepsWithoutSso({ sso });
     const { handler } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+    const registered = registerMSTeamsHandlers(handler, deps).handler as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
 

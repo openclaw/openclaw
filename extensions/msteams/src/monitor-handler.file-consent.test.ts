@@ -386,7 +386,7 @@ describe("msteams file consent invoke FS fallback", () => {
     const handler = registerMSTeamsHandlers(
       createActivityHandler(),
       createDeps(),
-    ) as MSTeamsActivityHandler & {
+    ).handler as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
 
@@ -436,7 +436,7 @@ describe("msteams file consent invoke FS fallback", () => {
     const handler = registerMSTeamsHandlers(
       createActivityHandler(),
       createDeps(),
-    ) as MSTeamsActivityHandler & {
+    ).handler as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
 

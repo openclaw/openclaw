@@ -686,7 +686,6 @@ describe("Feishu inbound debounce regressions", () => {
           unregister: () => {},
         }),
       }),
-      }),
     );
     const onMessage = await setupDebounceMonitor();
     const event = createTextEvent({ messageId: "om_retryable", text: "hello" });

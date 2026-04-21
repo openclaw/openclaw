@@ -26,7 +26,7 @@ vi.mock("../graph-thread.js", async () => {
 });
 
 describe("msteams thread parent context injection", () => {
-  type MessageHandler = ReturnType<typeof createMSTeamsMessageHandler>;
+  type MessageHandler = ReturnType<typeof createMSTeamsMessageHandler>["handleTeamsMessage"];
 
   function findParentSystemEventCall(
     mock: ReturnType<typeof vi.fn>,
@@ -68,7 +68,7 @@ describe("msteams thread parent context injection", () => {
       body: { content: "Can someone investigate the latency spike?", contentType: "text" },
     });
     const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: buildChannelActivity({ id: "msg-reply-1", replyToId: "thread-root-123" }),
@@ -89,7 +89,7 @@ describe("msteams thread parent context injection", () => {
       body: { content: "Original question", contentType: "text" },
     });
     const { deps } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await dispatchTwoThreadReplies(handler);
 
@@ -104,7 +104,7 @@ describe("msteams thread parent context injection", () => {
       body: { content: "Original question", contentType: "text" },
     });
     const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await dispatchTwoThreadReplies(handler);
 
@@ -136,7 +136,7 @@ describe("msteams thread parent context injection", () => {
         },
       },
     } as OpenClawConfig);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: buildChannelActivity({
@@ -153,7 +153,7 @@ describe("msteams thread parent context injection", () => {
   it("handles Graph failure gracefully without throwing or emitting a parent event", async () => {
     fetchChannelMessageMock.mockRejectedValueOnce(new Error("graph down"));
     const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: buildChannelActivity({ id: "msg-reply-1", replyToId: "thread-root-123" }),
@@ -175,7 +175,7 @@ describe("msteams thread parent context injection", () => {
     const { deps, enqueueSystemEvent } = createMessageHandlerDeps({
       channels: { msteams: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: {
@@ -199,7 +199,7 @@ describe("msteams thread parent context injection", () => {
       body: { content: "should-not-happen", contentType: "text" },
     });
     const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: buildChannelActivity({ id: "msg-root-1", replyToId: undefined }),

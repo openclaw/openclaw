@@ -24,7 +24,7 @@ describe("msteams thread session isolation", () => {
       channels: { msteams: { groupPolicy: "open" } },
     } as OpenClawConfig;
     const { deps, recordInboundSession } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     // Thread reply: has replyToId pointing to the thread root
     await handler({
@@ -43,7 +43,7 @@ describe("msteams thread session isolation", () => {
       channels: { msteams: { groupPolicy: "open" } },
     } as OpenClawConfig;
     const { deps, recordInboundSession } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     // Top-level channel message: no replyToId
     await handler({
@@ -62,7 +62,7 @@ describe("msteams thread session isolation", () => {
       channels: { msteams: { groupPolicy: "open" } },
     } as OpenClawConfig;
     const { deps, recordInboundSession } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: buildChannelActivity({ id: "msg-1", replyToId: "thread-A" }),
@@ -87,7 +87,7 @@ describe("msteams thread session isolation", () => {
       channels: { msteams: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const { deps, recordInboundSession } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: {
@@ -113,7 +113,7 @@ describe("msteams thread session isolation", () => {
       channels: { msteams: { groupPolicy: "open" } },
     } as OpenClawConfig;
     const { deps, recordInboundSession } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+    const { handleTeamsMessage: handler } = createMSTeamsMessageHandler(deps);
 
     await handler({
       activity: {
