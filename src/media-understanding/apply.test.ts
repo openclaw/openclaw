@@ -293,6 +293,25 @@ describe("applyMediaUnderstanding", () => {
         },
       };
     });
+    // Mock model catalog to report vision-capable models so runCapability
+    // skips image understanding (native vision path we are testing).
+    vi.doMock("../agents/model-catalog.js", async () => {
+      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
+        "../agents/model-catalog.js",
+      );
+      return {
+        ...actual,
+        loadModelCatalog: vi.fn(async () => [
+          {
+            id: "gpt-4.1",
+            name: "GPT-4.1",
+            provider: "openai",
+            input: ["text", "image"] as const,
+          },
+        ]),
+      };
+    });
+
     ({ applyMediaUnderstanding } = await import("./apply.js"));
     ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.js"));
 
@@ -1417,5 +1436,42 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("<file");
     expect(ctx.Body).toContain("vendor-json");
+  });
+
+  it("injects [media attached: media://inbound/<id>] into Body when image is skipped for native vision", async () => {
+    // Create a real PNG file to serve as the inbound media attachment.
+    // The file path will be something like <tmp>/openclaw-media-xxx/<hash>/image.png
+    // and will be stored under the "inbound" media subdir, so the media URI
+    // we expect in Body is media://inbound/<filename>.
+    const dir = await createTempMediaDir();
+    // Save directly to the media/inbound subdirectory structure so the path
+    // matches what resolveMedia would produce.
+    const inboundDir = path.join(dir, "inbound");
+    await fs.mkdir(inboundDir, { recursive: true });
+    const imageFilename = "test-image.png";
+    const imagePath = path.join(inboundDir, imageFilename);
+    // A minimal valid PNG (1x1 transparent pixel).
+    const pngBytes = Buffer.from(
+      "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63646800000000000000000000f8vfff30000000049454e44ae426082",
+      "hex",
+    );
+    await fs.writeFile(imagePath, pngBytes);
+
+    const ctx: MsgContext = {
+      Body: "",
+      MediaPath: imagePath,
+      MediaType: "image/png",
+    };
+
+    await applyMediaUnderstanding({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      activeModel: { provider: "openai", model: "gpt-4.1" },
+    });
+
+    // When primary model supports native vision, runCapability skips image
+    // understanding. The fix injects a [media attached: media://inbound/<id>]
+    // marker so downstream detectAndLoadPromptImages can find and load the file.
+    expect(ctx.Body).toContain(`[media attached: media://inbound/${imageFilename}]`);
   });
 });
