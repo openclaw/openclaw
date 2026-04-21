@@ -40,6 +40,11 @@ function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
   return cfg.memory?.backend === "qmd";
 }
 
+async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
+  const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
+  return hasInternalHookListeners("gateway", "startup");
+}
+
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
@@ -232,7 +237,9 @@ export async function startGatewaySidecars(params: {
     }
   });
 
-  if (internalHooksConfigured) {
+  const shouldDispatchGatewayStartupInternalHook =
+    internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
+  if (shouldDispatchGatewayStartupInternalHook) {
     setTimeout(() => {
       void import("../hooks/internal-hooks.js").then(
         ({ createInternalHookEvent, triggerInternalHook }) => {
@@ -385,6 +392,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
+    awaitSidecars?: boolean;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -475,6 +483,19 @@ export async function startGatewayPostAttachRuntime(
     .catch((err) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
+
+  if (params.awaitSidecars === true) {
+    const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
+      stopGatewayUpdateCheckPromise,
+      tailscaleCleanupPromise,
+      sidecarsPromise,
+    ]);
+    return {
+      stopGatewayUpdateCheck,
+      tailscaleCleanup,
+      pluginServices: sidecarsResult.pluginServices,
+    };
+  }
 
   const [stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
     stopGatewayUpdateCheckPromise,

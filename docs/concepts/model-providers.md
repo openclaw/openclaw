@@ -42,8 +42,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
-  `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
-  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  `augmentModelCatalog`, `resolveThinkingProfile`, `isBinaryThinking`,
+  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
+  `applyConfigDefaults`, `isModernModelRef`,
   `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, and
   `onModelSelected`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
@@ -131,10 +132,11 @@ Typical split:
   vendor-owned error for direct resolution failures
 - `augmentModelCatalog`: provider appends synthetic/final catalog rows after
   discovery and config merging
-- `isBinaryThinking`: provider owns binary on/off thinking UX
-- `supportsXHighThinking`: provider opts selected models into `xhigh`
-- `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
-  model family
+- `resolveThinkingProfile`: provider owns the exact `/think` level set,
+  optional display labels, and default level for a selected model
+- `isBinaryThinking`: compatibility hook for binary on/off thinking UX
+- `supportsXHighThinking`: compatibility hook for selected `xhigh` models
+- `resolveDefaultThinkingLevel`: compatibility hook for default `/think` policy
 - `applyConfigDefaults`: provider applies provider-specific global defaults
   during config materialization based on auth mode, env, or model family
 - `isModernModelRef`: provider owns live/smoke preferred-model matching
@@ -171,7 +173,7 @@ Current bundled examples:
   normalization (`input` / `output` and `prompt` / `completion` families), the
   shared `openai-responses-defaults` stream family for native OpenAI/Codex
   wrappers, provider-family metadata, bundled image-generation provider
-  registration for `gpt-image-1`, and bundled video-generation provider
+  registration for `gpt-image-2`, and bundled video-generation provider
   registration for `sora-2`
 - `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
   native Gemini replay validation, bootstrap replay sanitation, tagged

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import {
@@ -251,6 +252,74 @@ describe("memory-core dreaming phases", () => {
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
     expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
     expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
+  });
+
+  it("swallows synchronous request-scoped cleanup failures after narrative fallback", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await writeDailyNote(workspaceDir, [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Move backups to S3 Glacier.",
+      "- Keep retention at 365 days.",
+    ]);
+    const testConfig: OpenClawConfig = {
+      ...LIGHT_DREAMING_TEST_CONFIG,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 20,
+                    lookbackDays: 2,
+                  },
+                  rem: {
+                    enabled: false,
+                    limit: 0,
+                    lookbackDays: 2,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const subagent = createMockNarrativeSubagent();
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    subagent.deleteSession.mockImplementation(() => {
+      throw new RequestScopedSubagentRuntimeError();
+    });
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await expect(
+      runDreamingSweepPhases({
+        workspaceDir,
+        cfg: testConfig,
+        pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+        logger,
+        subagent,
+        nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+      }),
+    ).resolves.toBeUndefined();
+
+    const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreams).toContain("Move backups to S3 Glacier.");
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {

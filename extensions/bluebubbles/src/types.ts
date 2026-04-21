@@ -10,6 +10,11 @@ export type BlueBubblesGroupConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this group. */
   tools?: { allow?: string[]; deny?: string[] };
+  /**
+   * Free-form directive appended to the system prompt on every turn that
+   * handles a message in this group.
+   */
+  systemPrompt?: string;
 };
 
 export type BlueBubblesActionConfig = {
@@ -100,6 +105,17 @@ export type BlueBubblesAccountConfig = {
   healthMonitor?: {
     enabled?: boolean;
   };
+  /**
+   * When true, consecutive DM messages (`isGroup === false`) from the same
+   * sender within the inbound debounce window coalesce into a single agent
+   * turn. Keys by `chat:sender` instead of the per-message `messageId` so
+   * "command + payload as two sends" (e.g. a `dump` command followed by a
+   * pasted URL that iMessage renders as its own URL balloon) reaches the
+   * agent together. Does not apply to group chats or to BlueBubbles
+   * text+balloon follow-ups, which still coalesce via
+   * `associatedMessageGuid`. Default: false.
+   */
+  coalesceSameSenderDms?: boolean;
 };
 
 export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
@@ -166,7 +182,11 @@ export function buildBlueBubblesApiUrl(params: {
 let _fetchGuard = fetchWithSsrFGuard;
 
 /** @internal Replace the SSRF fetch guard in tests. */
-export function _setFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function _setFetchGuardForTesting(
+  impl:
+    | ((...args: Parameters<typeof fetchWithSsrFGuard>) => ReturnType<typeof fetchWithSsrFGuard>)
+    | null,
+): void {
   _fetchGuard = impl ?? fetchWithSsrFGuard;
 }
 

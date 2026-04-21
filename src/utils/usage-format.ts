@@ -313,23 +313,32 @@ export function resolveModelCostConfig(params: {
 const toNumber = (value: number | undefined): number =>
   typeof value === "number" && Number.isFinite(value) ? value : 0;
 
-/**
- * Compute the cost for a single token dimension (input, output, cacheRead,
- * or cacheWrite) across a set of sorted tiered-pricing tiers.
- *
- * The tiers define ranges on the **input** token axis.  For each tier,
- * the proportion of the total input that falls into that range determines
- * the fraction of *all* token types billed at that tier's rates.
- *
- * For example, if the input is 40 000 tokens and the tiers are:
- *   [0, 32000)  → $0.30/M input, $1.50/M output
- *   [32000, 128000) → $0.50/M input, $2.50/M output
- *
- * Then 80 % of every dimension is billed at the first tier and 20 % at the
- * second tier.
- *
- * Prices are per-million; the caller divides by 1 000 000 after summing.
- */
+function selectPricingTier(tiers: PricingTier[], input: number): PricingTier | undefined {
+  const sortedTiers = tiers.toSorted((a, b) => a.range[0] - b.range[0]);
+  if (sortedTiers.length === 0) {
+    return undefined;
+  }
+  if (input <= 0) {
+    return sortedTiers[0];
+  }
+
+  for (const tier of sortedTiers) {
+    const [start, end] = tier.range;
+    if (input >= start && input < end) {
+      return tier;
+    }
+  }
+
+  for (let index = sortedTiers.length - 1; index >= 0; index -= 1) {
+    const tier = sortedTiers[index];
+    if (input >= tier.range[0]) {
+      return tier;
+    }
+  }
+
+  return sortedTiers[0];
+}
+
 function computeTieredCost(
   tiers: PricingTier[],
   input: number,
@@ -337,61 +346,17 @@ function computeTieredCost(
   cacheRead: number,
   cacheWrite: number,
 ): number {
-  const totalInputTokens = input;
-  const sortedTiers = tiers.toSorted((a, b) => a.range[0] - b.range[0]);
-  if (totalInputTokens <= 0) {
-    // If there are no input tokens the tier proportion is undefined;
-    // fall back to the first tier for any residual output/cache usage.
-    const tier = sortedTiers[0];
-    if (!tier) {
-      return 0;
-    }
-    return output * tier.output + cacheRead * tier.cacheRead + cacheWrite * tier.cacheWrite;
+  const tier = selectPricingTier(tiers, input);
+  if (!tier) {
+    return 0;
   }
 
-  let total = 0;
-  let billedInput = 0;
-  let coveredUntil = 0;
-  let lastTier: PricingTier | undefined;
-
-  for (const tier of sortedTiers) {
-    const [start, end] = tier.range;
-    const tierStart = Math.max(0, start, coveredUntil);
-    const tierEnd = Math.min(totalInputTokens, end);
-    const inputInTier = Math.max(0, tierEnd - tierStart);
-    if (end > coveredUntil) {
-      coveredUntil = end;
-    }
-    if (inputInTier <= 0) {
-      continue;
-    }
-    const fraction = inputInTier / totalInputTokens;
-    total +=
-      inputInTier * tier.input +
-      output * fraction * tier.output +
-      cacheRead * fraction * tier.cacheRead +
-      cacheWrite * fraction * tier.cacheWrite;
-    billedInput += inputInTier;
-    lastTier = tier;
-  }
-
-  // Bill any uncovered gaps or overflow at the highest matched tier's rate.
-  // This keeps malformed remote/user tier ranges from underestimating cost.
-  const unbilledInput = totalInputTokens - billedInput;
-  if (unbilledInput > 0) {
-    const fallbackTier = lastTier ?? sortedTiers[sortedTiers.length - 1];
-    if (!fallbackTier) {
-      return total;
-    }
-    const fraction = unbilledInput / totalInputTokens;
-    total +=
-      unbilledInput * fallbackTier.input +
-      output * fraction * fallbackTier.output +
-      cacheRead * fraction * fallbackTier.cacheRead +
-      cacheWrite * fraction * fallbackTier.cacheWrite;
-  }
-
-  return total;
+  return (
+    input * tier.input +
+    output * tier.output +
+    cacheRead * tier.cacheRead +
+    cacheWrite * tier.cacheWrite
+  );
 }
 
 export function estimateUsageCost(params: {

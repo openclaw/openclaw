@@ -3255,6 +3255,63 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
               },
+              silentReply: {
+                type: "object",
+                properties: {
+                  direct: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                  group: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                  internal: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              silentReplyRewrite: {
+                type: "object",
+                properties: {
+                  direct: {
+                    type: "boolean",
+                  },
+                  group: {
+                    type: "boolean",
+                  },
+                  internal: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
               repoRoot: {
                 type: "string",
                 title: "Repo Root",
@@ -4716,6 +4773,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     const: "adaptive",
                   },
+                  {
+                    type: "string",
+                    const: "max",
+                  },
                 ],
               },
               verboseDefault: {
@@ -5686,7 +5747,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 thinkingDefault: {
                   type: "string",
-                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
@@ -22764,6 +22825,75 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
       },
+      surfaces: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+        },
+        additionalProperties: {
+          type: "object",
+          properties: {
+            silentReply: {
+              type: "object",
+              properties: {
+                direct: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+                group: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+                internal: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+              },
+              additionalProperties: false,
+            },
+            silentReplyRewrite: {
+              type: "object",
+              properties: {
+                direct: {
+                  type: "boolean",
+                },
+                group: {
+                  type: "boolean",
+                },
+                internal: {
+                  type: "boolean",
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
     },
     required: ["commands"],
     additionalProperties: false,
@@ -27516,6 +27646,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.20",
+  version: "2026.4.21",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

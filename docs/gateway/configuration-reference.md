@@ -631,7 +631,7 @@ exec ssh -T gateway-host imsg "$@"
 
 ### Matrix
 
-Matrix is extension-backed and configured under `channels.matrix`.
+Matrix is plugin-backed and configured under `channels.matrix`.
 
 ```json5
 {
@@ -679,7 +679,7 @@ Matrix is extension-backed and configured under `channels.matrix`.
 
 ### Microsoft Teams
 
-Microsoft Teams is extension-backed and configured under `channels.msteams`.
+Microsoft Teams is plugin-backed and configured under `channels.msteams`.
 
 ```json5
 {
@@ -699,7 +699,7 @@ Microsoft Teams is extension-backed and configured under `channels.msteams`.
 
 ### IRC
 
-IRC is extension-backed and configured under `channels.irc`.
+IRC is plugin-backed and configured under `channels.irc`.
 
 ```json5
 {
@@ -755,9 +755,9 @@ Run multiple accounts per channel (each with its own `accountId`):
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
 - `openclaw doctor --fix` also repairs mixed shapes by moving account-scoped top-level single-account values into the promoted account chosen for that channel. Most channels use `accounts.default`; Matrix can preserve an existing matching named/default target instead.
 
-### Other extension channels
+### Other plugin channels
 
-Many extension channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
+Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
 See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
@@ -1177,7 +1177,7 @@ Time format in system prompt. Default: `auto` (OS preference).
         fallbacks: ["openrouter/google/gemini-2.0-flash-vision:free"],
       },
       imageGenerationModel: {
-        primary: "openai/gpt-image-1",
+        primary: "openai/gpt-image-2",
         fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
       videoGenerationModel: {
@@ -1215,7 +1215,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Also used as fallback routing when the selected/default model cannot accept image input.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared image-generation capability and any future tool/plugin surface that generates images.
-  - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
+  - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-2` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
 - `musicGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -1791,7 +1791,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
-- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
+- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
 - `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex", fallback: "none" }` to make one agent Codex-only while other agents keep the default PI fallback.
@@ -2690,7 +2690,7 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
             name: "Kimi K2.6",
             reasoning: false,
             input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 262144,
           },
@@ -3193,8 +3193,8 @@ See [Multiple Gateways](/gateway/multiple-gateways).
     path: "/hooks",
     maxBodyBytes: 262144,
     defaultSessionKey: "hook:ingress",
-    allowRequestSessionKey: false,
-    allowedSessionKeyPrefixes: ["hook:"],
+    allowRequestSessionKey: true,
+    allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
     allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
     transformsDir: "~/.openclaw/hooks/transforms",
@@ -3225,6 +3225,7 @@ Validation and safety notes:
 - `hooks.token` must be **distinct** from `gateway.auth.token`; reusing the Gateway token is rejected.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
+- If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.
 
 **Endpoints:**
 
@@ -3232,6 +3233,7 @@ Validation and safety notes:
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
+  - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
 
 <Accordion title="Mapping details">
 
@@ -3243,14 +3245,18 @@ Validation and safety notes:
 - `agentId` routes to a specific agent; unknown IDs fall back to default.
 - `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
-- `allowRequestSessionKey`: allow `/hooks/agent` callers to set `sessionKey` (default: `false`).
-- `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`.
+- `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
+- `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
 - `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
 </Accordion>
 
 ### Gmail integration
+
+- The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"`.
+- If you keep that per-message routing, set `hooks.allowRequestSessionKey: true` and constrain `hooks.allowedSessionKeyPrefixes` to match the Gmail namespace, for example `["hook:", "hook:gmail:"]`.
+- If you need `hooks.allowRequestSessionKey: false`, override the preset with a static `sessionKey` instead of the templated default.
 
 ```json5
 {

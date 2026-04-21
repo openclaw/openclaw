@@ -39,17 +39,16 @@ const resolveGatewayPort = vi.hoisted(() => vi.fn((_cfg?: unknown, _env?: unknow
 const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
 const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
-const probeGateway =
-  vi.fn<
-    (opts: {
-      url: string;
-      auth?: { token?: string; password?: string };
-      timeoutMs: number;
-    }) => Promise<{
-      ok: boolean;
-      configSnapshot: unknown;
-    }>
-  >();
+const probeGateway = vi.fn<
+  (opts: {
+    url: string;
+    auth?: { token?: string; password?: string };
+    timeoutMs: number;
+  }) => Promise<{
+    ok: boolean;
+    configSnapshot: unknown;
+  }>
+>();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
@@ -288,6 +287,27 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits longer for Windows gateway restart health", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempts: 360,
+        delayMs: 500,
+        includeUnknownListenersAsStale: true,
+        port: 18789,
+      }),
+    );
   });
 
   it("fails restart with a stopped-free message when the waiter exits early", async () => {

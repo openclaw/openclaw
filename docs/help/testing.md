@@ -39,6 +39,11 @@ When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
+  `openclaw models list --provider moonshot --json`, then run an isolated
+  `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`
+  against `moonshot/kimi-k2.6`. Verify the JSON reports Moonshot/K2.6 and the
+  assistant transcript stores normalized `usage.cost`.
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
 
@@ -71,6 +76,12 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
   - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm test:docker:bundled-channel-deps`
+  - Packs and installs the current OpenClaw build in Docker, starts the Gateway
+    with OpenAI configured, then enables Telegram and Discord via config edits.
+  - Verifies the first Gateway restart installs each bundled channel plugin's
+    runtime dependencies on demand, and a second restart does not reinstall
+    dependencies that were already activated.
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
@@ -277,7 +288,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
   - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
   - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
-  - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include extension validation because extensions depend on those core contracts.
+  - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include extension validation because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field.
   - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
   - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
   - `auto-reply` now has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
@@ -300,7 +311,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - The shared `scripts/run-vitest.mjs` launcher now also adds `--no-maglev` for Vitest child Node processes by default to reduce V8 compile churn during big local runs. Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` if you need to compare against stock V8 behavior.
 - Fast-local iteration note:
   - `pnpm changed:lanes` shows which architectural lanes a diff triggers.
-  - The pre-commit hook runs `pnpm check:changed --staged` after staged formatting/linting, so core-only commits do not pay extension test cost unless they touch public extension-facing contracts.
+  - The pre-commit hook runs `pnpm check:changed --staged` after staged formatting/linting, so core-only commits do not pay extension test cost unless they touch public extension-facing contracts. Release metadata-only commits stay on the targeted version/config/root-dependency lane.
   - `pnpm test:changed` routes through scoped lanes when the changed paths map cleanly to a smaller suite.
   - `pnpm test:max` and `pnpm test:changed:max` keep the same routing behavior, just with a higher worker cap.
   - Local worker auto-scaling is intentionally conservative now and also backs off when the host load average is already high, so multiple concurrent Vitest runs do less damage by default.
@@ -768,7 +779,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - `google`
 - Optional narrowing:
   - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-1,google/gemini-3.1-flash-image-preview"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview"`
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides

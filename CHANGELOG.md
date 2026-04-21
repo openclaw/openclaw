@@ -6,15 +6,94 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- CLI/doctor plugins: lazy-load doctor plugin paths and prefer installed plugin `dist/*` runtime entries over source-adjacent JavaScript fallbacks, reducing the measured `doctor --non-interactive` runtime by about 74% while keeping cold doctor startup on built plugin artifacts. (#69840) Thanks @gumadeiras.
+- WhatsApp/groups+direct: forward per-group and per-direct `systemPrompt` config into inbound context `GroupSystemPrompt` so configured per-chat behavioral instructions are injected on every turn. Supports `"*"` wildcard fallback and account-scoped overrides under `channels.whatsapp.accounts.<id>.{groups,direct}`; account maps fully replace root maps (no deep merge), matching the existing `requireMention` pattern. Closes #7011. (#59553) Thanks @Bluetegu.
+
+## 2026.4.21
+
+### Changes
+
+- OpenAI/images: default the bundled image-generation provider and live media smoke tests to `gpt-image-2`, and advertise the newer 2K/4K OpenAI size hints in image-generation docs and tool metadata.
+- Plugins/skills: add the Skill Workshop plugin, which captures reusable workflow corrections as pending or auto-applied workspace skills, runs threshold-based reviewer passes for stronger completion bias on reusable procedures, quarantines unsafe proposals, and refreshes skill availability after safe writes.
+- Plugin SDK/channels: add presentation and skills runtime contracts, decouple channel presentation rendering, and document message presentation cards so plugins can own richer interactive surfaces without channel-specific glue.
+- Fireworks/models: add Kimi K2.6 (`fireworks/accounts/fireworks/models/kimi-k2p6`) to the bundled catalog and live-model priority list, while keeping Kimi thinking disabled for Fireworks K2.6 requests.
+- Onboard/wizard: simplify the security disclaimer copy, and switch remaining onboarding pickers with long dynamic option lists to searchable autocompletes for search providers, plugin configuration, and model provider filtering.
+- Channels/preview streaming: stream tool-progress updates into live preview edits for Discord, Slack, and Telegram so in-flight replies show incremental tool state in the same preview message before finalization. (#69611) Thanks @thewilloftheshadow.
+- Ollama/onboard: populate the cloud-only model list from `ollama.com/api/tags`, cap the discovered list at 500, and fall back to static suggestions when ollama.com is unavailable. (#68463) Thanks @BruceMacD.
+- QQBot: extract a self-contained engine architecture with QR-code onboarding, native approval handling via `/bot-approve`, per-account resource stacks, credential backup/restore, shared media storage, and unified API/bridge/gateway modules. (#67960) Thanks @cxyhhhhh.
+- Matrix/startup: narrow Matrix runtime registration and defer setup/doctor surfaces so cold plugin registration spends about 1.8s less in `setChannelRuntime`. (#69782) Thanks @gumadeiras.
+- Telegram/plugin startup: load Telegram's bundled runtime setter through a narrow sidecar and native built-sidecar loading, cutting measured setup-runtime registration by about 14s while preserving runtime API compatibility. (#69786) Thanks @gumadeiras.
+- Discord/plugin startup: lazy-load the Carbon UI runtime and load Discord's bundled runtime setter through a narrow sidecar, cutting measured registration time by about 98% while keeping packaged installs off Carbon until the Discord UI surface is needed. (#69791) Thanks @gumadeiras.
+
+### Fixes
+
+- Agents/ACP: skip the `sessions_send` A2A ping-pong flow when a parent sends to its own background oneshot ACP child, preventing parent/child echo loops while preserving normal A2A delivery for non-parent senders. (#69817) Thanks @scotthuang.
+- Image generation: log failed provider/model candidates at warn level before automatic provider fallback, so OpenAI image failures are visible in the gateway log even when a later provider succeeds.
+- Agents/subagents: stop terminal failed subagent runs from freezing or announcing captured reply text, so failover-exhausted runs report a clean failure instead of replaying stale assistant/tool output.
+- Security/external content: strip common self-hosted LLM chat-template special-token literals, including Qwen/ChatML, Llama, Gemma, Mistral, Phi, and GPT-OSS markers, from wrapped external content and metadata, preventing tokenizer-layer role-boundary spoofing against OpenAI-compatible backends that preserve special tokens in user text.
+- npm/install: mirror the `node-domexception` alias into root `package.json` `overrides`, so npm installs stop surfacing the deprecated `google-auth-library -> gaxios -> node-fetch -> fetch-blob -> node-domexception` chain pulled through Pi/Google runtime deps. Thanks @vincentkoc.
+- Auth/commands: require owner identity (an owner-candidate match or internal `operator.admin`) for owner-enforced commands instead of treating wildcard channel `allowFrom` or empty owner-candidate lists as sufficient, so non-owner senders can no longer reach owner-only commands through a permissive fallback when `enforceOwnerForCommands=true` and `commands.ownerAllowFrom` is unset. (#69774) Thanks @drobison00.
+- Control UI/CSP: tighten `img-src` to `'self' data:` only, and make Control UI avatar helpers drop remote `http(s)` and protocol-relative URLs so the UI falls back to the built-in logo/badge instead of issuing arbitrary remote image fetches. Same-origin avatar routes (relative paths) and `data:image/...` avatars still render. (#69773)
+- CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
+- Synology Chat: validate outbound webhook `file_url` values against the shared SSRF policy before forwarding to the NAS, rejecting malformed URLs, non-`http(s)` schemes, and private/blocked network targets so the NAS cannot be used as a confused deputy to fetch internal addresses. (#69784) Thanks @eleqtrizit.
+- Gateway/Control UI: require gateway auth on the Control UI avatar route (`GET /avatar/<agentId>` and `?meta=1` metadata) when auth is configured, matching the sibling assistant-media route, and propagate the existing gateway token through the UI avatar fetch (bearer header + authenticated blob URL) so authenticated dashboards still load local avatars. (#69775)
+- Exec/allowlist: reject POSIX parameter expansion forms such as `$VAR`, `$?`, `$$`, `$1`, and `$@` inside unquoted heredocs during shell approval analysis, so these heredocs no longer pass allowlist review as plain text. (#69795) Thanks @drobison00.
+- Gateway/MCP loopback: derive owner-only tool visibility from distinct authenticated owner vs non-owner loopback bearers instead of the caller-controlled owner header, so non-owner MCP child processes cannot recover owner access by spoofing request metadata. (#69796)
+- GitHub Copilot: update the default Opus model from `claude-opus-4.6` to `claude-opus-4.7` after GitHub removed Copilot support for 4.6. (#69818) Thanks @shakkernerd.
+- OpenShell: pin host-side sandbox writes under the mounted root so symlink-parent rebinds cannot redirect `writeFile` outside the workspace during local mirror updates. (#69797) Thanks @drobison00.
+- Ollama/media understanding: register Ollama as an image-capable media-understanding provider so `agents.defaults.imageModel.primary` values like `ollama/qwen2.5vl:7b` route through the Ollama plugin instead of failing as unknown models. (#69816) Thanks @soloclz.
+- CLI/media understanding: make `openclaw infer image describe --model <provider/model>` execute the explicit image model instead of skipping description when that model supports native vision.
+- Usage/providers: keep plugin-owned usage auth enabled when manifest-declared provider auth env vars such as `MINIMAX_CODE_PLAN_KEY` are present, so `/usage` can resolve MiniMax billing credentials through the provider plugin.
+- Tlon/uploads: route both hosted Memex upload targets and custom-S3 presigned upload URLs through the shared SSRF guard so blocked private or loopback destinations fail before upload, while public upload URLs continue through the existing hosted upload flow. (#69794) Thanks @drobison00.
+
+## 2026.4.20
+
+### Changes
+
+- Onboard/wizard: restyle the setup security disclaimer with a single yellow warning banner, section headings and bulleted checklists, and un-dim the note body so key guidance is easy to scan; add a loading spinner during the initial model catalog load so the wizard no longer goes blank while it runs; add an "API key" placeholder to provider API key prompts. (#69553) Thanks @Patrick-Erichsen.
+- Agents/prompts: strengthen the default system prompt and OpenAI GPT-5 overlay with clearer completion bias, live-state checks, weak-result recovery, and verification-before-final guidance.
 - Models/costs: support tiered model pricing from cached catalogs and configured models, and include bundled Moonshot Kimi K2.6/K2.5 cost estimates for token-usage reports. (#67605) Thanks @sliverp.
+- Sessions/Maintenance: enforce the built-in entry cap and age prune by default, and prune oversized stores at load time so accumulated cron/executor session backlogs cannot OOM the gateway before the write path runs. (#69404) Thanks @bobrenze-bot.
 - Plugins/tests: reuse plugin loader alias and Jiti config resolution across repeated same-context loads, reducing import-heavy test overhead. (#69316) Thanks @amknight.
 - Cron: split runtime execution state into `jobs-state.json` so `jobs.json` stays stable for git-tracked job definitions. (#63105) Thanks @Feelw00.
 - Agents/compaction: send opt-in start and completion notices during context compaction. (#67830) Thanks @feniix.
 - Moonshot/Kimi: default bundled Moonshot setup, web search, and media-understanding surfaces to `kimi-k2.6` while keeping `kimi-k2.5` available for compatibility. (#69477) Thanks @scoootscooob.
 - Moonshot/Kimi: allow `thinking.keep = "all"` on `moonshot/kimi-k2.6`, and strip it for other Moonshot models or requests where pinned `tool_choice` disables thinking. (#68816) Thanks @aniaan.
+- BlueBubbles/groups: forward per-group `systemPrompt` config into inbound context `GroupSystemPrompt` so configured group-specific behavioral instructions (for example threaded-reply and tapback conventions) are injected on every turn. Supports `"*"` wildcard fallback matching the existing `requireMention` pattern. Closes #60665. (#69198) Thanks @omarshahine.
+- Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
+- Terminal/logging: optimize `sanitizeForLog()` by replacing the iterative control-character stripping loop with a single regex pass while preserving the existing ANSI-first sanitization behavior. (#67205) Thanks @bulutmuf.
+- QA/CI: make `openclaw qa suite` and `openclaw qa telegram` fail by default when scenarios fail, add `--allow-failures` for artifact-only runs, and tighten live-lane defaults for CI automation. (#69122) Thanks @joshavant.
+- Mattermost: stream thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when safe. (#47838) thanks @ninjaa.
 
 ### Fixes
 
+- Exec/YOLO: stop rejecting gateway-host exec in `security=full` plus `ask=off` mode via the Python/Node script preflight hardening path, so promptless YOLO exec once again runs direct interpreter stdin and heredoc forms such as `node <<'NODE' ... NODE`.
+- OpenAI Codex: normalize legacy `openai-completions` transport overrides on default OpenAI/Codex and GitHub Copilot-compatible hosts back to the native Codex Responses transport while leaving custom proxies untouched. (#45304, #42194) Thanks @dyss1992 and @DeadlySilent.
+- Anthropic/plugins: scope Anthropic `api: "anthropic-messages"` defaulting to Anthropic-owned providers, so `openai-codex` and other providers without an explicit `api` no longer get rewritten to the wrong transport. Fixes #64534.
+- fix(qqbot): add SSRF guard to direct-upload URL paths in uploadC2CMedia and uploadGroupMedia [AI-assisted]. (#69595) Thanks @pgondhi987.
+- fix(gateway): enforce allowRequestSessionKey gate on template-rendered mapping sessionKeys. (#69381) Thanks @pgondhi987.
+- Browser/Chrome MCP: surface `DevToolsActivePort` attach failures as browser-connectivity errors instead of a generic "waiting for tabs" timeout, and point signed-out fallbacks toward the managed `openclaw` profile.
+- Webchat/images: treat inline image attachments as media for empty-turn gating while still ignoring metadata-only blank turns. (#69474) Thanks @Jaswir.
+- Discord/think: only show `adaptive` in `/think` autocomplete for provider/model pairs that actually support provider-managed adaptive thinking, so GPT/OpenAI models no longer advertise an Anthropic-only option.
+- Thinking: only expose `max` for models that explicitly support provider max reasoning, and remap stored `max` settings to the largest supported thinking mode when users switch to another model.
+- Gateway/usage: bound the cost usage cache with FIFO eviction so date/range lookups cannot grow unbounded. (#68842) Thanks @Feelw00.
+- OpenAI/Responses: resolve `/think` levels against each GPT model's supported reasoning efforts so `/think off` no longer becomes high reasoning or sends unsupported `reasoning.effort: "none"` payloads.
+- Lobster/TaskFlow: allow managed approval resumes to use `approvalId` without a resume token, and persist that id in approval wait state. (#69559) Thanks @kirkluokun.
+- Plugins/startup: install bundled runtime dependencies into each plugin's own runtime directory, reuse source-checkout repair caches after rebuilds, and log only packages that were actually installed so repeated Gateway starts stay quiet once deps are present.
+- Plugins/startup: ignore pnpm's `npm_execpath` when repairing bundled plugin runtime dependencies and skip workspace-only package specs so npm-only install flags or local workspace links do not break packaged plugin startup.
+- MCP: block interpreter-startup env keys such as `NODE_OPTIONS` for stdio servers while preserving ordinary credential and proxy env vars. (#69540) Thanks @drobison00.
+- Agents/shell: ignore non-interactive placeholder shells like `/usr/bin/false` and `/sbin/nologin`, falling back to `sh` so service-user exec runs no longer exit immediately. (#69308) Thanks @sk7n4k3d.
+- Setup/TUI: relaunch the setup hatch TUI in a fresh process while preserving the configured gateway target and auth source, so onboarding recovers terminal state cleanly without exposing gateway secrets on command-line args. (#69524) Thanks @shakkernerd.
+- Codex: avoid re-exposing the image-generation tool on native vision turns with inbound images, and keep bare image-model overrides on the configured image provider. (#65061) Thanks @zhulijin1991.
+- Sessions/reset: clear auto-sourced model, provider, and auth-profile overrides on `/new` and `/reset` while preserving explicit user selections, so channel sessions stop staying pinned to runtime fallback choices. (#69419) Thanks @sk7n4k3d.
+- Sessions/costs: snapshot `estimatedCostUsd` like token counters so repeated persist paths no longer compound the same run cost by up to dozens of times. (#69403) Thanks @MrMiaigi.
+- OpenAI Codex: route ChatGPT/Codex OAuth Responses requests through the `/backend-api/codex` endpoint so `openai-codex/gpt-5.4` no longer hits the removed `/backend-api/responses` alias. (#69336) Thanks @mzogithub.
+- OpenAI/Responses: omit disabled reasoning payloads when `/think off` is active, so GPT reasoning models no longer receive unsupported `reasoning.effort: "none"` requests. (#61982) Thanks @a-tokyo.
+- Gateway/pairing: treat loopback shared-secret node-host, TUI, and gateway clients as local for pairing decisions, so trusted local tools no longer reconnect as remote clients and fail with `pairing required`. (#69431) Thanks @SARAMALI15792.
+- Active Memory: degrade gracefully when memory recall fails during prompt building, logging a warning and letting the reply continue without memory context instead of failing the whole turn. (#69485) Thanks @Magicray1217.
+- Ollama: add provider-policy defaults for `baseUrl` and `models` so implicit local discovery can run before config validation rejects a minimal Ollama provider config. (#69370) Thanks @PratikRai0101.
+- Agents/model selection: clear transient auto-failover session overrides before each turn so recovered primary models are retried immediately without emitting user-override reset warnings. (#69365) Thanks @hitesh-github99.
+- Auto-reply: apply silent `NO_REPLY` policy per conversation type, so direct chats get a helpful rewritten reply while groups and internal deliveries can remain quiet. (#68644) Thanks @Takhoffman.
 - Telegram/status reactions: honor `messages.removeAckAfterReply` when lifecycle status reactions are enabled, clearing or restoring the reaction after success/error using the configured hold timings. (#68067) Thanks @poiskgit.
 - Web search/plugins: resolve plugin-scoped SecretRef API keys for bundled Exa, Firecrawl, Gemini, Kimi, Perplexity, Tavily, and Grok web-search providers when they are selected through the shared web-search config. (#68424) Thanks @afurm.
 - Telegram/polling: raise the default polling watchdog threshold from 90s to 120s and add configurable `channels.telegram.pollingStallThresholdMs` (also per-account) so long-running Telegram work gets more room before polling is treated as stalled. (#57737) Thanks @Vitalcheffe.
@@ -38,18 +117,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/startup: delay HTTP bind until websocket handlers are attached, so immediate post-startup websocket health/connect probes no longer hit the startup race window. (#43392) Thanks @dalefrieswthat.
 - Codex/app-server: release the session lane when a downstream consumer throws while draining the `turn/completed` notification, so follow-up messages after a Codex plugin reply stop queueing behind a stale lane lock. Fixes #67996. (#69072) Thanks @ayeshakhalid192007-dev.
 - Codex/app-server: default approval handling to `on-request` so Codex harness sessions do not start with overly permissive tool approvals. (#68721) Thanks @Lucenx9.
-
-## 2026.4.20
-
-### Changes
-
-- Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
-- Terminal/logging: optimize `sanitizeForLog()` by replacing the iterative control-character stripping loop with a single regex pass while preserving the existing ANSI-first sanitization behavior. (#67205) Thanks @bulutmuf.
-- QA/CI: make `openclaw qa suite` and `openclaw qa telegram` fail by default when scenarios fail, add `--allow-failures` for artifact-only runs, and tighten live-lane defaults for CI automation. (#69122) Thanks @joshavant.
-- Mattermost: stream thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when safe. (#47838) thanks @ninjaa.
-
-### Fixes
-
+- Cron/delivery: keep isolated cron chat delivery tools available, resolve `channel: "last"` targets from the gateway, show delivery previews in `cron list/show`, and avoid duplicate fallback sends after direct message-tool delivery. (#69587) Thanks @obviyus.
 - Cron/Telegram: key isolated direct-delivery dedupe to each cron execution instead of the reused session id, so recurring Telegram announce runs no longer report delivered while silently skipping later sends. (#69000) Thanks @obviyus.
 - Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
 - Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.
