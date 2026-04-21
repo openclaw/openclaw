@@ -2201,11 +2201,12 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("runs deferred final-delivery hooks only after final replies are queued", async () => {
+  it("registers deferred final-delivery hooks after final replies are queued", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const events: string[] = [];
+    const registered: Array<() => Promise<void> | void> = [];
     (dispatcher.sendFinalReply as Mock).mockImplementation((payload: ReplyPayload) => {
       events.push(`send:${payload.text ?? "<empty>"}`);
       return true;
@@ -2222,9 +2223,18 @@ describe("dispatchReplyFromConfig", () => {
       cfg,
       dispatcher,
       replyResolver,
+      replyOptions: {
+        registerAfterFinalDelivery: (callback) => {
+          events.push("register");
+          registered.push(callback);
+        },
+      },
     });
 
-    expect(events).toEqual(["send:hi", "after-final"]);
+    expect(events).toEqual(["send:hi", "register"]);
+    expect(registered).toHaveLength(1);
+    await registered[0]?.();
+    expect(events).toEqual(["send:hi", "register", "after-final"]);
   });
 
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {

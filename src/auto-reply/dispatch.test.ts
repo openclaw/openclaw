@@ -75,7 +75,7 @@ describe("withReplyDispatcher", () => {
         order.push("sendFinalReply");
         return true;
       },
-      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 1 }),
       getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
       markComplete: () => {
         order.push("markComplete");
@@ -89,10 +89,15 @@ describe("withReplyDispatcher", () => {
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcher,
-      replyResolver: async () => ({ text: "ok" }),
+      replyResolver: async (_ctx, opts) => {
+        opts?.registerAfterFinalDelivery?.(() => {
+          order.push("afterFinalDelivery");
+        });
+        return { text: "ok" };
+      },
     });
 
-    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle", "afterFinalDelivery"]);
   });
 
   it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {

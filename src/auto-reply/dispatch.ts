@@ -40,6 +40,7 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
+  const afterFinalDeliveryCallbacks: Array<() => Promise<void> | void> = [];
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
@@ -47,9 +48,20 @@ export async function dispatchInboundMessage(params: {
         ctx: finalized,
         cfg: params.cfg,
         dispatcher: params.dispatcher,
-        replyOptions: params.replyOptions,
+        replyOptions: {
+          ...params.replyOptions,
+          registerAfterFinalDelivery: (callback) => {
+            afterFinalDeliveryCallbacks.push(callback);
+          },
+        },
         replyResolver: params.replyResolver,
       }),
+    onSettled: async () => {
+      while (afterFinalDeliveryCallbacks.length > 0) {
+        const callback = afterFinalDeliveryCallbacks.shift();
+        await callback?.();
+      }
+    },
   });
 }
 

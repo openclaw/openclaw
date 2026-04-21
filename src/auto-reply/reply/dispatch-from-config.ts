@@ -806,13 +806,7 @@ export async function dispatchReplyFromConfig(params: {
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
-    const afterFinalDeliveryCallbacks: Array<() => Promise<void> | void> = [];
-    const runAfterFinalDeliveryCallbacks = async () => {
-      while (afterFinalDeliveryCallbacks.length > 0) {
-        const callback = afterFinalDeliveryCallbacks.shift();
-        await callback?.();
-      }
-    };
+    const deferredAfterFinalDeliveryCallbacks: Array<() => Promise<void> | void> = [];
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
@@ -823,7 +817,7 @@ export async function dispatchReplyFromConfig(params: {
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         registerAfterFinalDelivery: (callback) => {
-          afterFinalDeliveryCallbacks.push(callback);
+          deferredAfterFinalDeliveryCallbacks.push(callback);
         },
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
@@ -963,6 +957,7 @@ export async function dispatchReplyFromConfig(params: {
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
     let queuedFinal = false;
+    let queuedDispatcherFinal = false;
     let routedFinalCount = 0;
     /** Dedup equivalent finals — normalizes mention tag formats before comparison. */
     const deliveredFinalTexts = new Set<string>();
@@ -1018,6 +1013,7 @@ export async function dispatchReplyFromConfig(params: {
       } else {
         const didQueue = dispatcher.sendFinalReply(ttsReply);
         queuedFinal = didQueue || queuedFinal;
+        queuedDispatcherFinal = didQueue || queuedDispatcherFinal;
       }
     }
 
@@ -1071,6 +1067,7 @@ export async function dispatchReplyFromConfig(params: {
           } else {
             const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
             queuedFinal = didQueue || queuedFinal;
+            queuedDispatcherFinal = didQueue || queuedDispatcherFinal;
           }
         }
       } catch (err) {
@@ -1080,8 +1077,30 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    if (afterFinalDeliveryCallbacks.length > 0) {
-      await runAfterFinalDeliveryCallbacks();
+    if (
+      deferredAfterFinalDeliveryCallbacks.length > 0 &&
+      params.replyOptions?.registerAfterFinalDelivery
+    ) {
+      if (routedFinalCount > 0) {
+        params.replyOptions.registerAfterFinalDelivery(async () => {
+          while (deferredAfterFinalDeliveryCallbacks.length > 0) {
+            const callback = deferredAfterFinalDeliveryCallbacks.shift();
+            await callback?.();
+          }
+        });
+      } else if (queuedDispatcherFinal) {
+        params.replyOptions.registerAfterFinalDelivery(async () => {
+          const queued = dispatcher.getQueuedCounts().final;
+          const failed = dispatcher.getFailedCounts().final;
+          if (queued - failed <= 0) {
+            return;
+          }
+          while (deferredAfterFinalDeliveryCallbacks.length > 0) {
+            const callback = deferredAfterFinalDeliveryCallbacks.shift();
+            await callback?.();
+          }
+        });
+      }
     }
 
     const counts = dispatcher.getQueuedCounts();
