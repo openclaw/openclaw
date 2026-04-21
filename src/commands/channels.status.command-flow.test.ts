@@ -251,7 +251,15 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
   });
 
   it("keeps JSON fallback structured without rendering config-only text", async () => {
-    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.callGateway.mockRejectedValue(
+      new Error(
+        [
+          "gateway timeout after 3000ms",
+          "Gateway target: wss://user:pass@gateway.example.com/socket?token=secret-token&keep=visible",
+          "Source: env OPENCLAW_GATEWAY_URL",
+        ].join("\n"),
+      ),
+    );
     mocks.requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { secretResolved: true, channels: {} },
@@ -270,6 +278,9 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       }),
     );
     const payload = JSON.parse(logs.at(-1) ?? "{}");
+    expect(payload.error).toContain("Gateway target:");
+    expect(payload.error).not.toContain("user:pass");
+    expect(payload.error).not.toContain("secret-token");
     expect(payload).toEqual(
       expect.objectContaining({
         gatewayReachable: false,
