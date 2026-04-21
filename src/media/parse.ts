@@ -729,14 +729,14 @@ export function splitMediaFromOutput(
     )
     .join("\n")
     .replace(/\n{2,}/g, "\n")
-    .replace(/^\n+/, "")
-    .trim();
+    .replace(/^(?:[ \t]*\n)+/, "")
+    .trimEnd();
 
   // Detect and strip [[audio_as_voice]] tag
   const audioTagResult = parseAudioTag(cleanedText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
   if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").replace(/^\n+/, "").trim();
+    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").replace(/^(?:[ \t]*\n)+/, "").trimEnd();
   }
 
   if (media.length === 0) {
