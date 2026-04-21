@@ -6,38 +6,13 @@ import { describe, expect, it } from "vitest";
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 
-const ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS = new Set([
-  "src/media-generation/provider-capabilities.contract.test.ts",
-  "src/plugins/bundled-capability-metadata.test.ts",
-  "src/plugins/contracts/boundary-invariants.test.ts",
-]);
-
-const ALLOWED_EXTENSION_PATH_STRING_TESTS = new Set([
-  "src/plugin-sdk/browser-maintenance.test.ts",
-  "src/channels/plugins/bundled.shape-guard.test.ts",
-  "src/cli/capability-cli.test.ts",
-  "src/config/config.pruning-defaults.test.ts",
-  "src/commands/doctor-legacy-config.migrations.test.ts",
-  "src/plugins/contracts/bundled-extension-config-api-guardrails.test.ts",
-  "src/scripts/test-projects.test.ts",
-]);
-
-const ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS = new Set([
-  "src/plugins/contracts/boundary-invariants.test.ts",
-  "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-  "src/plugins/contracts/plugin-sdk-runtime-api-guardrails.test.ts",
-]);
-
-const ALLOWED_CHANNEL_BUNDLED_METADATA_CONSUMERS = new Set([
-  "src/channels/plugins/bundled.ts",
-  "src/channels/plugins/contracts/runtime-artifacts.ts",
-  "src/channels/plugins/session-conversation.bundled-fallback.test.ts",
-]);
-
 type FileFilter = {
   excludeTests?: boolean;
   testOnly?: boolean;
 };
+
+const tsFilesCache = new Map<string, string[]>();
+const sourceCache = new Map<string, string>();
 
 function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[] {
   const cacheKey = `${rootRelativePath}:${filter.excludeTests ? "exclude-tests" : ""}:${filter.testOnly ? "test-only" : ""}`;
