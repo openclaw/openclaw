@@ -72,8 +72,8 @@ function toDailyMemoryFileEntry(params: {
   }
   return {
     ...parsed,
-    absolutePath: path.join(params.memoryDir, params.fileName),
-    relativePath: `memory/${params.fileName}`,
+    absolutePath: path.join(params.memoryDir, parsed.fileName),
+    relativePath: `memory/${parsed.fileName}`,
     mtimeMs: params.mtimeMs,
     ...(params.sessionSummary ? { sessionSummary: true } : {}),
   };
@@ -537,9 +537,7 @@ export async function listRecentDailyMemoryFiles(params: {
   }
 
   for (const entry of recentEntries) {
-    if (!byFileName.has(entry.fileName)) {
-      byFileName.set(entry.fileName, entry);
-    }
+    byFileName.set(entry.fileName, entry);
   }
 
   return targetDays.flatMap((day) =>

@@ -165,6 +165,30 @@ describe("listRecentDailyMemoryFiles", () => {
     });
   });
 
+  it("keeps canonical session-summary flags on the returned recent entry", async () => {
+    const memoryDir = await makeMemoryDir();
+    await fs.writeFile(
+      path.join(memoryDir, "2026-04-19.md"),
+      [
+        "# Session: 2026-04-19 10:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    await expect(
+      listRecentDailyMemoryFiles({
+        memoryDir,
+        days: ["2026-04-19"],
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ fileName: "2026-04-19.md", sessionSummary: true }),
+    ]);
+  });
+
   it("can resolve recent daily files without writing the recent-file index", async () => {
     const memoryDir = await makeMemoryDir();
     await fs.writeFile(path.join(memoryDir, "2026-04-19-reset.md"), "slugged", "utf-8");
@@ -372,6 +396,29 @@ describe("listRecentDailyMemoryFiles", () => {
       }),
     ).resolves.toMatchObject({
       fileName: "2026-04-25-vendor-pitch.md",
+      sessionSummary: true,
+    });
+  });
+
+  it("sanitizes indexed file names before building stored daily-memory paths", async () => {
+    const memoryDir = await makeMemoryDir();
+
+    await rememberRecentDailyMemoryFile({
+      memoryDir,
+      fileName: "./2026-04-25-session-reset.md",
+      mtimeMs: 200,
+      sessionSummary: true,
+    });
+
+    await expect(
+      readRememberedDailyMemoryFile({
+        memoryDir,
+        fileName: "2026-04-25-session-reset.md",
+      }),
+    ).resolves.toMatchObject({
+      fileName: "2026-04-25-session-reset.md",
+      absolutePath: path.join(memoryDir, "2026-04-25-session-reset.md"),
+      relativePath: "memory/2026-04-25-session-reset.md",
       sessionSummary: true,
     });
   });

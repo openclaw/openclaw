@@ -237,7 +237,7 @@ async function hasSiblingDailyMemoryVariantSnippetMatch(params: {
   return false;
 }
 
-export async function filterSessionSummaryDailyMemoryFiles(
+export async function filterOutSessionSummaryDailyMemoryFiles(
   filePaths: string[],
   opts?: { tolerateReadErrors?: boolean },
 ): Promise<string[]> {
@@ -257,6 +257,8 @@ export async function filterSessionSummaryDailyMemoryFiles(
   }
   return keptPaths;
 }
+
+export const filterSessionSummaryDailyMemoryFiles = filterOutSessionSummaryDailyMemoryFiles;
 
 export function isLikelyMissingSessionSummaryDailyMemory(params: {
   filePath: string;

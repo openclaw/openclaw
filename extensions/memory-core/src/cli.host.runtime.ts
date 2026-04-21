@@ -22,6 +22,7 @@ export {
 export {
   collectDreamDiaryBackfillEntries,
   extractDailyMemoryDayFromPath,
+  filterOutSessionSummaryDailyMemoryFiles,
   filterSessionSummaryDailyMemoryFiles,
   isSessionSummaryDailyMemory,
   listDailyMemoryFiles,

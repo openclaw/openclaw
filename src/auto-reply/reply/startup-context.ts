@@ -88,7 +88,7 @@ function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string
   if (!yearRaw || !monthRaw || !dayRaw) {
     return stamp;
   }
-  const shifted = new Date(Date.UTC(yearRaw, monthRaw - 1, dayRaw - offsetDays));
+  const shifted = new Date(Date.UTC(yearRaw, monthRaw - 1, dayRaw + offsetDays));
   return shifted.toISOString().slice(0, 10);
 }
 
@@ -104,7 +104,7 @@ function buildStartupLocalDayCandidates(params: {
     Math.max(1, Math.trunc(params.dailyMemoryDays)),
   );
   for (let offset = 0; offset < daysToScan; offset += 1) {
-    orderedDays.push(shiftDateStampByCalendarDays(localToday, offset));
+    orderedDays.push(shiftDateStampByCalendarDays(localToday, -offset));
   }
   return orderedDays;
 }
@@ -188,7 +188,7 @@ async function resolveStartupDailyMemoryPaths(params: {
     dailyMemoryDays: params.dailyMemoryDays,
   });
   const localToday = formatDateStamp(params.nowMs, params.timezone);
-  const localYesterday = shiftDateStampByCalendarDays(localToday, 1);
+  const localYesterday = shiftDateStampByCalendarDays(localToday, -1);
   const utcToday = formatDateStamp(params.nowMs, "UTC");
   const targetDays = [...localDayCandidates];
   if (params.dailyMemoryDays === 1 && !targetDays.includes(localYesterday)) {

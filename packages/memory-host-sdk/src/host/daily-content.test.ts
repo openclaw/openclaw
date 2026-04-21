@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   areSessionSummaryDailyMemoryDependenciesCurrent,
-  filterSessionSummaryDailyMemoryFiles,
+  filterOutSessionSummaryDailyMemoryFiles,
   isLikelyMissingSessionSummaryDailyMemory,
   isLikelySessionSummaryDailyMemorySnippet,
   isSessionSummaryDailyMemory,
@@ -337,7 +337,7 @@ describe("daily-content", () => {
     );
 
     await expect(
-      filterSessionSummaryDailyMemoryFiles([notePath, sessionSummaryPath]),
+      filterOutSessionSummaryDailyMemoryFiles([notePath, sessionSummaryPath]),
     ).resolves.toEqual([notePath]);
   });
 
@@ -369,7 +369,7 @@ describe("daily-content", () => {
 
     try {
       await expect(
-        filterSessionSummaryDailyMemoryFiles([notePath, unreadablePath]),
+        filterOutSessionSummaryDailyMemoryFiles([notePath, unreadablePath]),
       ).resolves.toEqual([notePath]);
     } finally {
       readFile.mockRestore();
@@ -404,7 +404,7 @@ describe("daily-content", () => {
 
     try {
       await expect(
-        filterSessionSummaryDailyMemoryFiles([notePath, unreadablePath], {
+        filterOutSessionSummaryDailyMemoryFiles([notePath, unreadablePath], {
           tolerateReadErrors: false,
         }),
       ).rejects.toMatchObject({ code: "EACCES" });

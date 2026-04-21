@@ -34,6 +34,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     colorize: runtimeCli.colorize,
     defaultRuntime: runtimeCli.defaultRuntime,
     extractDailyMemoryDayFromPath: runtimeFiles.extractDailyMemoryDayFromPath,
+    filterOutSessionSummaryDailyMemoryFiles: runtimeFiles.filterOutSessionSummaryDailyMemoryFiles,
     filterSessionSummaryDailyMemoryFiles: runtimeFiles.filterSessionSummaryDailyMemoryFiles,
     formatErrorMessage: runtimeCli.formatErrorMessage,
     getMemorySearchManager,

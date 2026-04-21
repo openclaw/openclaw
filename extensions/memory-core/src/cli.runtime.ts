@@ -11,7 +11,7 @@ import {
   colorize,
   defaultRuntime,
   extractDailyMemoryDayFromPath,
-  filterSessionSummaryDailyMemoryFiles,
+  filterOutSessionSummaryDailyMemoryFiles,
   formatErrorMessage,
   getRuntimeConfig,
   getMemorySearchManager,
@@ -215,7 +215,7 @@ async function createHistoricalRemHarnessWorkspace(params: {
     timezone: params.timezone,
   });
   const groundedWorkspaceSourceFiles =
-    await filterSessionSummaryDailyMemoryFiles(workspaceSourceFiles);
+    await filterOutSessionSummaryDailyMemoryFiles(workspaceSourceFiles);
   return {
     workspaceDir,
     sourceFiles,
@@ -231,7 +231,7 @@ async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Pro
   try {
     const historicalFiles = await listHistoricalDailyFiles(memoryDir);
     if (!Number.isFinite(limit) || limit <= 0) {
-      return await filterSessionSummaryDailyMemoryFiles(historicalFiles, {
+      return await filterOutSessionSummaryDailyMemoryFiles(historicalFiles, {
         tolerateReadErrors: false,
       });
     }
@@ -255,7 +255,7 @@ async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Pro
       if (!dayFiles || dayFiles.length === 0) {
         continue;
       }
-      const filteredDayFiles = await filterSessionSummaryDailyMemoryFiles(dayFiles, {
+      const filteredDayFiles = await filterOutSessionSummaryDailyMemoryFiles(dayFiles, {
         tolerateReadErrors: false,
       });
       if (filteredDayFiles.length === 0) {
@@ -1831,7 +1831,8 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           await fs.copyFile(filePath, dst);
           workspaceSourceFiles.push(dst);
         }
-        const groundedInputPaths = await filterSessionSummaryDailyMemoryFiles(workspaceSourceFiles);
+        const groundedInputPaths =
+          await filterOutSessionSummaryDailyMemoryFiles(workspaceSourceFiles);
         if (groundedInputPaths.length === 0) {
           defaultRuntime.error(
             `Memory rem-backfill found no non-bookkeeping dated memory files (YYYY-MM-DD.md or YYYY-MM-DD-*.md) at ${shortenHomePath(path.resolve(opts.path))}.`,

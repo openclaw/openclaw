@@ -7,6 +7,7 @@ export type { SessionSummaryDailyMemoryDependency } from "./host/daily-content.j
 export {
   areSessionSummaryDailyMemoryDependenciesCurrent,
   buildSessionSummaryDailyMemoryProbePaths,
+  filterOutSessionSummaryDailyMemoryFiles,
   filterSessionSummaryDailyMemoryFiles,
   isBenignSessionSummaryDailyMemoryProbeError,
   isLikelyMissingSessionSummaryDailyMemory,
