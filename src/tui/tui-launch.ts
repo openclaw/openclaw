@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import type { TuiOptions } from "./tui.js";
@@ -22,6 +23,10 @@ function filterTuiExecArgv(execArgv: readonly string[]): string[] {
       arg === "--inspect-wait" ||
       arg.startsWith("--inspect-wait=")
     ) {
+      const next = execArgv[index + 1];
+      if (!arg.includes("=") && typeof next === "string" && !next.startsWith("-")) {
+        index += 1;
+      }
       continue;
     }
     if (arg === "--inspect-port") {
@@ -39,13 +44,16 @@ function filterTuiExecArgv(execArgv: readonly string[]): string[] {
   return filtered;
 }
 
-function buildTuiCliArgs(opts: TuiOptions): string[] {
+function buildCurrentCliEntryArgs(): string[] {
   const entry = process.argv[1]?.trim();
   if (!entry) {
     throw new Error("unable to relaunch TUI: current CLI entry path is unavailable");
   }
+  return path.isAbsolute(entry) ? [entry] : [];
+}
 
-  const args = [...filterTuiExecArgv(process.execArgv), entry, "tui"];
+function buildTuiCliArgs(opts: TuiOptions): string[] {
+  const args = [...filterTuiExecArgv(process.execArgv), ...buildCurrentCliEntryArgs(), "tui"];
   appendOption(args, "--url", opts.url);
   appendOption(args, "--token", opts.token);
   appendOption(args, "--password", opts.password);

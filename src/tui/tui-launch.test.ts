@@ -45,6 +45,8 @@ describe("launchTuiCli", () => {
     process.execArgv.push(
       "--import",
       "tsx",
+      "--inspect",
+      "127.0.0.1:9231",
       "--inspect=127.0.0.1:9229",
       "--inspect-brk",
       "--inspect-wait=0",
@@ -80,6 +82,23 @@ describe("launchTuiCli", () => {
         "--password",
         "test-password",
       ],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+  });
+
+  it("launches compiled CLI shapes without repeating the current command", async () => {
+    process.argv[1] = "setup";
+    const child = createChildProcess();
+    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    await launchTuiCli({ deliver: false });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["tui"],
       expect.objectContaining({ stdio: "inherit" }),
     );
   });
