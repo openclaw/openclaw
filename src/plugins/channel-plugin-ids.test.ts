@@ -672,6 +672,30 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["external-env-channel"]);
   });
 
+  it("ignores manifest env vars from untrusted external plugins", () => {
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {} as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+
+    expect(
+      hasConfiguredChannelsForReadOnlyScope({
+        config: {} as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toBe(false);
+  });
+
   it("ignores ambient or malformed manifest env vars as read-only configured channel triggers", () => {
     expect(
       listConfiguredChannelIdsForReadOnlyScope({

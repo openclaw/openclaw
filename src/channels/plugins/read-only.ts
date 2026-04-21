@@ -21,6 +21,12 @@ type ReadOnlyChannelPluginOptions = {
   cache?: boolean;
 };
 
+export type ReadOnlyChannelPluginResolution = {
+  plugins: ChannelPlugin[];
+  configuredChannelIds: string[];
+  missingConfiguredChannelIds: string[];
+};
+
 function resolveReadOnlyChannelPluginOptions(
   envOrOptions?: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
 ): ReadOnlyChannelPluginOptions {
@@ -130,6 +136,13 @@ export function listReadOnlyChannelPluginsForConfig(
   cfg: OpenClawConfig,
   envOrOptions?: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
 ): ChannelPlugin[] {
+  return resolveReadOnlyChannelPluginsForConfig(cfg, envOrOptions).plugins;
+}
+
+export function resolveReadOnlyChannelPluginsForConfig(
+  cfg: OpenClawConfig,
+  envOrOptions?: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
+): ReadOnlyChannelPluginResolution {
   const options = resolveReadOnlyChannelPluginOptions(envOrOptions);
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
@@ -143,6 +156,7 @@ export function listReadOnlyChannelPluginsForConfig(
     ...new Set(
       listConfiguredChannelIdsForReadOnlyScope({
         config: cfg,
+        activationSourceConfig: options.activationSourceConfig ?? cfg,
         workspaceDir,
         env,
         cache: options.cache,
@@ -197,5 +211,10 @@ export function listReadOnlyChannelPluginsForConfig(
     );
   }
 
-  return [...byId.values()];
+  const plugins = [...byId.values()];
+  return {
+    plugins,
+    configuredChannelIds,
+    missingConfiguredChannelIds: configuredChannelIds.filter((channelId) => !byId.has(channelId)),
+  };
 }

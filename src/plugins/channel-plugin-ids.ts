@@ -76,10 +76,23 @@ function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
 
 function listEnvConfiguredManifestChannelIds(params: {
   records: readonly PluginManifestRecord[];
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): string[] {
   const channelIds = new Set<string>();
+  const trustConfig = params.activationSourceConfig ?? params.config;
+  const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
   for (const record of params.records) {
+    if (
+      !isChannelPluginEligibleForScopedOwnership({
+        plugin: record,
+        normalizedConfig,
+        rootConfig: trustConfig,
+      })
+    ) {
+      continue;
+    }
     for (const channelId of record.channels) {
       const envVars = record.channelEnvVars?.[channelId] ?? [];
       if (envVars.some((envVar) => hasNonEmptyEnvValue(params.env, envVar))) {
@@ -92,6 +105,7 @@ function listEnvConfiguredManifestChannelIds(params: {
 
 export function listConfiguredChannelIdsForPluginScope(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   cache?: boolean;
@@ -113,6 +127,8 @@ export function listConfiguredChannelIdsForPluginScope(params: {
       }),
       ...listEnvConfiguredManifestChannelIds({
         records,
+        config: params.config,
+        activationSourceConfig: params.activationSourceConfig,
         env: params.env,
       }),
     ]),
@@ -121,6 +137,7 @@ export function listConfiguredChannelIdsForPluginScope(params: {
 
 export function listConfiguredChannelIdsForReadOnlyScope(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   cache?: boolean;
@@ -133,6 +150,7 @@ export function listConfiguredChannelIdsForReadOnlyScope(params: {
     resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config));
   return listConfiguredChannelIdsForPluginScope({
     config: params.config,
+    activationSourceConfig: params.activationSourceConfig,
     workspaceDir,
     env,
     cache: params.cache,
@@ -143,6 +161,7 @@ export function listConfiguredChannelIdsForReadOnlyScope(params: {
 
 export function hasConfiguredChannelsForReadOnlyScope(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   cache?: boolean;
@@ -328,6 +347,7 @@ export function resolveConfiguredChannelPluginIds(params: {
   const configuredChannelIds = new Set(
     listConfiguredChannelIdsForPluginScope({
       config: params.config,
+      activationSourceConfig: params.activationSourceConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
     }).map((id) => id.trim()),
