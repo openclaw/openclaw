@@ -18,6 +18,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
+  minimax: ["MINIMAX_API_KEY"],
   "minimax-cn": ["MINIMAX_API_KEY"],
 } as const;
 
