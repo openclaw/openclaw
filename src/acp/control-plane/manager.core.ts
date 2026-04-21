@@ -930,12 +930,19 @@ export class AcpSessionManager {
               continue;
             }
 
+            // If there are no fallback backends, throw the original error immediately
+            if (candidateBackends.length <= 1) {
+              throw acpError;
+            }
+
             // Record this backend's failure for potential failover
             backendAttempts.push({
               backend: currentBackend,
               error: acpError.message,
               code: acpError.code,
             });
+            // Break inner loop to try next backend
+            break;
           } finally {
             if (input.signal && onCallerAbort) {
               input.signal.removeEventListener("abort", onCallerAbort);
