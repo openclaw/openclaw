@@ -1,4 +1,5 @@
 import type { CliBackendConfig } from "../config/types.js";
+import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
@@ -12,8 +13,10 @@ type CliUsage = {
 
 export type CliOutput = {
   text: string;
+  rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
+  finalPromptText?: string;
 };
 
 export type CliStreamingDelta = {
@@ -37,48 +40,7 @@ function usesClaudeStreamJsonDialect(params: {
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
-  const candidates: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index] ?? "";
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      if (inString) {
-        escaped = true;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    if (char === "{") {
-      if (depth === 0) {
-        start = index;
-      }
-      depth += 1;
-      continue;
-    }
-    if (char === "}" && depth > 0) {
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        candidates.push(raw.slice(start, index + 1));
-        start = -1;
-      }
-    }
-  }
-
-  return candidates;
+  return extractBalancedJsonFragments(raw, { openers: ["{"] }).map((fragment) => fragment.json);
 }
 
 function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
@@ -149,18 +111,30 @@ function unwrapCliErrorText(raw: string): string {
 }
 
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
+  const readNestedCached = (key: "input_tokens_details" | "prompt_tokens_details") => {
+    const nested = raw[key];
+    if (!isRecord(nested)) {
+      return undefined;
+    }
+    return typeof nested.cached_tokens === "number" && nested.cached_tokens > 0
+      ? nested.cached_tokens
+      : undefined;
+  };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
   const totalInput = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
+  const nestedCached =
+    readNestedCached("input_tokens_details") ?? readNestedCached("prompt_tokens_details");
   const cacheRead =
     pick("cache_read_input_tokens") ??
     pick("cached_input_tokens") ??
     pick("cacheRead") ??
-    pick("cached");
+    pick("cached") ??
+    nestedCached;
   const input =
     pick("input") ??
-    (Object.hasOwn(raw, "cached") && typeof totalInput === "number"
+    ((Object.hasOwn(raw, "cached") || nestedCached !== undefined) && typeof totalInput === "number"
       ? Math.max(0, totalInput - (cacheRead ?? 0))
       : totalInput);
   const cacheWrite =

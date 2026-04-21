@@ -60,16 +60,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
-  const { resolveContextTokensForModel } = await getContextModule();
   const contextTokens =
-    resolveContextTokensForModel({
-      cfg,
-      provider: providerUsed,
-      model: modelUsed,
-      contextTokensOverride: params.contextTokensOverride,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-      allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+      ? params.contextTokensOverride
+      : ((await getContextModule()).resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
@@ -130,10 +130,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
+    // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
+    // cumulative run usage, so assign directly instead of accumulating).
+    // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
     if (runEstimatedCostUsd !== undefined) {
-      next.estimatedCostUsd =
-        (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
+      next.estimatedCostUsd = runEstimatedCostUsd;
     }
+  } else if (
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens) &&
+    entry.totalTokens > 0
+  ) {
+    next.totalTokens = entry.totalTokens;
+    next.totalTokensFresh = false;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

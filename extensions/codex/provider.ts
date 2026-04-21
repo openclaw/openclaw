@@ -89,7 +89,16 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       source: "codex-app-server",
       mode: "token",
     }),
-    supportsXHighThinking: ({ modelId }) => isKnownXHighCodexModel(modelId),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(isKnownXHighCodexModel(modelId) ? [{ id: "xhigh" as const }] : []),
+      ],
+    }),
     isModernModelRef: ({ modelId }) => isModernCodexModel(modelId),
   };
 }
@@ -114,6 +123,7 @@ export async function buildCodexProviderCatalog(
   return {
     provider: {
       baseUrl: CODEX_BASE_URL,
+      apiKey: "codex-app-server",
       auth: "token",
       api: "openai-codex-responses",
       models,

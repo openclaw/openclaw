@@ -17,6 +17,9 @@ describe("qa scenario catalog", () => {
     expect(pack.agent.identityMarkdown).toContain("Dev C-3PO");
     expect(pack.kickoffTask).toContain("Lobster Invaders");
     expect(listQaScenarioMarkdownPaths().length).toBe(pack.scenarios.length);
+    expect(listQaScenarioMarkdownPaths()).toContain(
+      "qa/scenarios/media/image-generation-roundtrip.md",
+    );
     expect(pack.scenarios.some((scenario) => scenario.id === "image-generation-roundtrip")).toBe(
       true,
     );
@@ -24,6 +27,8 @@ describe("qa scenario catalog", () => {
     expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-c3po")).toBe(true);
     expect(pack.scenarios.every((scenario) => scenario.execution?.kind === "flow")).toBe(true);
     expect(pack.scenarios.some((scenario) => scenario.execution.flow?.steps.length)).toBe(true);
+    expect(pack.scenarios.every((scenario) => scenario.coverage?.primary.length)).toBe(true);
+    expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
   it("exposes bootstrap data from the markdown pack", () => {
@@ -112,10 +117,60 @@ describe("qa scenario catalog", () => {
       (candidate) => candidate.id === "codex-harness-no-meta-leak",
     );
 
-    expect(scenario?.sourcePath).toBe("qa/scenarios/codex-harness-no-meta-leak.md");
+    expect(scenario?.sourcePath).toBe("qa/scenarios/models/codex-harness-no-meta-leak.md");
     expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
       "keeps codex coordination chatter out of the visible reply",
     );
+  });
+
+  it("includes the GPT-5.4 thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("gpt54-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("gpt54-thinking-visibility-switch") as
+      | {
+          requiredLiveProvider?: string;
+          requiredLiveModel?: string;
+          offDirective?: string;
+          maxDirective?: string;
+          reasoningDirective?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt54-thinking-visibility-switch.md");
+    expect(config?.requiredLiveProvider).toBe("openai");
+    expect(config?.requiredLiveModel).toBe("gpt-5.4");
+    expect(config?.offDirective).toBe("/think off");
+    expect(config?.maxDirective).toBe("/think max");
+    expect(config?.reasoningDirective).toBe("/reasoning on");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "enables reasoning display and disables thinking",
+      "switches to max thinking",
+      "verifies max thinking emits visible reasoning",
+      "verifies max thinking completes the answer",
+    ]);
+  });
+
+  it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
+    const scenarioIds = [
+      "reasoning-only-recovery-replay-safe-read",
+      "reasoning-only-no-auto-retry-after-write",
+      "empty-response-recovery-replay-safe-read",
+      "empty-response-retry-budget-exhausted",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | {
+            requiredProvider?: string;
+            prompt?: string;
+          }
+        | undefined;
+
+      expect(scenario.sourcePath).toBe(`qa/scenarios/runtime/${scenarioId}.md`);
+      expect(config?.requiredProvider).toBe("mock-openai");
+      expect(config?.prompt).toContain("check");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+    }
   });
 
   it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {

@@ -318,7 +318,16 @@ describe("browser config", () => {
         dangerouslyAllowPrivateNetwork: false,
       },
     });
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
+  });
+
+  it("preserves legacy explicit strict mode from allowPrivateNetwork=false", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: false,
+      },
+    } as unknown as BrowserConfig);
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
   });
 
   it("keeps allowlist-only browser SSRF policy strict by default", () => {
@@ -332,6 +341,18 @@ describe("browser config", () => {
       allowedHostnames: ["example.com"],
       hostnameAllowlist: ["*.example.com"],
     });
+  });
+
+  it("keeps configured profile cdpUrls out of the shared browser SSRF policy", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        remote: {
+          color: "#123456",
+          cdpUrl: "http://172.29.128.1:9223",
+        },
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({});
   });
 
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {

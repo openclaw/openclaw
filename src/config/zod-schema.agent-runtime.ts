@@ -248,6 +248,23 @@ export const SandboxPruneSchema = z
   .strict()
   .optional();
 
+export const AgentContextLimitsSchema = z
+  .object({
+    memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
+    memoryGetDefaultLines: z.number().int().min(1).max(5_000).optional(),
+    toolResultMaxChars: z.number().int().min(1).max(250_000).optional(),
+    postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
+  })
+  .strict()
+  .optional();
+
+export const AgentSkillsLimitsSchema = z
+  .object({
+    maxSkillsPromptChars: z.number().int().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolPolicyBaseSchema = z
   .object({
     allow: z.array(z.string()).optional(),
@@ -802,13 +819,15 @@ export const AgentEntrySchema = z
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
+    skillsLimits: AgentSkillsLimitsSchema,
+    contextLimits: AgentContextLimitsSchema,
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

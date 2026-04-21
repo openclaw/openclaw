@@ -3,6 +3,10 @@
   "name": "Codex",
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
+  "nonSecretAuthMarkers": ["codex-app-server"],
+  "activation": {
+    "onAgentHarnesses": ["codex"]
+  },
   "commandAliases": [
     {
       "name": "codex",
@@ -62,7 +66,7 @@
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"],
-            "default": "never"
+            "default": "on-request"
           },
           "sandbox": {
             "type": "string",

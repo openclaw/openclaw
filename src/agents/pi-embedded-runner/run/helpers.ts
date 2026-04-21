@@ -1,7 +1,8 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
-import { extractAssistantText, extractAssistantVisibleText } from "../../pi-embedded-utils.js";
+import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
@@ -160,6 +161,7 @@ export function resolveFinalAssistantRawText(
   if (!lastAssistant) {
     return undefined;
   }
-  const rawText = extractAssistantText(lastAssistant).trim();
+  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
+  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
   return rawText || undefined;
 }

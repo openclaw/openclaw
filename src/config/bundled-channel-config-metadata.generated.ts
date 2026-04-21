@@ -214,6 +214,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 9007199254740991,
         },
+        sendTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
         chunkMode: {
           type: "string",
           enum: ["length", "newline"],
@@ -237,6 +242,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             dangerouslyAllowPrivateNetwork: {
               type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
+        catchup: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            maxAgeMinutes: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            perRunLimit: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            firstRunLookbackMinutes: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            maxFailureRetries: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
             },
           },
           additionalProperties: false,
@@ -277,9 +311,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
                 additionalProperties: false,
               },
+              systemPrompt: {
+                type: "string",
+              },
             },
             additionalProperties: false,
           },
+        },
+        coalesceSameSenderDms: {
+          type: "boolean",
         },
         accounts: {
           type: "object",
@@ -491,6 +531,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              sendTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
               chunkMode: {
                 type: "string",
                 enum: ["length", "newline"],
@@ -514,6 +559,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   dangerouslyAllowPrivateNetwork: {
                     type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              catchup: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  maxAgeMinutes: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  perRunLimit: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  firstRunLookbackMinutes: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxFailureRetries: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
                   },
                 },
                 additionalProperties: false,
@@ -554,9 +628,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       },
                       additionalProperties: false,
                     },
+                    systemPrompt: {
+                      type: "string",
+                    },
                   },
                   additionalProperties: false,
                 },
+              },
+              coalesceSameSenderDms: {
+                type: "boolean",
               },
             },
             required: ["enrichGroupParticipantsFromContacts"],
@@ -3129,6 +3209,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         sensitive: true,
       },
     },
+    unsupportedSecretRefSurfacePatterns: [
+      "channels.discord.accounts.*.threadBindings.webhookToken",
+      "channels.discord.threadBindings.webhookToken",
+    ],
   },
   {
     pluginId: "feishu",
@@ -12997,6 +13081,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 9007199254740991,
         },
+        pollingStallThresholdMs: {
+          type: "integer",
+          minimum: 30000,
+          maximum: 600000,
+        },
         retry: {
           type: "object",
           properties: {
@@ -14030,6 +14119,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              pollingStallThresholdMs: {
+                type: "integer",
+                minimum: 30000,
+                maximum: 600000,
+              },
               retry: {
                 type: "object",
                 properties: {
@@ -14409,6 +14503,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       timeoutSeconds: {
         label: "Telegram API Timeout (seconds)",
         help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+      },
+      pollingStallThresholdMs: {
+        label: "Telegram Polling Stall Threshold (ms)",
+        help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
       },
       silentErrorReplies: {
         label: "Telegram Silent Error Replies",
@@ -15153,7 +15251,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
               },
               dmPolicy: {
-                default: "pairing",
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
               },
@@ -15176,7 +15273,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
               },
               groupPolicy: {
-                default: "allowlist",
                 type: "string",
                 enum: ["open", "disabled", "allowlist"],
               },
@@ -15337,7 +15433,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["off", "ack", "minimal", "extensive"],
               },
               debounceMs: {
-                default: 0,
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
@@ -15378,7 +15473,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 maximum: 9007199254740991,
               },
             },
-            required: ["dmPolicy", "groupPolicy", "debounceMs"],
             additionalProperties: false,
           },
         },
@@ -15432,6 +15526,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
       },
     },
+    unsupportedSecretRefSurfacePatterns: [
+      "channels.whatsapp.accounts.*.creds.json",
+      "channels.whatsapp.creds.json",
+    ],
   },
   {
     pluginId: "zalo",
