@@ -518,12 +518,42 @@ export async function applySessionsPatchToStore(params: {
           }
         })();
       }
+      // PR #68939 follow-up (P2.9 review fix C1+C2) — also clean up
+      // execution-phase nudge crons here. Adversarial review found
+      // that close-on-complete fires via plan-snapshot-persister.ts:
+      // 696 as a RAW `planMode: "normal"` patch (NOT planApproval),
+      // so this branch is the primary cleanup site for the executing
+      // → normal lifecycle. Same fire-and-forget pattern as
+      // design-phase above. Mirror block placed AT the same point as
+      // the planApproval-branch cleanup (line 1175) so all paths
+      // converge.
+      const previousExecutionNudgeIds = next.planMode?.executionNudgeJobIds;
+      if (previousExecutionNudgeIds && previousExecutionNudgeIds.length > 0) {
+        const ids = [...previousExecutionNudgeIds];
+        void (async () => {
+          try {
+            const { cleanupPlanExecutionNudges } = await import(
+              "../agents/plan-mode/plan-execution-nudge-crons.js"
+            );
+            await cleanupPlanExecutionNudges({ jobIds: ids });
+          } catch {
+            /* best-effort */
+          }
+        })();
+      }
       // PR-11 review fix (Codex P2 #3105134664): preserve
       // `lastPlanSteps` and `autoApprove` across the planMode→normal
       // transition. Pre-fix, /plan off (and any other normal-mode
       // toggle) erased the persisted plan snapshot — losing the
       // sidebar-recovery + audit trail. Operators expected to be able
       // to re-read the prior plan after toggling back to normal.
+      //
+      // P2.9 review fix C2: do NOT carry forward executionNudgeJobIds
+      // into the preserved entry — they were just cancelled above.
+      // Keeping them in the field would orphan them on the entry
+      // (no scheduler can reach them again) AND violate the cleanup
+      // invariant (cancelled crons should not appear in the tracking
+      // list).
       const preservedPlanSteps = next.planMode?.lastPlanSteps;
       const preservedAutoApprove = next.planMode?.autoApprove === true;
       if (preservedPlanSteps?.length || preservedAutoApprove) {
@@ -1033,7 +1063,12 @@ export async function applySessionsPatchToStore(params: {
         //
         // Captured locals BEFORE the fire-and-forget so the closure
         // doesn't read mutating state (next gets rebuilt below).
-        if (action === "approve") {
+        // P2.9 review fix P7 — schedule on BOTH approve AND edit. Edit
+         // also transitions mode → "executing" (approval.ts:113) so it
+         // needs the same execution-phase nudge coverage. The original
+         // commit's "acceptEdits implies forward progress" justification
+         // conflated permission scope with stall coverage.
+        if (action === "approve" || action === "edit") {
           const executionCycleId = next.planMode?.cycleId;
           const sessionKeyForCron = storeKey;
           const agentIdForCron = parsedAgent?.agentId;
@@ -1060,15 +1095,40 @@ export async function applySessionsPatchToStore(params: {
               }
               // Persist the jobIds back to the entry so close-on-
               // complete cleanup knows what to remove.
+              //
+              // P2.9 review fix C3 — race-check is now THREE-PRONGED
+              // (was: planMode-existence only). Mirror the design-
+              // phase check at pi-embedded-subscribe.handlers.tools.ts:
+              // 553-561. Specifically detects:
+              //   (a) close-on-complete fired (planMode deleted)
+              //   (b) autoApprove-preserve close fired (planMode kept
+              //       but mode flipped to "normal")
+              //   (c) fresh /plan on between schedule and persist
+              //       (cycleId regenerated; would pollute new entry
+              //       with stale IDs from the prior cycle)
+              // Any of these → cancel the just-scheduled crons +
+              // skip the persist.
+              //
+              // P2.9 review fix C4 — APPEND to existing array rather
+              // than overwriting. Mirror design-phase persistence at
+              // handlers.tools.ts:563. Prevents silent loss of a
+              // prior batch's IDs if the closure runs twice for any
+              // reason (e.g., race condition, multi-writer setup).
               const { updateSessionStoreEntry } = await import("../config/sessions/store.js");
               await updateSessionStoreEntry({
                 storePath: storePathForPersist,
                 sessionKey: sessionKeyForCron,
                 update: async (entry) => {
-                  if (!entry?.planMode) {
-                    // Race: close-on-complete fired between schedule
-                    // and persist. Best-effort: cancel the just-
-                    // scheduled crons since they have no owner.
+                  const planModeSnap = entry?.planMode;
+                  const racedAway =
+                    !planModeSnap ||
+                    planModeSnap.mode !== "executing" ||
+                    (executionCycleId !== undefined &&
+                      planModeSnap.cycleId !== executionCycleId);
+                  if (racedAway || !planModeSnap) {
+                    // Race: state moved away from this approve's
+                    // executing phase. Cancel the just-scheduled
+                    // crons since they have no valid owner.
                     const { cleanupPlanExecutionNudges } = await import(
                       "../agents/plan-mode/plan-execution-nudge-crons.js"
                     );
@@ -1079,8 +1139,11 @@ export async function applySessionsPatchToStore(params: {
                   }
                   return {
                     planMode: {
-                      ...entry.planMode,
-                      executionNudgeJobIds: scheduled.map((s) => s.jobId),
+                      ...planModeSnap,
+                      executionNudgeJobIds: [
+                        ...(planModeSnap.executionNudgeJobIds ?? []),
+                        ...scheduled.map((s) => s.jobId),
+                      ],
                     },
                   };
                 },
