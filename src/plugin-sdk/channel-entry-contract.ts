@@ -355,9 +355,15 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
         pluginId: "(bundled-entry)",
         source: modulePath,
         elapsedMs: endMs - loadStartMs,
+        // When the Win32 fast-path resolves the module via `nodeRequire`,
+        // `getJitiEndMs` stays `0` because the `catch` block (the only place
+        // it gets stamped) never runs. Reporting `getJitiMs` /
+        // `jitiCallMs` as `0` for that path keeps the breakdown honest:
+        // `elapsedMs=` already captures the nodeRequire time, and we don't
+        // want to mis-attribute it to jiti sub-steps.
         extras: [
-          ["getJitiMs", getJitiEndMs - loadStartMs],
-          ["jitiCallMs", endMs - (getJitiEndMs || loadStartMs)],
+          ["getJitiMs", getJitiEndMs ? getJitiEndMs - loadStartMs : 0],
+          ["jitiCallMs", getJitiEndMs ? endMs - getJitiEndMs : 0],
         ],
       }),
     );
