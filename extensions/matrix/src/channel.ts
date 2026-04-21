@@ -74,7 +74,7 @@ import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
-const loadMatrixSetupSurfaceModule = createLazyRuntimeNamedExport(
+const loadMatrixSetupWizard = createLazyRuntimeNamedExport(
   () => import("./setup-surface.js"),
   "matrixSetupWizard",
 );
@@ -326,7 +326,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       id: "matrix",
       meta,
       setupWizard: createMatrixSetupWizardProxy(async () => ({
-        matrixSetupWizard: await loadMatrixSetupSurfaceModule(),
+        matrixSetupWizard: await loadMatrixSetupWizard(),
       })),
       capabilities: {
         chatTypes: ["direct", "group", "thread"],

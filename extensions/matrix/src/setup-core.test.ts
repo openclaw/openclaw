@@ -97,12 +97,27 @@ describe("createMatrixSetupWizardProxy", () => {
       }),
     }));
     const proxy = createMatrixSetupWizardProxy(loader);
-    const cfg = { channels: { matrix: {} } } as CoreConfig;
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {
+              dm: {
+                allowFrom: ["  @ops:example.org  ", "", "*"],
+              },
+            },
+          },
+        },
+      },
+    } as CoreConfig;
 
-    expect(proxy.dmPolicy?.getCurrent(cfg)).toBe("pairing");
-    const next = proxy.dmPolicy?.setPolicy(cfg, "open") as CoreConfig;
+    expect(proxy.dmPolicy?.getCurrent(cfg, "ops")).toBe("pairing");
+    const next = proxy.dmPolicy?.setPolicy(cfg, "open", "ops") as CoreConfig;
 
-    expect(next.channels?.matrix?.dm).toMatchObject({ policy: "open", allowFrom: ["*"] });
+    expect(next.channels?.matrix?.accounts?.ops?.dm).toMatchObject({
+      policy: "open",
+      allowFrom: ["@ops:example.org", "*"],
+    });
     expect(loader).not.toHaveBeenCalled();
 
     await proxy.dmPolicy?.promptAllowFrom?.({

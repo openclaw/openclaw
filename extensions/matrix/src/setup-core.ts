@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   type DmPolicy,
   normalizeAccountId,
@@ -32,9 +33,7 @@ function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy, accountId?: string
     accountId: resolvedAccountId,
   });
   const allowFrom =
-    policy === "open"
-      ? [...new Set([...(existing.dm?.allowFrom ?? []), "*"])]
-      : existing.dm?.allowFrom;
+    policy === "open" ? addWildcardAllowFrom(existing.dm?.allowFrom) : existing.dm?.allowFrom;
   return updateMatrixAccountConfig(cfg, resolvedAccountId, {
     dm: {
       ...existing.dm,
