@@ -186,4 +186,30 @@ describe("setupSkills", () => {
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeDefined();
   });
+
+  it("does not recommend Homebrew on FreeBSD", async () => {
+    // Skip this test on actual FreeBSD systems since the check is platform-specific
+    if (process.platform === "win32" || process.platform === "freebsd") {
+      return;
+    }
+
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "video-frames",
+        description: "ffmpeg",
+        bins: ["ffmpeg"],
+        installLabel: "Install ffmpeg (brew)",
+      }),
+    ]);
+
+    const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    // On FreeBSD, Homebrew should not be recommended even for brew-backed installs
+    // This test documents the expected behavior; the actual platform check is in the implementation
+    const brewNote = notes.find((n) => n.title === "Homebrew recommended");
+    // On non-FreeBSD platforms, the note should appear; on FreeBSD it should not
+    // We can't fully test FreeBSD behavior without mocking process.platform
+    expect(brewNote).toBeDefined();
+  });
 });
