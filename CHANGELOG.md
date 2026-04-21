@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
 - Synology Chat: validate outbound webhook `file_url` values against the shared SSRF policy before forwarding to the NAS, rejecting malformed URLs, non-`http(s)` schemes, and private/blocked network targets so the NAS cannot be used as a confused deputy to fetch internal addresses. (#69784) Thanks @eleqtrizit.
 - Gateway/Control UI: require gateway auth on the Control UI avatar route (`GET /avatar/<agentId>` and `?meta=1` metadata) when auth is configured, matching the sibling assistant-media route, and propagate the existing gateway token through the UI avatar fetch (bearer header + authenticated blob URL) so authenticated dashboards still load local avatars. (#69775)
+- Exec/allowlist: reject POSIX parameter expansion forms such as `$VAR`, `$?`, `$$`, `$1`, and `$@` inside unquoted heredocs during shell approval analysis, so these heredocs no longer pass allowlist review as plain text. (#69795) Thanks @drobison00.
 
 ## 2026.4.20
 
