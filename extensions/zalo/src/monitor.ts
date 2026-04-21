@@ -89,7 +89,7 @@ type ZaloUpdateProcessingParams = ZaloProcessingContext & {
 };
 
 let zaloWebhookModulePromise: Promise<ZaloWebhookModule> | undefined;
-const hostedMediaRouteRefs = new Map<string, { count: number; unregister: () => void }>();
+const hostedMediaRouteRefs = new Map<string, { count: number; unregisters: Array<() => void> }>();
 
 function loadZaloWebhookModule(): Promise<ZaloWebhookModule> {
   zaloWebhookModulePromise ??= import("./monitor.webhook.js");
@@ -123,7 +123,7 @@ function registerSharedHostedMediaRoute(params: {
   const existing = hostedMediaRouteRefs.get(params.path);
   if (existing) {
     existing.count += 1;
-    existing.unregister = unregister;
+    existing.unregisters.push(unregister);
     return () => {
       const current = hostedMediaRouteRefs.get(params.path);
       if (!current) {
@@ -134,11 +134,13 @@ function registerSharedHostedMediaRoute(params: {
         return;
       }
       hostedMediaRouteRefs.delete(params.path);
-      current.unregister();
+      for (const unregisterHandle of current.unregisters) {
+        unregisterHandle();
+      }
     };
   }
 
-  hostedMediaRouteRefs.set(params.path, { count: 1, unregister });
+  hostedMediaRouteRefs.set(params.path, { count: 1, unregisters: [unregister] });
   return () => {
     const current = hostedMediaRouteRefs.get(params.path);
     if (!current) {
@@ -149,7 +151,9 @@ function registerSharedHostedMediaRoute(params: {
       return;
     }
     hostedMediaRouteRefs.delete(params.path);
-    current.unregister();
+    for (const unregisterHandle of current.unregisters) {
+      unregisterHandle();
+    }
   };
 }
 
@@ -726,18 +730,16 @@ async function deliverZaloReply(params: {
       }
     },
     sendMedia: async ({ mediaUrl, caption }) => {
-      if (!canHostMedia || !webhookUrl || !webhookPath) {
-        throw new Error(
-          "Zalo outbound media requires a configured webhookUrl to host media safely",
-        );
-      }
-      const sendableMediaUrl = await prepareHostedZaloMediaUrl({
-        mediaUrl,
-        webhookUrl,
-        webhookPath,
-        maxBytes: mediaMaxBytes,
-        proxyUrl,
-      });
+      const sendableMediaUrl =
+        canHostMedia && webhookUrl && webhookPath
+          ? await prepareHostedZaloMediaUrl({
+              mediaUrl,
+              webhookUrl,
+              webhookPath,
+              maxBytes: mediaMaxBytes,
+              proxyUrl,
+            })
+          : mediaUrl;
       await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher);
       statusSink?.({ lastOutboundAt: Date.now() });
     },

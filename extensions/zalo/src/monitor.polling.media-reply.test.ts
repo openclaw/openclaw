@@ -139,6 +139,57 @@ describe("Zalo polling media replies", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
+  it("sends media replies directly when webhook hosting is not configured", async () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    getUpdatesMock
+      .mockResolvedValueOnce({
+        ok: true,
+        result: createTextUpdate({
+          messageId: "polling-media-2",
+          userId: "user-2",
+          userName: "User Two",
+          chatId: "dm-chat-2",
+          text: "send media directly",
+        }),
+      })
+      .mockImplementation(() => new Promise(() => {}));
+
+    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const abort = new AbortController();
+    const runtime = createRuntimeEnv();
+    const { account, config } = createLifecycleMonitorSetup({
+      accountId: "acct-zalo-polling-direct-media",
+      dmPolicy: "open",
+    });
+    const run = monitorZaloProvider({
+      token: "zalo-token",
+      account,
+      config,
+      runtime,
+      abortSignal: abort.signal,
+    });
+
+    try {
+      await vi.waitFor(() => expect(sendPhotoMock).toHaveBeenCalledTimes(1));
+
+      expect(registry.httpRoutes).toHaveLength(0);
+      expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
+      expect(sendPhotoMock).toHaveBeenCalledWith(
+        "zalo-token",
+        {
+          chat_id: "dm-chat-2",
+          photo: "https://example.com/reply-image.png",
+          caption: "caption text",
+        },
+        undefined,
+      );
+    } finally {
+      abort.abort();
+      await run;
+    }
+  });
+
   it("re-registers the hosted media route after the active registry swaps", async () => {
     const firstRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(firstRegistry);
