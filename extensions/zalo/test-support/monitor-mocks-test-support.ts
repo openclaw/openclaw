@@ -152,12 +152,16 @@ export async function startWebhookLifecycleMonitor(params: {
   });
 
   await vi.waitFor(() => {
-    if (setWebhookMock.mock.calls.length !== 1 || registry.httpRoutes.length !== 1) {
+    const webhookRoute = registry.httpRoutes.find((route) => route.source === "zalo-webhook");
+    const hostedMediaRoute = registry.httpRoutes.find(
+      (route) => route.source === "zalo-hosted-media",
+    );
+    if (setWebhookMock.mock.calls.length !== 1 || !webhookRoute || !hostedMediaRoute) {
       throw new Error("waiting for webhook registration");
     }
   });
 
-  const route = registry.httpRoutes[0];
+  const route = registry.httpRoutes.find((entry) => entry.source === "zalo-webhook");
   if (!route) {
     throw new Error("missing plugin HTTP route");
   }
