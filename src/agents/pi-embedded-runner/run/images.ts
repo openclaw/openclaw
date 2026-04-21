@@ -411,9 +411,9 @@ export async function loadImageFromRef(
     } else if (!path.isAbsolute(targetPath)) {
       targetPath = path.resolve(workspaceDir, targetPath);
     }
-    // Skip workspaceOnly check for media-uri refs since they use localRoots: [getMediaDir()]
-    // which defines allowed paths via assertLocalMediaAllowed in loadWebMedia
-    if (options?.workspaceOnly && !options?.sandbox && ref.type !== "media-uri") {
+    // workspaceOnly applies only to regular path refs; media-uri refs are handled
+    // exclusively in the early-return block above and cannot reach this point.
+    if (options?.workspaceOnly && !options?.sandbox) {
       const root = options?.sandbox?.root ?? workspaceDir;
       await assertSandboxPath({
         filePath: targetPath,
