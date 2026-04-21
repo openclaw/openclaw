@@ -25,4 +25,26 @@ describe("runWithImageModelFallback provider resolution", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([["openai-codex", "gpt-5.4-mini"]]);
   });
+
+  it("keeps a fully qualified override provider over the configured default", async () => {
+    const cfg = makeModelFallbackCfg({
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "openai-codex/gpt-5.4",
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithImageModelFallback({
+      cfg,
+      modelOverride: "google/gemini-3-pro-image",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([["google", "gemini-3-pro-image"]]);
+  });
 });
