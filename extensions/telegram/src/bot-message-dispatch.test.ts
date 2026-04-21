@@ -66,6 +66,7 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
 const resolveDefaultModelForAgent = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
+const resolveHumanDelayConfig = vi.hoisted(() => vi.fn(() => undefined));
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -118,6 +119,10 @@ vi.mock("./sticker-cache.js", () => ({
   searchStickers: () => [],
   getAllCachedStickers: () => [],
   describeStickerImage,
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveHumanDelayConfig,
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
@@ -3756,5 +3761,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(generateTopicLabel).not.toHaveBeenCalled();
     expect(bot.api.editForumTopic).not.toHaveBeenCalled();
+  });
+
+  it("passes humanDelay config to dispatcher", async () => {
+    const humanDelayConfig = { minMs: 100, maxMs: 500 };
+    resolveHumanDelayConfig.mockReturnValue(humanDelayConfig);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(resolveHumanDelayConfig).toHaveBeenCalledWith(expect.any(Object), "test-agent");
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          humanDelay: humanDelayConfig,
+        }),
+      }),
+    );
   });
 });
