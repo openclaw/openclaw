@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   tasksShowCommand: vi.fn(),
   tasksNotifyCommand: vi.fn(),
   tasksCancelCommand: vi.fn(),
+  jobsListCommand: vi.fn(),
+  jobsShowCommand: vi.fn(),
   flowsListCommand: vi.fn(),
   flowsShowCommand: vi.fn(),
   flowsCancelCommand: vi.fn(),
@@ -34,6 +36,8 @@ const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
 const tasksShowCommand = mocks.tasksShowCommand;
 const tasksNotifyCommand = mocks.tasksNotifyCommand;
 const tasksCancelCommand = mocks.tasksCancelCommand;
+const jobsListCommand = mocks.jobsListCommand;
+const jobsShowCommand = mocks.jobsShowCommand;
 const flowsListCommand = mocks.flowsListCommand;
 const flowsShowCommand = mocks.flowsShowCommand;
 const flowsCancelCommand = mocks.flowsCancelCommand;
@@ -63,6 +67,11 @@ vi.mock("../../commands/tasks.js", () => ({
   tasksShowCommand: mocks.tasksShowCommand,
   tasksNotifyCommand: mocks.tasksNotifyCommand,
   tasksCancelCommand: mocks.tasksCancelCommand,
+}));
+
+vi.mock("../../commands/jobs.js", () => ({
+  jobsListCommand: mocks.jobsListCommand,
+  jobsShowCommand: mocks.jobsShowCommand,
 }));
 
 vi.mock("../../commands/flows.js", () => ({
@@ -99,6 +108,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     tasksShowCommand.mockResolvedValue(undefined);
     tasksNotifyCommand.mockResolvedValue(undefined);
     tasksCancelCommand.mockResolvedValue(undefined);
+    jobsListCommand.mockResolvedValue(undefined);
+    jobsShowCommand.mockResolvedValue(undefined);
     flowsListCommand.mockResolvedValue(undefined);
     flowsShowCommand.mockResolvedValue(undefined);
     flowsCancelCommand.mockResolvedValue(undefined);
@@ -268,6 +279,44 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(tasksShowCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         lookup: "run-123",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs jobs list from the parent command", async () => {
+    await runCli(["jobs", "--json", "--status", "running", "--owner", "agent:main:main"]);
+
+    expect(jobsListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        status: "running",
+        owner: "agent:main:main",
+      }),
+      runtime,
+    );
+  });
+
+  it("runs jobs list subcommand with parent option forwarding", async () => {
+    await runCli(["jobs", "--json", "--owner", "agent:main:main", "list", "--status", "waiting"]);
+
+    expect(jobsListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        status: "waiting",
+        owner: "agent:main:main",
+      }),
+      runtime,
+    );
+  });
+
+  it("runs jobs show subcommand with job id forwarding", async () => {
+    await runCli(["jobs", "show", "job-123", "--json"]);
+
+    expect(jobsShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: "job-123",
         json: true,
       }),
       runtime,

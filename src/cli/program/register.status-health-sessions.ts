@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
+import { jobsListCommand, jobsShowCommand } from "../../commands/jobs.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
@@ -431,6 +432,76 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await flowsCancelCommand(
           {
             lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const jobsCmd = program
+    .command("jobs")
+    .description("Inspect durable jobs registry state")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (planned, scheduled, running, waiting, blocked, completed, cancelled, superseded)",
+    )
+    .option("--owner <sessionKey>", "Filter by owner session key")
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await jobsListCommand(
+          {
+            json: Boolean(opts.json),
+            status: opts.status as string | undefined,
+            owner: opts.owner as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  jobsCmd.enablePositionalOptions();
+
+  jobsCmd
+    .command("list")
+    .description("List durable jobs")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (planned, scheduled, running, waiting, blocked, completed, cancelled, superseded)",
+    )
+    .option("--owner <sessionKey>", "Filter by owner session key")
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            json?: boolean;
+            status?: string;
+            owner?: string;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await jobsListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+            owner: (opts.owner as string | undefined) ?? parentOpts?.owner,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  jobsCmd
+    .command("show")
+    .description("Show one durable job by job id")
+    .argument("<job-id>", "Durable job id")
+    .option("--json", "Output as JSON", false)
+    .action(async (jobId, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await jobsShowCommand(
+          {
+            jobId,
+            json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
         );
