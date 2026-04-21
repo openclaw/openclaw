@@ -35,6 +35,7 @@ import {
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordChannelNameSafe } from "./channel-access.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -919,7 +920,7 @@ export async function handleDiscordCommandArgInteraction(params: {
     sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
-    responseEphemeral: true,
+    responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
   });
 }
 
