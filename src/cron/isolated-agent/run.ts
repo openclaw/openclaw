@@ -206,6 +206,32 @@ function buildCronDeliveryTrace(params: {
   };
 }
 
+function resolveMessagingToolSentTargets(params: {
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+  runResult: CronExecutionResult["runResult"];
+}): MessagingToolSend[] {
+  const explicitTargets = params.runResult.messagingToolSentTargets ?? [];
+  if (explicitTargets.length > 0 || params.runResult.didSendViaMessagingTool !== true) {
+    return explicitTargets;
+  }
+  if (!params.resolvedDelivery.ok) {
+    return [];
+  }
+  return [
+    {
+      tool: "message",
+      provider: params.resolvedDelivery.channel,
+      ...(params.resolvedDelivery.accountId
+        ? { accountId: params.resolvedDelivery.accountId }
+        : {}),
+      ...(params.resolvedDelivery.to ? { to: params.resolvedDelivery.to } : {}),
+      ...(params.resolvedDelivery.threadId
+        ? { threadId: String(params.resolvedDelivery.threadId) }
+        : {}),
+    },
+  ];
+}
+
 function resolveCronToolPolicy(params: { deliveryMode: "announce" | "webhook" | "none" }) {
   const enableMessageTool = params.deliveryMode !== "webhook";
   return {
@@ -756,7 +782,10 @@ async function finalizeCronRun(params: {
     matchesMessagingToolDeliveryTarget,
     resolveCronDeliveryBestEffort,
   } = await loadCronDeliveryRuntime();
-  const messagingToolSentTargets = finalRunResult.messagingToolSentTargets ?? [];
+  const messagingToolSentTargets = resolveMessagingToolSentTargets({
+    resolvedDelivery: prepared.resolvedDelivery,
+    runResult: finalRunResult,
+  });
   const didSendViaMessagingTool =
     finalRunResult.didSendViaMessagingTool === true && messagingToolSentTargets.length > 0;
   const skipMessagingToolDelivery =
