@@ -106,13 +106,37 @@ export async function schedulePlanExecutionNudges(params: {
       // approved-plan injection text added in commit 9bf283be71
       // (which addressed Eva's "subagent returned but plan not
       // marked complete" stall).
+      //
+      // P2.12a (2026-04-22): restructured as imperative steps so
+      // GPT-5.4 cannot shortcut to NO_REPLY on a belief that it
+      // "already knows" the plan is done. Live-validated failure
+      // mode: agent received the +1/+3/+5 nudges, believed
+      // internally that "all steps are marked complete", returned
+      // NO_REPLY three times — but `plan_mode_status` showed 1
+      // in_progress + 3 pending + 2 completed. The agent conflated
+      // "did the work" with "called update_plan on it".
+      //
+      // Adversarial review #1 round-2 feedback: the earlier draft's
+      // closing sentence "if zero pending+in_progress, no further
+      // action needed" was itself an escape hatch — the model could
+      // read it as permission to NO_REPLY without calling the tool,
+      // reinstating the exact failure mode this nudge tries to
+      // break. This revision removes that escape and makes step 1
+      // (call plan_mode_status) unconditional.
       const message =
-        `[PLAN_NUDGE]: Execution-phase wake-up (+${minutes}min): if a plan ` +
-        "step you were working on has finished, call `update_plan` to mark " +
-        'its status "completed" or "cancelled". If you are blocked on an ' +
-        "external wait, schedule another resume via cron sessionTarget:'current' " +
-        "and explain what you're waiting on. If all steps are recorded, the " +
-        "plan auto-closes — no further action needed.";
+        `[PLAN_NUDGE]: Execution-phase wake-up (+${minutes}min). REQUIRED STEPS: ` +
+        "(1) Call `plan_mode_status` to read the authoritative step counts — " +
+        "do NOT skip this step even if you believe you already know the answer, " +
+        "your internal memory of which steps you marked via update_plan is " +
+        "unreliable across turns. " +
+        "(2) Based ONLY on what `plan_mode_status` reports: if any step is " +
+        "`pending` or `in_progress`, call `update_plan` to mark finished steps " +
+        '"completed" / "cancelled" or to advance the next step with work. ' +
+        "(3) If you are blocked on an external wait, schedule another resume " +
+        "via cron sessionTarget:'current' and explain what you are waiting on. " +
+        "(4) If `plan_mode_status` shows zero `pending` and zero `in_progress` " +
+        "steps, close-on-complete will fire automatically; you may then return " +
+        "a brief completion summary.";
       // Same sessionTarget-validation guardrail as the design-phase
       // scheduler: catch malformed sessionKeys locally instead of
       // letting the cron jobs.ts validator reject ~60s later.

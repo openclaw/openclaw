@@ -61,7 +61,9 @@ export function applySessionStoreMigrations(store: Record<string, SessionEntry>)
       (planModeRec.approval === "approved" || planModeRec.approval === "edited")
     ) {
       const hasInFlightStep = planModeRec.lastPlanSteps.some((s: unknown) => {
-        if (!s || typeof s !== "object") return false;
+        if (!s || typeof s !== "object") {
+          return false;
+        }
         const status = (s as { status?: unknown }).status;
         return status === "pending" || status === "in_progress";
       });
