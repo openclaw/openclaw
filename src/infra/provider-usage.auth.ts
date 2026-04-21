@@ -242,25 +242,25 @@ export async function resolveProviderAuths(params: {
     env: params.env ?? process.env,
     agentDir: params.agentDir,
   };
-  const hasDirectCredentialSource = params.providers.some((provider) =>
-    Boolean(
+  const hasAuthProfileStoreSource = hasAnyAuthProfileStoreSource(params.agentDir);
+  const auths: ProviderAuth[] = [];
+
+  for (const provider of params.providers) {
+    const hasDirectCredentialSource = Boolean(
       resolveProviderApiKeyFromConfig({
         state: { ...stateBase, allowAuthProfileStore: false },
         providerIds: [provider],
       }),
-    ),
-  );
-  const allowAuthProfileStore =
-    !params.skipPluginAuthWithoutCredentialSource ||
-    hasDirectCredentialSource ||
-    hasAnyAuthProfileStoreSource(params.agentDir);
-  const state: UsageAuthState = {
-    ...stateBase,
-    allowAuthProfileStore,
-  };
-  const auths: ProviderAuth[] = [];
+    );
+    const allowAuthProfileStore =
+      !params.skipPluginAuthWithoutCredentialSource ||
+      hasDirectCredentialSource ||
+      hasAuthProfileStoreSource;
+    const state: UsageAuthState = {
+      ...stateBase,
+      allowAuthProfileStore,
+    };
 
-  for (const provider of params.providers) {
     if (!params.skipPluginAuthWithoutCredentialSource || allowAuthProfileStore) {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({
         state,

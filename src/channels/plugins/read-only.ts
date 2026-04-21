@@ -1,12 +1,14 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveDiscoverableScopedChannelPluginIds } from "../../plugins/channel-plugin-ids.js";
+import {
+  listConfiguredChannelIdsForPluginScope,
+  resolveDiscoverableScopedChannelPluginIds,
+} from "../../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../../plugins/manifest-registry.js";
-import { listPotentialConfiguredChannelIds } from "../config-presence.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -48,11 +50,6 @@ function addChannelPlugins(
   }
 }
 
-function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
-  const value = env[key];
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function resolveReadOnlyWorkspaceDir(
   cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions,
@@ -72,22 +69,6 @@ function listExternalChannelManifestRecords(params: {
     env: params.env,
     cache: params.cache,
   }).plugins.filter((plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0);
-}
-
-function listExternalEnvConfiguredChannelIds(params: {
-  records: readonly PluginManifestRecord[];
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  const channelIds = new Set<string>();
-  for (const record of params.records) {
-    for (const channelId of record.channels) {
-      const envVars = record.channelEnvVars?.[channelId] ?? [];
-      if (envVars.some((envVar) => hasNonEmptyEnvValue(params.env, envVar))) {
-        channelIds.add(channelId);
-      }
-    }
-  }
-  return [...channelIds].toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveExternalReadOnlyChannelPluginIds(params: {
@@ -148,15 +129,16 @@ export function listReadOnlyChannelPluginsForConfig(
     cache: options.cache,
   });
   const configuredChannelIds = [
-    ...new Set([
-      ...listPotentialConfiguredChannelIds(cfg, env, {
-        includePersistedAuthState: options.includePersistedAuthState,
-      }),
-      ...listExternalEnvConfiguredChannelIds({
-        records: externalManifestRecords,
+    ...new Set(
+      listConfiguredChannelIdsForPluginScope({
+        config: cfg,
+        workspaceDir,
         env,
+        cache: options.cache,
+        includePersistedAuthState: options.includePersistedAuthState,
+        manifestRecords: externalManifestRecords,
       }),
-    ]),
+    ),
   ];
   const byId = new Map<string, ChannelPlugin>();
 

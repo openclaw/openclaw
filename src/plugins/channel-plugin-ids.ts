@@ -61,6 +61,56 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
   ).toSorted((left, right) => left.localeCompare(right));
 }
 
+function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
+  const value = env[key];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function listEnvConfiguredManifestChannelIds(params: {
+  records: readonly PluginManifestRecord[];
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const channelIds = new Set<string>();
+  for (const record of params.records) {
+    for (const channelId of record.channels) {
+      const envVars = record.channelEnvVars?.[channelId] ?? [];
+      if (envVars.some((envVar) => hasNonEmptyEnvValue(params.env, envVar))) {
+        channelIds.add(channelId);
+      }
+    }
+  }
+  return [...channelIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listConfiguredChannelIdsForPluginScope(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  cache?: boolean;
+  includePersistedAuthState?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
+}): string[] {
+  const records =
+    params.manifestRecords ??
+    loadPluginManifestRegistry({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      cache: params.cache,
+    }).plugins;
+  return [
+    ...new Set([
+      ...listPotentialConfiguredChannelIds(params.config, params.env, {
+        includePersistedAuthState: params.includePersistedAuthState,
+      }),
+      ...listEnvConfiguredManifestChannelIds({
+        records,
+        env: params.env,
+      }),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 function isChannelPluginEligibleForScopedOwnership(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
@@ -222,7 +272,11 @@ export function resolveConfiguredChannelPluginIds(params: {
   env: NodeJS.ProcessEnv;
 }): string[] {
   const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
+    listConfiguredChannelIdsForPluginScope({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }).map((id) => id.trim()),
   );
   if (configuredChannelIds.size === 0) {
     return [];

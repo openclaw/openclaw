@@ -69,4 +69,28 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
+
+  it("skips plugin usage auth per provider when only another provider has direct credentials", async () => {
+    await expect(
+      resolveProviderAuths({
+        providers: ["anthropic", "zai"],
+        skipPluginAuthWithoutCredentialSource: true,
+        env: {
+          ANTHROPIC_API_KEY: "sk-ant",
+        },
+      }),
+    ).resolves.toEqual([
+      {
+        provider: "anthropic",
+        token: "sk-ant",
+      },
+    ]);
+
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+      }),
+    );
+  });
 });

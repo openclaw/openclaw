@@ -1,9 +1,7 @@
 import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import {
-  hasPotentialConfiguredChannels,
-  listPotentialConfiguredChannelIds,
-} from "../channels/config-presence.js";
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -16,6 +14,7 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { resolveConfiguredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -73,6 +72,8 @@ export type SecurityAuditOptions = {
   codeSafetySummaryCache?: Map<string, Promise<unknown>>;
   /** Optional explicit auth for deep gateway probe. */
   deepProbeAuth?: { token?: string; password?: string };
+  /** Override workspace used for workspace plugin discovery. */
+  workspaceDir?: string;
   /** Dependency injection for tests. */
   probeGatewayFn?: ProbeGatewayFn;
 };
@@ -95,6 +96,7 @@ type AuditExecutionContext = {
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
   deepProbeAuth?: { token?: string; password?: string };
+  workspaceDir?: string;
 };
 
 let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
@@ -356,11 +358,13 @@ async function collectPluginSecurityAuditFindings(
       }
     }
     if (context.includeChannelSecurity && context.plugins !== undefined) {
-      for (const channelId of listPotentialConfiguredChannelIds(
-        context.sourceConfig,
-        context.env,
-      )) {
-        requestedPluginIds.delete(channelId);
+      for (const pluginId of resolveConfiguredChannelPluginIds({
+        config: autoEnabled.config,
+        activationSourceConfig: context.sourceConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+      })) {
+        requestedPluginIds.delete(pluginId);
       }
     }
     if (requestedPluginIds.size === 0) {
@@ -372,6 +376,7 @@ async function collectPluginSecurityAuditFindings(
       config: autoEnabled.config,
       activationSourceConfig: context.sourceConfig,
       env: context.env,
+      workspaceDir: context.workspaceDir,
       onlyPluginIds: [...requestedPluginIds],
     });
     collectors = snapshot.securityAuditCollectors ?? [];
@@ -894,6 +899,8 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
+  const workspaceDir =
+    opts.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
   const configSnapshot = includeFilesystem
     ? opts.configSnapshot !== undefined
@@ -915,6 +922,7 @@ async function createAuditExecutionContext(
     execDockerRawFn: opts.execDockerRawFn,
     probeGatewayFn: opts.probeGatewayFn,
     plugins: opts.plugins,
+    workspaceDir,
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
     deepProbeAuth: opts.deepProbeAuth,
@@ -997,13 +1005,21 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
 
   const shouldAuditChannelSecurity =
     context.includeChannelSecurity &&
-    (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
+    (context.plugins !== undefined ||
+      hasPotentialConfiguredChannels(cfg, env) ||
+      resolveConfiguredChannelPluginIds({
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        workspaceDir: context.workspaceDir,
+        env,
+      }).length > 0);
   if (shouldAuditChannelSecurity) {
     if (context.plugins === undefined) {
       (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
         scope: "configured-channels",
         config: cfg,
         activationSourceConfig: context.sourceConfig,
+        workspaceDir: context.workspaceDir,
         env,
       });
     }

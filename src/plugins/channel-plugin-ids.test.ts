@@ -103,6 +103,17 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
+        id: "external-env-channel-plugin",
+        channels: ["external-env-channel"],
+        channelEnvVars: {
+          "external-env-channel": ["EXTERNAL_ENV_CHANNEL_TOKEN"],
+        },
+        origin: "config",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "voice-call",
         channels: [],
         origin: "bundled",
@@ -584,6 +595,22 @@ describe("resolveConfiguredChannelPluginIds", () => {
         env: process.env,
       }),
     ).toEqual([]);
+  });
+
+  it("includes trusted external channel owners configured only by manifest env vars", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: {
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual(["external-env-channel-plugin"]);
   });
 
   it("blocks bundled activation owners when explicitly disabled", () => {
