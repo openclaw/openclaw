@@ -17,7 +17,10 @@ import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { rememberRecentDailyMemoryFile } from "../../../memory-host-sdk/runtime-files.js";
+import {
+  rememberRecentDailyMemoryFile,
+  SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+} from "../../../memory-host-sdk/runtime-files.js";
 import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -66,24 +69,31 @@ function formatSessionMemoryDateParts(
   };
 }
 
-async function resolveAvailableMemoryFilename(params: {
-  memoryDir: string;
-  dateStr: string;
-  slug: string;
-}): Promise<string> {
-  const basename = `${params.dateStr}-${params.slug}`;
-  let suffix = 1;
+function buildFallbackTimestampSlug(now: Date, localTimeStr: string): string {
+  const localTimeSlug = localTimeStr.replace(/:/g, "").slice(0, 6);
+  const utcTimeSlug = now.toISOString().slice(11, 19).replace(/:/g, "");
+  return localTimeSlug === utcTimeSlug ? localTimeSlug : `${localTimeSlug}-u${utcTimeSlug}`;
+}
 
-  while (true) {
-    const filename = suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
+async function resolveAvailableSessionMemoryFileName(
+  memoryDir: string,
+  preferredFileName: string,
+): Promise<string> {
+  const extension = path.extname(preferredFileName);
+  const baseName = preferredFileName.slice(
+    0,
+    Math.max(0, preferredFileName.length - extension.length),
+  );
+  let candidate = preferredFileName;
+  for (let suffix = 2; ; suffix += 1) {
     try {
-      await fs.access(path.join(params.memoryDir, filename));
-      suffix += 1;
-    } catch (err) {
-      if ((err as { code?: string }).code === "ENOENT") {
-        return filename;
+      await fs.access(path.join(memoryDir, candidate));
+      candidate = `${baseName}-${suffix}${extension}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return candidate;
       }
-      throw err;
+      throw error;
     }
   }
 }
@@ -224,13 +234,15 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = localTimeStr.replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
+      slug = buildFallbackTimestampSlug(now, localTimeStr);
       log.debug("Using fallback timestamp slug", { slug });
     }
 
     // Create filename with date and slug
-    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
+    const filename = await resolveAvailableSessionMemoryFileName(
+      memoryDir,
+      `${dateStr}-${slug}.md`,
+    );
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
@@ -244,6 +256,8 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     // Build Markdown entry
     const entryParts = [
       `# Session: ${dateStr} ${localTimeStr} ${timezone}`,
+      "",
+      SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
@@ -269,6 +283,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       memoryDir,
       fileName: filename,
       mtimeMs: now.getTime(),
+      sessionSummary: true,
     }).catch((error: unknown) => {
       log.debug("Failed to update recent daily memory index", {
         error: error instanceof Error ? error.message : String(error),

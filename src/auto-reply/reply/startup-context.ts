@@ -3,7 +3,11 @@ import path from "node:path";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
-import { listRecentDailyMemoryFiles } from "../../memory-host-sdk/runtime-files.js";
+import {
+  isSessionSummaryDailyMemory,
+  listRecentDailyMemoryFiles,
+  type DailyMemoryFileEntry,
+} from "../../memory-host-sdk/runtime-files.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
 const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
@@ -88,31 +92,83 @@ function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string
   return shifted.toISOString().slice(0, 10);
 }
 
-function buildStartupTargetDays(params: {
-  dailyMemoryDays: number;
+function buildStartupLocalDayCandidates(params: {
   nowMs: number;
   timezone: string;
+  dailyMemoryDays: number;
 }): string[] {
   const orderedDays: string[] = [];
-  const seen = new Set<string>();
   const localToday = formatDateStamp(params.nowMs, params.timezone);
-  const utcToday = formatDateStamp(params.nowMs, "UTC");
-  const addDay = (day: string) => {
-    if (orderedDays.length >= params.dailyMemoryDays || seen.has(day)) {
-      return;
-    }
-    seen.add(day);
-    orderedDays.push(day);
-  };
-  for (let offset = 0; orderedDays.length < params.dailyMemoryDays; offset += 1) {
-    addDay(shiftDateStampByCalendarDays(localToday, offset));
-    if (utcToday !== localToday) {
-      // Older session-memory hooks stamped files in UTC, so prioritize that adjacent day
-      // before older local history when calendars diverge around midnight.
-      addDay(shiftDateStampByCalendarDays(utcToday, offset));
-    }
+  const daysToScan = Math.min(
+    STARTUP_MEMORY_DAILY_DAYS_CAP,
+    Math.max(1, Math.trunc(params.dailyMemoryDays)),
+  );
+  for (let offset = 0; offset < daysToScan; offset += 1) {
+    orderedDays.push(shiftDateStampByCalendarDays(localToday, offset));
   }
   return orderedDays;
+}
+
+function groupStartupPathsByDay(params: {
+  entries: DailyMemoryFileEntry[];
+  prioritizedPaths?: ReadonlySet<string>;
+}): Map<string, string[]> {
+  const prioritizedPaths = params.prioritizedPaths ?? new Set<string>();
+  const entriesByDay = new Map<string, Array<{ entry: DailyMemoryFileEntry; index: number }>>();
+  for (const [index, entry] of params.entries.entries()) {
+    const dayEntries = entriesByDay.get(entry.day);
+    if (dayEntries) {
+      dayEntries.push({ entry, index });
+      continue;
+    }
+    entriesByDay.set(entry.day, [{ entry, index }]);
+  }
+  return new Map(
+    [...entriesByDay.entries()].map(([day, entries]) => [
+      day,
+      entries
+        .toSorted((left, right) => {
+          const leftPriority = prioritizedPaths.has(left.entry.relativePath)
+            ? 0
+            : left.entry.canonical
+              ? 1
+              : 2;
+          const rightPriority = prioritizedPaths.has(right.entry.relativePath)
+            ? 0
+            : right.entry.canonical
+              ? 1
+              : 2;
+          if (leftPriority !== rightPriority) {
+            return leftPriority - rightPriority;
+          }
+          return left.index - right.index;
+        })
+        .map(({ entry }) => entry.relativePath),
+    ]),
+  );
+}
+
+function interleaveStartupPathsByDay(params: {
+  orderedDays: string[];
+  pathsByDay: Map<string, string[]>;
+}): string[] {
+  const relativePaths: string[] = [];
+  for (let offset = 0; params.orderedDays.length > 0; offset += 1) {
+    let addedAtOffset = false;
+    for (const day of params.orderedDays) {
+      const dayPaths = params.pathsByDay.get(day);
+      const nextPath = dayPaths?.[offset];
+      if (!nextPath) {
+        continue;
+      }
+      relativePaths.push(nextPath);
+      addedAtOffset = true;
+    }
+    if (!addedAtOffset) {
+      break;
+    }
+  }
+  return relativePaths;
 }
 
 async function resolveStartupDailyMemoryPaths(params: {
@@ -120,16 +176,143 @@ async function resolveStartupDailyMemoryPaths(params: {
   dailyMemoryDays: number;
   nowMs: number;
   timezone: string;
+  maxFileBytes: number;
+  readCache: Map<string, string | null>;
 }): Promise<string[]> {
-  const targetDays = buildStartupTargetDays(params);
-  return (
-    await listRecentDailyMemoryFiles({
-      memoryDir: path.join(params.workspaceDir, "memory"),
-      days: targetDays,
-      // Startup context should stay read-only even on the first reset/new turn.
-      persistIndex: false,
-    })
-  ).map((entry) => entry.relativePath);
+  const localDayCandidates = buildStartupLocalDayCandidates({
+    nowMs: params.nowMs,
+    timezone: params.timezone,
+    dailyMemoryDays: params.dailyMemoryDays,
+  });
+  const localToday = formatDateStamp(params.nowMs, params.timezone);
+  const localYesterday = shiftDateStampByCalendarDays(localToday, 1);
+  const utcToday = formatDateStamp(params.nowMs, "UTC");
+  const targetDays = [...localDayCandidates];
+  if (params.dailyMemoryDays === 1 && !targetDays.includes(localYesterday)) {
+    targetDays.push(localYesterday);
+  }
+  if (utcToday !== localToday && !targetDays.includes(utcToday)) {
+    targetDays.push(utcToday);
+  }
+  const currentLocalDay = localDayCandidates[0];
+  const entries = await listRecentDailyMemoryFiles({
+    memoryDir: path.join(params.workspaceDir, "memory"),
+    days: targetDays,
+    // Startup context should stay read-only even on the first reset/new turn.
+    persistIndex: false,
+  });
+  const summaryPriorityDays = [...new Set([currentLocalDay, localYesterday, utcToday])].filter(
+    (day) => Boolean(day) && targetDays.includes(day),
+  );
+  const sessionSummaryPaths = new Set<string>();
+  for (const day of summaryPriorityDays) {
+    const daySummaryPaths = await resolveStartupSessionSummaryPaths({
+      workspaceDir: params.workspaceDir,
+      entries,
+      day,
+      maxFileBytes: params.maxFileBytes,
+      readCache: params.readCache,
+    });
+    for (const relativePath of daySummaryPaths) {
+      sessionSummaryPaths.add(relativePath);
+    }
+  }
+  const pathsByDay = groupStartupPathsByDay({
+    entries,
+    prioritizedPaths: sessionSummaryPaths,
+  });
+  const selectedDays: string[] = [];
+  const existingLocalDays = localDayCandidates.filter(
+    (day) => (pathsByDay.get(day)?.length ?? 0) > 0,
+  );
+  const boundaryDay =
+    utcToday !== localToday &&
+    entries.some((entry) => entry.day === utcToday && sessionSummaryPaths.has(entry.relativePath))
+      ? utcToday
+      : null;
+
+  if (
+    currentLocalDay &&
+    (pathsByDay.get(currentLocalDay)?.length ?? 0) > 0 &&
+    (await hasReadableStartupMemoryPathForDay({
+      workspaceDir: params.workspaceDir,
+      relativePaths: pathsByDay.get(currentLocalDay) ?? [],
+      maxFileBytes: params.maxFileBytes,
+      readCache: params.readCache,
+    }))
+  ) {
+    selectedDays.push(currentLocalDay);
+  }
+  if (
+    params.dailyMemoryDays === 1 &&
+    !selectedDays.includes(localYesterday) &&
+    selectedDays.length === 0 &&
+    (await hasReadableStartupMemoryPathForDay({
+      workspaceDir: params.workspaceDir,
+      relativePaths: (pathsByDay.get(localYesterday) ?? []).filter((relativePath) =>
+        sessionSummaryPaths.has(relativePath),
+      ),
+      maxFileBytes: params.maxFileBytes,
+      readCache: params.readCache,
+    }))
+  ) {
+    selectedDays.push(localYesterday);
+  }
+  if (
+    boundaryDay &&
+    !selectedDays.includes(boundaryDay) &&
+    (await hasReadableStartupMemoryPathForDay({
+      workspaceDir: params.workspaceDir,
+      relativePaths: pathsByDay.get(boundaryDay) ?? [],
+      maxFileBytes: params.maxFileBytes,
+      readCache: params.readCache,
+    }))
+  ) {
+    selectedDays.push(boundaryDay);
+  }
+  for (const day of existingLocalDays) {
+    if (selectedDays.length >= params.dailyMemoryDays) {
+      break;
+    }
+    if (
+      !selectedDays.includes(day) &&
+      (await hasReadableStartupMemoryPathForDay({
+        workspaceDir: params.workspaceDir,
+        relativePaths: pathsByDay.get(day) ?? [],
+        maxFileBytes: params.maxFileBytes,
+        readCache: params.readCache,
+      }))
+    ) {
+      selectedDays.push(day);
+    }
+  }
+
+  // Read the first file for each selected day before extra same-day variants so
+  // UTC-boundary summaries are not starved by local-day variant fan-out.
+  return interleaveStartupPathsByDay({
+    orderedDays: selectedDays,
+    pathsByDay,
+  });
+}
+
+async function hasReadableStartupMemoryPathForDay(params: {
+  workspaceDir: string;
+  relativePaths: string[];
+  maxFileBytes: number;
+  readCache: Map<string, string | null>;
+}): Promise<boolean> {
+  for (const relativePath of params.relativePaths) {
+    const content = await readStartupMemoryFile({
+      workspaceDir: params.workspaceDir,
+      relativePath,
+      maxFileBytes: params.maxFileBytes,
+      readCache: params.readCache,
+    });
+    if (content?.trim()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function trimStartupMemoryContent(content: string, maxChars: number): string {
@@ -225,7 +408,12 @@ async function readStartupMemoryFile(params: {
   workspaceDir: string;
   relativePath: string;
   maxFileBytes: number;
+  readCache?: Map<string, string | null>;
 }): Promise<string | null> {
+  const cached = params.readCache?.get(params.relativePath);
+  if (cached !== undefined || params.readCache?.has(params.relativePath)) {
+    return cached ?? null;
+  }
   const absolutePath = path.join(params.workspaceDir, params.relativePath);
   const opened = await openBoundaryFile({
     absolutePath,
@@ -234,13 +422,41 @@ async function readStartupMemoryFile(params: {
     maxBytes: params.maxFileBytes,
   });
   if (!opened.ok) {
+    params.readCache?.set(params.relativePath, null);
     return null;
   }
   try {
-    return await readFromFd({ fd: opened.fd, maxFileBytes: params.maxFileBytes });
+    const content = await readFromFd({ fd: opened.fd, maxFileBytes: params.maxFileBytes });
+    params.readCache?.set(params.relativePath, content);
+    return content;
   } finally {
     await closeFd(opened.fd);
   }
+}
+
+async function resolveStartupSessionSummaryPaths(params: {
+  workspaceDir: string;
+  entries: DailyMemoryFileEntry[];
+  day?: string;
+  maxFileBytes: number;
+  readCache?: Map<string, string | null>;
+}): Promise<Set<string>> {
+  const sessionSummaryPaths = new Set<string>();
+  for (const entry of params.entries) {
+    if (params.day && entry.day !== params.day) {
+      continue;
+    }
+    const content = await readStartupMemoryFile({
+      workspaceDir: params.workspaceDir,
+      relativePath: entry.relativePath,
+      maxFileBytes: params.maxFileBytes,
+      readCache: params.readCache,
+    });
+    if (content && isSessionSummaryDailyMemory(content)) {
+      sessionSummaryPaths.add(entry.relativePath);
+    }
+  }
+  return sessionSummaryPaths;
 }
 
 export async function buildSessionStartupContextPrelude(params: {
@@ -251,11 +467,14 @@ export async function buildSessionStartupContextPrelude(params: {
   const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const limits = resolveStartupContextLimits(params.cfg);
+  const readCache = new Map<string, string | null>();
   const dailyPaths = await resolveStartupDailyMemoryPaths({
     workspaceDir: params.workspaceDir,
     dailyMemoryDays: limits.dailyMemoryDays,
     nowMs,
     timezone,
+    maxFileBytes: limits.maxFileBytes,
+    readCache,
   });
 
   const sections: string[] = [];
@@ -272,6 +491,7 @@ export async function buildSessionStartupContextPrelude(params: {
       workspaceDir: params.workspaceDir,
       relativePath,
       maxFileBytes: limits.maxFileBytes,
+      readCache,
     });
     if (!content?.trim()) {
       continue;

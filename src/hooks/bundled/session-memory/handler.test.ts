@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { SESSION_SUMMARY_DAILY_MEMORY_SENTINEL } from "../../../memory-host-sdk/runtime-files.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
@@ -482,6 +483,48 @@ describe("session-memory hook", () => {
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^2026-04-11-/);
     expect(memoryContent).toContain("# Session: 2026-04-11 19:30:00 America/Chicago");
+    expect(memoryContent).toContain(SESSION_SUMMARY_DAILY_MEMORY_SENTINEL);
+  });
+
+  it("keeps fallback timestamp slugs unique across DST fall-back repeats", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "dst-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "DST boundary note" },
+        { role: "assistant", content: "Persist both repeated local times" },
+      ]),
+    });
+
+    for (const timestamp of ["2026-11-01T06:30:00.000Z", "2026-11-01T07:30:00.000Z"]) {
+      await runNewWithPreviousSessionEntry({
+        tempDir,
+        cfg: {
+          agents: {
+            defaults: {
+              workspace: tempDir,
+              userTimezone: "America/Chicago",
+            },
+          },
+        } satisfies OpenClawConfig,
+        previousSessionEntry: {
+          sessionId: `dst-${timestamp}`,
+          sessionFile,
+        },
+        timestamp,
+      });
+    }
+
+    const files = (await fs.readdir(path.join(tempDir, "memory")))
+      .filter((file) => file.endsWith(".md"))
+      .toSorted();
+    expect(files).toHaveLength(2);
+    expect(files[0]).toMatch(/^2026-11-01-0130/);
+    expect(files[1]).toMatch(/^2026-11-01-0130/);
+    expect(files[0]).not.toBe(files[1]);
   });
 
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
@@ -518,6 +561,7 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
     expect(memoryContent).toContain("user: Remember this under Navi");
     expect(memoryContent).toContain("assistant: Stored in the bound workspace");
+    expect(memoryContent).toContain(SESSION_SUMMARY_DAILY_MEMORY_SENTINEL);
     expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
     await expect(fs.access(path.join(mainWorkspace, "memory"))).rejects.toThrow();
   });
