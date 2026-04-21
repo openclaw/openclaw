@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { quoteCmdScriptArg } from "./cmd-argv.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsage,
@@ -91,11 +90,25 @@ async function writeStartupFallbackEntry(env: Record<string, string>) {
   return startupEntryPath;
 }
 
-function expectStartupFallbackSpawn(env: Record<string, string>) {
-  expect(spawn).toHaveBeenCalledWith(
-    "cmd.exe",
-    ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
-    expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+function expectStartupFallbackSpawn() {
+  expect(spawn).toHaveBeenCalled();
+  const calls = spawn.mock.calls as unknown as Array<
+    [string, readonly string[], Record<string, unknown>]
+  >;
+  const lastCall = calls[calls.length - 1];
+  if (!lastCall) {
+    throw new Error("expected gateway launch spawn call");
+  }
+  const [executable, args, options] = lastCall;
+  expect(executable).not.toBe("cmd.exe");
+  expect(args).toEqual(expect.arrayContaining(["--port", "18789"]));
+  expect(options).toEqual(
+    expect.objectContaining({
+      detached: true,
+      env: expect.objectContaining({ OPENCLAW_GATEWAY_PORT: "18789" }),
+      stdio: "ignore",
+      windowsHide: true,
+    }),
   );
 }
 
@@ -197,11 +210,7 @@ describe("Windows startup fallback", () => {
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
       expect(startupScript).toContain('start "" /min cmd.exe /d /c');
       expect(startupScript).toContain("gateway.cmd");
-      expect(spawn).toHaveBeenCalledWith(
-        "cmd.exe",
-        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
-        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
-      );
+      expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
       expect(printed).toContain("Installed Windows login item");
     });
@@ -216,18 +225,33 @@ describe("Windows startup fallback", () => {
       await installGatewayScheduledTask(env);
 
       await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
-      expectStartupFallbackSpawn(env);
+      expectStartupFallbackSpawn();
     });
   });
 
-  it("launches the task script directly when schtasks /Run is accepted but never starts the task", async () => {
+  it("falls back to a Startup-folder launcher when schtasks availability is slow", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push(
+        { code: 124, stdout: "", stderr: "schtasks produced no output for 30000ms" },
+        { code: 124, stdout: "", stderr: "schtasks produced no output for 30000ms" },
+        { code: 124, stdout: "", stderr: "schtasks produced no output for 30000ms" },
+      );
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("launches through the Startup-style launcher when schtasks /Run is accepted but never starts the task", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
       addAcceptedRunNeverStartsResponses();
 
       await installGatewayScheduledTask(env);
 
-      expectStartupFallbackSpawn(env);
+      expectStartupFallbackSpawn();
     });
   });
 
@@ -373,6 +397,7 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: "", stderr: "" },
         { code: 1, stdout: "", stderr: "not found" },
       ]);
+      await writeGatewayScript(env);
       await writeStartupFallbackEntry(env);
       inspectPortUsage.mockResolvedValue({
         port: 18789,
@@ -386,7 +411,7 @@ describe("Windows startup fallback", () => {
         outcome: "completed",
       });
       expectGatewayTermination(5151);
-      expectStartupFallbackSpawn(env);
+      expectStartupFallbackSpawn();
     });
   });
 
@@ -417,7 +442,7 @@ describe("Windows startup fallback", () => {
         outcome: "completed",
       });
 
-      expectStartupFallbackSpawn(env);
+      expectStartupFallbackSpawn();
     });
   });
 

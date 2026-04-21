@@ -6,7 +6,15 @@ import {
 
 export { normalizeFastMode };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
 export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
 export type NoticeLevel = "off" | "on" | "full";
@@ -20,7 +28,7 @@ export type ThinkingCatalogEntry = {
   reasoning?: boolean;
 };
 
-const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high", "adaptive"];
+const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 const NO_THINKING_LEVELS: ThinkLevel[] = [...BASE_THINKING_LEVELS];
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
@@ -37,6 +45,9 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   const collapsed = key.replace(/[\s_-]+/g, "");
   if (collapsed === "adaptive" || collapsed === "auto") {
     return "adaptive";
+  }
+  if (collapsed === "max") {
+    return "max";
   }
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
@@ -56,9 +67,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-  ) {
+  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {
@@ -91,6 +100,10 @@ export function formatThinkingLevels(
 
 export function formatXHighModelHint(): string {
   return "provider models that advertise xhigh reasoning";
+}
+
+export function formatMaxModelHint(): string {
+  return "provider models that advertise max reasoning";
 }
 
 export function resolveThinkingDefaultForModel(params: {

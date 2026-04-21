@@ -8,10 +8,22 @@ type ThinkingProviderPlugin = {
   id: string;
   aliases?: string[];
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  supportsAdaptiveThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  supportsMaxThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
-  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  ) =>
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max"
+    | null
+    | undefined;
 };
 
 const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
@@ -59,6 +71,18 @@ export function resolveProviderXHighThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
   return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
+}
+
+export function resolveProviderAdaptiveThinking(
+  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
+) {
+  return resolveActiveThinkingProvider(params.provider)?.supportsAdaptiveThinking?.(params.context);
+}
+
+export function resolveProviderMaxThinking(
+  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
+) {
+  return resolveActiveThinkingProvider(params.provider)?.supportsMaxThinking?.(params.context);
 }
 
 export function resolveProviderDefaultThinkingLevel(

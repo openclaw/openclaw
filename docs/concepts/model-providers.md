@@ -43,6 +43,7 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
+  `supportsAdaptiveThinking`, `supportsMaxThinking`,
   `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
   `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, and
   `onModelSelected`.
@@ -133,6 +134,8 @@ Typical split:
   discovery and config merging
 - `isBinaryThinking`: provider owns binary on/off thinking UX
 - `supportsXHighThinking`: provider opts selected models into `xhigh`
+- `supportsAdaptiveThinking`: provider opts selected models into `adaptive`
+- `supportsMaxThinking`: provider opts selected models into `max`
 - `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
   model family
 - `applyConfigDefaults`: provider applies provider-specific global defaults
