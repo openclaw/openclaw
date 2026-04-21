@@ -256,6 +256,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
         [
           "gateway timeout after 3000ms",
           "Gateway target: wss://user:pass@gateway.example.com/socket?token=secret-token&keep=visible",
+          "Gateway fallback: (wss://fallback-user:fallback-pass@[bad-host/socket?token=fallback-secret&keep=visible)",
           "Source: env OPENCLAW_GATEWAY_URL",
         ].join("\n"),
       ),
@@ -280,9 +281,13 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(errors.join("\n")).not.toContain("user:pass");
     expect(errors.join("\n")).not.toContain("secret-token");
+    expect(errors.join("\n")).not.toContain("fallback-user:fallback-pass");
+    expect(errors.join("\n")).not.toContain("fallback-secret");
     expect(payload.error).toContain("Gateway target:");
     expect(payload.error).not.toContain("user:pass");
     expect(payload.error).not.toContain("secret-token");
+    expect(payload.error).not.toContain("fallback-user:fallback-pass");
+    expect(payload.error).not.toContain("fallback-secret");
     expect(payload).toEqual(
       expect.objectContaining({
         gatewayReachable: false,

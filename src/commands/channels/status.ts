@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../../plugins/channel-plugin-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { redactSensitiveUrlLikeString } from "../../shared/net/redact-sensitive-url.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import {
@@ -30,36 +31,9 @@ export type ChannelsStatusOptions = {
   timeout?: string;
 };
 
-const SENSITIVE_GATEWAY_URL_QUERY_KEYS = new Set([
-  "access_token",
-  "api_key",
-  "auth",
-  "key",
-  "password",
-  "secret",
-  "signature",
-  "token",
-]);
-
 function redactGatewayUrlSecretsInText(text: string): string {
   return text.replace(/\b(?:wss?|https?):\/\/[^\s"'<>]+/gi, (rawUrl) => {
-    try {
-      const url = new URL(rawUrl);
-      if (url.username) {
-        url.username = "redacted";
-      }
-      if (url.password) {
-        url.password = "redacted";
-      }
-      for (const key of url.searchParams.keys()) {
-        if (SENSITIVE_GATEWAY_URL_QUERY_KEYS.has(key.toLowerCase())) {
-          url.searchParams.set(key, "redacted");
-        }
-      }
-      return url.toString();
-    } catch {
-      return rawUrl;
-    }
+    return redactSensitiveUrlLikeString(rawUrl);
   });
 }
 
