@@ -607,6 +607,43 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("shows dreaming schedule defaults when frequency and timezone are omitted", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: true,
+            config: {
+              dreaming: {
+                enabled: true,
+                phases: {
+                  light: { enabled: true },
+                  deep: { enabled: false },
+                  rem: { enabled: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Dreaming: 0 3 * * * · light on · deep off · rem on"),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
