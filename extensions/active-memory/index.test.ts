@@ -1147,12 +1147,9 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
-  it("returns undefined instead of throwing when an unexpected error escapes the recall path", async () => {
-    runEmbeddedPiAgent.mockRejectedValueOnce(new Error("network reset"));
-    hoisted.updateSessionStore.mockRejectedValueOnce(new Error("store unavailable"));
-
+  it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
     const result = await hooks.before_prompt_build(
-      { prompt: "what should i eat? escape test", messages: [] },
+      { prompt: "what should i eat? escape test", messages: undefined as never },
       {
         agentId: "main",
         trigger: "user",
