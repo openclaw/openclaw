@@ -39,6 +39,7 @@ import {
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
+  resolveHumanDelayConfig,
 } from "./bot-message-dispatch.agent.runtime.js";
 import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
@@ -846,6 +847,7 @@ export const dispatchTelegramMessage = async ({
         dispatcherOptions: {
           ...replyPipeline,
           beforeDeliver: async (payload) => payload,
+          humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload, info) => {
             if (isDispatchSuperseded()) {
               return;
