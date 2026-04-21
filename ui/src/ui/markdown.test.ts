@@ -320,8 +320,9 @@ describe("toSanitizedMarkdownHtml", () => {
     it("preserves special characters in data-code attribute", () => {
       const code = '<div>hello & world</div>';
       const html = toSanitizedMarkdownHtml("```\n" + code + "\n```");
-      // data-code should contain the original code, not HTML-escaped
-      expect(html).toContain('data-code="' + code + '"');
+      // After escapeHtmlAttribute escapes &, <, >, " and DOMPurify serializes
+      // via innerHTML, the attribute value is HTML-encoded in the output string
+      expect(html).toContain('data-code="&lt;div&gt;hello &amp; world&lt;/div&gt;"');
     });
 
     it("collapses JSON code blocks", () => {

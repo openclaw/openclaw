@@ -146,7 +146,7 @@ function escapeHtml(value: string): string {
 }
 
 function escapeHtmlAttribute(value: string): string {
-  return value.replace(/"/g, "&quot;");
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 function normalizeMarkdownImageLabel(text?: string | null): string {
