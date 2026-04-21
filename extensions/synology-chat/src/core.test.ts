@@ -33,7 +33,9 @@ const synologyChatSetupPlugin = {
 const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatSetupPlugin);
 const originalEnv = { ...process.env };
 
-function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
+function createSynologySetupPrompter(
+  params: { allowedUserIds?: string; publicOrigin?: string } = {},
+) {
   return createTestWizardPrompter({
     text: vi.fn(async ({ message }: { message: string }) => {
       if (message === "Enter Synology Chat outgoing webhook token") {
@@ -41,6 +43,9 @@ function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
       }
       if (message === "Incoming webhook URL") {
         return "https://nas.example.com/webapi/entry.cgi?token=incoming";
+      }
+      if (message === "Public gateway origin for hosted media (optional)") {
+        return params.publicOrigin ?? "";
       }
       if (message === "Outgoing webhook path (optional)") {
         return "";
@@ -72,6 +77,7 @@ describe("synology-chat core", () => {
       { type?: string }
     >;
 
+    expect(properties.publicOrigin?.type).toBe("string");
     expect(properties.dangerouslyAllowNameMatching?.type).toBe("boolean");
   });
 
@@ -136,6 +142,23 @@ describe("synology-chat core", () => {
 
     expect(result.cfg.channels?.["synology-chat"]?.dmPolicy).toBe("allowlist");
     expect(result.cfg.channels?.["synology-chat"]?.allowedUserIds).toEqual(["123456", "789012"]);
+  });
+
+  it("records publicOrigin through the supported setup flow", async () => {
+    const prompter = createSynologySetupPrompter({
+      publicOrigin: "https://gateway.example.com",
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: synologyChatConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.cfg.channels?.["synology-chat"]?.publicOrigin).toBe(
+      "https://gateway.example.com",
+    );
   });
 });
 
