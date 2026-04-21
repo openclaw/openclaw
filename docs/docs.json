@@ -1267,6 +1267,7 @@
                   "providers/deepseek",
                   "providers/fal",
                   "providers/fireworks",
+                  "providers/friendliai",
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
