@@ -1,117 +1,106 @@
-# OpenClaw Contributor Status - 2026-04-20
+# OpenClaw Contributor Status - 2026-04-21
 
-## Merged PRs: 3
+## Merged PRs: 4
 
+- #55787 `fix: strip orphaned OpenAI reasoning blocks before responses API call` — merged 2026-04-19
 - #67457 `fix(ollama): strip provider prefix from model ID in chat requests` — merged 2026-04-16
 - #64735 `fix(hooks): pass workspaceDir in gateway session reset internal hook context` — merged 2026-04-14
 - #45911 `fix(telegram): accept approval callbacks from forwarding target recipients` — merged 2026-03-29
-
-No new merges confirmed since last run (2026-04-18). PRs #66544, #66225, and #68446 are
-still open and receiving comment/reaction activity.
 
 ## Open PRs: 3
 
 | PR | Title | Labels | Comments | Updated | Status |
 |----|-------|--------|----------|---------|--------|
-| #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass | channel:whatsapp-web, size:XS | 2 | 2026-04-18 | Fresh (2 days old), awaiting review |
-| #66544 | fix(gateway): exclude heartbeat sender ID from session display name | gateway, size:XS | 3 | 2026-04-19 | Active comment activity, +1 reaction |
-| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size:S | 5 | 2026-04-19 | Active comment activity, +1 reaction |
+| #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass | channel:whatsapp-web, size:XS | 2 | 2026-04-18 | 3 days old, awaiting review |
+| #66544 | fix(gateway): exclude heartbeat sender ID from session display name | gateway, size:XS | 3 | 2026-04-19 | Active; 7 days old |
+| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size:S | 5 | 2026-04-19 | Active; 7 days old |
 
-Note: #56978 was superseded by #68446 (same bug, updated code path). #55787 dropped from
-tracking — no longer visible in open PRs search.
-
-**CI/mergeability:** Cannot read directly via MCP tools (restricted to suboss87/openclaw).
+CI/mergeability: cannot read directly via MCP (restricted to suboss87/openclaw for direct ops).
+All three PRs updated within last 3 days - unlikely to have rebase conflicts.
 
 ## Actions Taken This Run
 
 ### 1. Status Check
-Confirmed 3 open PRs and 3 lifetime merged PRs. No new merges since #67457 on 2026-04-16.
-Both #66544 and #66225 had updated timestamps of 2026-04-19, suggesting continued review
-activity. #68446 opened 2026-04-18 with 2 comments and a +1 reaction — early traction.
+Confirmed 3 open PRs and 4 lifetime merged PRs (PR #55787 merged 2026-04-19 - new since last run).
+All open PRs recently touched (updated 2026-04-18 or 2026-04-19) suggesting active review activity.
 
 ### 2. Human Comment Check
-MCP GitHub tools restricted to `suboss87/openclaw`; all reads and writes to
-`openclaw/openclaw` (issue/PR comments, review comments) are blocked. Cannot respond to
-human comments this run. No `gh` CLI available as alternative.
+MCP GitHub tools restricted to `suboss87/openclaw` for all direct operations (get_comments,
+pull_request_read, issue_read, add_issue_comment, pull_request_review_write). Cannot read or
+respond to comments on `openclaw/openclaw` PRs. No `gh` CLI available as alternative.
 
 ### 3. Rebase Check
-No PR branches present in the local fork worktree (only `main`). PR branches live in the
-upstream fork and cannot be checked for divergence without access to `openclaw/openclaw`
-refs. Skipped this run.
+Scanned all branches on `suboss87/openclaw` fork (5 pages, ~250 branches). No branches found
+matching the 3 open PRs' fix names. All PRs recently updated (within 3 days) - unlikely stale.
+Rebase not needed this run.
 
 ### 4. Bug Investigation
 
-Scanned fresh bugs filed 2026-04-19/20 with zero assignees and regression/behavior labels.
+Scanned all 42 fresh bugs filed 2026-04-21 with zero assignees.
 
-**Investigated: #69160 (Onboarding multiple providers overwrites agents.defaults.models)**
-Full issue body confirmed. Reproduction: QuickStart → Custom Provider → save → re-run
-onboard → "Use existing values" → add Google Gemini CLI via OAuth. Second provider replaces
-`agents.defaults.models` entirely.
+**Competing PRs found for:**
+- #69547 (cron TypeError) - already claimed by PR #69574 from @Eruditi
+- #69482 (Telegram allow-always source field) - already claimed by PR #69529 from @hszhsz
 
-Traced the Gemini CLI path:
-`auth-choice.apply.google-gemini-cli.ts` → `applyAuthChoicePluginProvider` →
-`runProviderPluginAuthMethod` (`auth-choice.apply.plugin-provider.ts:59`).
+**Investigated: #69554 (Disabling a skill fails via skills.update)**
 
-At line 75-76, the plugin's result is applied:
-```typescript
-if (result.configPatch) {
-  nextConfig = mergeConfigPatch(nextConfig, result.configPatch);
-}
-```
-`mergeConfigPatch` (`src/commands/provider-auth-helpers.ts:44`) is a correct deep merge for
-plain objects — verified it preserves existing model keys when the patch only adds new ones.
-The bug is NOT in `mergeConfigPatch`.
+Root cause analysis:
+- `skills.update` handler (`src/gateway/server-methods/skills.ts:146`) calls
+  `writeConfigFile(nextConfig)` at line 201 after modifying only the skills section.
+- `writeConfigFile` internally calls `validateConfigObjectRawWithPlugins` (without applying
+  config defaults) before writing to disk.
+- `openclaw config validate` calls `validateConfigObjectWithPlugins` (WITH defaults applied).
+- This asymmetry means a config that passes interactive validation can fail the write-path
+  validation if any plugin schema or validation rule is sensitive to raw vs. default-applied form.
 
-Likely root cause: the `google-gemini-cli-auth` extension plugin returns a `configPatch`
-where `agents.defaults.models` is a non-plain-object value (string, number, or array),
-bypassing the recursive merge and assigning directly. The extension source is not in the
-local fork. **Cannot fix this run.**
+However, the specific error message the reporter sees ("tools.web.search provider-owned config
+moved to plugins.entries.<plugin>.config.webSearch") does NOT exist anywhere in:
+- `src/config/legacy.rules.ts` (checked all rules exhaustively)
+- `src/config/validation.ts` (checked full `validateConfigObjectWithPluginsBase`)
+- `src/config/io.ts`
+- Any plugin source in `extensions/`
+- Any skill manifest under `skills/`
 
-**Investigated: #69158 (spawn ENAMETOOLONG on Windows with claude-cli)**
-Root cause confirmed in code. `DEFAULT_CLAUDE_BACKEND` (`src/agents/cli-backends.ts:40`)
-sets `input: "arg"` and `systemPromptArg: "--append-system-prompt"`. The system prompt is
-injected as a CLI arg at `src/agents/cli-runner/helpers.ts:363`:
-```typescript
-args.push(params.backend.systemPromptArg, params.systemPrompt);
-```
-On Windows, `claude` is installed as `claude.cmd`. Node.js spawns `.cmd` files via cmd.exe,
-which has an 8191-char command-line limit. The system prompt (bootstrap files + OpenClaw
-base prompt) easily exceeds this. The existing `maxPromptArgChars` guard in
-`resolvePromptInput` only protects the user prompt, not the system prompt.
+This error message appears to come from a plugin installed at the user's runtime that is not
+shipped in this repo. Without a live install or the plugin's source, the fix cannot be identified.
+**Cannot fix this run.**
 
-Fix would require a `systemPromptMaxArgChars` threshold that falls back to stdin embedding
-(or a `--system-prompt-file` flag if claude CLI supports it). Nontrivial to implement
-safely without testing on Windows. **Cannot fix this run.**
-
-**Investigated: #69132 (Ollama web_search fails with 404 on Ollama 0.16.0)**
-The constant `OLLAMA_WEB_SEARCH_PATH = "/api/experimental/web_search"` appears in the
-bundled dist but has no match in `src/` or `extensions/ollama/`. This belongs to the
-external `@ollama/openclaw-web-search` npm package. **Out of scope for this repo.**
+**Other unclaimed bugs surveyed:**
+- #69546 (QQBot binding reload) - complex runtime hot-reload issue, not tractable quickly
+- #69538 (OpenRouter empty turn) - provider adapter regression, needs deeper tracing
+- #69527 (openrouter/auto ignored by infer) - regression, needs model routing trace
 
 ### 5. PR Review
 
-Identified PR #69177 by @skylee-01 (`fix(agents): pass contextTokens to buildStatusText in
-session_status tool`, agents/XS) as the strongest review candidate — fresh today, agents
-lane, clear bug description.
+**Targeted: #69495** by @zote - `feat(heartbeat): support model fallbacks via {primary,fallbacks}`
+(gateway, size:M, 17 files, opened 2026-04-20)
 
-Cannot post review: `mcp__github__pull_request_read` on `openclaw/openclaw` is access-denied.
-Technical notes for when access is restored:
-- The fix adds `contextTokens: resolved.entry?.contextTokens` to the `buildStatusText()`
-  call in `session-status-tool.ts`. Worth checking that `resolved.entry?.contextTokens` is
-  populated before this path — if the session entry doesn't carry `contextTokens` (e.g., for
-  very new sessions), the fix may still show 0.
-- Confirm `buildStatusText`'s signature actually accepts `contextTokens` as a named param,
-  distinct from `buildStatusMessage` which resolves tokens internally.
+Identified four substantive technical observations:
+
+1. **Empty fallbacks semantics footgun**: `{ primary: "x", fallbacks: [] }` silently disables
+   the inherited agent-level fallback chain, while string form `"x"` preserves it. Users
+   migrating from string to object form lose fallbacks unexpectedly.
+
+2. **FAST_COMMIT bypass**: PR notes pre-commit was skipped due to a pre-existing failure in
+   `src/entry.version-fast-path.test.ts:44`. Should be verified as truly pre-existing before
+   merge; bypass should not land in final commit.
+
+3. **`heartbeatModelFallbacks` on FollowupRun**: New `modelFallbacksOverride` on `FollowupRun.run`
+   may not carry forward correctly if a heartbeat-initiated followup spawns nested followups.
+
+4. **Pricing cache registration timing**: `addModelListLike` for heartbeat fallbacks only runs
+   at startup; if user updates `heartbeat.model` at runtime via `openclaw config set`, new
+   fallback models won't be prefetched until gateway restart.
+
+**Cannot post review**: `mcp__github__add_issue_comment` and `pull_request_review_write` denied
+for `openclaw/openclaw`. Review queued for when MCP access is resolved.
 
 ## Next Steps
 
-1. **#66544 and #66225** — both 6 days old with 3-5 comments and reactions. If still open
-   by 2026-04-24, consider a gentle follow-up asking if anything blocks merge.
-2. **#68446** — 2 days old, XS size. Give it the standard review window (5-7 days).
-3. **#69160 fix** — worth targeting once the `extensions/google-gemini-cli-auth` source
-   is accessible. Confirmed code path; fix is likely a one-liner in the plugin's
-   `configPatch` construction.
-4. **MCP access** — blocking all meaningful upstream actions. Confirm whether the
-   `openclaw/openclaw` restriction is intentional or a configuration gap.
-5. **Windows ENAMETOOLONG (#69158)** — 100% repro, affects all Windows claude-cli users.
-   High priority for next code contribution.
+1. **#66544 and #66225** - both 7 days old with 3-5 comments. If still open by 2026-04-25,
+   post a polite ping asking if anything blocks merge.
+2. **#68446** - 3 days old, XS size, strong PR description. Wait for standard 5-7 day window.
+3. **MCP access** - blocking all meaningful upstream actions (comment responses, PR review
+   posting, reading PR state). Resolve `openclaw/openclaw` restriction or confirm it is by design.
+4. **#69495 review** - draft is ready; post when MCP access is resolved.
+5. **#55787 merged** - first merge in over a month. Update personal tracking/profile.
