@@ -73,7 +73,10 @@ export function sanitizeMediaDisplayName(mediaSource: string): string {
   const normalized = mediaSource.replace(/\\/g, "/");
   // Strip URL query/fragment to avoid leaking signed tokens or credentials
   const withoutParams = normalized.replace(/[?#].*$/, "");
-  return path.basename(withoutParams) || mediaSource;
+  const basename = path.basename(withoutParams) || mediaSource;
+  // Escape backticks, newlines, and carriage returns so the display name
+  // cannot break out of Markdown code spans in formatDroppedMediaNotice.
+  return basename.replace(/[`\n\r]/g, "_");
 }
 
 /** Derive a reason code from the error thrown during media normalization. */
