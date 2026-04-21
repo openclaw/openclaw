@@ -433,7 +433,7 @@ export function redactExecApprovalsForTransport(file: ExecApprovalsFile): ExecAp
           agentId,
           {
             ...agent,
-            allowlist: agent.allowlist?.map(({ source: _source, ...entry }) => entry),
+            allowlist: agent.allowlist?.map((entry) => ({ ...entry })),
           },
         ]),
       )

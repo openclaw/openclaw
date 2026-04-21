@@ -279,7 +279,7 @@ describe("exec approvals store helpers", () => {
     ).not.toHaveProperty("commandText");
   });
 
-  it("redacts internal allowlist metadata from transport payloads", () => {
+  it("preserves durable allowlist metadata while redacting socket tokens", () => {
     const redacted = redactExecApprovalsForTransport({
       version: 1,
       socket: { path: " ~/.openclaw/exec-approvals.sock ", token: "secret-token" },
@@ -310,6 +310,7 @@ describe("exec approvals store helpers", () => {
               id: "entry-1",
               pattern: "/usr/bin/python3",
               argPattern: "^script\\.py\\x00$",
+              source: "allow-always",
               lastUsedAt: 321_000,
               lastUsedCommand: "python3 script.py",
               lastResolvedPath: "/opt/homebrew/bin/python3",
