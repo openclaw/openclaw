@@ -63,7 +63,7 @@ jobs:
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -329,7 +329,7 @@ jobs:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -407,7 +407,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -464,12 +464,52 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
@@ -524,12 +564,52 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -572,12 +652,52 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -635,12 +755,52 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -663,12 +823,52 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_extensions_matrix) }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -716,12 +916,52 @@ jobs:
 
       - name: Checkout
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
@@ -800,12 +1040,52 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -884,12 +1164,52 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_dist_matrix) }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1013,12 +1333,52 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1057,12 +1417,52 @@ jobs:
             task: strict-smoke
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1152,12 +1552,52 @@ jobs:
             group: runtime-topology-architecture
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1274,12 +1714,52 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1330,12 +1810,52 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 120s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1354,7 +1874,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
           submodules: false
@@ -1681,7 +2201,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
           submodules: false

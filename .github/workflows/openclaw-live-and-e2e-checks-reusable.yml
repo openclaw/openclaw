@@ -159,7 +159,7 @@ jobs:
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout selected ref
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
@@ -219,7 +219,7 @@ jobs:
       OPENCLAW_LIVE_TEST: "1"
     steps:
       - name: Checkout selected ref
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
@@ -255,7 +255,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
@@ -300,7 +300,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "1"
     steps:
       - name: Checkout selected ref
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
@@ -451,7 +451,7 @@ jobs:
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
     steps:
       - name: Checkout selected ref
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
@@ -593,7 +593,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
