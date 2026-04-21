@@ -53,6 +53,7 @@ const createChannelReplyPipeline = vi.hoisted(() =>
     responsePrefix: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),
     onModelSelected: () => undefined,
+    onContextUsage: () => undefined,
   })),
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
@@ -224,6 +225,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       responsePrefix: undefined,
       responsePrefixContextProvider: () => ({ identityName: undefined }),
       onModelSelected: () => undefined,
+      onContextUsage: () => undefined,
     });
     wasSentByBot.mockReturnValue(false);
     resolveStorePath.mockReturnValue("/tmp/sessions.json");

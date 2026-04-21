@@ -527,6 +527,18 @@ describe("resolveResponsePrefixTemplate", () => {
         expected: "[OpenClaw]",
       },
       {
+        name: "context",
+        template: "ctx:{context}",
+        values: { context: "15k" },
+        expected: "ctx:15k",
+      },
+      {
+        name: "contextPercent",
+        template: "usage:{contextPercent}%",
+        values: { contextPercent: "75" },
+        expected: "usage:75%",
+      },
+      {
         name: "case-insensitive variables",
         template: "[{MODEL} | {ThinkingLevel}]",
         values: { model: "gpt-5.4", thinkingLevel: "low" },

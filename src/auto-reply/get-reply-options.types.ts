@@ -17,6 +17,14 @@ export type ModelSelectedContext = {
   thinkLevel: string | undefined;
 };
 
+/** Context passed to onContextUsage callback after inference completes. */
+export type ContextUsageContext = {
+  /** Tokens consumed by the last inference call (approximates context-window usage). */
+  tokens?: number;
+  /** Total tokens available in the active model's context window, if known. */
+  contextWindowTokens?: number;
+};
+
 export type TypingPolicy =
   | "auto"
   | "user_message"
@@ -137,6 +145,9 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Called once inference usage data is available.
+   * Use this to populate `{context}`/`{contextPercent}` in responsePrefix templates. */
+  onContextUsage?: (ctx: ContextUsageContext) => void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

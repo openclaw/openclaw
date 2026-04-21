@@ -11,6 +11,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { resolveContextWindowInfo } from "../../agents/context-window-guard.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -1273,6 +1274,31 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+
+      // Surface token usage so responsePrefix templates can interpolate
+      // `{context}` / `{contextPercent}`. lastCallUsage reflects the final
+      // API call's context size (not the accumulated tool-loop usage).
+      const lastCallUsage = runResult?.meta?.agentMeta?.lastCallUsage;
+      if (lastCallUsage && params.opts?.onContextUsage) {
+        const tokens =
+          typeof lastCallUsage.total === "number" && lastCallUsage.total > 0
+            ? lastCallUsage.total
+            : (lastCallUsage.input ?? 0) +
+              (lastCallUsage.cacheRead ?? 0) +
+              (lastCallUsage.cacheWrite ?? 0);
+        const contextWindowInfo = resolveContextWindowInfo({
+          cfg: runtimeConfig,
+          provider: fallbackProvider ?? "",
+          modelId: fallbackModel ?? "",
+          defaultTokens: 0,
+        });
+        const contextWindowTokens =
+          contextWindowInfo.source === "default" ? undefined : contextWindowInfo.tokens;
+        params.opts.onContextUsage({
+          tokens: tokens > 0 ? tokens : undefined,
+          contextWindowTokens,
+        });
+      }
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: attempt.provider,
