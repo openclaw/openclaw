@@ -1260,6 +1260,7 @@
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
+    "check:no-unjustified-exec": "node scripts/check-no-unjustified-exec.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:test-types": "pnpm tsgo:test",

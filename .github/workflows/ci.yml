@@ -1648,6 +1648,7 @@ jobs:
               run_check "extension-plugin-sdk-internal-boundary" pnpm run lint:extensions:no-plugin-sdk-internal
               run_check "extension-relative-outside-package-boundary" pnpm run lint:extensions:no-relative-outside-package
               run_check "lint:ui:no-raw-window-open" pnpm lint:ui:no-raw-window-open
+              run_check "check:no-unjustified-exec" pnpm check:no-unjustified-exec
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
