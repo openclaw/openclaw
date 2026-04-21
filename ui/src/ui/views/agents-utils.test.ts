@@ -127,6 +127,14 @@ describe("resolveAgentAvatarUrl", () => {
     ).toBe("/avatar/main");
   });
 
+  it("ignores remote http avatars so the control UI falls back to a local badge", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "https://example.com/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for initials or emoji avatar values without a URL", () => {
     expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
     expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
