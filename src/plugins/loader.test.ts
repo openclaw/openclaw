@@ -429,13 +429,22 @@ function expectPluginSourcePrecedence(
   },
 ) {
   const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
-  const loaded = entries.find((entry) => entry.status === "loaded");
-  const overridden = entries.find((entry) => entry.status === "disabled");
+  expect(entries, scenario.label).toHaveLength(1);
+  const loaded = entries[0];
   expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
-  expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
-  if (scenario.expectedDisabledError) {
-    expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
-  }
+  expect(loaded?.status, scenario.label).toBe("loaded");
+  const expectedWarning =
+    scenario.expectedDisabledError ??
+    `${scenario.expectedDisabledOrigin} plugin will be overridden by ${scenario.expectedLoadedOrigin} plugin`;
+  expect(
+    registry.diagnostics.some(
+      (diag) =>
+        diag.level === "warn" &&
+        diag.pluginId === scenario.pluginId &&
+        diag.message.includes(expectedWarning),
+    ),
+    scenario.label,
+  ).toBe(true);
 }
 
 function expectPluginOriginAndStatus(params: {
@@ -908,7 +917,7 @@ module.exports = {
       },
       bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
         installedSpecs.push(...missingSpecs);
-        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(bundledDir));
+        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
         fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
           recursive: true,
         });
@@ -1021,7 +1030,7 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "openai")?.status).toBe("loaded");
   });
 
-  it("retains earlier bundled runtime deps across sequential repairs", () => {
+  it("installs bundled runtime deps into each plugin root", () => {
     const bundledDir = makeTempDir();
     const alpha = writePlugin({
       id: "alpha",
@@ -1101,7 +1110,7 @@ module.exports = {
       },
       {
         missingSpecs: ["beta-runtime@1.0.0"],
-        installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"],
+        installSpecs: ["beta-runtime@1.0.0"],
       },
     ]);
   });
@@ -2522,6 +2531,87 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
+      expectedArtifacts,
+    );
+  });
+
+  it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const absolutePath = path.join(workspaceDir, "MEMORY.md");
+    fs.writeFileSync(absolutePath, "# Memory\n");
+    const memoryPlugin = writePlugin({
+      id: "capability-survives-memory",
+      filename: "capability-survives-memory.cjs",
+      body: `module.exports = {
+        id: "capability-survives-memory",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "memory-root",
+                  workspaceDir: ${JSON.stringify(workspaceDir)},
+                  relativePath: "MEMORY.md",
+                  absolutePath: ${JSON.stringify(absolutePath)},
+                  agentIds: ["main"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+        },
+      };`,
+    });
+    const sidecarPlugin = writePlugin({
+      id: "capability-survives-sidecar",
+      filename: "capability-survives-sidecar.cjs",
+      body: `module.exports = {
+        id: "capability-survives-sidecar",
+        register() {},
+      };`,
+    });
+
+    const activateConfig = {
+      plugins: {
+        load: { paths: [memoryPlugin.file, sidecarPlugin.file] },
+        allow: ["capability-survives-memory", "capability-survives-sidecar"],
+        slots: { memory: "capability-survives-memory" },
+      },
+    };
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: memoryPlugin.dir,
+      config: activateConfig,
+    });
+
+    const expectedArtifacts = [
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath,
+        agentIds: ["main"],
+        contentType: "markdown" as const,
+      },
+    ];
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
+      expectedArtifacts,
+    );
+
+    // Simulate what resolvePluginWebSearchProviders and similar read-only paths do:
+    // load plugins again with activate:false. Each per-plugin snapshot/rollback must
+    // preserve the previously registered memory capability.
+    loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: memoryPlugin.dir,
+      config: activateConfig,
+    });
+
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
       expectedArtifacts,
     );

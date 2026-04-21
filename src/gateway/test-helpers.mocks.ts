@@ -46,10 +46,6 @@ export {
   testTailscaleWhois,
 };
 
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
-
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
@@ -262,12 +258,6 @@ vi.mock("../commands/health.js", () => ({
 }));
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
-}));
-vi.mock(buildBundledPluginModuleId("whatsapp", "runtime-api.js"), () => ({
-  sendMessageWhatsApp: (...args: unknown[]) =>
-    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-  sendPollWhatsApp: (...args: unknown[]) =>
-    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 vi.mock("../channels/web/index.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/web/index.js")>(

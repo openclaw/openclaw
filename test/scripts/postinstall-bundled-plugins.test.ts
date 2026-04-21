@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createBundledRuntimeDependencyInstallArgs,
+  createBundledRuntimeDependencyInstallEnv,
   createNestedNpmInstallEnv,
+  isDirectPostinstallInvocation,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
@@ -47,14 +50,7 @@ async function writePluginPackage(
 
 describe("bundled plugin postinstall", () => {
   function createNpmInstallArgs(...packages: string[]) {
-    return [
-      "install",
-      "--omit=dev",
-      "--no-save",
-      "--package-lock=false",
-      "--legacy-peer-deps",
-      ...packages,
-    ];
+    return createBundledRuntimeDependencyInstallArgs(packages);
   }
 
   function createBareNpmRunner(packages: string[]) {
@@ -86,6 +82,20 @@ describe("bundled plugin postinstall", () => {
       windowsVerbatimArguments: undefined,
     });
   }
+
+  it("recognizes direct invocation through symlinked temp prefixes", () => {
+    const realpathSync = vi.fn((value: string) =>
+      value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
+    );
+
+    expect(
+      isDirectPostinstallInvocation({
+        entryPath: "/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        modulePath: "/private/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        realpathSync,
+      }),
+    ).toBe(true);
+  });
 
   async function writeDiscordDaveyOptionalDependencyFixture(
     extensionsDir: string,
@@ -119,6 +129,25 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toEqual({
       HOME: "/tmp/home",
+    });
+  });
+
+  it("uses package-manager-neutral runtime install args with npm config env", () => {
+    expect(createBundledRuntimeDependencyInstallArgs(["acpx@0.4.1"])).toEqual([
+      "install",
+      "--ignore-scripts",
+      "acpx@0.4.1",
+    ]);
+    expect(
+      createBundledRuntimeDependencyInstallEnv({
+        HOME: "/tmp/home",
+        npm_config_prefix: "/opt/homebrew",
+      }),
+    ).toEqual({
+      HOME: "/tmp/home",
+      npm_config_legacy_peer_deps: "true",
+      npm_config_package_lock: "false",
+      npm_config_save: "false",
     });
   });
 

@@ -1,4 +1,3 @@
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,29 +5,8 @@ import {
   listWhatsAppDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
 
-type DirectoryListFn = (params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  query?: string | null;
-  limit?: number | null;
-}) => Promise<ChannelDirectoryEntry[]>;
-
-async function listDirectoryEntriesWithDefaults(listFn: DirectoryListFn, cfg: OpenClawConfig) {
-  return await listFn({
-    cfg,
-    accountId: "default",
-    query: null,
-    limit: null,
-  });
-}
-
-async function expectDirectoryIds(
-  listFn: DirectoryListFn,
-  cfg: OpenClawConfig,
-  expected: string[],
-) {
-  const entries = await listDirectoryEntriesWithDefaults(listFn, cfg);
-  expect(entries.map((entry) => entry.id)).toEqual(expected);
+function ids(entries: Array<{ id: string }>) {
+  return entries.map((entry) => entry.id);
 }
 
 describe("WhatsApp directory contract", () => {
@@ -42,8 +20,20 @@ describe("WhatsApp directory contract", () => {
       },
     } as unknown as OpenClawConfig;
 
-    await expectDirectoryIds(listWhatsAppDirectoryPeersFromConfig, cfg, ["+15550000000"]);
-    await expectDirectoryIds(listWhatsAppDirectoryGroupsFromConfig, cfg, ["999@g.us"]);
+    const peers = await listWhatsAppDirectoryPeersFromConfig({
+      cfg,
+      accountId: "default",
+      query: null,
+      limit: null,
+    });
+    const groups = await listWhatsAppDirectoryGroupsFromConfig({
+      cfg,
+      accountId: "default",
+      query: null,
+      limit: null,
+    });
+    expect(ids(peers)).toEqual(["+15550000000"]);
+    expect(ids(groups)).toEqual(["999@g.us"]);
   });
 
   it("applies query and limit filtering for config-backed directories", async () => {
@@ -61,6 +51,6 @@ describe("WhatsApp directory contract", () => {
       query: "@g.us",
       limit: 1,
     });
-    expect(groups.map((entry) => entry.id)).toEqual(["111@g.us"]);
+    expect(ids(groups)).toEqual(["111@g.us"]);
   });
 });

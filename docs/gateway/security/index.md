@@ -710,6 +710,21 @@ tool calls. Reduce the blast radius by:
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
+### Self-hosted LLM backends
+
+OpenAI-compatible self-hosted backends such as vLLM, SGLang, TGI, LM Studio,
+or custom Hugging Face tokenizer stacks can differ from hosted providers in how
+chat-template special tokens are handled. If a backend tokenizes literal strings
+such as `<|im_start|>`, `<|start_header_id|>`, or `<start_of_turn>` as
+structural chat-template tokens inside user content, untrusted text can try to
+forge role boundaries at the tokenizer layer.
+
+OpenClaw strips common model-family special-token literals from wrapped
+external content before dispatching it to the model. Keep external-content
+wrapping enabled, and prefer backend settings that split or escape special
+tokens in user-provided content when available. Hosted providers such as OpenAI
+and Anthropic already apply their own request-side sanitization.
+
 ### Model strength (security note)
 
 Prompt injection resistance is **not** uniform across model tiers. Smaller/cheaper models are generally more susceptible to tool misuse and instruction hijacking, especially under adversarial prompts.

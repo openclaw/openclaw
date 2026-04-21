@@ -39,6 +39,11 @@ When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
+  `openclaw models list --provider moonshot --json`, then run an isolated
+  `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`
+  against `moonshot/kimi-k2.6`. Verify the JSON reports Moonshot/K2.6 and the
+  assistant transcript stores normalized `usage.cost`.
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
 
@@ -71,6 +76,12 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
   - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm test:docker:bundled-channel-deps`
+  - Packs and installs the current OpenClaw build in Docker, starts the Gateway
+    with OpenAI configured, then enables Telegram and Discord via config edits.
+  - Verifies the first Gateway restart installs each bundled channel plugin's
+    runtime dependencies on demand, and a second restart does not reinstall
+    dependencies that were already activated.
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.

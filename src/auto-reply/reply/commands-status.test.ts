@@ -444,7 +444,7 @@ describe("buildStatusReply subagent summary", () => {
         sessionKey: "agent:main:main",
         parentSessionKey: "agent:main:main",
         sessionScope: "per-sender",
-        statusChannel: "whatsapp",
+        statusChannel: "mobilechat",
         provider: "anthropic",
         model: "claude-opus-4-5",
         contextTokens: 32_000,

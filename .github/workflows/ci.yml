@@ -489,7 +489,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -589,7 +589,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -677,7 +677,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -736,6 +736,10 @@ jobs:
         env:
           SHARD_RESULT: ${{ needs.checks-fast-channel-contracts-shard.result }}
         run: |
+          if [ "$SHARD_RESULT" = "cancelled" ]; then
+            echo "Channel contract shards were cancelled, usually because a newer commit superseded this run." >&2
+            exit 1
+          fi
           if [ "$SHARD_RESULT" != "success" ]; then
             echo "Channel contract shards failed: $SHARD_RESULT" >&2
             exit 1
@@ -776,7 +780,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -844,7 +848,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -937,7 +941,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1061,7 +1065,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1185,7 +1189,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1354,7 +1358,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1438,7 +1442,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1573,7 +1577,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1735,7 +1739,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1831,7 +1835,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1895,8 +1899,8 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_windows == 'true'
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-32vcpu-windows-2025' || 'windows-2025' }}
     timeout-minutes: 60
     env:
@@ -1976,20 +1980,6 @@ jobs:
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Download dist artifact
-        if: matrix.task == 'test'
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Download A2UI bundle artifact
-        if: matrix.task == 'test'
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
-
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
@@ -2014,7 +2004,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-latest' || 'macos-latest' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-latest' || 'macos-latest' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

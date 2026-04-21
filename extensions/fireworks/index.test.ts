@@ -1,39 +1,21 @@
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type {
-  ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import {
+  createProviderDynamicModelContext,
+  runSingleProviderCatalog,
+} from "../test-support/provider-model-test-helpers.js";
 import fireworksPlugin from "./index.js";
 import {
   FIREWORKS_BASE_URL,
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_K2_6_CONTEXT_WINDOW,
+  FIREWORKS_K2_6_MAX_TOKENS,
+  FIREWORKS_K2_6_MODEL_ID,
 } from "./provider-catalog.js";
-
-function createDynamicContext(params: {
-  provider: string;
-  modelId: string;
-  models: ProviderRuntimeModel[];
-}): ProviderResolveDynamicModelContext {
-  return {
-    provider: params.provider,
-    modelId: params.modelId,
-    modelRegistry: {
-      find(providerId: string, modelId: string) {
-        return (
-          params.models.find(
-            (model) =>
-              model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
-          ) ?? null
-        );
-      },
-    } as ModelRegistry,
-  };
-}
 
 function createFireworksDefaultRuntimeModel(params: { reasoning: boolean }): ProviderRuntimeModel {
   return {
@@ -67,28 +49,23 @@ describe("fireworks provider plugin", () => {
     expect(resolved?.method.id).toBe("api-key");
   });
 
-  it("builds the Fireworks Fire Pass starter catalog", async () => {
+  it("builds the Fireworks catalog", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
-    const catalog = await provider.catalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: "test-key" }),
-      resolveProviderAuth: () => ({
-        apiKey: "test-key",
-        mode: "api_key",
-        source: "env",
-      }),
-    } as never);
+    const catalogProvider = await runSingleProviderCatalog(provider);
 
-    expect(catalog && "provider" in catalog).toBe(true);
-    if (!catalog || !("provider" in catalog)) {
-      throw new Error("expected single-provider catalog");
-    }
-
-    expect(catalog.provider.api).toBe("openai-completions");
-    expect(catalog.provider.baseUrl).toBe(FIREWORKS_BASE_URL);
-    expect(catalog.provider.models?.map((model) => model.id)).toEqual([FIREWORKS_DEFAULT_MODEL_ID]);
-    expect(catalog.provider.models?.[0]).toMatchObject({
+    expect(catalogProvider.api).toBe("openai-completions");
+    expect(catalogProvider.baseUrl).toBe(FIREWORKS_BASE_URL);
+    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
+      FIREWORKS_K2_6_MODEL_ID,
+      FIREWORKS_DEFAULT_MODEL_ID,
+    ]);
+    expect(catalogProvider.models?.[0]).toMatchObject({
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: FIREWORKS_K2_6_CONTEXT_WINDOW,
+      maxTokens: FIREWORKS_K2_6_MAX_TOKENS,
+    });
+    expect(catalogProvider.models?.[1]).toMatchObject({
       reasoning: false,
       input: ["text", "image"],
       contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
@@ -99,7 +76,7 @@ describe("fireworks provider plugin", () => {
   it("resolves forward-compat Fireworks model ids from the default template", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
     const resolved = provider.resolveDynamicModel?.(
-      createDynamicContext({
+      createProviderDynamicModelContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/models/qwen3.6-plus",
         models: [createFireworksDefaultRuntimeModel({ reasoning: true })],
@@ -118,7 +95,7 @@ describe("fireworks provider plugin", () => {
   it("disables reasoning metadata for Fireworks Kimi dynamic models", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
     const resolved = provider.resolveDynamicModel?.(
-      createDynamicContext({
+      createProviderDynamicModelContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/models/kimi-k2p5",
         models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
@@ -135,7 +112,7 @@ describe("fireworks provider plugin", () => {
   it("disables reasoning metadata for Fireworks Kimi k2.5 aliases", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
     const resolved = provider.resolveDynamicModel?.(
-      createDynamicContext({
+      createProviderDynamicModelContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/routers/kimi-k2.5-turbo",
         models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
@@ -145,6 +122,23 @@ describe("fireworks provider plugin", () => {
     expect(resolved).toMatchObject({
       provider: "fireworks",
       id: "accounts/fireworks/routers/kimi-k2.5-turbo",
+      reasoning: false,
+    });
+  });
+
+  it("disables reasoning metadata for Fireworks Kimi k2.6 dynamic models", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const resolved = provider.resolveDynamicModel?.(
+      createProviderDynamicModelContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
       reasoning: false,
     });
   });

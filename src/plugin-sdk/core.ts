@@ -81,6 +81,7 @@ export type {
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,

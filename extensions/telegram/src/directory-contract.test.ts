@@ -1,46 +1,13 @@
-import type {
-  BaseProbeResult,
-  BaseTokenResolution,
-  ChannelDirectoryEntry,
-} from "openclaw/plugin-sdk/channel-contract";
+import type { BaseProbeResult, BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { type OpenClawConfig, withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { expectDirectoryIds } from "../../../test/helpers/channels/directory-ids.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
 import type { TelegramProbe } from "./probe.js";
 import type { TelegramTokenResolution } from "./token.js";
-
-type DirectoryListFn = (params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  query?: string | null;
-  limit?: number | null;
-}) => Promise<ChannelDirectoryEntry[]>;
-
-async function listDirectoryEntriesWithDefaults(listFn: DirectoryListFn, cfg: OpenClawConfig) {
-  return await listFn({
-    cfg,
-    accountId: "default",
-    query: null,
-    limit: null,
-  });
-}
-
-async function expectDirectoryIds(
-  listFn: DirectoryListFn,
-  cfg: OpenClawConfig,
-  expected: string[],
-  options?: { sorted?: boolean },
-) {
-  const entries = await listDirectoryEntriesWithDefaults(listFn, cfg);
-  const ids = entries.map((entry) => entry.id);
-  const sortIds = (values: string[]) => values.toSorted((a, b) => a.localeCompare(b));
-  expect(options?.sorted ? sortIds(ids) : ids).toEqual(
-    options?.sorted ? sortIds(expected) : expected,
-  );
-}
 
 describe("Telegram directory contract", () => {
   it("keeps public probe and token resolution aligned with base contracts", () => {

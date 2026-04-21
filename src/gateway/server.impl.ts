@@ -228,6 +228,10 @@ export type GatewayServerOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   /**
+   * Test-only: wait for post-listen sidecars such as plugin services before returning.
+   */
+  awaitStartupSidecars?: boolean;
+  /**
    * Optional startup timestamp used for concise readiness logging.
    */
   startupStartedAt?: number;
@@ -252,12 +256,13 @@ export async function startGatewayServer(
   });
   const startupTrace = createGatewayStartupTrace();
 
-  const configSnapshot = await startupTrace.measure("config.snapshot", () =>
+  const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
       log,
     }),
   );
+  const configSnapshot = startupConfigLoad.snapshot;
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
@@ -322,14 +327,14 @@ export async function startGatewayServer(
         }),
       );
   cfgAtStart = controlUiSeed.config;
-  // Always capture the final config hash after all startup writes (plugin
-  // auto-enable, auth token generation, control-UI origin seeding) so the
-  // config reloader can recognize its own startup writes and suppress the
-  // spurious hot-reload that would otherwise trigger a SIGUSR1 restart loop.
-  // Previously the hash was only captured when auth or control-UI persisted
-  // changes, missing the plugin auto-enable write performed earlier inside
-  // loadGatewayStartupConfigSnapshot().  See #67436.
-  {
+  // Capture the final config hash only after startup writes (plugin auto-enable,
+  // auth token generation, control-UI origin seeding) so the config reloader can
+  // suppress its own persistence events without rereading config on every boot.
+  if (
+    startupConfigLoad.wroteConfig ||
+    authBootstrap.persistedGeneratedToken ||
+    controlUiSeed.persistedAllowedOriginsSeed
+  ) {
     const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
       readConfigFileSnapshot(),
     );
@@ -455,6 +460,7 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
+  let startupSidecarsReady = minimalTestGateway;
   const channelManager = createChannelManager({
     loadConfig: () =>
       applyPluginAutoEnable({
@@ -468,6 +474,7 @@ export async function startGatewayServer(
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
+    getStartupPending: () => !startupSidecarsReady,
   });
   log.info("starting HTTP server...");
   const {
@@ -476,6 +483,7 @@ export async function startGatewayServer(
     httpServer,
     httpServers,
     httpBindHosts,
+    startListening,
     wss,
     preauthConnectionBudget,
     clients,
@@ -523,7 +531,6 @@ export async function startGatewayServer(
       getReadiness,
     }),
   );
-  startupTrace.mark("http.bound");
   const {
     nodeRegistry,
     nodePresenceTimers,
@@ -793,6 +800,8 @@ export async function startGatewayServer(
       broadcast,
       context: gatewayRequestContext,
     });
+    await startListening();
+    startupTrace.mark("http.bound");
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -821,11 +830,19 @@ export async function startGatewayServer(
         logHooks,
         logChannels,
         unavailableGatewayMethods,
+        onPluginServices: (pluginServices) => {
+          runtimeState.pluginServices = pluginServices;
+        },
+        onSidecarsReady: () => {
+          startupSidecarsReady = true;
+        },
+        startupTrace,
+        awaitSidecars: opts.awaitStartupSidecars,
       }),
     ));
     startupTrace.mark("ready");
 
-    // Keep scheduled work inert until post-attach sidecars finish.
+    // HTTP is live before sidecars finish; /readyz stays red until the startup sidecars settle.
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,
