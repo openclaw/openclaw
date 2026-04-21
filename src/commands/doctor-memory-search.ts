@@ -25,7 +25,10 @@ import {
   type DreamingArtifactsAuditSummary,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
-import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
+import {
+  getActiveMemorySearchManager,
+  resolveActiveMemoryBackendConfig,
+} from "../plugins/memory-runtime.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -122,10 +125,6 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
   )?.providerId;
-}
-
-function resolveConfiguredQmdBackendConfig(cfg: OpenClawConfig): OpenClawConfig["memory"] | null {
-  return cfg.memory?.backend === "qmd" ? cfg.memory : null;
 }
 
 async function resolveRuntimeMemoryAuditContext(
@@ -325,17 +324,21 @@ export async function noteMemorySearchHealth(
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
   // separate embedding provider is needed. Skip the provider check entirely.
-  const qmdBackendConfig = resolveConfiguredQmdBackendConfig(cfg);
-  if (qmdBackendConfig) {
+  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
+  if (!backendConfig) {
+    note("No active memory plugin is registered for the current config.", "Memory search");
+    return;
+  }
+  if (backendConfig.backend === "qmd") {
     const qmdCheck = await checkQmdBinaryAvailability({
-      command: qmdBackendConfig.qmd?.command ?? "qmd",
+      command: backendConfig.qmd?.command ?? "qmd",
       env: process.env,
       cwd: resolveAgentWorkspaceDir(cfg, agentId),
     });
     if (!qmdCheck.available) {
       note(
         [
-          `QMD memory backend is configured, but the qmd binary could not be started (${qmdBackendConfig.qmd?.command ?? "qmd"}).`,
+          `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
           qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
           "",
           "Fix (pick one):",

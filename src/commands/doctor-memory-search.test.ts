@@ -12,6 +12,7 @@ const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 const checkQmdBinaryAvailability = vi.hoisted(() =>
   vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
@@ -47,6 +48,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
 
 vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager,
+  resolveActiveMemoryBackendConfig,
 }));
 
 vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
@@ -153,6 +155,12 @@ describe("noteMemorySearchHealth", () => {
     hasAnyAuthProfileStoreSource.mockReset();
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
     getActiveMemorySearchManager.mockReset();
+    resolveActiveMemoryBackendConfig.mockReset();
+    resolveActiveMemoryBackendConfig.mockImplementation(({ cfg }: { cfg: OpenClawConfig }) =>
+      cfg.memory?.backend === "qmd"
+        ? { backend: "qmd", qmd: cfg.memory.qmd ?? {} }
+        : { backend: "builtin" },
+    );
     getActiveMemorySearchManager.mockResolvedValue({
       manager: {
         status: () => ({ workspaceDir: "/tmp/agent-default/workspace", backend: "builtin" }),
@@ -217,6 +225,24 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not emit provider guidance when no memory runtime is active", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain(
+      "No active memory plugin is registered",
+    );
   });
 
   it("does not warn when QMD backend is active", async () => {
