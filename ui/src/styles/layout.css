@@ -862,7 +862,7 @@
     transform var(--shell-focus-duration) var(--shell-focus-ease),
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
-  max-height: 40px;
+  max-height: 60px;
 }
 
 .shell--chat-focus .content-header {
