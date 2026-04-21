@@ -9,6 +9,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 }));
 
 const {
+  createSynologyHostedMediaHandler,
   clearSynologyHostedMediaStateForTest,
   deriveSynologyPublicOrigin,
   registerSynologyHostedMediaTransport,
@@ -66,7 +67,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
       /^https:\/\/gateway-config\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
     );
     expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
-      maxBytes: 5 * 1024 * 1024,
+      maxBytes: 32 * 1024 * 1024,
       url: "https://example.com/file.png",
     });
   });
@@ -84,7 +85,7 @@ describe("resolveSynologyWebhookFileUrl", () => {
       /^https:\/\/gateway-config\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
     );
     expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
-      maxBytes: 5 * 1024 * 1024,
+      maxBytes: 32 * 1024 * 1024,
       url: "https://example.com/file.png",
     });
   });
@@ -102,9 +103,46 @@ describe("resolveSynologyWebhookFileUrl", () => {
       /^https:\/\/gateway\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
     );
     expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
-      maxBytes: 5 * 1024 * 1024,
+      maxBytes: 32 * 1024 * 1024,
       url: "https://example.com/file.png",
     });
+  });
+
+  it("evicts oldest hosted media when the total byte budget is exceeded", async () => {
+    const largeBuffer = Buffer.alloc(24 * 1024 * 1024, 1);
+    fetchRemoteMediaMock.mockResolvedValue({
+      buffer: largeBuffer,
+      contentType: "image/png",
+      fileName: "file.png",
+    });
+    registerSynologyHostedMediaTransport({
+      ...testAccount,
+      publicOrigin: "https://gateway-config.example.com",
+    });
+
+    const firstUrl = await resolveSynologyWebhookFileUrl({
+      account: testAccount,
+      sourceUrl: "https://example.com/file-1.png",
+    });
+    const secondUrl = await resolveSynologyWebhookFileUrl({
+      account: testAccount,
+      sourceUrl: "https://example.com/file-2.png",
+    });
+    const thirdUrl = await resolveSynologyWebhookFileUrl({
+      account: testAccount,
+      sourceUrl: "https://example.com/file-3.png",
+    });
+
+    const handler = createSynologyHostedMediaHandler(testAccount);
+    const firstRes = createMockResponseRecorder();
+    await handler({ method: "GET", url: new URL(firstUrl!).pathname } as never, firstRes as never);
+    expect(firstRes.statusCode).toBe(404);
+
+    const thirdRes = createMockResponseRecorder();
+    await handler({ method: "GET", url: new URL(thirdUrl!).pathname } as never, thirdRes as never);
+    expect(thirdRes.statusCode).toBe(200);
+
+    expect(secondUrl).toBeTruthy();
   });
 
   it("ignores loopback gateway urls for bootstrap origin seeding", async () => {
@@ -179,3 +217,20 @@ describe("resolveSynologyWebhookFileUrl", () => {
     expect(origin).toBeUndefined();
   });
 });
+
+function createMockResponseRecorder() {
+  return {
+    statusCode: 0,
+    headers: undefined as Record<string, string | number> | undefined,
+    body: undefined as unknown,
+    writeHead(statusCode: number, headers?: Record<string, string | number>) {
+      this.statusCode = statusCode;
+      this.headers = headers;
+      return this;
+    },
+    end(body?: unknown) {
+      this.body = body;
+      return this;
+    },
+  };
+}

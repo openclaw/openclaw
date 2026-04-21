@@ -8,7 +8,9 @@ import type { ResolvedSynologyChatAccount } from "./types.js";
 const MEDIA_PROXY_SEGMENT = "__openclaw-media";
 const HOSTED_MEDIA_TTL_MS = 10 * 60 * 1000;
 const MAX_HOSTED_MEDIA_ENTRIES = 128;
-const HOSTED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
+const SYNOLOGY_HOSTED_MEDIA_MAX_BYTES = 32 * 1024 * 1024;
+const HOSTED_MEDIA_MAX_BYTES = Math.max(MEDIA_MAX_BYTES, SYNOLOGY_HOSTED_MEDIA_MAX_BYTES);
+const HOSTED_MEDIA_TOTAL_MAX_BYTES = 64 * 1024 * 1024;
 
 type SynologyHostedMedia = Awaited<ReturnType<typeof fetchRemoteMedia>> & {
   accountId: string;
@@ -129,14 +131,28 @@ function cleanupExpiredHostedMedia(nowMs = Date.now()): void {
   }
 }
 
+function getHostedMediaTotalBytes(): number {
+  let totalBytes = 0;
+  for (const entry of hostedMedia.values()) {
+    totalBytes += entry.buffer.length;
+  }
+  return totalBytes;
+}
+
 function trimHostedMediaCache(): void {
-  if (hostedMedia.size <= MAX_HOSTED_MEDIA_ENTRIES) {
+  if (
+    hostedMedia.size <= MAX_HOSTED_MEDIA_ENTRIES &&
+    getHostedMediaTotalBytes() <= HOSTED_MEDIA_TOTAL_MAX_BYTES
+  ) {
     return;
   }
 
   const entries = [...hostedMedia.entries()].toSorted((a, b) => a[1].createdAt - b[1].createdAt);
   for (const [token] of entries) {
-    if (hostedMedia.size <= MAX_HOSTED_MEDIA_ENTRIES) {
+    if (
+      hostedMedia.size <= MAX_HOSTED_MEDIA_ENTRIES &&
+      getHostedMediaTotalBytes() <= HOSTED_MEDIA_TOTAL_MAX_BYTES
+    ) {
       break;
     }
     hostedMedia.delete(token);
