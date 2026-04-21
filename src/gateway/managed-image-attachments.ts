@@ -676,7 +676,7 @@ export async function createManagedOutgoingImageBlocks(params: {
               limits.maxBytes,
               `generated-image-${index + 1}`,
             )
-          : await saveMediaSource(mediaUrl, undefined, "outgoing/originals");
+          : await saveMediaSource(mediaUrl, undefined, "outgoing/originals", limits.maxBytes);
       savedOriginalPath = savedOriginal.path;
       if (savedOriginal.size > limits.maxBytes) {
         throw createManagedImageAttachmentError(

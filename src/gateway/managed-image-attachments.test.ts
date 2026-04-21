@@ -60,6 +60,21 @@ async function createPngDataUrl(width: number, height: number): Promise<string> 
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
+async function createNoisyPngBuffer(width: number, height: number): Promise<Buffer> {
+  const sharp = (await import("sharp")).default;
+  const pixels = Buffer.alloc(width * height * 4);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const seed = i / 4;
+    pixels[i] = seed % 251;
+    pixels[i + 1] = (seed * 17) % 253;
+    pixels[i + 2] = (seed * 29) % 255;
+    pixels[i + 3] = 255;
+  }
+  return sharp(pixels, { raw: { width, height, channels: 4 } })
+    .png({ compressionLevel: 0 })
+    .toBuffer();
+}
+
 async function createFixture(
   stateDir: string,
   options?: { sessionKey?: string; attachmentId?: string; filename?: string },
@@ -457,6 +472,50 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(blocks).toHaveLength(2);
     expect(blocks[0]?.type).toBe("image");
     expect(blocks[1]).toMatchObject({ type: "text" });
+  });
+
+  it("accepts URL images up to the configured managed-image byte limit", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const imageBuffer = await createNoisyPngBuffer(1600, 1200);
+    expect(imageBuffer.byteLength).toBeGreaterThan(5 * 1024 * 1024);
+    expect(imageBuffer.byteLength).toBeLessThan(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxBytes);
+
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader("content-type", "image/png");
+      res.end(imageBuffer);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    setMediaStoreNetworkDepsForTest({
+      resolvePinnedHostname: async (hostname) => ({
+        hostname,
+        addresses: ["127.0.0.1"],
+        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
+      }),
+    });
+
+    try {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`http://127.0.0.1:${address.port}/large-image.png`],
+        stateDir,
+      });
+
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]).toMatchObject({ type: "image" });
+    } finally {
+      setMediaStoreNetworkDepsForTest();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+      if (previousStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
   });
 
   it("drops downloaded non-image sources without leaving orphaned originals", async () => {
