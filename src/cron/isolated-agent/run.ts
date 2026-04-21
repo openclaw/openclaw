@@ -241,6 +241,16 @@ function resolveCronToolPolicy(params: { deliveryMode: "announce" | "webhook" | 
   };
 }
 
+function canPromptForMessageTool(params: {
+  disableMessageTool: boolean;
+  toolsAllow?: string[];
+}): boolean {
+  if (params.disableMessageTool) {
+    return false;
+  }
+  return !params.toolsAllow?.length || params.toolsAllow.includes("message");
+}
+
 async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
@@ -561,7 +571,10 @@ async function prepareCronRunContext(params: {
   commandBody = appendCronDeliveryInstruction({
     commandBody,
     deliveryRequested,
-    messageToolEnabled: !toolPolicy.disableMessageTool,
+    messageToolEnabled: canPromptForMessageTool({
+      disableMessageTool: toolPolicy.disableMessageTool,
+      toolsAllow: agentPayload?.toolsAllow,
+    }),
     resolvedDeliveryOk: resolvedDelivery.ok,
   });
 
