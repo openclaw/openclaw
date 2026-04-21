@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import type { ConnectionOptions } from "node:tls";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
@@ -6,6 +8,9 @@ import {
 import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
+type ProxyRule = RegExp | URL | string;
+type TlsCert = ConnectionOptions["cert"];
+type TlsKey = ConnectionOptions["key"];
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type GoogleAuthModule = typeof import("google-auth-library");
 type GaxiosModule = typeof import("gaxios");
@@ -18,10 +23,22 @@ type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
 type GuardedGoogleAuthRequestInit = RequestInit & {
   agent?: unknown;
   cert?: unknown;
+  dispatcher?: unknown;
   fetchImplementation?: unknown;
   key?: unknown;
   noProxy?: unknown;
   proxy?: unknown;
+};
+type TlsOptions = {
+  cert?: TlsCert;
+  key?: TlsKey;
+};
+type ProxyAgentLike = {
+  connectOpts?: TlsOptions;
+  proxy: URL;
+};
+type TlsAgentLike = {
+  options?: TlsOptions;
 };
 type GoogleChatServiceAccountCredentials = Record<string, unknown> & {
   auth_provider_x509_cert_url?: string;
@@ -48,6 +65,129 @@ const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 let googleAuthTransportPromise: Promise<GoogleAuthTransport> | null = null;
+
+function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function hasProxyAgentShape(value: unknown): value is ProxyAgentLike {
+  const record = asNullableObjectRecord(value);
+  return record !== null && record.proxy instanceof URL;
+}
+
+function hasTlsAgentShape(value: unknown): value is TlsAgentLike {
+  const record = asNullableObjectRecord(value);
+  return record !== null && asNullableObjectRecord(record.options) !== null;
+}
+
+function resolveGoogleAuthAgent(init: GuardedGoogleAuthRequestInit, url: URL): unknown {
+  return typeof init.agent === "function" ? init.agent(url) : init.agent;
+}
+
+function hasTlsOptions(options: TlsOptions): boolean {
+  return options.cert !== undefined || options.key !== undefined;
+}
+
+function resolveGoogleAuthTlsOptions(init: GuardedGoogleAuthRequestInit, url: URL): TlsOptions {
+  const explicit = {
+    cert: init.cert as TlsCert | undefined,
+    key: init.key as TlsKey | undefined,
+  };
+  if (hasTlsOptions(explicit)) {
+    return explicit;
+  }
+
+  const agent = resolveGoogleAuthAgent(init, url);
+  if (hasProxyAgentShape(agent)) {
+    return {
+      cert: agent.connectOpts?.cert,
+      key: agent.connectOpts?.key,
+    };
+  }
+  if (hasTlsAgentShape(agent)) {
+    return {
+      cert: agent.options?.cert,
+      key: agent.options?.key,
+    };
+  }
+  return {};
+}
+
+function normalizeGoogleAuthProxyEnvValue(value: string | undefined): string | null | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveGoogleAuthEnvProxyUrl(protocol: "http" | "https"): string | undefined {
+  const lowerHttpProxy = normalizeGoogleAuthProxyEnvValue(process.env.http_proxy);
+  const lowerHttpsProxy = normalizeGoogleAuthProxyEnvValue(process.env.https_proxy);
+  const httpProxy =
+    lowerHttpProxy !== undefined
+      ? lowerHttpProxy
+      : normalizeGoogleAuthProxyEnvValue(process.env.HTTP_PROXY);
+  const httpsProxy =
+    lowerHttpsProxy !== undefined
+      ? lowerHttpsProxy
+      : normalizeGoogleAuthProxyEnvValue(process.env.HTTPS_PROXY);
+  if (protocol === "https") {
+    return httpsProxy ?? httpProxy ?? undefined;
+  }
+  return httpProxy ?? undefined;
+}
+
+function collectGoogleAuthNoProxyRules(noProxy: ProxyRule[] = []): ProxyRule[] {
+  const rules = [...noProxy];
+  const envRules = (process.env.NO_PROXY ?? process.env.no_proxy)?.split(",") ?? [];
+  for (const rule of envRules) {
+    const trimmed = rule.trim();
+    if (trimmed.length > 0) {
+      rules.push(trimmed);
+    }
+  }
+  return rules;
+}
+
+function shouldBypassGoogleAuthProxy(url: URL, noProxy: ProxyRule[] = []): boolean {
+  for (const rule of collectGoogleAuthNoProxyRules(noProxy)) {
+    if (rule instanceof RegExp) {
+      if (rule.test(url.toString())) {
+        return true;
+      }
+      continue;
+    }
+    if (rule instanceof URL) {
+      if (rule.origin === url.origin) {
+        return true;
+      }
+      continue;
+    }
+    if (rule.startsWith("*.") || rule.startsWith(".")) {
+      const cleanedRule = rule.replace(/^\*\./, ".");
+      if (url.hostname.endsWith(cleanedRule)) {
+        return true;
+      }
+      continue;
+    }
+    if (rule === url.origin || rule === url.hostname || rule === url.href) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function readGoogleAuthProxyUrl(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (value instanceof URL) {
+    return value.toString();
+  }
+  return undefined;
+}
 
 function readOptionalTrimmedString(
   record: Record<string, unknown>,
@@ -186,11 +326,73 @@ function sanitizeGoogleAuthInit(init?: RequestInit): RequestInit | undefined {
   const nextInit = { ...(init as GuardedGoogleAuthRequestInit) };
   delete nextInit.agent;
   delete nextInit.cert;
+  delete nextInit.dispatcher;
   delete nextInit.fetchImplementation;
   delete nextInit.key;
   delete nextInit.noProxy;
   delete nextInit.proxy;
   return nextInit;
+}
+
+function resolveGoogleAuthDispatcherPolicy(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): {
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  init?: RequestInit;
+} {
+  const requestUrl =
+    input instanceof Request
+      ? new URL(input.url)
+      : new URL(typeof input === "string" ? input : input.toString());
+  const nextInit = sanitizeGoogleAuthInit(init);
+  const googleAuthInit = (init ?? {}) as GuardedGoogleAuthRequestInit;
+  const tlsOptions = resolveGoogleAuthTlsOptions(googleAuthInit, requestUrl);
+  const proxyBypassed = shouldBypassGoogleAuthProxy(
+    requestUrl,
+    Array.isArray(googleAuthInit.noProxy) ? (googleAuthInit.noProxy as ProxyRule[]) : [],
+  );
+  const agent = resolveGoogleAuthAgent(googleAuthInit, requestUrl);
+  const explicitProxy =
+    readGoogleAuthProxyUrl(googleAuthInit.proxy) ??
+    (hasProxyAgentShape(agent) ? agent.proxy.toString() : undefined);
+
+  if (!proxyBypassed && explicitProxy) {
+    return {
+      dispatcherPolicy: {
+        allowPrivateProxy: true,
+        mode: "explicit-proxy",
+        ...(hasTlsOptions(tlsOptions) ? { proxyTls: { ...tlsOptions } } : {}),
+        proxyUrl: explicitProxy,
+      },
+      init: nextInit,
+    };
+  }
+
+  const envProxyUrl = proxyBypassed
+    ? undefined
+    : resolveGoogleAuthEnvProxyUrl(requestUrl.protocol === "http:" ? "http" : "https");
+  if (envProxyUrl) {
+    return {
+      dispatcherPolicy: {
+        mode: "env-proxy",
+        ...(hasTlsOptions(tlsOptions) ? { proxyTls: { ...tlsOptions } } : {}),
+      },
+      init: nextInit,
+    };
+  }
+
+  if (hasTlsOptions(tlsOptions)) {
+    return {
+      dispatcherPolicy: {
+        connect: { ...tlsOptions },
+        mode: "direct",
+      },
+      init: nextInit,
+    };
+  }
+
+  return { init: nextInit };
 }
 
 async function releaseGuardedResponseBody(
@@ -263,10 +465,12 @@ export function createGoogleAuthFetch(
 ): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
+    const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
     const { response, release } = await fetchWithSsrFGuard({
       auditContext: GOOGLE_AUTH_AUDIT_CONTEXT,
+      dispatcherPolicy: guardedOptions.dispatcherPolicy,
       fetchImpl: baseFetch,
-      init: sanitizeGoogleAuthInit(init),
+      init: guardedOptions.init,
       policy: GOOGLE_AUTH_POLICY,
       url,
     });

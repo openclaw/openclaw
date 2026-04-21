@@ -50,7 +50,7 @@ afterEach(() => {
 });
 
 describe("googlechat google auth runtime", () => {
-  it("routes Google auth fetches through the SSRF guard and strips proxy fields", async () => {
+  it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
@@ -60,16 +60,102 @@ describe("googlechat google auth runtime", () => {
     const guardedFetch = createGoogleAuthFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       agent: { proxy: new URL("http://proxy.example:8080") },
+      cert: "CLIENT_CERT",
       headers: { "content-type": "application/json" },
+      key: "CLIENT_KEY",
       method: "POST",
       proxy: "http://proxy.example:8080",
     } as RequestInit);
 
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       auditContext: "googlechat.auth.google-auth",
+      dispatcherPolicy: {
+        allowPrivateProxy: true,
+        mode: "explicit-proxy",
+        proxyTls: {
+          cert: "CLIENT_CERT",
+          key: "CLIENT_KEY",
+        },
+        proxyUrl: "http://proxy.example:8080",
+      },
       fetchImpl: expect.any(Function),
       init: {
         headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      policy: {
+        hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
+      },
+      url: "https://oauth2.googleapis.com/token",
+    });
+    await expect(response.text()).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("bypasses explicit proxy when noProxy excludes the Google auth host", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+    const response = await guardedFetch("https://oauth2.googleapis.com/token", {
+      cert: "CLIENT_CERT",
+      key: "CLIENT_KEY",
+      method: "POST",
+      noProxy: ["oauth2.googleapis.com"],
+      proxy: "http://proxy.example:8080",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
+      auditContext: "googlechat.auth.google-auth",
+      dispatcherPolicy: {
+        connect: {
+          cert: "CLIENT_CERT",
+          key: "CLIENT_KEY",
+        },
+        mode: "direct",
+      },
+      fetchImpl: expect.any(Function),
+      init: {
+        method: "POST",
+      },
+      policy: {
+        hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
+      },
+      url: "https://oauth2.googleapis.com/token",
+    });
+    await expect(response.text()).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves env-proxy transport when HTTPS proxy is configured", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
+
+    const guardedFetch = createGoogleAuthFetch();
+    const response = await guardedFetch("https://oauth2.googleapis.com/token", {
+      cert: "CLIENT_CERT",
+      key: "CLIENT_KEY",
+      method: "POST",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
+      auditContext: "googlechat.auth.google-auth",
+      dispatcherPolicy: {
+        mode: "env-proxy",
+        proxyTls: {
+          cert: "CLIENT_CERT",
+          key: "CLIENT_KEY",
+        },
+      },
+      fetchImpl: expect.any(Function),
+      init: {
         method: "POST",
       },
       policy: {
