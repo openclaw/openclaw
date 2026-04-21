@@ -95,6 +95,7 @@ function loadSingleSkillDirectory(params: {
 
 function listCandidateSkillDirs(dir: string): string[] {
   const skillDirs: string[] = [];
+  const visited = new Set<string>();
 
   const walk = (currentDir: string) => {
     let entries: fs.Dirent[];
@@ -121,6 +122,17 @@ function listCandidateSkillDirs(dir: string): string[] {
       if (!isDirectory) {
         continue;
       }
+
+      let realPath: string;
+      try {
+        realPath = fs.realpathSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (visited.has(realPath)) {
+        continue;
+      }
+      visited.add(realPath);
 
       if (fs.existsSync(path.join(fullPath, "SKILL.md"))) {
         skillDirs.push(fullPath);
