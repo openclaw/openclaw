@@ -168,12 +168,12 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes contract tests to the contracts config", () => {
+  it("routes plugin contract tests to the plugin contracts config", () => {
     expect(
       buildVitestRunPlans(["src/plugins/contracts/memory-embedding-provider.contract.test.ts"]),
     ).toEqual([
       {
-        config: "test/vitest/vitest.contracts.config.ts",
+        config: "test/vitest/vitest.contracts-plugin.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugins/contracts/memory-embedding-provider.contract.test.ts"],
         watchMode: false,

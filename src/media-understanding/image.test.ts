@@ -90,6 +90,7 @@ describe("describeImageWithModel", () => {
   });
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
+    const authStore = { version: 1, profiles: {} };
     const result = await describeImageWithModel({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
@@ -100,6 +101,7 @@ describe("describeImageWithModel", () => {
       mime: "image/png",
       prompt: "Describe the image.",
       timeoutMs: 1000,
+      authStore,
     });
 
     expect(result).toEqual({
@@ -107,7 +109,9 @@ describe("describeImageWithModel", () => {
       model: "MiniMax-VL-01",
     });
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
-    expect(getApiKeyForModelMock).toHaveBeenCalled();
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ store: authStore }),
+    );
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
     expect(fetchMock).toHaveBeenCalledWith(

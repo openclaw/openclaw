@@ -86,7 +86,7 @@ describe("agents delete command", () => {
         cfg,
         sessions: {
           "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: 1 },
-          "agent:ops:discord:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
+          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
           "agent:main:main": { sessionId: "sess-main", updatedAt: 3 },
         },
       });
@@ -119,8 +119,8 @@ describe("agents delete command", () => {
         cfg,
         sessions: {
           "agent:main:main": { sessionId: "sess-default-alias", updatedAt: 1 },
-          "agent:ops:discord:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
-          "agent:main:discord:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
+          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
+          "agent:main:quietchat:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
           global: { sessionId: "sess-global", updatedAt: 4 },
         },
       });
@@ -129,7 +129,7 @@ describe("agents delete command", () => {
 
       expect(runtime.exit).not.toHaveBeenCalled();
       expectSessionStore(storePath, {
-        "agent:main:discord:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
+        "agent:main:quietchat:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
         global: { sessionId: "sess-global", updatedAt: 4 },
       });
     });
@@ -151,9 +151,9 @@ describe("agents delete command", () => {
         cfg,
         sessions: {
           main: { sessionId: "sess-main", updatedAt: 1 },
-          "discord:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
+          "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
           "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: 3 },
-          "agent:ops:discord:direct:u2": { sessionId: "sess-ops-direct", updatedAt: 4 },
+          "agent:ops:quietchat:direct:u2": { sessionId: "sess-ops-direct", updatedAt: 4 },
         },
       });
 
@@ -162,7 +162,7 @@ describe("agents delete command", () => {
       expect(runtime.exit).not.toHaveBeenCalled();
       expectSessionStore(storePath, {
         main: { sessionId: "sess-main", updatedAt: 1 },
-        "discord:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
+        "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
       });
     });
   });

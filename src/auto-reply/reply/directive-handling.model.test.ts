@@ -1057,7 +1057,7 @@ describe("persistInlineDirectives internal exec scope gate", () => {
   it("treats internal provider context as authoritative over external surface metadata", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
       messageProvider: "webchat",
-      surface: "telegram",
+      surface: "forum",
     });
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
