@@ -339,21 +339,31 @@ export function renderStreamingGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   authToken?: string | null,
+  message?: unknown,
+  showReasoning = false,
 ) {
   const name = assistant?.name ?? "Assistant";
+  const streamingMessage =
+    message && typeof message === "object"
+      ? {
+          role: "assistant",
+          timestamp: startedAt,
+          ...(message as Record<string, unknown>),
+        }
+      : {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          timestamp: startedAt,
+        };
 
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
-          {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: startedAt,
-          },
+          streamingMessage,
           `stream:${startedAt}`,
-          { isStreaming: true, showReasoning: false },
+          { isStreaming: true, showReasoning },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">

@@ -964,6 +964,8 @@ export function renderChat(props: ChatProps) {
                 assistantIdentity,
                 props.basePath,
                 props.assistantAttachmentAuthToken ?? null,
+                "message" in item ? item.message : undefined,
+                showReasoning,
               );
             }
             if (item.kind === "group") {

@@ -3,6 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
+import { buildChatItems } from "./build-chat-items.ts";
 import {
   formatChatTimestampForDisplay,
   renderMessageGroup,
@@ -1667,5 +1668,51 @@ describe("grouped chat rendering", () => {
       message: streamMessage,
       text: "",
     });
+  });
+
+  it("preserves reasoning for structured streaming messages and keeps plain text fallback", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamingGroup(
+        "Structured reply",
+        1,
+        undefined,
+        { name: "OpenClaw", avatar: null },
+        undefined,
+        null,
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Plan A" },
+            { type: "text", text: "Structured reply" },
+          ],
+          timestamp: 1,
+        },
+        true,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thinking")).not.toBeNull();
+    expect(container.textContent).toContain("Plan A");
+    expect(container.textContent).toContain("Structured reply");
+
+    render(
+      renderStreamingGroup(
+        "Plain fallback",
+        2,
+        undefined,
+        { name: "OpenClaw", avatar: null },
+        undefined,
+        null,
+        undefined,
+        true,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thinking")).toBeNull();
+    expect(container.textContent).toContain("Plain fallback");
   });
 });
