@@ -76,6 +76,7 @@ export async function resolveDeliveryTarget(
     accountId?: string;
     sessionKey?: string;
   },
+  options?: { dryRun?: boolean },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
@@ -174,6 +175,34 @@ export async function resolveDeliveryTarget(
       error:
         channelResolutionError ??
         new Error("Channel is required when delivery.channel=last has no previous channel."),
+    };
+  }
+
+  if (options?.dryRun) {
+    const { getLoadedChannelPluginForRead } = await loadDeliveryTargetRuntime();
+    const defaultTo = getLoadedChannelPluginForRead(channel)?.config.resolveDefaultTo?.({
+      cfg,
+      accountId,
+    });
+    const previewTo = toCandidate ?? defaultTo;
+    if (!previewTo) {
+      return {
+        ok: false,
+        channel,
+        to: undefined,
+        accountId,
+        threadId,
+        mode,
+        error: new Error("Target is required for delivery preview."),
+      };
+    }
+    return {
+      ok: true,
+      channel,
+      to: previewTo,
+      accountId,
+      threadId,
+      mode,
     };
   }
 
