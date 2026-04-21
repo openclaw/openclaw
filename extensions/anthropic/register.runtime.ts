@@ -34,7 +34,7 @@ import {
 } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
-  normalizeAnthropicProviderConfig,
+  normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
@@ -483,7 +483,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
         },
       }),
     ],
-    normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
+    normalizeConfig: ({ provider, providerConfig }) =>
+      normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>
