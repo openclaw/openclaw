@@ -441,7 +441,7 @@ describe("chat view", () => {
     expect(status?.textContent).toContain("In progress");
   });
 
-  it("uses unified busy state to queue sends and hide new-session while tools are running", () => {
+  it("keeps send semantics aligned with actual queue rules while tools are running", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -465,10 +465,28 @@ describe("chat view", () => {
       container,
     );
 
+    const sendButton = container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
+    expect(sendButton).not.toBeNull();
+    expect(sendButton?.getAttribute("title")).toBe("Send");
+    expect(container.querySelector('button[title="New session"]')).toBeNull();
+  });
+
+  it("shows queue semantics only when send would actually queue behind an active run", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          runId: "run-1",
+          stream: null,
+          sending: false,
+        }),
+      ),
+      container,
+    );
+
     const sendButton = container.querySelector<HTMLButtonElement>('button[aria-label="Queue message"]');
     expect(sendButton).not.toBeNull();
     expect(sendButton?.getAttribute("title")).toBe("Queue");
-    expect(container.querySelector('button[title="New session"]')).toBeNull();
   });
 
   it("renders the run action button for abortable and idle states", () => {
