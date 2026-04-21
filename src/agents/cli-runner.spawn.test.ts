@@ -1094,6 +1094,42 @@ describe("runCliAgent spawn path", () => {
     });
   });
 
+  it("fails when Claude exits before a live turn starts", async () => {
+    supervisorSpawnMock.mockImplementationOnce(async () => ({
+      runId: "live-run",
+      pid: 2345,
+      startedAtMs: Date.now(),
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+      },
+      wait: vi.fn(async () => ({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "startup failed",
+        timedOut: false,
+        noOutputTimedOut: false,
+      })),
+      cancel: vi.fn(),
+    }));
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-startup-exit",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Claude CLI live session closed before handling the turn");
+  });
+
   it("restarts the Claude live process after request abort", async () => {
     const abortController = new AbortController();
     let stdoutListener: ((chunk: string) => void) | undefined;

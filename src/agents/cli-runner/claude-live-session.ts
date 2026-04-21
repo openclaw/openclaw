@@ -534,6 +534,7 @@ function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
 }
 
 function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): void {
+  session.closing = true;
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
     session.idleTimer = null;
@@ -551,7 +552,7 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
       handleClaudeLiveLine(session, session.stdoutBuffer);
     } catch (error) {
       session.stdoutBuffer = "";
-      closeLiveSession(session, "abort", error);
+      failTurn(session, error);
       return;
     }
     session.stdoutBuffer = "";
@@ -850,6 +851,10 @@ export async function runClaudeLiveSessionTurn(params: {
     cliBackendLog.info(
       `claude live session reuse: provider=${session.providerId} model=${session.modelId}`,
     );
+  }
+  if (session.closing) {
+    await cleanup();
+    throw new Error("Claude CLI live session closed before handling the turn");
   }
   if (session.currentTurn || session.drainingAbortedTurn) {
     throw new Error("Claude CLI live session is already handling a turn");
