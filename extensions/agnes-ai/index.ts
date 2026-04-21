@@ -1,13 +1,23 @@
-export default function register({ registerProvider }: any) {
-  registerProvider({
-    id: "agnes-ai",
-    name: "Agnes AI",
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+
+export default defineSingleProviderPluginEntry({
+  providerId: "agnes-ai",
+
+  catalog: {
     models: [
       {
-        id: "agnes-ai/agnes-1.5-pro",
+        id: "agnes-1.5-pro",
         name: "Agnes 1.5 Pro",
         type: "text"
       }
     ]
-  });
-}
+  },
+
+  auth: [
+    {
+      id: "apiKey",
+      label: "API Key",
+      envVars: ["AGNES_API_KEY"]
+    }
+  ]
+});
