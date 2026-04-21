@@ -103,6 +103,9 @@ async function importWebhookModule(cacheBust: string): Promise<WebhookModule> {
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
   (await importWebhookModule("reset-webhook")).clearZaloWebhookSecurityStateForTest();
+  (
+    await importMonitorModule({ cacheBust: "reset-monitor", mocked: false })
+  ).__testing.clearHostedMediaRouteRefsForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 
