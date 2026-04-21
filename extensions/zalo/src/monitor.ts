@@ -724,8 +724,10 @@ async function deliverZaloReply(params: {
       }
     },
     sendMedia: async ({ mediaUrl, caption }) => {
-      if (!canHostMedia || !webhookUrl) {
-        throw new Error("Zalo outbound media requires webhook mode with a configured webhookUrl");
+      if (!canHostMedia || !webhookUrl || !webhookPath) {
+        throw new Error(
+          "Zalo outbound media requires a configured webhookUrl to host media safely",
+        );
       }
       const sendableMediaUrl = await prepareHostedZaloMediaUrl({
         mediaUrl,
@@ -764,6 +766,23 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   const effectiveMediaMaxMb = account.config.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const fetcher = fetcherOverride ?? resolveZaloProxyFetch(account.config.proxy);
   const mode = useWebhook ? "webhook" : "polling";
+  const effectiveWebhookUrl = normalizeWebhookUrl(webhookUrl ?? account.config.webhookUrl);
+  const effectiveWebhookPath =
+    effectiveWebhookUrl || webhookPath?.trim() || account.config.webhookPath?.trim()
+      ? (resolveWebhookPath({
+          webhookPath: webhookPath ?? account.config.webhookPath,
+          webhookUrl: effectiveWebhookUrl,
+          defaultPath: null,
+        }) ?? undefined)
+      : undefined;
+  const canHostMedia = Boolean(effectiveWebhookUrl && effectiveWebhookPath);
+  const hostedMediaRoutePath =
+    canHostMedia && effectiveWebhookUrl
+      ? resolveHostedZaloMediaRoutePrefix({
+          webhookUrl: effectiveWebhookUrl,
+          webhookPath: effectiveWebhookPath,
+        })
+      : undefined;
 
   let stopped = false;
   const stopHandlers: Array<() => void> = [];
@@ -784,28 +803,36 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   );
 
   try {
+    if (hostedMediaRoutePath) {
+      const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
+        path: hostedMediaRoutePath,
+        accountId: account.accountId,
+        log: runtime.log,
+      });
+      stopHandlers.push(unregisterHostedMediaRoute);
+    }
+
     if (useWebhook) {
       const { registerZaloWebhookTarget } = await loadZaloWebhookModule();
-      if (!webhookUrl || !webhookSecret) {
+      if (!effectiveWebhookUrl || !webhookSecret) {
         throw new Error("Zalo webhookUrl and webhookSecret are required for webhook mode");
       }
-      if (!webhookUrl.startsWith("https://")) {
+      if (!effectiveWebhookUrl.startsWith("https://")) {
         throw new Error("Zalo webhook URL must use HTTPS");
       }
       if (webhookSecret.length < 8 || webhookSecret.length > 256) {
         throw new Error("Zalo webhook secret must be 8-256 characters");
       }
 
-      const path = resolveWebhookPath({ webhookPath, webhookUrl, defaultPath: null });
+      const path = effectiveWebhookPath;
       if (!path) {
         throw new Error("Zalo webhookPath could not be derived");
       }
 
       runtime.log?.(
-        `[${account.accountId}] Zalo configuring webhook path=${path} target=${describeWebhookTarget(webhookUrl)}`,
+        `[${account.accountId}] Zalo configuring webhook path=${path} target=${describeWebhookTarget(effectiveWebhookUrl)}`,
       );
-      await setWebhook(token, { url: webhookUrl, secret_token: webhookSecret }, fetcher);
-      const hostedMediaRoutePath = resolveHostedZaloMediaRoutePrefix({ webhookUrl, webhookPath });
+      await setWebhook(token, { url: effectiveWebhookUrl, secret_token: webhookSecret }, fetcher);
       let webhookCleanupPromise: Promise<void> | undefined;
       cleanupWebhook = async () => {
         if (!webhookCleanupPromise) {
@@ -826,12 +853,6 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         await webhookCleanupPromise;
       };
       runtime.log?.(`[${account.accountId}] Zalo webhook registered path=${path}`);
-      const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
-        path: hostedMediaRoutePath,
-        accountId: account.accountId,
-        log: runtime.log,
-      });
-      stopHandlers.push(unregisterHostedMediaRoute);
 
       const unregister = registerZaloWebhookTarget(
         {
@@ -841,12 +862,12 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
           runtime,
           core,
           path,
-          webhookUrl,
+          webhookUrl: effectiveWebhookUrl,
           webhookPath: path,
           secret: webhookSecret,
           statusSink: (patch) => statusSink?.(patch),
           mediaMaxMb: effectiveMediaMaxMb,
-          canHostMedia: true,
+          canHostMedia,
           fetcher,
         },
         {
@@ -910,7 +931,9 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       config,
       runtime,
       core,
-      canHostMedia: false,
+      canHostMedia,
+      webhookUrl: effectiveWebhookUrl,
+      webhookPath: effectiveWebhookPath,
       abortSignal,
       isStopped: () => stopped,
       mediaMaxMb: effectiveMediaMaxMb,
