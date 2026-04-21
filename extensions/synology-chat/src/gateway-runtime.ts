@@ -2,6 +2,13 @@ import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/acc
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { dispatchSynologyChatInboundTurn } from "./inbound-turn.js";
+import {
+  createSynologyHostedMediaHandler,
+  getSynologyHostedMediaPathPrefix,
+  registerSynologyHostedMediaTransport,
+  rememberSynologyHostedMediaOrigin,
+  unregisterSynologyHostedMediaTransport,
+} from "./media-proxy.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler, type WebhookHandlerDeps } from "./webhook-handler.js";
 
@@ -186,15 +193,55 @@ export function registerSynologyWebhookRoute(params: {
         log: createUnknownArgsLogAdapter(log),
       }),
     log: createUnknownArgsLogAdapter(log),
+    observePublicOrigin: (origin) => rememberSynologyHostedMediaOrigin(account, origin),
   });
-  const unregister = registerPluginHttpRoute({
+
+  let routeRegistrationFailed = false;
+  const registerRoute = (params: Parameters<typeof registerPluginHttpRoute>[0]) =>
+    registerPluginHttpRoute({
+      ...params,
+      log: (msg: string) => {
+        log?.info?.(msg);
+        if (
+          msg.includes("webhook path missing") ||
+          msg.includes("route overlap denied") ||
+          msg.includes("route conflict") ||
+          msg.includes("route replacement denied")
+        ) {
+          routeRegistrationFailed = true;
+        }
+      },
+    });
+
+  const unregisterWebhookRoute = registerRoute({
     path: account.webhookPath,
     auth: "plugin",
     pluginId: CHANNEL_ID,
     accountId: account.accountId,
-    log: (msg: string) => log?.info?.(msg),
     handler,
   });
+  const unregisterMediaRoute = registerRoute({
+    path: getSynologyHostedMediaPathPrefix(account),
+    auth: "plugin",
+    match: "prefix",
+    pluginId: CHANNEL_ID,
+    accountId: account.accountId,
+    handler: createSynologyHostedMediaHandler(account),
+  });
+
+  if (routeRegistrationFailed) {
+    unregisterWebhookRoute();
+    unregisterMediaRoute();
+    return () => {};
+  }
+
+  registerSynologyHostedMediaTransport(account);
+
+  const unregister = () => {
+    unregisterWebhookRoute();
+    unregisterMediaRoute();
+    unregisterSynologyHostedMediaTransport(account);
+  };
   activeRouteUnregisters.set(routeKey, unregister);
   return () => {
     unregister();

@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { listAccountIds, resolveAccount } from "./accounts.js";
+import { normalizeSynologyPublicOrigin } from "./media-proxy.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
 const channel = "synology-chat" as const;
@@ -21,7 +22,8 @@ const SYNOLOGY_SETUP_HELP_LINES = [
   "1) Create an incoming webhook in Synology Chat and copy its URL",
   "2) Create an outgoing webhook and copy its secret token",
   `3) Point the outgoing webhook to https://<gateway-host>${DEFAULT_WEBHOOK_PATH}`,
-  "4) Keep allowed user IDs handy for DM allowlisting",
+  "4) If you need proactive outbound media before the first inbound webhook, set the public gateway origin",
+  "5) Keep allowed user IDs handy for DM allowlisting",
   `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
 ];
 
@@ -129,6 +131,26 @@ function validateWebhookPath(value: string): string | undefined {
   return trimmed.startsWith("/") ? undefined : "Webhook path must start with /.";
 }
 
+function validatePublicOrigin(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return "Public gateway origin must be a valid URL.";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return "Public gateway origin must use http:// or https://.";
+  }
+  if (!normalizeSynologyPublicOrigin(trimmed)) {
+    return "Public gateway origin must use a non-private, non-loopback host.";
+  }
+  return undefined;
+}
+
 function parseSynologyUserId(value: string): string | null {
   const cleaned = value.replace(/^synology-chat:/i, "").trim();
   return /^\d+$/.test(cleaned) ? cleaned : null;
@@ -174,22 +196,38 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
       return urlError;
     }
     if (input.webhookPath?.trim()) {
-      return validateWebhookPath(input.webhookPath.trim()) ?? null;
+      const webhookPathError = validateWebhookPath(input.webhookPath.trim());
+      if (webhookPathError) {
+        return webhookPathError;
+      }
+    }
+    if (input.publicOrigin?.trim()) {
+      const publicOriginError = validatePublicOrigin(input.publicOrigin.trim());
+      if (publicOriginError) {
+        return publicOriginError;
+      }
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) =>
-    patchSynologyChatAccountConfig({
+  applyAccountConfig: ({ cfg, accountId, input }) => {
+    const hasExplicitPublicOrigin = Object.hasOwn(input, "publicOrigin");
+    const publicOriginValue = input.publicOrigin?.trim();
+    return patchSynologyChatAccountConfig({
       cfg,
       accountId,
       enabled: true,
-      clearFields: input.useEnv ? ["token"] : undefined,
+      clearFields: [
+        ...(input.useEnv ? ["token"] : []),
+        ...(hasExplicitPublicOrigin && !publicOriginValue ? ["publicOrigin"] : []),
+      ],
       patch: {
         ...(input.useEnv ? {} : { token: input.token?.trim() }),
         incomingUrl: input.url?.trim(),
+        ...(publicOriginValue ? { publicOrigin: publicOriginValue } : {}),
         ...(input.webhookPath?.trim() ? { webhookPath: input.webhookPath.trim() } : {}),
       },
-    }),
+    });
+  },
 };
 
 export const synologyChatSetupWizard: ChannelSetupWizard = {
@@ -280,6 +318,30 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         }),
     },
     {
+      inputKey: "publicOrigin",
+      message: "Public gateway origin for hosted media (optional)",
+      placeholder: "https://gateway.example.com",
+      required: false,
+      applyEmptyValue: true,
+      helpTitle: "Synology Chat public gateway origin",
+      helpLines: [
+        "Set this when Synology needs a stable public OpenClaw origin for hosted media URLs.",
+        "This enables proactive outbound media before the first inbound webhook reveals the public origin.",
+      ],
+      currentValue: ({ cfg, accountId }) =>
+        getRawAccountConfig(cfg, accountId).publicOrigin?.trim(),
+      keepPrompt: (value) => `Public gateway origin set (${value}). Keep it?`,
+      validate: ({ value }) => validatePublicOrigin(value),
+      applySet: async ({ cfg, accountId, value }) =>
+        patchSynologyChatAccountConfig({
+          cfg,
+          accountId,
+          enabled: true,
+          clearFields: value.trim() ? undefined : ["publicOrigin"],
+          patch: value.trim() ? { publicOrigin: value.trim() } : {},
+        }),
+    },
+    {
       inputKey: "webhookPath",
       message: "Outgoing webhook path (optional)",
       placeholder: DEFAULT_WEBHOOK_PATH,
@@ -329,6 +391,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     title: "Synology Chat access control",
     lines: [
       `Default outgoing webhook path: ${DEFAULT_WEBHOOK_PATH}`,
+      "Set the public gateway origin if you need outbound media before the first inbound webhook.",
       'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` for public DMs.',
       'With `dmPolicy="allowlist"`, an empty allowedUserIds list blocks the route from starting.',
       `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,

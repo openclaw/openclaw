@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import type { ResolvedSynologyChatAccount } from "./types.js";
 
 // Mock http and https modules before importing the client
 vi.mock("node:https", () => {
@@ -16,12 +17,26 @@ vi.mock("node:http", () => {
   return { default: { request: httpRequest, get: httpGet }, request: httpRequest, get: httpGet };
 });
 
+const resolveSynologyWebhookFileUrlMock = vi.fn(
+  async ({
+    sourceUrl,
+  }: {
+    account: ResolvedSynologyChatAccount;
+    sourceUrl: string;
+  }): Promise<string | null> => sourceUrl,
+);
+
+vi.mock("./media-proxy.js", () => ({
+  resolveSynologyWebhookFileUrl: resolveSynologyWebhookFileUrlMock,
+}));
+
 const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
 let sendMessage: typeof import("./client.js").sendMessage;
 let sendFileUrl: typeof import("./client.js").sendFileUrl;
 let fetchChatUsers: typeof import("./client.js").fetchChatUsers;
 let resolveLegacyWebhookNameToChatUserId: typeof import("./client.js").resolveLegacyWebhookNameToChatUserId;
+let lastMockRequestWrite = vi.fn();
 
 type RequestCallback = (res: IncomingMessage) => void;
 type MockRequestHandler = (
@@ -30,18 +45,36 @@ type MockRequestHandler = (
   callback?: RequestCallback,
 ) => ClientRequest;
 
+const testAccount: ResolvedSynologyChatAccount = {
+  accountId: "default",
+  enabled: true,
+  token: "token",
+  incomingUrl: "https://nas.example.com/incoming",
+  nasHost: "nas.example.com",
+  webhookPath: "/webhook/synology",
+  webhookPathSource: "default",
+  dangerouslyAllowNameMatching: false,
+  dangerouslyAllowInheritedWebhookPath: false,
+  dmPolicy: "open",
+  allowedUserIds: [],
+  rateLimitPerMinute: 30,
+  botName: "Bot",
+  allowInsecureSsl: false,
+};
+
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
-  const res = new EventEmitter() as Partial<IncomingMessage>;
+  const res = new EventEmitter() as IncomingMessage;
   res.statusCode = statusCode;
-  return res as IncomingMessage;
+  return res;
 }
 
 function createMockRequestEmitter(): ClientRequest {
-  const req = new EventEmitter() as Partial<ClientRequest>;
+  const req = new EventEmitter() as ClientRequest;
   req.write = vi.fn() as ClientRequest["write"];
   req.end = vi.fn() as ClientRequest["end"];
   req.destroy = vi.fn() as ClientRequest["destroy"];
-  return req as ClientRequest;
+  lastMockRequestWrite = vi.mocked(req.write);
+  return req;
 }
 
 async function settleTimers<T>(promise: Promise<T>): Promise<T> {
@@ -83,6 +116,8 @@ function installFakeTimerHarness() {
     vi.useFakeTimers();
     fakeNowMs += 10_000;
     vi.setSystemTime(fakeNowMs);
+    lastMockRequestWrite = vi.fn();
+    resolveSynologyWebhookFileUrlMock.mockImplementation(async ({ sourceUrl }) => sourceUrl);
   });
 
   afterEach(() => {
@@ -132,29 +167,114 @@ describe("sendMessage", () => {
 describe("sendFileUrl", () => {
   installFakeTimerHarness();
 
-  it("returns true on success", async () => {
+  it("returns true on success for hostname-backed file URLs when they are rewritten through the proxy", async () => {
     mockSuccessResponse();
-    const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
-    );
+    const result = await settleTimers(sendFileUrl(testAccount, "https://example.com/file.png"));
     expect(result).toBe(true);
+    expect(resolveSynologyWebhookFileUrlMock).toHaveBeenCalledWith({
+      account: testAccount,
+      sourceUrl: "https://example.com/file.png",
+    });
   });
 
-  it("returns false on failure", async () => {
+  it("returns false on failure after URL resolution succeeds", async () => {
     mockFailureResponse(500);
-    const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
-    );
+    const result = await settleTimers(sendFileUrl(testAccount, "https://example.com/file.png"));
     expect(result).toBe(false);
   });
 
   it("verifies TLS by default", async () => {
     mockSuccessResponse();
-    await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
-    );
+    await settleTimers(sendFileUrl(testAccount, "https://example.com/file.png"));
     const httpsRequest = vi.mocked(https.request);
     expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("uses the rewritten OpenClaw media URL when delivering to Synology", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(
+      "https://openclaw.example.com/webhook/synology/__openclaw-media/token-1",
+    );
+    mockSuccessResponse();
+    await settleTimers(sendFileUrl(testAccount, "https://example.com/file.png", 42));
+    expect(decodeURIComponent(String(lastMockRequestWrite.mock.calls[0]?.[0] ?? ""))).toContain(
+      "https://openclaw.example.com/webhook/synology/__openclaw-media/token-1",
+    );
+  });
+
+  it("blocks file URLs when they cannot be resolved to a safe webhook URL", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(sendFileUrl(testAccount, "https://example.com/file.png"));
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks loopback file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(
+      sendFileUrl(testAccount, "http://127.0.0.1:8080/api/internal"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks localhost file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(sendFileUrl(testAccount, "http://localhost/api/internal"));
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks private-network file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(
+      sendFileUrl(testAccount, "http://192.168.1.10/admin/config.json"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks unspecified-address file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(sendFileUrl(testAccount, "http://0.0.0.0/api/internal"));
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks IPv6 unspecified address file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(sendFileUrl(testAccount, "http://[::]/api/internal"));
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks IPv6 loopback file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(sendFileUrl(testAccount, "http://[::1]/api/internal"));
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks IPv4-mapped unspecified address file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(
+      sendFileUrl(testAccount, "http://[::ffff:0.0.0.0]/api/internal"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-http file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(sendFileUrl(testAccount, "file:///etc/passwd"));
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks malformed file URLs before reaching the NAS webhook", async () => {
+    resolveSynologyWebhookFileUrlMock.mockResolvedValueOnce(null);
+    const result = await settleTimers(sendFileUrl(testAccount, "not a url at all"));
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 });
 

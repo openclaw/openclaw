@@ -7,6 +7,8 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
+import { resolveSynologyWebhookFileUrl } from "./media-proxy.js";
+import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
@@ -126,15 +128,21 @@ export async function sendMessage(
  * Send a file URL to Synology Chat.
  */
 export async function sendFileUrl(
-  incomingUrl: string,
+  account: ResolvedSynologyChatAccount,
   fileUrl: string,
   userId?: string | number,
-  allowInsecureSsl = false,
 ): Promise<boolean> {
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
+  const resolvedFileUrl = await resolveSynologyWebhookFileUrl({
+    account,
+    sourceUrl: fileUrl,
+  });
+  if (!resolvedFileUrl) {
+    return false;
+  }
+  const body = buildWebhookBody({ file_url: resolvedFileUrl }, userId);
 
   try {
-    const ok = await doPost(incomingUrl, body, allowInsecureSsl);
+    const ok = await doPost(account.incomingUrl, body, account.allowInsecureSsl);
     lastSendTime = Date.now();
     return ok;
   } catch {

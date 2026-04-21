@@ -4,6 +4,7 @@ import { z } from "openclaw/plugin-sdk/zod";
 export const SynologyChatChannelConfigSchema = buildChannelConfigSchema(
   z
     .object({
+      publicOrigin: z.string().optional(),
       dangerouslyAllowNameMatching: z.boolean().optional(),
       dangerouslyAllowInheritedWebhookPath: z.boolean().optional(),
     })

@@ -44,6 +44,7 @@ Details: [Plugins](/tools/plugin)
 4. Finish setup in OpenClaw.
    - Guided: `openclaw onboard`
    - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
+   - If you need outbound media before the first inbound webhook arrives, set `publicOrigin` in config or `SYNOLOGY_CHAT_PUBLIC_ORIGIN=https://gateway-host`.
 5. Restart gateway and send a DM to the Synology Chat bot.
 
 Webhook auth details:
@@ -66,6 +67,7 @@ Minimal config:
       enabled: true,
       token: "synology-outgoing-token",
       incomingUrl: "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=...",
+      publicOrigin: "https://gateway.example.com",
       webhookPath: "/webhook/synology",
       dmPolicy: "allowlist",
       allowedUserIds: ["123456"],
@@ -83,6 +85,7 @@ For the default account, you can use env vars:
 - `SYNOLOGY_CHAT_TOKEN`
 - `SYNOLOGY_CHAT_INCOMING_URL`
 - `SYNOLOGY_NAS_HOST`
+- `SYNOLOGY_CHAT_PUBLIC_ORIGIN`
 - `SYNOLOGY_ALLOWED_USER_IDS` (comma-separated)
 - `SYNOLOGY_RATE_LIMIT`
 - `OPENCLAW_BOT_NAME`
@@ -113,11 +116,15 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --te
 ```
 
 Media sends are supported by URL-based file delivery.
+If you need proactive outbound media before OpenClaw has observed an inbound webhook origin,
+set `publicOrigin` or `SYNOLOGY_CHAT_PUBLIC_ORIGIN` to the public HTTPS origin that serves your
+Synology webhook path.
 
 ## Multi-account
 
 Multiple Synology Chat accounts are supported under `channels.synology-chat.accounts`.
 Each account can override token, incoming URL, webhook path, DM policy, and limits.
+Accounts can also set `publicOrigin` when they need a stable public Gateway origin for hosted media.
 Direct-message sessions are isolated per account and user, so the same numeric `user_id`
 on two different Synology accounts does not share transcript state.
 Give each enabled account a distinct `webhookPath`. OpenClaw now rejects duplicate exact paths
@@ -135,10 +142,12 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
         default: {
           token: "token-a",
           incomingUrl: "https://nas-a.example.com/...token=...",
+          publicOrigin: "https://gateway-a.example.com",
         },
         alerts: {
           token: "token-b",
           incomingUrl: "https://nas-b.example.com/...token=...",
+          publicOrigin: "https://gateway-b.example.com",
           webhookPath: "/webhook/synology-alerts",
           dmPolicy: "allowlist",
           allowedUserIds: ["987654"],
