@@ -15,11 +15,11 @@ function readRootManifest(): RootPackageManifest {
 }
 
 describe("root package override guardrails", () => {
-  it("mirrors the node-domexception alias into npm overrides", () => {
+  it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {
     const manifest = readRootManifest();
     const pnpmOverride = manifest.pnpm?.overrides?.["node-domexception"];
 
-    expect(pnpmOverride).toBe("npm:@nolyfill/domexception@^1.0.28");
+    expect(pnpmOverride).toBe("npm:@nolyfill/domexception@1.0.28");
     expect(manifest.overrides?.["node-domexception"]).toBe(pnpmOverride);
   });
 });
