@@ -9,7 +9,7 @@ import {
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
@@ -193,13 +193,15 @@ export async function promptRemoteGatewayConfig(
       });
       token = resolved.ref;
     } else {
-      token = (
-        (await prompter.text({
-          message: "Gateway token",
-          initialValue: typeof token === "string" ? token : undefined,
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        })) ?? ""
-      ).trim();
+      const rawToken = await prompter.text({
+        message: "Gateway token",
+        initialValue: typeof token === "string" ? token : undefined,
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      if (rawToken == null) {
+        throw new WizardCancelledError("text prompt returned no input (non-TTY or closed stdin)");
+      }
+      token = rawToken.trim();
     }
     password = undefined;
   } else if (authChoice === "password") {
@@ -225,13 +227,15 @@ export async function promptRemoteGatewayConfig(
       });
       password = resolved.ref;
     } else {
-      password = (
-        (await prompter.text({
-          message: "Gateway password",
-          initialValue: typeof password === "string" ? password : undefined,
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        })) ?? ""
-      ).trim();
+      const rawPassword = await prompter.text({
+        message: "Gateway password",
+        initialValue: typeof password === "string" ? password : undefined,
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      if (rawPassword == null) {
+        throw new WizardCancelledError("text prompt returned no input (non-TTY or closed stdin)");
+      }
+      password = rawPassword.trim();
     }
     token = undefined;
   } else {

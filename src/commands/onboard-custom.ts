@@ -6,7 +6,7 @@ import { OLLAMA_DEFAULT_BASE_URL } from "../plugins/provider-model-defaults.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
@@ -176,13 +176,15 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
 }
 
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
-  return (
-    (await prompter.text({
-      message: "Model ID",
-      placeholder: "e.g. llama3, claude-3-7-sonnet",
-      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-    })) ?? ""
-  ).trim();
+  const raw = await prompter.text({
+    message: "Model ID",
+    placeholder: "e.g. llama3, claude-3-7-sonnet",
+    validate: (val) => (val.trim() ? undefined : "Model ID is required"),
+  });
+  if (raw == null) {
+    throw new WizardCancelledError("text prompt returned no input (non-TTY or closed stdin)");
+  }
+  return raw.trim();
 }
 
 async function applyCustomApiRetryChoice(params: {

@@ -5,7 +5,7 @@ import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-au
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import type { WizardPrompter } from "../../wizard/prompts.js";
+import { WizardCancelledError, type WizardPrompter } from "../../wizard/prompts.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
@@ -985,13 +985,16 @@ export async function promptSingleChannelToken(params: {
   keepPrompt: string;
   inputPrompt: string;
 }): Promise<{ useEnv: boolean; token: string | null }> {
-  const promptToken = async (): Promise<string> =>
-    (
-      (await params.prompter.text({
-        message: params.inputPrompt,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })) ?? ""
-    ).trim();
+  const promptToken = async (): Promise<string> => {
+    const raw = await params.prompter.text({
+      message: params.inputPrompt,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    if (raw == null) {
+      throw new WizardCancelledError("text prompt returned no input (non-TTY or closed stdin)");
+    }
+    return raw.trim();
+  };
 
   if (params.canUseEnv) {
     const keepEnv = await params.prompter.confirm({
