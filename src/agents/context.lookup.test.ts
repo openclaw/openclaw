@@ -150,6 +150,21 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("claude-sonnet-4-5", { allowAsyncLoad: false })).toBe(222_000);
   });
 
+  it("does not treat bare sonnet as an implicit Anthropic model during cache lookup", async () => {
+    mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "sonnet", contextWindow: 222_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("sonnet", { allowAsyncLoad: false })).toBeUndefined();
+  });
+
   it("falls back from Claude CLI refs to Anthropic family aliases during cache lookup", async () => {
     mockContextModuleDeps(() => ({
       models: {
@@ -348,6 +363,31 @@ describe("lookupContextTokens", () => {
       model: "sonnet",
     });
     expect(result).toBe(222_000);
+  });
+
+  it("resolveContextTokensForModel prefers explicit claude-cli config over anthropic fallback", async () => {
+    mockDiscoveryDeps([]);
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "sonnet", contextWindow: 222_000 }],
+          },
+          "claude-cli": {
+            models: [{ id: "sonnet", contextWindow: 333_000 }],
+          },
+        },
+      },
+    };
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    const result = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "claude-cli",
+      model: "sonnet",
+    });
+    expect(result).toBe(333_000);
   });
 
   it("resolveContextTokensForModel prefers anthropic family aliases over canonical ids when both are configured", async () => {

@@ -40,15 +40,14 @@ function pushLookupCandidates(items: string[], values: Iterable<string | undefin
 
 function buildConfiguredProviderLookupIds(provider: string): string[] {
   const normalized = normalizeProviderId(provider);
-  if (normalized === "claude-cli") {
-    // Claude CLI runs Anthropic model families, so prefer Anthropic provider
-    // metadata before any claude-cli-specific overrides.
-    return ["anthropic", "claude-cli"];
-  }
-
   const lookupIds: string[] = [];
   pushUnique(lookupIds, provider);
   pushUnique(lookupIds, normalized);
+  if (normalized === "claude-cli") {
+    // Claude CLI can reuse Anthropic family metadata, but explicit claude-cli
+    // config should still win over the shared Anthropic fallback.
+    pushUnique(lookupIds, "anthropic");
+  }
   return lookupIds;
 }
 
@@ -145,8 +144,23 @@ export function buildContextCacheLookupIds(rawModelId: string): string[] {
     return lookupIds;
   }
 
-  pushLookupCandidates(lookupIds, buildAnthropicModelLookupIds(trimmed));
+  // Keep providerless cache lookups conservative. Only obviously Claude-
+  // specific bare ids should borrow Anthropic family aliases; generic family
+  // shorthands such as `sonnet` / `opus` remain provider-ambiguous.
+  if (trimmed.toLowerCase().startsWith("claude-")) {
+    pushLookupCandidates(lookupIds, buildAnthropicModelLookupIds(trimmed));
+  }
   return lookupIds;
+}
+
+export function isAmbiguousAnthropicFamilyAlias(rawModelId: string): boolean {
+  const trimmed = rawModelId.trim();
+  if (!trimmed || trimmed.includes("/")) {
+    return false;
+  }
+
+  const lower = trimmed.toLowerCase();
+  return lower === "sonnet" || lower === "opus" || lower === "sonnet[1m]" || lower === "opus[1m]";
 }
 
 export function resolveConfiguredProviderContextTokens(

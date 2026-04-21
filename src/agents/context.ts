@@ -9,6 +9,7 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   buildContextCacheLookupIds,
+  isAmbiguousAnthropicFamilyAlias,
   resolveConfiguredProviderContextTokens,
 } from "./configured-model-context.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
@@ -262,7 +263,7 @@ export function lookupContextTokens(
     void ensureContextWindowCacheLoaded();
   }
   const direct = lookupCachedContextTokens(modelId);
-  if (direct !== undefined) {
+  if (direct !== undefined && !isAmbiguousAnthropicFamilyAlias(modelId)) {
     return direct;
   }
 
