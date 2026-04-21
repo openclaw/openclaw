@@ -27,6 +27,7 @@
   "dist/extensions/signal/runtime-api.js",
   "dist/extensions/slack/runtime-api.js",
   "dist/extensions/telegram/runtime-api.js",
+  "dist/extensions/telegram/runtime-setter-api.js",
   "dist/extensions/tlon/runtime-api.js",
   "dist/extensions/twitch/runtime-api.js",
   "dist/extensions/voice-call/runtime-api.js",
