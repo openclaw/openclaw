@@ -1468,10 +1468,17 @@ async function deliverOutboundPayloadsCore(
       // text message after the media to avoid oversizing media captions (many
       // channels enforce strict caption length limits).
       // Only inline the notice when there are no surviving media items AND the
-      // payload is not a structured reply (interactive/channelData).  Structured
-      // adapters may not render payload.text, so the notice would be silently
-      // lost — keep it for the separate text-send path instead.
-      const isStructuredPayload = !!(effectivePayload.interactive || effectivePayload.channelData);
+      // payload will actually be delivered via the structured sendPayload path.
+      // Both conditions are required: the adapter must implement sendPayload AND
+      // the structured fields must contain real content (not empty objects).
+      // Otherwise the notice would be silently lost when delivery falls through
+      // to the plain-text path.
+      const isStructuredPayload =
+        !!handler.sendPayload &&
+        hasReplyPayloadContent({
+          interactive: effectivePayload.interactive,
+          channelData: effectivePayload.channelData,
+        });
       if (droppedMediaNotice && payloadSummary.mediaUrls.length === 0 && !isStructuredPayload) {
         const separator = payloadSummary.text.trim() ? "\n\n" : "";
         effectivePayload = {
