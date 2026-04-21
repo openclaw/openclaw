@@ -1,7 +1,13 @@
 import type { ErrorObject } from "ajv";
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
-import { formatValidationErrors, validateTalkConfigResult, validateWakeParams } from "./index.js";
+import {
+  formatValidationErrors,
+  validateExecApprovalsNodeSetParams,
+  validateExecApprovalsSetParams,
+  validateTalkConfigResult,
+  validateWakeParams,
+} from "./index.js";
 
 const makeError = (overrides: Partial<ErrorObject>): ErrorObject => ({
   keyword: "type",
@@ -141,6 +147,44 @@ describe("validateWakeParams", () => {
         text: "check back",
         unknownFutureField: 42,
         anotherExtra: true,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("exec approvals schema", () => {
+  const approvalsFileWithAllowAlwaysSource = {
+    version: 1 as const,
+    agents: {
+      maelcum: {
+        allowlist: [
+          {
+            pattern: "/usr/bin/curl",
+            source: "allow-always" as const,
+            lastUsedAt: 1776563902217,
+            lastUsedCommand: "curl -s http://localhost:8000/health",
+            lastResolvedPath: "/usr/bin/curl",
+          },
+        ],
+      },
+    },
+  };
+
+  it("accepts allowlist source metadata for exec.approvals.set", () => {
+    expect(
+      validateExecApprovalsSetParams({
+        file: approvalsFileWithAllowAlwaysSource,
+        baseHash: "abc123",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts allowlist source metadata for exec.approvals.node.set", () => {
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        file: approvalsFileWithAllowAlwaysSource,
+        baseHash: "abc123",
       }),
     ).toBe(true);
   });
