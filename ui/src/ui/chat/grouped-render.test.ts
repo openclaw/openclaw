@@ -1000,6 +1000,23 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("renders assistant reasoning-only messages when reasoning is visible", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Plan A" }],
+        timestamp: Date.now(),
+      },
+      { showReasoning: true, showToolCalls: false },
+    );
+
+    expect(container.querySelector(".chat-bubble")).not.toBeNull();
+    expect(container.querySelector(".chat-thinking")).not.toBeNull();
+    expect(container.textContent).toContain("Plan A");
+  });
+
   it("renders canvas-only [embed] shortcodes inside the assistant bubble", () => {
     const container = document.createElement("div");
     renderAssistantMessage(
@@ -1651,5 +1668,4 @@ describe("grouped chat rendering", () => {
       text: "",
     });
   });
-
 });
