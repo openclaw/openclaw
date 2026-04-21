@@ -216,7 +216,7 @@ function assertDeliverySupport(
   // With a single configured channel, the runtime safely defaults to it.
   if (configuredChannels && !job.delivery.channel && configuredChannels.length >= 2) {
     throw new Error(
-      `delivery.channel is required when multiple channels are configured. Active channels: ${configuredChannels.join(", ")}. Set --channel explicitly.`,
+      `delivery.channel is required when multiple channels are configured. Active channels: ${configuredChannels.join(", ")}. Set delivery.channel explicitly.`,
     );
   }
 }

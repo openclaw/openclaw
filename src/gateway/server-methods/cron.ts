@@ -51,7 +51,7 @@ function assertConfiguredAnnounceChannel(params: {
       return;
     }
     throw new Error(
-      `${params.field} is required when multiple channels are configured: ${configuredChannels.join(", ")}`,
+      `${params.field} is required when multiple channels are configured. Active channels: ${configuredChannels.join(", ")}. Set ${params.field} explicitly.`,
     );
   }
 

@@ -420,7 +420,7 @@ describe("applyJobPatch", () => {
 
   describe("channel ambiguity with configuredChannels", () => {
     const expectedError =
-      "delivery.channel is required when multiple channels are configured. Active channels: telegram, signal. Set --channel explicitly.";
+      "delivery.channel is required when multiple channels are configured. Active channels: telegram, signal. Set delivery.channel explicitly.";
 
     it("rejects a delivery patch that omits channel when 2+ channels are configured", () => {
       const job = createIsolatedAgentTurnJob("job-ambiguous-patch", {
@@ -602,7 +602,7 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
         { configuredChannels: ["telegram", "signal"] },
       ),
     ).toThrow(
-      "delivery.channel is required when multiple channels are configured. Active channels: telegram, signal. Set --channel explicitly.",
+      "delivery.channel is required when multiple channels are configured. Active channels: telegram, signal. Set delivery.channel explicitly.",
     );
   });
 });
