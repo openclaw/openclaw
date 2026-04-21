@@ -361,6 +361,18 @@ describe("sanitizeLogRecordForSink — Error payloads", () => {
     // No pattern match for a bare alnum string; no ancestor context → message passes through.
     expect(sanitized.error.message).toBe(SECRET);
   });
+
+  it("rewrites Error.stack header under a credential key so the raw secret does not leak", () => {
+    const record = { token: new Error(SECRET) };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      token: { message: string; stack: string };
+    };
+
+    expect(sanitized.token.message).toBe(MASKED);
+    expect(sanitized.token.stack).toContain(`Error: ${MASKED}`);
+    expect(sanitized.token.stack).not.toContain(SECRET);
+  });
 });
 
 // ── X2: Prototype pollution protection ─────────────────────────────────────

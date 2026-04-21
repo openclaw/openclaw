@@ -249,12 +249,27 @@ function sanitizeErrorForSink(
   seen.add(error);
   try {
     const out: JsonLikeRecord = Object.create(null) as JsonLikeRecord;
-    out.name = sanitizeStringForSink(error.name, resolved);
-    out.message = sanitizeStringForSink(error.message, resolved, {
+    const sanitizedName = sanitizeStringForSink(error.name, resolved);
+    const sanitizedMessage = sanitizeStringForSink(error.message, resolved, {
       allowDirectMask: inherited !== MaskStrength.None,
     });
+    out.name = sanitizedName;
+    out.message = sanitizedMessage;
     if (typeof error.stack === "string") {
-      out.stack = sanitizeStringForSink(error.stack, resolved);
+      const stackSanitized = sanitizeStringForSink(error.stack, resolved);
+      // Node-style stacks repeat `name: message` in the first line. When the
+      // Error sits under a credential key, rewrite that header from the already
+      // sanitized name/message pair so secrets do not leak via the stack string.
+      out.stack =
+        inherited === MaskStrength.None
+          ? stackSanitized
+          : rewriteErrorStackHeader(
+              stackSanitized,
+              error.name,
+              error.message,
+              sanitizedName,
+              sanitizedMessage,
+            );
     }
     const errorWithCause = error as Error & { cause?: unknown };
     if ("cause" in errorWithCause && errorWithCause.cause !== undefined) {
@@ -282,6 +297,31 @@ function sanitizeErrorForSink(
   } finally {
     seen.delete(error);
   }
+}
+
+function rewriteErrorStackHeader(
+  stack: string,
+  rawName: string,
+  rawMessage: string,
+  sanitizedName: string,
+  sanitizedMessage: string,
+): string {
+  const newlineIndex = stack.indexOf("\n");
+  const firstLine = newlineIndex === -1 ? stack : stack.slice(0, newlineIndex);
+  const rest = newlineIndex === -1 ? "" : stack.slice(newlineIndex);
+
+  const rawHeader = `${rawName}: ${rawMessage}`;
+  const sanitizedHeader = `${sanitizedName}: ${sanitizedMessage}`;
+  if (firstLine === rawHeader) {
+    return `${sanitizedHeader}${rest}`;
+  }
+  if (firstLine === rawMessage) {
+    return `${sanitizedMessage}${rest}`;
+  }
+  if (sanitizedMessage !== rawMessage && firstLine.includes(rawMessage)) {
+    return `${firstLine.replace(rawMessage, sanitizedMessage)}${rest}`;
+  }
+  return stack;
 }
 
 function sanitizeRecordForSink(
