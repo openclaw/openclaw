@@ -371,9 +371,12 @@ function resetRunOutcomeMocks(): void {
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   resolveDeliveryTargetMock.mockReset();
   resolveDeliveryTargetMock.mockResolvedValue({
+    ok: true,
     channel: "discord",
-    to: undefined,
+    to: "test-target",
     accountId: undefined,
+    threadId: undefined,
+    mode: "explicit",
     error: undefined,
   });
   dispatchCronDeliveryMock.mockReset();
@@ -386,11 +389,22 @@ function resetRunOutcomeMocks(): void {
       deliveryRequested,
       skipHeartbeatDelivery,
       skipMessagingToolDelivery,
+      resolvedDelivery,
     }) => ({
       result: undefined,
-      delivered: Boolean(deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery),
+      delivered: Boolean(
+        skipMessagingToolDelivery ||
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
+      ),
       deliveryAttempted: Boolean(
-        deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery,
+        skipMessagingToolDelivery ||
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
       ),
       summary,
       outputText,
