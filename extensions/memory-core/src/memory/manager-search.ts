@@ -122,6 +122,14 @@ export async function searchVector(params: {
     return [];
   }
   if (await params.ensureVectorReady(params.queryVec.length)) {
+    // Use sqlite-vec's native KNN (MATCH ? AND k = ?) for candidate selection,
+    // which runs in ~O(log N + k) via the vec0 index, instead of the previous
+    // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
+    // the SELECT so `score = 1 - dist` stays in the cosine [0, 1] range the
+    // downstream merge/minScore pipeline expects. (chunks_vec is created with
+    // sqlite-vec's default L2 distance, so v.distance cannot be used directly
+    // for scoring.)
+    const qBlob = vectorToBlob(params.queryVec);
     const rows = params.db
       .prepare(
         `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
@@ -129,15 +137,15 @@ export async function searchVector(params: {
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
           `  FROM ${params.vectorTable} v\n` +
           `  JOIN chunks c ON c.id = v.id\n` +
-          ` WHERE c.model = ?${params.sourceFilterVec.sql}\n` +
-          ` ORDER BY dist ASC\n` +
-          ` LIMIT ?`,
+          ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${params.sourceFilterVec.sql}\n` +
+          ` ORDER BY dist ASC`,
       )
       .all(
-        vectorToBlob(params.queryVec),
+        qBlob,
+        qBlob,
+        params.limit,
         params.providerModel,
         ...params.sourceFilterVec.params,
-        params.limit,
       ) as Array<{
       id: string;
       path: string;
