@@ -6,13 +6,37 @@ export type DreamDiaryBackfillEntry = {
   bodyLines: string[];
 };
 
+type MergedDiaryLine = {
+  text: string;
+  dedupeScope?: string;
+};
+
 const MERGED_DIARY_LIST_LINE_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 
-function groundedMarkdownToDiaryLines(markdown: string): string[] {
-  return markdown
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^##\s+/, "").trimEnd())
-    .filter((line, index, lines) => !(line.length === 0 && lines[index - 1]?.length === 0));
+function groundedMarkdownToDiaryLines(markdown: string): MergedDiaryLine[] {
+  const rawLines = markdown.split(/\r?\n/);
+  const lines: MergedDiaryLine[] = [];
+  let currentSection = "";
+  for (const rawLine of rawLines) {
+    const isSectionHeading = /^##\s+/.test(rawLine);
+    const text = rawLine.replace(/^##\s+/, "").trimEnd();
+    if (text.length === 0) {
+      if (lines[lines.length - 1]?.text !== "") {
+        lines.push({ text });
+      }
+      continue;
+    }
+    if (isSectionHeading) {
+      currentSection = text.trim().toLowerCase();
+      lines.push({ text });
+      continue;
+    }
+    lines.push({
+      text,
+      dedupeScope: shouldDedupeMergedDiaryLine(text) ? currentSection : undefined,
+    });
+  }
+  return lines;
 }
 
 function shouldDedupeMergedDiaryLine(line: string): boolean {
@@ -44,8 +68,12 @@ export function collectDreamDiaryBackfillEntries(params: {
       entries.set(isoDay, {
         isoDay,
         sourcePath,
-        bodyLines: [...bodyLines],
-        seenLines: new Set(bodyLines.filter((line) => shouldDedupeMergedDiaryLine(line))),
+        bodyLines: bodyLines.map((line) => line.text),
+        seenLines: new Set(
+          bodyLines
+            .filter((line) => shouldDedupeMergedDiaryLine(line.text))
+            .map((line) => `${line.dedupeScope ?? ""}\u0000${line.text}`),
+        ),
       });
       continue;
     }
@@ -55,24 +83,25 @@ export function collectDreamDiaryBackfillEntries(params: {
     if (
       existing.bodyLines.length > 0 &&
       existing.bodyLines[existing.bodyLines.length - 1] !== "" &&
-      bodyLines[0] !== ""
+      bodyLines[0]?.text !== ""
     ) {
       existing.bodyLines.push("");
     }
     for (const line of bodyLines) {
-      if (line === "") {
+      if (line.text === "") {
         if (existing.bodyLines[existing.bodyLines.length - 1] !== "") {
-          existing.bodyLines.push(line);
+          existing.bodyLines.push(line.text);
         }
         continue;
       }
-      if (shouldDedupeMergedDiaryLine(line) && existing.seenLines.has(line)) {
+      const dedupeKey = `${line.dedupeScope ?? ""}\u0000${line.text}`;
+      if (shouldDedupeMergedDiaryLine(line.text) && existing.seenLines.has(dedupeKey)) {
         continue;
       }
-      if (shouldDedupeMergedDiaryLine(line)) {
-        existing.seenLines.add(line);
+      if (shouldDedupeMergedDiaryLine(line.text)) {
+        existing.seenLines.add(dedupeKey);
       }
-      existing.bodyLines.push(line);
+      existing.bodyLines.push(line.text);
     }
   }
   return [...entries.values()].map(({ seenLines: _seenLines, ...entry }) => entry);

@@ -21,8 +21,10 @@ const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPU
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
+  "dist/plugin-sdk/packages/memory-host-sdk/src/runtime-files.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
+  "dist/plugin-sdk/src/memory-host-sdk/runtime-files.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
@@ -31,6 +33,7 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
 const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
+  "packages/plugin-sdk/dist/src/memory-host-sdk/runtime-files.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",

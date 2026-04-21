@@ -3,9 +3,17 @@
 export type { DreamDiaryBackfillEntry } from "./host/dream-diary-backfill.js";
 export type { DailyMemoryFileEntry } from "./host/daily-files.js";
 export type { DailyMemoryPathInfo, ParsedDailyMemoryFileName } from "./host/daily-paths.js";
+export type { SessionSummaryDailyMemoryDependency } from "./host/daily-content.js";
 export {
+  areSessionSummaryDailyMemoryDependenciesCurrent,
+  buildSessionSummaryDailyMemoryProbePaths,
   filterSessionSummaryDailyMemoryFiles,
+  isBenignSessionSummaryDailyMemoryProbeError,
+  isLikelyMissingSessionSummaryDailyMemory,
+  isLikelySessionSummaryDailyMemorySnippet,
   isSessionSummaryDailyMemory,
+  isSessionSummaryDailyMemoryPath,
+  SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
 } from "./host/daily-content.js";
 export { collectDreamDiaryBackfillEntries } from "./host/dream-diary-backfill.js";
 export {
@@ -18,6 +26,7 @@ export {
   compareDailyVariantPathPreference,
   extractDailyMemoryDayFromPath,
   isDailyMemoryFileName,
+  isSupportedShortTermMemoryPath,
   parseDailyMemoryFileName,
   parseDailyMemoryPathInfo,
 } from "./host/daily-paths.js";

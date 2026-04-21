@@ -1,17 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createAsyncLock, writeJsonAtomic } from "./json-files.js";
+import { withFileLock } from "./file-lock.js";
+import { writeJsonAtomic } from "./json-files.js";
 import { parseDailyMemoryFileName, type ParsedDailyMemoryFileName } from "./daily-paths.js";
+import { isSessionSummaryDailyMemory } from "./daily-session-summary.js";
 
 const DAILY_MEMORY_RECENT_INDEX_FILE_NAME = ".recent-daily-files.json";
 const DAILY_MEMORY_RECENT_INDEX_VERSION = 1;
 const DAILY_MEMORY_RECENT_INDEX_MAX_ENTRIES = 512;
-const withDailyMemoryRecentIndexLock = createAsyncLock();
+const DAILY_MEMORY_RECENT_INDEX_LOCK_OPTIONS = {
+  retries: {
+    retries: 12,
+    factor: 1.5,
+    minTimeout: 25,
+    maxTimeout: 250,
+    randomize: true,
+  },
+  stale: 30_000,
+} as const;
 
 export type DailyMemoryFileEntry = ParsedDailyMemoryFileName & {
   absolutePath: string;
   relativePath: string;
   mtimeMs: number;
+  sessionSummary?: boolean;
 };
 
 type DailyMemoryRecentIndexPayload = {
@@ -19,6 +31,7 @@ type DailyMemoryRecentIndexPayload = {
   files: Array<{
     fileName: string;
     mtimeMs: number;
+    sessionSummary?: boolean;
   }>;
 };
 
@@ -36,10 +49,22 @@ function resolveDailyMemoryRecentIndexPath(memoryDir: string): string {
   return path.join(path.dirname(memoryDir), ".openclaw", DAILY_MEMORY_RECENT_INDEX_FILE_NAME);
 }
 
+async function withDailyMemoryRecentIndexLock<T>(
+  memoryDir: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  return await withFileLock(
+    resolveDailyMemoryRecentIndexPath(memoryDir),
+    DAILY_MEMORY_RECENT_INDEX_LOCK_OPTIONS,
+    task,
+  );
+}
+
 function toDailyMemoryFileEntry(params: {
   memoryDir: string;
   fileName: string;
   mtimeMs: number;
+  sessionSummary?: boolean;
 }): DailyMemoryFileEntry | null {
   const parsed = parseDailyMemoryFileName(params.fileName);
   if (!parsed) {
@@ -50,6 +75,7 @@ function toDailyMemoryFileEntry(params: {
     absolutePath: path.join(params.memoryDir, params.fileName),
     relativePath: `memory/${params.fileName}`,
     mtimeMs: params.mtimeMs,
+    ...(params.sessionSummary ? { sessionSummary: true } : {}),
   };
 }
 
@@ -87,6 +113,50 @@ async function statDailyMemoryFile(params: {
     fileName: params.fileName,
     mtimeMs: stat.mtimeMs,
   });
+}
+
+async function resolveLiveSessionSummaryFlag(params: {
+  entry: Pick<DailyMemoryFileEntry, "absolutePath" | "canonical" | "mtimeMs">;
+  rememberedSessionSummary?: boolean;
+  rememberedMtimeMs?: number;
+  detectUnrememberedVariants?: boolean;
+}): Promise<boolean> {
+  const shouldRecheckLiveFile =
+    params.detectUnrememberedVariants ||
+    params.rememberedSessionSummary === true ||
+    params.rememberedMtimeMs !== params.entry.mtimeMs;
+  if (!shouldRecheckLiveFile) {
+    return false;
+  }
+  let raw;
+  try {
+    raw = await fs.readFile(params.entry.absolutePath, "utf-8");
+  } catch (error) {
+    if (isBenignDailyMemoryFileError(error) || isBenignDailyMemoryDirError(error)) {
+      return false;
+    }
+    throw error;
+  }
+  return isSessionSummaryDailyMemory(raw);
+}
+
+async function mergeRememberedSessionSummaryFlags(params: {
+  entries: DailyMemoryFileEntry[];
+  rememberedByFileName: ReadonlyMap<string, DailyMemoryFileEntry>;
+  detectUnrememberedVariants?: boolean;
+}): Promise<DailyMemoryFileEntry[]> {
+  return await Promise.all(
+    params.entries.map(async (entry) => {
+      const remembered = params.rememberedByFileName.get(entry.fileName);
+      const sessionSummary = await resolveLiveSessionSummaryFlag({
+        entry,
+        rememberedSessionSummary: remembered?.sessionSummary,
+        rememberedMtimeMs: remembered?.mtimeMs,
+        detectUnrememberedVariants: params.detectUnrememberedVariants,
+      });
+      return sessionSummary ? { ...entry, sessionSummary: true } : entry;
+    }),
+  );
 }
 
 async function statDailyMemoryDirectory(memoryDir: string): Promise<number | null> {
@@ -179,6 +249,7 @@ async function readDailyMemoryRecentIndex(memoryDir: string): Promise<{
         fileName: typeof entry?.fileName === "string" ? entry.fileName : "",
         mtimeMs:
           typeof entry?.mtimeMs === "number" && Number.isFinite(entry.mtimeMs) ? entry.mtimeMs : 0,
+        sessionSummary: entry?.sessionSummary === true,
       }),
     )
     .filter((entry): entry is DailyMemoryFileEntry => entry !== null);
@@ -199,10 +270,18 @@ async function persistDailyMemoryRecentIndex(
         return left.fileName.localeCompare(right.fileName);
       })
       .slice(0, DAILY_MEMORY_RECENT_INDEX_MAX_ENTRIES)
-      .map((entry) => ({
-        fileName: entry.fileName,
-        mtimeMs: entry.mtimeMs,
-      })),
+      .map((entry) =>
+        entry.sessionSummary
+          ? {
+              fileName: entry.fileName,
+              mtimeMs: entry.mtimeMs,
+              sessionSummary: true,
+            }
+          : {
+              fileName: entry.fileName,
+              mtimeMs: entry.mtimeMs,
+            },
+      ),
   };
   await writeJsonAtomic(resolveDailyMemoryRecentIndexPath(memoryDir), payload, {
     mode: 0o600,
@@ -256,18 +335,20 @@ export async function rememberRecentDailyMemoryFile(params: {
   memoryDir: string;
   fileName: string;
   mtimeMs?: number;
+  sessionSummary?: boolean;
 }): Promise<void> {
   const nextEntry = toDailyMemoryFileEntry({
     memoryDir: params.memoryDir,
     fileName: params.fileName,
     mtimeMs: params.mtimeMs ?? Date.now(),
+    sessionSummary: params.sessionSummary,
   });
   if (!nextEntry) {
     return;
   }
 
   try {
-    await withDailyMemoryRecentIndexLock(async () => {
+    await withDailyMemoryRecentIndexLock(params.memoryDir, async () => {
       const current = await readDailyMemoryRecentIndex(params.memoryDir);
       const byFileName = new Map(current.entries.map((entry) => [entry.fileName, entry] as const));
       byFileName.set(nextEntry.fileName, nextEntry);
@@ -279,6 +360,14 @@ export async function rememberRecentDailyMemoryFile(params: {
     }
     throw error;
   }
+}
+
+export async function readRememberedDailyMemoryFile(params: {
+  memoryDir: string;
+  fileName: string;
+}): Promise<DailyMemoryFileEntry | null> {
+  const indexed = await readDailyMemoryRecentIndex(params.memoryDir);
+  return indexed.entries.find((entry) => entry.fileName === params.fileName) ?? null;
 }
 
 export async function listRecentDailyMemoryFiles(params: {
@@ -313,6 +402,9 @@ export async function listRecentDailyMemoryFiles(params: {
     (memoryDirMtimeMs !== null && indexed.mtimeMs !== null && memoryDirMtimeMs > indexed.mtimeMs);
   if (!shouldRescanDirectory && indexed.exists) {
     const indexedForDays = indexed.entries.filter((entry) => targetDaySet.has(entry.day));
+    const indexedForDaysByFileName = new Map(
+      indexedForDays.map((entry) => [entry.fileName, entry] as const),
+    );
     const resolvedIndexed = await Promise.all(
       indexedForDays.map((entry) =>
         statDailyMemoryFile({
@@ -321,15 +413,15 @@ export async function listRecentDailyMemoryFiles(params: {
         }),
       ),
     );
-    recentEntries = resolvedIndexed.filter(
-      (entry): entry is DailyMemoryFileEntry => entry !== null,
-    );
-    const indexedForDaysByFileName = new Map(
-      indexedForDays.map((entry) => [entry.fileName, entry.mtimeMs] as const),
-    );
+    recentEntries = await mergeRememberedSessionSummaryFlags({
+      entries: resolvedIndexed.filter((entry): entry is DailyMemoryFileEntry => entry !== null),
+      rememberedByFileName: indexedForDaysByFileName,
+    });
     shouldRefreshIndex =
       indexedForDays.length !== recentEntries.length ||
-      recentEntries.some((entry) => indexedForDaysByFileName.get(entry.fileName) !== entry.mtimeMs);
+      recentEntries.some(
+        (entry) => indexedForDaysByFileName.get(entry.fileName)?.mtimeMs !== entry.mtimeMs,
+      );
     const recentEntriesByFileName = new Set(recentEntries.map((entry) => entry.fileName));
     const candidateFileNames = await listDailyMemoryFileNamesForDays({
       memoryDir: params.memoryDir,
@@ -339,16 +431,20 @@ export async function listRecentDailyMemoryFiles(params: {
       .map((entry) => entry.fileName)
       .filter((fileName) => !recentEntriesByFileName.has(fileName));
     if (missingFileNames.length > 0) {
-      const discoveredEntries = (
-        await Promise.all(
-          missingFileNames.map((fileName) =>
-            statDailyMemoryFile({
-              memoryDir: params.memoryDir,
-              fileName,
-            }),
-          ),
-        )
-      ).filter((entry): entry is DailyMemoryFileEntry => entry !== null);
+      const discoveredEntries = await mergeRememberedSessionSummaryFlags({
+        entries: (
+          await Promise.all(
+            missingFileNames.map((fileName) =>
+              statDailyMemoryFile({
+                memoryDir: params.memoryDir,
+                fileName,
+              }),
+            ),
+          )
+        ).filter((entry): entry is DailyMemoryFileEntry => entry !== null),
+        rememberedByFileName: indexedForDaysByFileName,
+        detectUnrememberedVariants: persistIndex,
+      });
       if (discoveredEntries.length > 0) {
         recentEntries = [...recentEntries, ...discoveredEntries];
         shouldRefreshIndex = true;
@@ -356,17 +452,22 @@ export async function listRecentDailyMemoryFiles(params: {
     }
   } else {
     if (persistIndex) {
-      const scanned = await listDailyMemoryFiles(params.memoryDir);
+      const indexedEntriesByFileName = new Map(
+        indexed.entries.map((entry) => [entry.fileName, entry] as const),
+      );
+      const scanned = await mergeRememberedSessionSummaryFlags({
+        entries: await listDailyMemoryFiles(params.memoryDir),
+        rememberedByFileName: indexedEntriesByFileName,
+        detectUnrememberedVariants: true,
+      });
       recentEntries = scanned.filter((entry) => targetDaySet.has(entry.day));
-      if (scanned.length > 0) {
-        try {
-          await withDailyMemoryRecentIndexLock(async () => {
-            await persistDailyMemoryRecentIndex(params.memoryDir, scanned);
-          });
-        } catch (error) {
-          if (!isBenignDailyMemoryDirError(error) && !isBenignDailyMemoryFileError(error)) {
-            throw error;
-          }
+      try {
+        await withDailyMemoryRecentIndexLock(params.memoryDir, async () => {
+          await persistDailyMemoryRecentIndex(params.memoryDir, scanned);
+        });
+      } catch (error) {
+        if (!isBenignDailyMemoryDirError(error) && !isBenignDailyMemoryFileError(error)) {
+          throw error;
         }
       }
     } else {
@@ -390,7 +491,7 @@ export async function listRecentDailyMemoryFiles(params: {
   if (persistIndex && shouldRefreshIndex) {
     const preservedEntries = indexed.entries.filter((entry) => !targetDaySet.has(entry.day));
     try {
-      await withDailyMemoryRecentIndexLock(async () => {
+      await withDailyMemoryRecentIndexLock(params.memoryDir, async () => {
         await persistDailyMemoryRecentIndex(params.memoryDir, [
           ...preservedEntries,
           ...recentEntries,

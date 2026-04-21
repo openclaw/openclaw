@@ -66,4 +66,46 @@ describe("collectDreamDiaryBackfillEntries", () => {
       },
     ]);
   });
+
+  it("preserves repeated list items when they belong to different same-day sections", () => {
+    const entries = collectDreamDiaryBackfillEntries({
+      files: [
+        {
+          path: "memory/2026-04-19.md",
+          renderedMarkdown: [
+            "## What Happened",
+            "- Shared bullet",
+            "",
+            "## Reflections",
+            "- Original reflection",
+          ].join("\n"),
+        },
+        {
+          path: "memory/2026-04-19-reset-summary.md",
+          renderedMarkdown: [
+            "## What Happened",
+            "- Different detail",
+            "",
+            "## Reflections",
+            "- Shared bullet",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.bodyLines).toEqual([
+      "What Happened",
+      "- Shared bullet",
+      "",
+      "Reflections",
+      "- Original reflection",
+      "",
+      "What Happened",
+      "- Different detail",
+      "",
+      "Reflections",
+      "- Shared bullet",
+    ]);
+  });
 });

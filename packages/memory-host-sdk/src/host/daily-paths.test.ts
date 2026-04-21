@@ -3,6 +3,7 @@ import {
   compareDailyVariantPathPreference,
   extractDailyMemoryDayFromPath,
   isDailyMemoryFileName,
+  isSupportedShortTermMemoryPath,
   parseDailyMemoryFileName,
   parseDailyMemoryPathInfo,
 } from "./daily-paths.js";
@@ -54,5 +55,16 @@ describe("daily-paths", () => {
         "memory/archive/2026-04-19-reset.md",
       ),
     ).toBe(0);
+  });
+
+  it("matches the runtime-supported short-term memory path shapes", () => {
+    expect(isSupportedShortTermMemoryPath("memory/2026-04-19.md")).toBe(true);
+    expect(isSupportedShortTermMemoryPath("2026-04-19-session-reset.md")).toBe(true);
+    expect(isSupportedShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-19.md")).toBe(
+      true,
+    );
+    expect(isSupportedShortTermMemoryPath("memory/archive/2026-04-19.md")).toBe(false);
+    expect(isSupportedShortTermMemoryPath("docs/memory/2026-04-19.md")).toBe(false);
+    expect(isSupportedShortTermMemoryPath("memory/dreaming/2026-04-19.md")).toBe(false);
   });
 });
