@@ -26,6 +26,9 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   if (thinkingLevel === "adaptive") {
     return "medium";
   }
+  if (thinkingLevel === "max") {
+    return "xhigh";
+  }
   return thinkingLevel;
 }
 
