@@ -1349,10 +1349,12 @@ export function buildGatewaySessionRow(params: {
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
         })
       : null;
+  const isEntryFromFallback = entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback;
   const preferLiveSubagentModelIdentity =
     Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
   const shouldUseTranscriptModelIdentity =
     runtimeModelPresent &&
+    !isEntryFromFallback &&
     !preferLiveSubagentModelIdentity &&
     (needsTranscriptTotalTokens || needsTranscriptContextTokens);
   const resolvedModelIdentity = {
@@ -1382,7 +1384,6 @@ export function buildGatewaySessionRow(params: {
       model,
       entry,
     }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
-  const isEntryFromFallback = entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback;
   // When the entry is from a fallback run, skip both the stored entry
   // context tokens and transcript-derived context tokens — both reflect the
   // fallback model's context window rather than the resolved primary model.
