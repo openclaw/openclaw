@@ -240,7 +240,7 @@ Infer commands normalize JSON output under a shared envelope:
   "capability": "image.generate",
   "transport": "local",
   "provider": "openai",
-  "model": "gpt-image-1",
+  "model": "gpt-image-2",
   "attempts": [],
   "outputs": []
 }

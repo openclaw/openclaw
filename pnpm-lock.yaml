@@ -744,9 +744,6 @@ importers:
 
   extensions/mattermost:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -1094,6 +1091,16 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/signal:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/skill-workshop:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

@@ -1642,6 +1642,7 @@ jobs:
               run_check "lint:plugins:no-extension-src-imports" pnpm run lint:plugins:no-extension-src-imports
               run_check "lint:plugins:no-extension-test-core-imports" pnpm run lint:plugins:no-extension-test-core-imports
               run_check "lint:plugins:plugin-sdk-subpaths-exported" pnpm run lint:plugins:plugin-sdk-subpaths-exported
+              run_check "deps:root-ownership:check" pnpm deps:root-ownership:check
               run_check "web-search-provider-boundary" pnpm run lint:web-search-provider-boundaries
               run_check "web-fetch-provider-boundary" pnpm run lint:web-fetch-provider-boundaries
               run_check "extension-src-outside-plugin-sdk-boundary" pnpm run lint:extensions:no-src-outside-plugin-sdk

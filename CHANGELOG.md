@@ -2,18 +2,21 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
+## 2026.4.21
 
 ### Changes
 
+- OpenAI/images: default the bundled image-generation provider and live media smoke tests to `gpt-image-2`, and advertise the newer 2K/4K OpenAI size hints in image-generation docs and tool metadata.
+- Plugins/skills: add the Skill Workshop plugin, which captures reusable workflow corrections as pending or auto-applied workspace skills, runs threshold-based reviewer passes for stronger completion bias on reusable procedures, quarantines unsafe proposals, and refreshes skill availability after safe writes.
+- Plugin SDK/channels: add presentation and skills runtime contracts, decouple channel presentation rendering, and document message presentation cards so plugins can own richer interactive surfaces without channel-specific glue.
 - Fireworks/models: add Kimi K2.6 (`fireworks/accounts/fireworks/models/kimi-k2p6`) to the bundled catalog and live-model priority list, while keeping Kimi thinking disabled for Fireworks K2.6 requests.
-- Onboard/wizard: simplify the security disclaimer copy (drop the yellow banner and warning icon in favor of plain-prose paragraphs), and flip remaining onboarding pickers with long dynamic option lists to searchable autocompletes (search provider, plugin configure, model provider filter).
+- Onboard/wizard: simplify the security disclaimer copy, and switch remaining onboarding pickers with long dynamic option lists to searchable autocompletes for search providers, plugin configuration, and model provider filtering.
 - Channels/preview streaming: stream tool-progress updates into live preview edits for Discord, Slack, and Telegram so in-flight replies show incremental tool state in the same preview message before finalization. (#69611) Thanks @thewilloftheshadow.
-- Ollama/onboard: populate the cloud-only model list from `ollama.com/api/tags` so `openclaw onboard` reflects the live cloud catalog instead of a static three-model seed; cap the discovered list at 500 and fall back to the previous hardcoded suggestions when ollama.com is unreachable or returns no models. (#68463) Thanks @BruceMacD.
+- Ollama/onboard: populate the cloud-only model list from `ollama.com/api/tags`, cap the discovered list at 500, and fall back to static suggestions when ollama.com is unavailable. (#68463) Thanks @BruceMacD.
+- QQBot: extract a self-contained engine architecture with QR-code onboarding, native approval handling via `/bot-approve`, per-account resource stacks, credential backup/restore, shared media storage, and unified API/bridge/gateway modules. (#67960) Thanks @cxyhhhhh.
 - Matrix/startup: narrow Matrix runtime registration and defer setup/doctor surfaces so cold plugin registration spends about 1.8s less in `setChannelRuntime`. (#69782) Thanks @gumadeiras.
-- QQBot: extract a self-contained `engine/` architecture with QR-code onboarding, native approval handling via `/bot-approve`, per-account isolated resource stacks and multi-account logger, credential backup/restore, shared `~/.openclaw/media` payload root, and unified API/bridge/gateway modules. (#67960) Thanks @cxyhhhhh.
-- Telegram/plugin startup: load Telegram's bundled runtime setter through a narrow sidecar and let built sidecars use native loading before falling back to jiti, cutting the measured setup-runtime registration path by about 14s while preserving runtime API compatibility. (#69786) thanks @gumadeiras.
-- Discord/plugin startup: load Discord's bundled runtime setter through a narrow sidecar so setup-runtime registration avoids the broad runtime barrel, cutting measured registration time by about 98% (18.5s to 0.44s) while preserving runtime API compatibility. (#69791) thanks @gumadeiras.
+- Telegram/plugin startup: load Telegram's bundled runtime setter through a narrow sidecar and native built-sidecar loading, cutting measured setup-runtime registration by about 14s while preserving runtime API compatibility. (#69786) Thanks @gumadeiras.
+- Discord/plugin startup: lazy-load the Carbon UI runtime and load Discord's bundled runtime setter through a narrow sidecar, cutting measured registration time by about 98% while keeping packaged installs off Carbon until the Discord UI surface is needed. (#69791) Thanks @gumadeiras.
 
 ### Fixes
 
@@ -24,6 +27,9 @@ Docs: https://docs.openclaw.ai
 - CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
 - Synology Chat: validate outbound webhook `file_url` values against the shared SSRF policy before forwarding to the NAS, rejecting malformed URLs, non-`http(s)` schemes, and private/blocked network targets so the NAS cannot be used as a confused deputy to fetch internal addresses. (#69784) Thanks @eleqtrizit.
 - Gateway/Control UI: require gateway auth on the Control UI avatar route (`GET /avatar/<agentId>` and `?meta=1` metadata) when auth is configured, matching the sibling assistant-media route, and propagate the existing gateway token through the UI avatar fetch (bearer header + authenticated blob URL) so authenticated dashboards still load local avatars. (#69775)
+- Exec/allowlist: reject POSIX parameter expansion forms such as `$VAR`, `$?`, `$$`, `$1`, and `$@` inside unquoted heredocs during shell approval analysis, so these heredocs no longer pass allowlist review as plain text. (#69795) Thanks @drobison00.
+- Gateway/MCP loopback: derive owner-only tool visibility from distinct authenticated owner vs non-owner loopback bearers instead of the caller-controlled owner header, so non-owner MCP child processes cannot recover owner access by spoofing request metadata. (#69796)
+- GitHub Copilot: update the default Opus model from `claude-opus-4.6` to `claude-opus-4.7` after GitHub removed Copilot support for 4.6. (#69818) Thanks @shakkernerd.
 
 ## 2026.4.20
 
@@ -46,7 +52,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Sessions/reset: add `/reset soft [message]` for an in-place reset that keeps the current transcript/session while clearing reused CLI backend bindings and reloading startup/bootstrap context. (#68635) Thanks @Takhoffman.
 - Exec/YOLO: stop rejecting gateway-host exec in `security=full` plus `ask=off` mode via the Python/Node script preflight hardening path, so promptless YOLO exec once again runs direct interpreter stdin and heredoc forms such as `node <<'NODE' ... NODE`.
 - OpenAI Codex: normalize legacy `openai-completions` transport overrides on default OpenAI/Codex and GitHub Copilot-compatible hosts back to the native Codex Responses transport while leaving custom proxies untouched. (#45304, #42194) Thanks @dyss1992 and @DeadlySilent.
 - Anthropic/plugins: scope Anthropic `api: "anthropic-messages"` defaulting to Anthropic-owned providers, so `openai-codex` and other providers without an explicit `api` no longer get rewritten to the wrong transport. Fixes #64534.
@@ -56,8 +61,6 @@ Docs: https://docs.openclaw.ai
 - Webchat/images: treat inline image attachments as media for empty-turn gating while still ignoring metadata-only blank turns. (#69474) Thanks @Jaswir.
 - Discord/think: only show `adaptive` in `/think` autocomplete for provider/model pairs that actually support provider-managed adaptive thinking, so GPT/OpenAI models no longer advertise an Anthropic-only option.
 - Thinking: only expose `max` for models that explicitly support provider max reasoning, and remap stored `max` settings to the largest supported thinking mode when users switch to another model.
-- Thinking/slash: remap stored `/think adaptive` to `medium` when switching to non-adaptive OpenAI models, remap unsupported `xhigh` to the nearest supported level, and cover the provider-specific option list with a live QA Lab scenario.
-- Thinking/UI: drive `/think` options and chat/Sessions pickers from provider-owned thinking profiles, so custom model level sets such as binary `on/off`, Gemini 3 Pro `off/low/high`, Anthropic `adaptive/max`, and OpenAI `xhigh` stay in one runtime contract.
 - Gateway/usage: bound the cost usage cache with FIFO eviction so date/range lookups cannot grow unbounded. (#68842) Thanks @Feelw00.
 - OpenAI/Responses: resolve `/think` levels against each GPT model's supported reasoning efforts so `/think off` no longer becomes high reasoning or sends unsupported `reasoning.effort: "none"` payloads.
 - Lobster/TaskFlow: allow managed approval resumes to use `approvalId` without a resume token, and persist that id in approval wait state. (#69559) Thanks @kirkluokun.
@@ -100,7 +103,6 @@ Docs: https://docs.openclaw.ai
 - Codex/app-server: release the session lane when a downstream consumer throws while draining the `turn/completed` notification, so follow-up messages after a Codex plugin reply stop queueing behind a stale lane lock. Fixes #67996. (#69072) Thanks @ayeshakhalid192007-dev.
 - Codex/app-server: default approval handling to `on-request` so Codex harness sessions do not start with overly permissive tool approvals. (#68721) Thanks @Lucenx9.
 - Cron/delivery: keep isolated cron chat delivery tools available, resolve `channel: "last"` targets from the gateway, show delivery previews in `cron list/show`, and avoid duplicate fallback sends after direct message-tool delivery. (#69587) Thanks @obviyus.
-- BlueBubbles: add opt-in `channels.bluebubbles.coalesceSameSenderDms` so a single composed message with text + pasted URL (which Apple splits into two webhooks ~0.8-2.0 s apart) arrives as one agent turn instead of two. When enabled, DM messages that are not linked via `associatedMessageGuid` hash to `dm:<chat>:<sender>` so the inbound debounce window merges them into a single merged turn — including URL-preview balloon events, DM control-command sends (which normally bypass debouncing), and rapid same-sender follow-ups. The default inbound debounce window widens from 500 ms to 2500 ms when the flag is set without an explicit `messages.inbound.byChannel.bluebubbles`, covering the observed Apple split-send cadence. Every source `messageId` folded into the merged view is committed to the inbound dedupe store after processing, so a later MessagePoller replay of any individual source event is recognized as a duplicate. Merged output is bounded (≤4000 chars text with an explicit `…[truncated]` marker, ≤20 attachments, first-plus-latest sampling beyond 10 source entries) so a rapid-fire flood inside the window cannot amplify the downstream prompt. Group chats and existing text+balloon follow-ups continue to key per-message. See [Coalescing split-send DMs](https://docs.openclaw.ai/channels/bluebubbles#coalescing-split-send-dms-command--url-in-one-composition) for scenarios, tuning, and troubleshooting. (#69258) Thanks @omarshahine.
 - Cron/Telegram: key isolated direct-delivery dedupe to each cron execution instead of the reused session id, so recurring Telegram announce runs no longer report delivered while silently skipping later sends. (#69000) Thanks @obviyus.
 - Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
 - Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.
@@ -130,9 +132,6 @@ Docs: https://docs.openclaw.ai
 - Slack: fix outbound replies failing with "unresolved SecretRef" for accounts configured via `file` or `exec` secret sources; the send path now tolerates the runtime snapshot retaining an unresolved channel SecretRef when a boot-resolved token override is already available. (#68954) Thanks @openperf.
 - Control UI/device pairing: explain scope and role approval upgrades during reconnects, and show requested versus approved access in the Control UI and `openclaw devices` so broader reconnects no longer look like lost pairings. (#69221) Thanks @obviyus.
 - Gateway/Control UI: surface pending scope, role, and device-metadata pairing approvals in auth errors and Control UI hints so broader reconnects no longer look like random auth breakage. (#69226) Thanks @obviyus.
-- Telegram/media: parse lowercase media directives in block replies and preserve outbound attachment filenames, so generated files send once with their original names. (#69641) Thanks @obviyus.
-- Agents/Anthropic: honor explicit `cacheRetention: "long"` for custom `anthropic-messages` endpoints by applying the 1-hour ephemeral cache TTL independently of the Anthropic/Vertex hostname allowlist. Implicit and env-driven long retention still require an allowlisted host. (#67800) Thanks @MonkeyLeeT.
-- GitHub Copilot: update the default Opus model from `claude-opus-4.6` to `claude-opus-4.7` after GitHub removed Copilot support for 4.6. (#69818) Thanks @shakkernerd.
 
 ## 2026.4.19-beta.2
 

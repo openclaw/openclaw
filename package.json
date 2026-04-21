@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.20",
+  "version": "2026.4.21",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -320,6 +320,10 @@
     "./plugin-sdk/plugin-runtime": {
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
+    },
+    "./plugin-sdk/skills-runtime": {
+      "types": "./dist/plugin-sdk/skills-runtime.d.ts",
+      "default": "./dist/plugin-sdk/skills-runtime.js"
     },
     "./plugin-sdk/channel-secret-basic-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
@@ -1282,6 +1286,7 @@
     "deadcode:ts-prune": "pnpm dlx ts-prune src extensions scripts",
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
     "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
+    "deps:root-ownership:check": "node scripts/root-dependency-ownership-audit.mjs --check",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
@@ -1382,7 +1387,8 @@
     "qa:lab:up": "node --import tsx scripts/qa-lab-up.ts",
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
-    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
+    "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
+    "release:check": "pnpm deps:root-ownership:check && pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:clawhub:check": "node --import tsx scripts/plugin-clawhub-release-check.ts",
