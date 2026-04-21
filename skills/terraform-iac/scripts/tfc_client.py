@@ -26,6 +26,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -228,12 +229,6 @@ def get_org():
     return org
 
 
-def terraform_label(value):
-    safe = "".join(ch if ch.isalnum() else "_" for ch in str(value).lower())
-    safe = safe.strip("_")
-    return safe or "x"
-
-
 def api_headers():
     return {
         "Authorization": f"Bearer {get_token()}",
@@ -243,7 +238,6 @@ def api_headers():
 
 def _resolve_terraform():
     """Resolve terraform binary to an absolute path."""
-    import shutil
     tf = shutil.which("terraform")
     if not tf:
         print("ERROR: terraform not found on PATH")
@@ -294,7 +288,6 @@ def prompt(question, default=None, choices=None):
 
 def terraform_label(value):
     """Normalize arbitrary user text into a Terraform-safe identifier."""
-    import re
     if not isinstance(value, str):
         value = str(value)
     label = value.strip().lower()
@@ -366,7 +359,6 @@ Best practices enforced:
     env      = prompt("Environment", default="prod", choices=["dev", "staging", "prod"])
 
     # Validate username
-    import re
     if not re.match(r'^[\w+=,.@-]+$', username) or len(username) > 64:
         print(f"  ❌ Invalid IAM username. Use letters, numbers, and _+=,.@- (max 64 chars)")
         sys.exit(1)
@@ -814,7 +806,6 @@ Supported runtimes: Python 3.12, Node.js 20, Go (AL2023)
         bootstrap_path = code_dir / "bootstrap"
         go_build_ok = False
         try:
-            import shutil
             if not shutil.which("go"):
                 raise FileNotFoundError("go not found on PATH")
             print("  ⏳ Compiling Go binary (GOOS=linux GOARCH=amd64)...")
@@ -1238,7 +1229,7 @@ data "terraform_remote_state" "vpc" {{
     print("    1) Allow all outbound (standard, recommended)")
     print("    2) Restrict outbound to HTTPS only (443)")
     print("    3) No outbound (fully locked down)")
-    egress_choice = prompt("Egress policy", default="3", choices=["1", "2", "3"])
+    egress_choice = prompt("Egress policy", default="1", choices=["1", "2", "3"])
 
     # Summary
     print(f"\n📋 Design Summary:")
@@ -2190,8 +2181,13 @@ import {{
   }
 """
 
+    # When import blocks are used, Terraform >= 1.5 is required
+    required_version_block = ""
+    if has_existing_org:
+        required_version_block = '  required_version = ">= 1.5.0"\n'
+
     main_tf = f"""terraform {{
-  required_providers {{
+{required_version_block}  required_providers {{
     aws = {{ source = "hashicorp/aws", version = "~> 5.0" }}
   }}
   cloud {{
@@ -3122,7 +3118,6 @@ output "trail_bucket" {{ value = {bucket_ref} }}
 
 def prompt_budget(org, workspace, outdir):
     """Interactively gather AWS Budget + Forecast alert config."""
-    import re
 
     print("""
 💰 AWS Budget & Forecast Alert Wizard
@@ -3509,7 +3504,6 @@ output "availability_zone"   {{ value = aws_instance.this.availability_zone }}
 
 def prompt_vpc(org, workspace, outdir):
     """Interactively gather VPC config with design principle guidance."""
-    import re
 
     print("""
 🏗️  VPC Design Wizard
@@ -3727,7 +3721,6 @@ output "private_subnets" {{ value = [{priv_subnet_ids}] }}
 
 def validate_iam_role_name(name):
     """Validate IAM role name rules before generating .tf files."""
-    import re
     errors = []
     if not (1 <= len(name) <= 64):
         errors.append(f"Name must be 1-64 characters (got {len(name)})")
@@ -3738,7 +3731,6 @@ def validate_iam_role_name(name):
 
 def validate_s3_bucket_name(name):
     """Validate S3 bucket name rules before generating .tf files."""
-    import re
     errors = []
     if not (3 <= len(name) <= 63):
         errors.append(f"Name must be 3-63 characters (got {len(name)})")
@@ -3761,7 +3753,6 @@ def validate_s3_bucket_name(name):
 
 def validate_landing_zone_name(name):
     """Validate landing zone names before deriving dependent names from them."""
-    import re
     errors = []
     if not (3 <= len(name) <= 63):
         errors.append(f"Name must be 3-63 characters (got {len(name)})")
@@ -3784,7 +3775,6 @@ def validate_landing_zone_name(name):
 
 def validate_azure_rg_name(name):
     """Validate Azure Resource Group name rules."""
-    import re
     errors = []
     if not (1 <= len(name) <= 90):
         errors.append(f"Name must be 1-90 characters (got {len(name)})")
