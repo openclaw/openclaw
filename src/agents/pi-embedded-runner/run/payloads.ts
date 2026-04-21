@@ -270,10 +270,11 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  const streamedAnswerTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
+    : (streamedAnswerTexts.length
+        ? streamedAnswerTexts
         : fallbackAnswerText
           ? [fallbackAnswerText]
           : []

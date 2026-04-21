@@ -528,6 +528,37 @@ export async function applyMediaUnderstanding(params: {
       ctx.MediaUnderstandingDecisions = [...(ctx.MediaUnderstandingDecisions ?? []), ...decisions];
     }
 
+    // When the primary model supports native vision, runCapability skips image
+    // understanding (no outputs). In that case ctx.Body gets no [Image: source: /path]
+    // marker, so detectAndLoadPromptImages finds nothing to load.
+    // Inject [media attached: media://inbound/<id>] markers so the image files
+    // are picked up downstream.
+    const imageSkippedForNativeVision =
+      decisions.some(
+        (d) =>
+          d.capability === "image" &&
+          d.outcome === "skipped" &&
+          d.attachments[0]?.chosen?.reason === "primary model supports vision natively",
+      ) &&
+      !outputs.some((o) => o.kind === "image.description");
+
+    if (imageSkippedForNativeVision) {
+      const mediaMarkers: string[] = [];
+      for (const att of attachments) {
+        if (att.path) {
+          // MediaPath is <mediaDir>/inbound/<id>; extract <id> for the URI.
+          const parts = att.path.split("/");
+          const filename = parts[parts.length - 1];
+          if (filename) {
+            mediaMarkers.push(`[media attached: media://inbound/${filename}]`);
+          }
+        }
+      }
+      if (mediaMarkers.length > 0) {
+        ctx.Body = ctx.Body ? `${ctx.Body}\n${mediaMarkers.join("\n")}` : mediaMarkers.join("\n");
+      }
+    }
+
     if (outputs.length > 0) {
       ctx.Body = formatMediaUnderstandingBody({ body: ctx.Body, outputs });
       const audioOutputs = outputs.filter((output) => output.kind === "audio.transcription");

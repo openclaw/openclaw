@@ -25,6 +25,9 @@ export function normalizeStringifiedOptionalString(value: unknown): string | und
 }
 
 export function normalizeOptionalLowercaseString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
   return normalizeOptionalString(value)?.toLowerCase();
 }
 

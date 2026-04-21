@@ -69,6 +69,49 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
   });
 
+  it("treats blank streamed assistant text as unavailable and keeps the final answer", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["   "],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          content: [
+            {
+              type: "text",
+              text: "Need inspect.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "item_commentary",
+                phase: "commentary",
+              }),
+            },
+            {
+              type: "text",
+              text: "Done.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "item_final",
+                phase: "final_answer",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-incomplete-turn-blank-streamed-text",
+    });
+
+    expect(result.payloads).toEqual([{ text: "Done." }]);
+    expect(result.meta.finalAssistantVisibleText).toBe("Done.");
+  });
+
   it("uses explicit agentId without a session key before surfacing the strict-agentic blocked state", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(

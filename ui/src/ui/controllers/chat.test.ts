@@ -597,6 +597,88 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages).toEqual([messages[0], messages[2]]);
   });
 
+  it("preserves optimistic local user messages missing from server history", async () => {
+    const optimisticMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      timestamp: 123,
+      __optimistic: true,
+    };
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages: [] }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [optimisticMessage],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([optimisticMessage]);
+  });
+
+  it("drops an optimistic local user message once matching server history arrives", async () => {
+    const persistedMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      timestamp: 456,
+    };
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages: [persistedMessage] }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 123,
+          __optimistic: true,
+        },
+      ],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedMessage]);
+  });
+
+  it("keeps extra optimistic duplicates until the server catches up", async () => {
+    const persistedMessage = {
+      role: "user",
+      content: [{ type: "text", text: "same text" }],
+      timestamp: 456,
+    };
+    const pendingDuplicate = {
+      role: "user",
+      content: [{ type: "text", text: "same text" }],
+      timestamp: 789,
+      __optimistic: true,
+    };
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages: [persistedMessage] }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "same text" }],
+          timestamp: 123,
+          __optimistic: true,
+        },
+        pendingDuplicate,
+      ],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedMessage, pendingDuplicate]);
+  });
+
   it("keeps a user message even if it matches the synthetic repair text", async () => {
     const messages = [
       {
