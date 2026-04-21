@@ -6,7 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
-  clearActiveMcpLoopbackRuntime,
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
@@ -156,7 +156,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
       new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (!error) {
-            clearActiveMcpLoopbackRuntime(ownerToken);
+            clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
             if (activeMcpLoopbackServer === server) {
               activeMcpLoopbackServer = undefined;
             }

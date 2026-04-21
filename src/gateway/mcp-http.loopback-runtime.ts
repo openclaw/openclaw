@@ -21,8 +21,8 @@ export function resolveMcpLoopbackBearerToken(
   return senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
 }
 
-export function clearActiveMcpLoopbackRuntime(token: string): void {
-  if (activeRuntime?.ownerToken === token || activeRuntime?.nonOwnerToken === token) {
+export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): void {
+  if (activeRuntime?.ownerToken === ownerToken) {
     activeRuntime = undefined;
   }
 }

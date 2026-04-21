@@ -167,7 +167,7 @@ export async function prepareCliRunContext(
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined,
     env: mcpLoopbackRuntime
-        ? {
+      ? {
           OPENCLAW_MCP_TOKEN:
             params.senderIsOwner === true
               ? mcpLoopbackRuntime.ownerToken
