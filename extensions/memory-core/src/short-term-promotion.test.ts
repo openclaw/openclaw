@@ -1480,6 +1480,29 @@ describe("short-term promotion", () => {
     expect(matchedKey).toBe("local");
   });
 
+  it("does not probe local source aliases for migrated Windows absolute paths", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-foo.md"),
+        "local alias should not be probed\n",
+        "utf-8",
+      );
+
+      await expect(
+        __testing.resolveShortTermSourcePathCandidates(
+          workspaceDir,
+          "C:/old/memory/2026-04-03-foo.md",
+        ),
+      ).resolves.toEqual([]);
+      expect(
+        __testing.resolveShortTermSourcePathCandidatesLegacy(
+          workspaceDir,
+          "C:/old/memory/2026-04-03-foo.md",
+        ),
+      ).toEqual([]);
+    });
+  });
+
   it("ignores identical same-day snippets across different memory subdirectories", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNoteInSubdir(workspaceDir, "daily", "2026-04-03", ["same snippet"]);
