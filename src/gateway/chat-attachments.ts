@@ -573,7 +573,19 @@ export async function describeOffloadedImagesForTextOnlyModel(params: {
 
   let updatedMessage = parsed.message;
 
-  for (const ref of parsed.offloadedRefs) {
+  // Cap per-request description fanout to avoid unbounded cost/latency.
+  // Gateway RPC schemas accept unbounded attachments arrays; without a cap,
+  // one request could trigger many sequential paid image-description calls.
+  const MAX_DESCRIBE_FANOUT = 5;
+  const refsToDescribe = parsed.offloadedRefs.slice(0, MAX_DESCRIBE_FANOUT);
+  const skippedCount = parsed.offloadedRefs.length - refsToDescribe.length;
+  if (skippedCount > 0) {
+    log?.warn(
+      `describeOffloadedImages: capping at ${MAX_DESCRIBE_FANOUT} of ${parsed.offloadedRefs.length} offloaded images; ${skippedCount} will remain as media:// markers`,
+    );
+  }
+
+  for (const ref of refsToDescribe) {
     try {
       // Resolve the physical file path from the media store
       const physicalPath = await resolveMediaBufferPath(ref.id, "inbound");
