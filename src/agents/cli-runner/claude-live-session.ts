@@ -247,7 +247,6 @@ function buildClaudeLiveFingerprint(params: {
     argv: stableArgv,
     env: Object.keys(params.env)
       .toSorted()
-      .filter((key) => key.startsWith("OPENCLAW_MCP_"))
       .map((key) => [key, params.env[key] ? sha256(params.env[key]) : ""]),
   });
 }
@@ -768,13 +767,15 @@ export async function runClaudeLiveSessionTurn(params: {
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
+  const useResume = params.args.includes("--resume") || params.args.includes("-r");
+  const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
   const argv = [
     params.context.preparedBackend.backend.command,
     ...buildClaudeLiveArgs({
       args: params.args,
       backend: params.context.preparedBackend.backend,
       systemPrompt: params.context.systemPrompt,
-      useResume: params.args.includes("--resume") || params.args.includes("-r"),
+      useResume,
     }),
   ];
   const fingerprint = buildClaudeLiveFingerprint({
@@ -791,6 +792,10 @@ export async function runClaudeLiveSessionTurn(params: {
     await params.cleanup();
   };
   let session = liveSessions.get(key) ?? null;
+  if (session && resumeCapable && !useResume) {
+    closeLiveSession(session, "restart");
+    session = null;
+  }
   if (session && session.fingerprint !== fingerprint) {
     closeLiveSession(session, "restart");
     session = null;
@@ -812,6 +817,9 @@ export async function runClaudeLiveSessionTurn(params: {
         throw error;
       }
       if (session.fingerprint !== fingerprint) {
+        closeLiveSession(session, "restart");
+        session = null;
+      } else if (resumeCapable && !useResume) {
         closeLiveSession(session, "restart");
         session = null;
       } else {

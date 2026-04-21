@@ -999,6 +999,99 @@ describe("runCliAgent spawn path", () => {
     expect(args).not.toContain("current prompt");
   });
 
+  it("restarts Claude live sessions for env changes and fresh retries", async () => {
+    const cancels: Array<ReturnType<typeof vi.fn>> = [];
+    const turnResults = ["first-ok", "resume-ok", "env-ok", "fresh-ok"];
+    let turnIndex = 0;
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const spawnIndex = supervisorSpawnMock.mock.calls.length;
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      const cancel = vi.fn();
+      cancels.push(cancel);
+      return {
+        runId: `live-run-${spawnIndex}`,
+        pid: 2345 + spawnIndex,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+            const result = turnResults[turnIndex] ?? "ok";
+            turnIndex += 1;
+            input.onStdout?.(
+              [
+                JSON.stringify({ type: "system", subtype: "init", session_id: "live-session" }),
+                JSON.stringify({
+                  type: "result",
+                  session_id: "live-session",
+                  result,
+                }),
+              ].join("\n") + "\n",
+            );
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+    const runTurn = async (runId: string, args: string[], env: Record<string, string>) => {
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId,
+        backend: {
+          liveSession: "claude-stdio",
+          resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
+        },
+      });
+      const result = await runClaudeLiveSessionTurn({
+        context,
+        args,
+        env,
+        prompt: "hi",
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          reconcileOrphans: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        cleanup: async () => {},
+      });
+      return result.output.text;
+    };
+    const freshArgs = ["-p", "--output-format", "stream-json"];
+    const resumeArgs = ["-p", "--output-format", "stream-json", "--resume", "live-session"];
+
+    await expect(
+      runTurn("run-live-fresh", freshArgs, { ANTHROPIC_BASE_URL: "https://one.example" }),
+    ).resolves.toBe("first-ok");
+    await expect(
+      runTurn("run-live-resume", resumeArgs, { ANTHROPIC_BASE_URL: "https://one.example" }),
+    ).resolves.toBe("resume-ok");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(cancels[0]).not.toHaveBeenCalled();
+
+    await expect(
+      runTurn("run-live-env-change", resumeArgs, { ANTHROPIC_BASE_URL: "https://two.example" }),
+    ).resolves.toBe("env-ok");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
+
+    await expect(
+      runTurn("run-live-fresh-retry", freshArgs, {
+        ANTHROPIC_BASE_URL: "https://two.example",
+      }),
+    ).resolves.toBe("fresh-ok");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
+    expect(cancels[1]).toHaveBeenCalledWith("manual-cancel");
+    expect(cancels[2]).not.toHaveBeenCalled();
+  });
+
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
