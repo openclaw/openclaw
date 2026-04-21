@@ -84,7 +84,6 @@ let suiteConfigRootSeq = 0;
 let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
 let activeSuiteGatewayServerCount = 0;
-const activeSuiteGatewayServers = new Set<{ __resetForTest?: () => void }>();
 let activeSuiteHookScopeCount = 0;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
@@ -442,9 +441,6 @@ async function resetGatewayTestRuntimeOnly() {
     drainSystemEvents(sessionKey);
   }
   resetAgentRunContextForTest();
-  for (const server of activeSuiteGatewayServers) {
-    server.__resetForTest?.();
-  }
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -596,7 +592,6 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   }
   const server = await mod.startGatewayServer(port, resolvedOpts);
   activeSuiteGatewayServerCount += 1;
-  activeSuiteGatewayServers.add(server);
   const originalClose = server.close.bind(server);
   let closed = false;
   server.close = (async (...args: Parameters<typeof originalClose>) => {
@@ -606,7 +601,6 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
       if (!closed) {
         closed = true;
         activeSuiteGatewayServerCount = Math.max(0, activeSuiteGatewayServerCount - 1);
-        activeSuiteGatewayServers.delete(server);
       }
     }
   }) as typeof server.close;
@@ -1039,6 +1033,7 @@ export async function connectWebchatClient(params: {
   return ws;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
 export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,

@@ -146,7 +146,6 @@ function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | un
 
 export type GatewayServer = {
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
-  __resetForTest?: () => void;
 };
 
 export type GatewayServerOptions = {
@@ -858,12 +857,6 @@ export async function startGatewayServer(
       });
       await runClosePrelude();
       await close(opts);
-    },
-    __resetForTest: () => {
-      agentRunSeq.clear();
-      dedupe.clear();
-      chatRunState.clear();
-      chatAbortControllers.clear();
     },
   };
 }

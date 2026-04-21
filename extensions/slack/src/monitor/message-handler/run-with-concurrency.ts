@@ -5,7 +5,7 @@ export async function runTasksWithConcurrency<T>(params: {
   limit: number;
   errorMode?: ConcurrencyErrorMode;
   onTaskError?: (error: unknown, index: number) => void;
-}): Promise<{ results: T[]; firstError: unknown; hasError: boolean }> {
+}): Promise<{ results: Array<T | undefined>; firstError: unknown; hasError: boolean }> {
   const { tasks, limit, onTaskError } = params;
   const errorMode = params.errorMode ?? "continue";
   if (tasks.length === 0) {
@@ -13,7 +13,7 @@ export async function runTasksWithConcurrency<T>(params: {
   }
 
   const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-  const results: T[] = Array.from({ length: tasks.length });
+  const results: Array<T | undefined> = Array.from({ length: tasks.length });
   let next = 0;
   let firstError: unknown = undefined;
   let hasError = false;
