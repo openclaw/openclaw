@@ -434,6 +434,11 @@ export function buildAgentSystemPrompt(params: {
   docsPath?: string;
   workspaceNotes?: string[];
   ttsHint?: string;
+  /** Optional override for the identity prompt line (first line of system prompt).
+   * Useful when a provider's content filter blocks the default identity string.
+   * Defaults to "You are an AI personal assistant, powered by OpenClaw."
+   */
+  identityPrompt?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
@@ -661,11 +666,11 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return params.identityPrompt ?? "You are an AI personal assistant, powered by OpenClaw.";
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    params.identityPrompt ?? "You are an AI personal assistant, powered by OpenClaw.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
