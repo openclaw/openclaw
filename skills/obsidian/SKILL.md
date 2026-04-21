@@ -100,7 +100,7 @@ obsidian property:set file="My Note" name=status value=done
 
 ```bash
 obsidian rename file="Old Name" name="New Name"   # updates all wikilinks
-obsidian move path="old/note.md" path="new/note.md"  # updates all wikilinks
+obsidian move path="old/note.md" to="new/folder/note.md"  # updates all wikilinks
 obsidian delete file="Draft Note"
 ```
 
