@@ -14,7 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- CLI/`infer model run`: surface the actual model-fallback attempts in the `model.run` envelope's `attempts` field (local and gateway transports) instead of always returning an empty array, and stop rendering the resolved default as `openrouter/openrouter/auto` in `openclaw models status` when the configured primary is `openrouter/auto`. Fixes #69527.
+- CLI/`infer model run`: surface the actual model-fallback attempts in the `model.run` envelope's `attempts` field (local and gateway transports) with token redaction and error/size caps applied before the meta is exposed, instead of always returning an empty array, and stop rendering the resolved default as `openrouter/openrouter/auto` in `openclaw models status` when the configured primary is `openrouter/auto`. Fixes #69527.
 - Telegram/status reactions: honor `messages.removeAckAfterReply` when lifecycle status reactions are enabled, clearing or restoring the reaction after success/error using the configured hold timings. (#68067) Thanks @poiskgit.
 - Web search/plugins: resolve plugin-scoped SecretRef API keys for bundled Exa, Firecrawl, Gemini, Kimi, Perplexity, Tavily, and Grok web-search providers when they are selected through the shared web-search config. (#68424) Thanks @afurm.
 - Telegram/polling: raise the default polling watchdog threshold from 90s to 120s and add configurable `channels.telegram.pollingStallThresholdMs` (also per-account) so long-running Telegram work gets more room before polling is treated as stalled. (#57737) Thanks @Vitalcheffe.

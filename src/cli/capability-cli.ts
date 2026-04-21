@@ -13,6 +13,7 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { modelsAuthLoginCommand, modelsStatusCommand } from "../commands/models.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -556,7 +557,7 @@ async function runModelRun(params: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
       meta?: {
         agentMeta?: { provider?: string; model?: string };
-        fallbackAttempts?: Array<Record<string, unknown>>;
+        fallbackAttempts?: FallbackAttempt[];
       };
     };
   } = await callGateway({

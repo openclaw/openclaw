@@ -16,6 +16,7 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -49,6 +50,7 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import type { FallbackAttempt } from "./model-fallback.types.js";
 import {
   buildAllowedModelSet,
   modelKey,
@@ -63,6 +65,34 @@ import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+const FALLBACK_ATTEMPTS_META_MAX = 16;
+const FALLBACK_ATTEMPT_ERROR_MAX_CHARS = 500;
+
+export function sanitizeFallbackAttemptsForMeta(attempts: FallbackAttempt[]): FallbackAttempt[] {
+  const capped =
+    attempts.length > FALLBACK_ATTEMPTS_META_MAX
+      ? attempts.slice(-FALLBACK_ATTEMPTS_META_MAX)
+      : attempts;
+  const sanitized: FallbackAttempt[] = [];
+  for (const attempt of capped) {
+    const redacted = redactSensitiveText(attempt.error);
+    const error =
+      redacted.length > FALLBACK_ATTEMPT_ERROR_MAX_CHARS
+        ? `${redacted.slice(0, FALLBACK_ATTEMPT_ERROR_MAX_CHARS)}…`
+        : redacted;
+    sanitized.push({
+      provider: attempt.provider,
+      model: attempt.model,
+      error,
+      reason: attempt.reason,
+      status: attempt.status,
+      code: attempt.code,
+    });
+  }
+  return sanitized;
+}
+
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
 type AcpPolicyRuntime = typeof import("../acp/policy.js");
@@ -906,7 +936,7 @@ async function agentCommandInternal(
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         if (fallbackResult.attempts.length > 0) {
-          result.meta.fallbackAttempts = fallbackResult.attempts;
+          result.meta.fallbackAttempts = sanitizeFallbackAttemptsForMeta(fallbackResult.attempts);
         }
         if (!lifecycleEnded) {
           const stopReason = result.meta.stopReason;
