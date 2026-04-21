@@ -15,6 +15,7 @@ let loadConfig: typeof import("../config.js").loadConfig;
 let clearSessionStoreCacheForTest: typeof import("./store.js").clearSessionStoreCacheForTest;
 let loadSessionStore: typeof import("./store.js").loadSessionStore;
 let saveSessionStore: typeof import("./store.js").saveSessionStore;
+let updateLastRoute: typeof import("./store.js").updateLastRoute;
 
 let mockLoadConfig: ReturnType<typeof vi.fn>;
 
@@ -37,29 +38,44 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+function createStoreWithEntryCount(
+  entryCount: number,
+  now = Date.now(),
+): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    Array.from({ length: entryCount }, (_, index) => [
+      `session-${String(index).padStart(4, "0")}`,
+      makeEntry(now - index),
+    ]),
+  );
+}
+
+function applyMaintenanceConfig(
+  mockLoadConfig: ReturnType<typeof vi.fn>,
+  maintenance: Record<string, unknown>,
+) {
   mockLoadConfig.mockReturnValue({
     session: {
-      maintenance: {
-        mode: "enforce",
-        pruneAfter: "7d",
-        maxEntries: 500,
-        rotateBytes: 10_485_760,
-      },
+      maintenance,
     },
   });
 }
 
+function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+  applyMaintenanceConfig(mockLoadConfig, {
+    mode: "enforce",
+    pruneAfter: "7d",
+    maxEntries: 500,
+    rotateBytes: 10_485_760,
+  });
+}
+
 function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
-    session: {
-      maintenance: {
-        mode: "enforce",
-        pruneAfter: "365d",
-        maxEntries: 1,
-        rotateBytes: 10_485_760,
-      },
-    },
+  applyMaintenanceConfig(mockLoadConfig, {
+    mode: "enforce",
+    pruneAfter: "365d",
+    maxEntries: 1,
+    rotateBytes: 10_485_760,
   });
 }
 
@@ -90,7 +106,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ loadConfig } = await import("../config.js"));
-    ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
+    ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore, updateLastRoute } =
       await import("./store.js"));
     mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
     testDir = await createCaseDir("pruning-integ");
@@ -225,15 +241,11 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "warn",
-          pruneAfter: "7d",
-          maxEntries: 1,
-          rotateBytes: 10_485_760,
-        },
-      },
+    applyMaintenanceConfig(mockLoadConfig, {
+      mode: "warn",
+      pruneAfter: "7d",
+      maxEntries: 1,
+      rotateBytes: 10_485_760,
     });
 
     const store = createStaleAndFreshStore();
@@ -244,6 +256,104 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.stale).toBeDefined();
     expect(loaded.fresh).toBeDefined();
     expect(Object.keys(loaded)).toHaveLength(2);
+  });
+
+  it("loadSessionStore does not trim on load when the resolved config mode is warn", async () => {
+    applyMaintenanceConfig(mockLoadConfig, {
+      mode: "warn",
+      pruneAfter: "7d",
+      maxEntries: 1,
+      rotateBytes: 10_485_760,
+      resetArchiveRetention: false,
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      oldest: makeEntry(now - 2 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(Object.keys(loaded)).toHaveLength(3);
+    expect(loaded.oldest).toBeDefined();
+    expect(loaded.recent).toBeDefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
+  it("loadSessionStore honors the resolved maxEntries config on load", async () => {
+    applyMaintenanceConfig(mockLoadConfig, {
+      mode: "enforce",
+      pruneAfter: "99999d",
+      maxEntries: 999_999,
+      rotateBytes: 10_485_760,
+      resetArchiveRetention: false,
+    });
+
+    const oversizedStore = createStoreWithEntryCount(536);
+    await fs.writeFile(storePath, JSON.stringify(oversizedStore), "utf-8");
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(Object.keys(loaded)).toHaveLength(536);
+    expect(loaded["session-0000"]).toBeDefined();
+    expect(loaded["session-0535"]).toBeDefined();
+  });
+
+  it("does not trim stores above 500 entries when config allows more", async () => {
+    applyMaintenanceConfig(mockLoadConfig, {
+      mode: "enforce",
+      pruneAfter: "99999d",
+      maxEntries: 600,
+      rotateBytes: 10_485_760,
+      resetArchiveRetention: false,
+    });
+
+    const oversizedStore = createStoreWithEntryCount(536);
+    await fs.writeFile(storePath, JSON.stringify(oversizedStore), "utf-8");
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(Object.keys(loaded)).toHaveLength(536);
+    expect(loaded["session-0500"]).toBeDefined();
+    expect(loaded["session-0535"]).toBeDefined();
+  });
+
+  it("does not persist cached load-time trimming into later writes", async () => {
+    applyMaintenanceConfig(mockLoadConfig, {
+      mode: "warn",
+      pruneAfter: "99999d",
+      maxEntries: 999_999,
+      rotateBytes: 10_485_760,
+      resetArchiveRetention: false,
+    });
+
+    const oversizedStore = createStoreWithEntryCount(536);
+    await fs.writeFile(storePath, JSON.stringify(oversizedStore), "utf-8");
+
+    const inspected = loadSessionStore(storePath, {
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        pruneAfterMs: 99999 * DAY_MS,
+        maxEntries: 500,
+        resetArchiveRetentionMs: null,
+      },
+    });
+    expect(Object.keys(inspected)).toHaveLength(500);
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: "session-0000",
+      channel: "telegram",
+      to: "12345",
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(persisted)).toHaveLength(536);
+    expect(persisted["session-0500"]).toBeDefined();
+    expect(persisted["session-0535"]).toBeDefined();
   });
 
   it("loadSessionStore prunes stale entries from oversized stores by default", async () => {
