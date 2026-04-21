@@ -12,6 +12,7 @@ const {
   createSynologyHostedMediaHandler,
   clearSynologyHostedMediaStateForTest,
   deriveSynologyPublicOrigin,
+  getSynologyHostedMediaPathPrefix,
   registerSynologyHostedMediaTransport,
   rememberSynologyHostedMediaOrigin,
   resolveSynologyWebhookFileUrl,
@@ -70,6 +71,15 @@ describe("resolveSynologyWebhookFileUrl", () => {
       maxBytes: 32 * 1024 * 1024,
       url: "https://example.com/file.png",
     });
+  });
+
+  it("normalizes slash-less webhook paths before composing the hosted-media prefix", () => {
+    expect(
+      getSynologyHostedMediaPathPrefix({
+        ...testAccount,
+        webhookPath: "webhook/synology",
+      }),
+    ).toBe("/webhook/synology/__openclaw-media/");
   });
 
   it("does not mint hosted-media tokens before the gateway transport is registered", async () => {

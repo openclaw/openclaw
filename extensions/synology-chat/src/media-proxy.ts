@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import ipaddr from "ipaddr.js";
 import { fetchRemoteMedia, MEDIA_MAX_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const MEDIA_PROXY_SEGMENT = "__openclaw-media";
@@ -171,7 +172,8 @@ function resolveForwardedHeaderValue(value: string | string[] | undefined): stri
 }
 
 export function getSynologyHostedMediaPathPrefix(account: ResolvedSynologyChatAccount): string {
-  return `${account.webhookPath.replace(/\/+$/, "")}/${MEDIA_PROXY_SEGMENT}/`;
+  const webhookPath = normalizeWebhookPath(account.webhookPath);
+  return `${webhookPath === "/" ? "" : webhookPath}/${MEDIA_PROXY_SEGMENT}/`;
 }
 
 export function registerSynologyHostedMediaTransport(account: ResolvedSynologyChatAccount): void {
