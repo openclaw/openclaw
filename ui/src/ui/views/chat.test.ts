@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
@@ -10,12 +10,21 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../chat-model.test-helpers.ts";
-import { resetAssistantAttachmentAvailabilityCacheForTest } from "../chat/grouped-render.ts";
+import {
+  cleanupUnusedManagedImagePreviewBlobUrls,
+  resetAssistantAttachmentAvailabilityCacheForTest,
+} from "../chat/grouped-render.ts";
 import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
+
+afterEach(() => {
+  cleanupUnusedManagedImagePreviewBlobUrls(document, { revokeActive: true });
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function createSessions(): SessionsListResult {
   return {
@@ -1680,6 +1689,41 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Unavailable");
   });
 
+  it("keeps legacy transcript media paths and input images in extracted images", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            normalizeMessage({
+              id: "assistant-legacy-media-paths",
+              role: "assistant",
+              content: [
+                { type: "text", text: "legacy paths" },
+                { type: "input_image", image_url: { url: "/media/input-image.png" } },
+              ],
+              MediaPath: "/media/legacy-single.png",
+              MediaPaths: ["/media/legacy-list-a.png", "/media/legacy-list-b.png"],
+              timestamp: Date.now(),
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const images = Array.from(container.querySelectorAll<HTMLImageElement>(".chat-message-image"));
+    const imageSources = images.map((image) => image.getAttribute("src"));
+    expect(imageSources).toEqual([
+      "/media/input-image.png",
+      "/media/legacy-single.png",
+      "/media/legacy-list-a.png",
+      "/media/legacy-list-b.png",
+    ]);
+  });
+
   it("renders blocked local assistant files as unavailable with a reason", () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const container = document.createElement("div");
@@ -1854,6 +1898,88 @@ describe("chat view", () => {
 
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("revokes stale managed preview blob urls when images leave the chat", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const createObjectURL = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:managed-preview-a")
+      .mockReturnValueOnce("blob:managed-preview-b");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+    const firstBlob = new Blob(["a"], { type: "image/png" });
+    const secondBlob = new Blob(["b"], { type: "image/png" });
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL) => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(firstBlob, {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(secondBlob, {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    const renderMessages = (messages: ChatProps["messages"]) =>
+      render(
+        renderChat(
+          createProps({
+            showToolCalls: false,
+            basePath: "/openclaw",
+            assistantAttachmentAuthToken: "session-token",
+            onRequestUpdate: () => renderMessages(messages),
+            messages,
+          }),
+        ),
+        container,
+      );
+
+    renderMessages([
+      {
+        id: "assistant-managed-preview-a",
+        role: "assistant",
+        content: [{ type: "image", url: "/openclaw/api/chat/media/outgoing/img-a/full" }],
+        timestamp: Date.now(),
+      },
+    ]);
+
+    return Promise.resolve()
+      .then(() => Promise.resolve())
+      .then(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      .then(() => {
+        expect(createObjectURL).toHaveBeenCalledTimes(1);
+        expect(container.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+          "blob:managed-preview-a",
+        );
+
+        renderMessages([
+          {
+            id: "assistant-managed-preview-b",
+            role: "assistant",
+            content: [{ type: "image", url: "/openclaw/api/chat/media/outgoing/img-b/full" }],
+            timestamp: Date.now(),
+          },
+        ]);
+
+        return Promise.resolve()
+          .then(() => Promise.resolve())
+          .then(() => new Promise((resolve) => setTimeout(resolve, 0)));
+      })
+      .then(() => {
+        expect(createObjectURL).toHaveBeenCalledTimes(2);
+        expect(container.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+          "blob:managed-preview-b",
+        );
+        expect(revokeObjectURL).toHaveBeenCalledWith("blob:managed-preview-a");
+        expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:managed-preview-b");
+      });
   });
 
   it("allows tilde local assistant attachments inside home-based preview roots", async () => {

@@ -185,6 +185,24 @@ function extractImages(message: unknown): ImageBlock[] {
         if (typeof imageUrl?.url === "string") {
           images.push({ url: imageUrl.url });
         }
+      } else if (b.type === "input_image") {
+        const imageUrl = b.image_url as Record<string, unknown> | undefined;
+        if (typeof imageUrl?.url === "string") {
+          images.push({ url: imageUrl.url });
+        }
+      }
+    }
+  }
+
+  const mediaPath = m.MediaPath;
+  if (typeof mediaPath === "string" && mediaPath.trim()) {
+    images.push({ url: mediaPath });
+  }
+  const mediaPaths = m.MediaPaths;
+  if (Array.isArray(mediaPaths)) {
+    for (const candidate of mediaPaths) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        images.push({ url: candidate });
       }
     }
   }

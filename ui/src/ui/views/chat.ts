@@ -10,6 +10,7 @@ import {
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
+  cleanupUnusedManagedImagePreviewBlobUrls,
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
@@ -1139,6 +1140,9 @@ function renderSlashMenu(
 }
 
 export function renderChat(props: ChatProps) {
+  if (typeof document !== "undefined") {
+    cleanupUnusedManagedImagePreviewBlobUrls(document);
+  }
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);

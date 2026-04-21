@@ -427,6 +427,9 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       deletedRecordCount += 1;
       continue;
     }
+    if (record.original?.path) {
+      referencedPaths.add(record.original.path);
+    }
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
       retainedCount += 1;
       continue;
@@ -449,9 +452,6 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       deletedRecordCount += 1;
       deletedFileCount += await deleteManagedImageRecordArtifacts(record, stateDir);
     } else {
-      if (record.original?.path) {
-        referencedPaths.add(record.original.path);
-      }
       retainedCount += 1;
     }
   }
