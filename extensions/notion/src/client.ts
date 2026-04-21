@@ -109,15 +109,13 @@ export class NotionApiClient {
   }
 
   async search(query: string, kind?: string, pageSize?: number, cursor?: string) {
-    const body: Record<string, unknown> = { query };
-    if (kind) body.filter = { property: 'object', value: kind };
-    if (pageSize) body.page_size = pageSize;
-    if (cursor) body.start_cursor = cursor;
+    const params = new URLSearchParams();
+    params.append('query', query);
+    if (kind) {params.append('filter', JSON.stringify({ property: 'object', value: kind }));}
+    if (pageSize) {params.append('page_size', String(pageSize));}
+    if (cursor) {params.append('start_cursor', cursor);}
     
-    return this.request('/search', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+    return this.request(`/search?${params.toString()}`);
   }
 
   async fetchPage(pageId: string, includeBlocks?: boolean) {
@@ -235,12 +233,12 @@ export class NotionApiClient {
     return this.request(`/comments?block_id=${blockId}&${params.toString()}`);
   }
 
-  async createComment(blockId: string, richText: unknown[], parentId?: string) {
+  async createComment(blockId: string, richText: unknown[], parentId?: string, parentType: 'page_id' | 'block_id' = 'block_id') {
     const body: Record<string, unknown> = {
-      parent: { type: blockId.startsWith('page') ? 'page_id' : 'block_id', [blockId.startsWith('page') ? 'page_id' : 'block_id']: blockId },
+      parent: { type: parentType, [parentType]: blockId },
       rich_text: richText,
     };
-    if (parentId) {body.parent_id = parentId;}
+    if (parentId) body.parent_id = parentId;
     
     return this.request('/comments', {
       method: 'POST',
