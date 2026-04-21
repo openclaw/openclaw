@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Auth/commands: require owner identity (an owner-candidate match or internal `operator.admin`) for owner-enforced commands instead of treating wildcard channel `allowFrom` or empty owner-candidate lists as sufficient, so non-owner senders can no longer reach owner-only commands through a permissive fallback when `enforceOwnerForCommands=true` and `commands.ownerAllowFrom` is unset. (#69774) Thanks @drobison00.
 - Control UI/CSP: tighten `img-src` to `'self' data:` only, and make Control UI avatar helpers drop remote `http(s)` and protocol-relative URLs so the UI falls back to the built-in logo/badge instead of issuing arbitrary remote image fetches. Same-origin avatar routes (relative paths) and `data:image/...` avatars still render. (#69773)
 - CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
+- Synology Chat: validate outbound webhook `file_url` values against the shared SSRF policy before forwarding to the NAS, rejecting malformed URLs, non-`http(s)` schemes, and private/blocked network targets so the NAS cannot be used as a confused deputy to fetch internal addresses. (#69784) Thanks @eleqtrizit.
 
 ## 2026.4.20
 
