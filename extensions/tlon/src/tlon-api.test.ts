@@ -207,4 +207,41 @@ describe("uploadFile memex upload hardening", () => {
     );
     expect(mockRelease).not.toHaveBeenCalled();
   });
+
+  it("treats unparseable ship URLs as not hosted instead of falling back to a raw-string suffix match", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    configureClient({
+      shipUrl: "foo.tlon.network",
+      shipName: "~zod",
+      verbose: false,
+      getCode: async () => "123456",
+    });
+    mockScryUrbitPath.mockImplementation(async (_deps, params) => {
+      if (params.path === "/storage/configuration.json") {
+        return {
+          currentBucket: "uploads",
+          buckets: ["uploads"],
+          publicUrlBase: "https://files.tlon.network/",
+          presignedUrl: "https://files.tlon.network/presigned",
+          region: "us-east-1",
+          service: "presigned-url",
+        };
+      }
+      if (params.path === "/storage/credentials.json") {
+        return { "storage-update": {} };
+      }
+      throw new Error(`Unexpected scry path: ${params.path}`);
+    });
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("No storage credentials configured");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockGuardedFetch).not.toHaveBeenCalled();
+    expect(mockRelease).not.toHaveBeenCalled();
+  });
 });

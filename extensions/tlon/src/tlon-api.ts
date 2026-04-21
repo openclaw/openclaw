@@ -104,10 +104,7 @@ function isHostedShipUrl(shipUrl: string): boolean {
     const { hostname } = new URL(shipUrl);
     return isHostedTlonHostname(hostname);
   } catch {
-    return (
-      hostnameMatchesDomainBoundary(shipUrl, "tlon.network") ||
-      hostnameMatchesDomainBoundary(shipUrl, "test.tlon.systems")
-    );
+    return false;
   }
 }
 
