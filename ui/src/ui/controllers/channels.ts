@@ -89,8 +89,7 @@ export async function loadChannels(
       includeAccounts: request.includeAccounts,
       timeoutMs: 8000,
     });
-    const pendingStronger = isStrongerChannelsRequest(privateState.__channelsPending, request);
-    if (privateState.__channelsRequestSeq === seq && !pendingStronger) {
+    if (privateState.__channelsRequestSeq === seq) {
       state.channelsSnapshot = res;
       state.channelsLastSuccess = Date.now();
     }

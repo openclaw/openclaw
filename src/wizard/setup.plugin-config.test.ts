@@ -458,4 +458,43 @@ describe("setupPluginConfig", () => {
     });
     expect(multiselect).not.toHaveBeenCalled();
   });
+
+  it("excludes denied plugins from quickstart personalization", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("miya", {
+            "personaLite.profileName": { label: "Profile", quickstart: true },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const multiselect = vi.fn(async () => ["miya"]);
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          deny: ["miya"],
+        },
+      },
+      workspaceDir: "/tmp",
+      prompter: {
+        note: vi.fn(async () => {}),
+        select: vi.fn() as unknown as WizardPrompter["select"],
+        multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+        text: vi.fn() as unknown as WizardPrompter["text"],
+        confirm: vi.fn() as unknown as WizardPrompter["confirm"],
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+      surface: "quickstart",
+    });
+
+    expect(result).toEqual({
+      plugins: {
+        deny: ["miya"],
+      },
+    });
+    expect(multiselect).not.toHaveBeenCalled();
+  });
 });

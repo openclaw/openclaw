@@ -317,9 +317,11 @@ export async function setupPluginConfig(params: {
 
   const unconfigured = discoverUnconfiguredPlugins({
     manifestPlugins: registry.plugins.filter((p) => {
-      // Only show enabled plugins
+      // Only show enabled plugins that are not explicitly denied.
       const entry = params.config.plugins?.entries?.[p.id];
-      // Plugin is discoverable if it's enabled or enabledByDefault and not denied
+      if (params.config.plugins?.deny?.includes(p.id)) {
+        return false;
+      }
       return p.enabledByDefault || entry?.enabled === true;
     }),
     config: params.config,
