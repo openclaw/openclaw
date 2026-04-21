@@ -167,6 +167,23 @@ describe("uploadFile memex upload hardening", () => {
     expect(mockRelease).not.toHaveBeenCalled();
   });
 
+  it("rejects Memex upload targets with a non-standard port", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network:8443/put"));
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex upload URL must not specify a non-standard port");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockGuardedFetch).not.toHaveBeenCalled();
+    expect(mockRelease).not.toHaveBeenCalled();
+  });
+
   it("rejects redirected Memex upload targets outside the hosted Tlon domain allowlist", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
@@ -183,6 +200,28 @@ describe("uploadFile memex upload hardening", () => {
         contentType: "image/png",
       }),
     ).rejects.toThrow("Memex final upload URL must target a trusted hosted Tlon domain");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockGuardedFetch).toHaveBeenCalledOnce();
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects redirected Memex upload targets with a non-standard port", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
+    mockGuardedFetch.mockResolvedValueOnce({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://uploads.tlon.network:8443/put",
+      release: mockRelease,
+    });
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex final upload URL must not specify a non-standard port");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockGuardedFetch).toHaveBeenCalledOnce();

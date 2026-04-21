@@ -134,6 +134,10 @@ function assertTrustedMemexUploadUrl(rawUrl: string, label: string): string {
     throw new Error(`${label} must target a trusted hosted Tlon domain`);
   }
 
+  if (parsed.port) {
+    throw new Error(`${label} must not specify a non-standard port`);
+  }
+
   return parsed.toString();
 }
 
