@@ -10,6 +10,7 @@ import {
 } from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
+import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<
@@ -18,6 +19,7 @@ type ProcessSupervisor = ReturnType<
 type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
+  startedAtMs: number;
   rawLines: string[];
   rawChars: number;
   sessionId?: string;
@@ -99,7 +101,7 @@ function appendArg(args: string[], flag: string): string[] {
 
 function stripFreshSessionArgs(args: string[], backend: CliBackendConfig): string[] {
   const freshSessionFlags = new Set(
-    [backend.sessionArg, "--session-id"].filter(
+    [backend.sessionArg, "--session-id", "--resume", "-r"].filter(
       (entry): entry is string => typeof entry === "string" && entry.length > 0,
     ),
   );
@@ -165,6 +167,11 @@ function buildClaudeLiveFingerprint(params: {
       )
     : undefined;
   const normalizePluginDir = Boolean(skillsFingerprint);
+  const omitValueFlags = new Set(
+    [params.context.preparedBackend.backend.systemPromptArg].filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    ),
+  );
   const unstableValueFlags = new Set(
     [
       params.context.preparedBackend.backend.sessionArg,
@@ -178,6 +185,13 @@ function buildClaudeLiveFingerprint(params: {
   const stableArgv: string[] = [];
   for (let i = 0; i < params.argv.length; i += 1) {
     const entry = params.argv[i] ?? "";
+    if (omitValueFlags.has(entry)) {
+      i += 1;
+      continue;
+    }
+    if ([...omitValueFlags].some((flag) => entry.startsWith(`${flag}=`))) {
+      continue;
+    }
     if (unstableValueFlags.has(entry)) {
       stableArgv.push("<unstable>");
       i += 1;
@@ -239,6 +253,9 @@ function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
   if (!turn) {
     return;
   }
+  cliBackendLog.info(
+    `claude live session turn: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} rawLines=${turn.rawLines.length}`,
+  );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
   session.currentTurn = null;
@@ -251,6 +268,9 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
   if (!turn) {
     return;
   }
+  cliBackendLog.warn(
+    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${String(error)}`,
+  );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
   session.currentTurn = null;
@@ -288,12 +308,15 @@ function cleanupLiveSession(session: ClaudeLiveSession): void {
 
 function closeLiveSession(
   session: ClaudeLiveSession,
-  _reason: "idle" | "restart" | "abort",
+  reason: "idle" | "restart" | "abort",
   error?: unknown,
 ): void {
   if (session.closing) {
     return;
   }
+  cliBackendLog.info(
+    `claude live session close: provider=${session.providerId} model=${session.modelId} reason=${reason}`,
+  );
   session.closing = true;
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
@@ -636,6 +659,9 @@ async function createClaudeLiveSession(params: {
     },
   );
   liveSessions.set(params.key, session);
+  cliBackendLog.info(
+    `claude live session start: provider=${session.providerId} model=${session.modelId} activeSessions=${liveSessions.size}`,
+  );
   return session;
 }
 
@@ -649,6 +675,7 @@ function createTurn(params: {
 }): ClaudeLiveTurn {
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
+    startedAtMs: Date.now(),
     rawLines: [],
     rawChars: 0,
     noOutputTimer: null,
@@ -757,6 +784,9 @@ export async function runClaudeLiveSessionTurn(params: {
       clearTimeout(session.idleTimer);
       session.idleTimer = null;
     }
+    cliBackendLog.info(
+      `claude live session reuse: provider=${session.providerId} model=${session.modelId}`,
+    );
   }
   if (session.currentTurn || session.drainingAbortedTurn) {
     throw new Error("Claude CLI live session is already handling a turn");

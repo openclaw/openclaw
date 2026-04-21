@@ -740,6 +740,68 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("reuses a Claude live session when resumed turns omit the system prompt arg", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let turn = 0;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        turn += 1;
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-system" }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-system",
+              result: turn === 1 ? "one" : "two",
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const backend = {
+      resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
+      liveSession: "claude-stdio" as const,
+    };
+    const first = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-system-1",
+        prompt: "first",
+        backend,
+      }),
+    );
+    const second = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-system-2",
+        prompt: "second",
+        backend,
+      }),
+      "live-system",
+    );
+
+    expect(first.text).toBe("one");
+    expect(second.text).toBe("two");
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
