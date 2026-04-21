@@ -156,7 +156,7 @@ function formatCliEnvKeyList(keys: readonly string[]): string {
 function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
   return [
     `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
-    `sessionKey=${childEnv.OPENCLAW_MCP_SESSION_KEY || "<empty>"}`,
+    `sessionKey=${childEnv.OPENCLAW_MCP_SESSION_KEY ? "set" : "<empty>"}`,
     `agentId=${childEnv.OPENCLAW_MCP_AGENT_ID || "<empty>"}`,
     `accountId=${childEnv.OPENCLAW_MCP_ACCOUNT_ID || "<empty>"}`,
     `messageChannel=${childEnv.OPENCLAW_MCP_MESSAGE_CHANNEL || "<empty>"}`,
