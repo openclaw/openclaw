@@ -27,10 +27,8 @@ const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
-const CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS = 10_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
-type TelegramApiAbortSignal = Parameters<TelegramBot["api"]["getUpdates"]>[1];
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -48,9 +46,6 @@ const waitForGracefulStop = async (stop: () => Promise<void>) => {
     }
   }
 };
-
-const telegramApiTimeoutSignal = (timeoutMs: number): TelegramApiAbortSignal =>
-  AbortSignal.timeout(timeoutMs) as unknown as TelegramApiAbortSignal;
 
 const resolvePollingStallThresholdMs = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -225,19 +220,10 @@ export class TelegramPollingSession {
     }
   }
 
-  async #confirmPersistedOffset(bot: TelegramBot): Promise<void> {
-    const lastUpdateId = this.opts.getLastUpdateId();
-    if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
-      return;
-    }
-    try {
-      await bot.api.getUpdates(
-        { offset: lastUpdateId + 1, limit: 1, timeout: 0 },
-        telegramApiTimeoutSignal(CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS),
-      );
-    } catch {
-      // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
-    }
+  async #confirmPersistedOffset(_bot: TelegramBot): Promise<void> {
+    // Offset confirmation removed - the runner handles duplicates via shouldSkipUpdate.
+    // The confirmation getUpdates call was causing 409 self-conflicts on restart
+    // when stale polling state existed on Telegram's side.
   }
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
