@@ -465,9 +465,9 @@
 .chat-compose .chat-compose__actions .btn {
   padding: 0 16px;
   font-size: 13px;
-  height: 40px;
-  min-height: 40px;
-  max-height: 40px;
+  height: 30px;
+  min-height: 30px;
+  max-height: 30px;
   line-height: 1;
   white-space: nowrap;
   box-sizing: border-box;
@@ -477,7 +477,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  margin: 0 18px 5px;
   padding: 0;
   background: var(--card);
   border: 1px solid var(--border);
@@ -502,10 +502,10 @@
 
 .agent-chat__input > textarea {
   width: 100%;
-  min-height: 40px;
+  min-height: 30px;
   max-height: 150px;
   resize: none;
-  padding: 12px 14px 8px;
+  padding: 4px 14px 0px;
   border: none;
   background: transparent;
   color: var(--text);
@@ -528,7 +528,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
+  padding: 0px 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 

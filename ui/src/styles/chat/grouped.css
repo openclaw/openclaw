@@ -5,9 +5,9 @@
 /* Chat Group Layout - default (assistant/other on left) */
 .chat-group {
   display: flex;
-  gap: 10px;
+  gap: 3px;
   align-items: flex-start;
-  margin-bottom: 14px;
+  margin-bottom: 3px;
   margin-left: 4px;
   margin-right: 16px;
 }
