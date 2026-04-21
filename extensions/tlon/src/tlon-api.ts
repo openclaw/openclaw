@@ -95,17 +95,27 @@ function isStorageCredentials(value: unknown): value is StorageCredentials {
   );
 }
 
+function hostnameMatchesDomainBoundary(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
 function isHostedShipUrl(shipUrl: string): boolean {
   try {
     const { hostname } = new URL(shipUrl);
-    return hostname.endsWith("tlon.network") || hostname.endsWith(".test.tlon.systems");
+    return isHostedTlonHostname(hostname);
   } catch {
-    return shipUrl.endsWith("tlon.network") || shipUrl.endsWith(".test.tlon.systems");
+    return (
+      hostnameMatchesDomainBoundary(shipUrl, "tlon.network") ||
+      hostnameMatchesDomainBoundary(shipUrl, "test.tlon.systems")
+    );
   }
 }
 
 function isHostedTlonHostname(hostname: string): boolean {
-  return hostname.endsWith("tlon.network") || hostname.endsWith(".test.tlon.systems");
+  return (
+    hostnameMatchesDomainBoundary(hostname, "tlon.network") ||
+    hostnameMatchesDomainBoundary(hostname, "test.tlon.systems")
+  );
 }
 
 function assertTrustedMemexUploadUrl(rawUrl: string, label: string): string {

@@ -152,7 +152,7 @@ describe("uploadFile memex upload hardening", () => {
 
   it("rejects Memex upload targets outside the hosted Tlon domain allowlist", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
-    fetchMock.mockResolvedValueOnce(createMemexResponse("https://attacker.example/upload"));
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://eviltlon.network/upload"));
 
     await expect(
       uploadFile({
@@ -172,7 +172,7 @@ describe("uploadFile memex upload hardening", () => {
     fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
     mockGuardedFetch.mockResolvedValueOnce({
       response: new Response(null, { status: 200 }),
-      finalUrl: "https://attacker.example/upload",
+      finalUrl: "https://eviltlon.network/upload",
       release: mockRelease,
     });
 
