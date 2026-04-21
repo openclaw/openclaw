@@ -85,6 +85,42 @@ describe("buildAssistantMessage", () => {
     expect(msg.content).toHaveLength(1);
     expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
   });
+
+  it("parses string tool_call arguments into an object", () => {
+    const response = makeOllamaResponse({
+      content: "",
+      tool_calls: [
+        {
+          function: {
+            name: "read",
+            arguments: '{"path": "/tmp/hello.txt"}' as unknown as Record<string, unknown>,
+          },
+        },
+      ],
+    });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    const toolCall = msg.content.find((c) => c.type === "toolCall");
+    expect(toolCall).toBeDefined();
+    expect(toolCall?.type === "toolCall" && toolCall.arguments).toEqual({ path: "/tmp/hello.txt" });
+  });
+
+  it("passes through object tool_call arguments unchanged", () => {
+    const response = makeOllamaResponse({
+      content: "",
+      tool_calls: [
+        {
+          function: {
+            name: "read",
+            arguments: { path: "/tmp/world.txt" },
+          },
+        },
+      ],
+    });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    const toolCall = msg.content.find((c) => c.type === "toolCall");
+    expect(toolCall).toBeDefined();
+    expect(toolCall?.type === "toolCall" && toolCall.arguments).toEqual({ path: "/tmp/world.txt" });
+  });
 });
 
 describe("createOllamaStreamFn thinking events", () => {
