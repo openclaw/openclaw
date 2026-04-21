@@ -46,7 +46,11 @@ function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy, accountId?: string
 export function createMatrixSetupWizardProxy(
   loadWizardModule: () => Promise<MatrixSetupWizardModule>,
 ): ChannelSetupWizardAdapter {
-  const loadWizard = async () => (await loadWizardModule()).matrixSetupWizard;
+  let wizardPromise: Promise<ChannelSetupWizardAdapter> | null = null;
+  const loadWizard = () => {
+    wizardPromise ??= loadWizardModule().then((module) => module.matrixSetupWizard);
+    return wizardPromise;
+  };
   return {
     channel,
     getStatus: async (ctx) => await (await loadWizard()).getStatus(ctx),

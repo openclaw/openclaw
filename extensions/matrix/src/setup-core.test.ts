@@ -68,17 +68,28 @@ describe("createMatrixSetupWizardProxy", () => {
       statusLines: ["Matrix: configured"],
     };
     const getStatus = vi.fn(async () => status);
+    const configure = vi.fn(async ({ cfg }) => ({ cfg }));
     const loader = vi.fn(async () => ({
-      matrixSetupWizard: makeFakeSetupWizard({ getStatus }),
+      matrixSetupWizard: makeFakeSetupWizard({ configure, getStatus }),
     }));
     const proxy = createMatrixSetupWizardProxy(loader);
     const cfg = { channels: { matrix: {} } } as CoreConfig;
 
     const result = await proxy.getStatus({ cfg, accountOverrides: {} });
+    const configured = await proxy.configure({
+      cfg,
+      runtime: {} as never,
+      prompter: {} as never,
+      forceAllowFrom: false,
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+    });
 
     expect(loader).toHaveBeenCalledTimes(1);
     expect(getStatus).toHaveBeenCalledWith({ cfg, accountOverrides: {} });
+    expect(configure).toHaveBeenCalledTimes(1);
     expect(result).toBe(status);
+    expect(configured).toEqual({ cfg });
   });
 
   it("keeps sync dmPolicy helpers local and lazy-loads only promptAllowFrom", async () => {
