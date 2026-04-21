@@ -73,6 +73,7 @@ describe("agents delete command", () => {
 
   it("purges deleted agent entries from the session store", async () => {
     await withStateDirEnv("openclaw-agents-delete-", async ({ stateDir }) => {
+      const now = Date.now();
       const cfg: OpenClawConfig = {
         agents: {
           list: [
@@ -85,9 +86,9 @@ describe("agents delete command", () => {
         stateDir,
         cfg,
         sessions: {
-          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: 1 },
-          "agent:ops:discord:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
-          "agent:main:main": { sessionId: "sess-main", updatedAt: 3 },
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
         },
       });
 
@@ -102,13 +103,14 @@ describe("agents delete command", () => {
         }),
       );
       expectSessionStore(storePath, {
-        "agent:main:main": { sessionId: "sess-main", updatedAt: 3 },
+        "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
     });
   });
 
   it("purges legacy main-alias entries owned by the deleted default agent", async () => {
     await withStateDirEnv("openclaw-agents-delete-main-alias-", async ({ stateDir }) => {
+      const now = Date.now();
       const cfg: OpenClawConfig = {
         agents: {
           list: [{ id: "ops", default: true, workspace: path.join(stateDir, "workspace-ops") }],
@@ -118,10 +120,13 @@ describe("agents delete command", () => {
         stateDir,
         cfg,
         sessions: {
-          "agent:main:main": { sessionId: "sess-default-alias", updatedAt: 1 },
-          "agent:ops:discord:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
-          "agent:main:discord:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
-          global: { sessionId: "sess-global", updatedAt: 4 },
+          "agent:main:main": { sessionId: "sess-default-alias", updatedAt: now + 1 },
+          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },
+          "agent:main:quietchat:direct:u2": {
+            sessionId: "sess-stale-main",
+            updatedAt: now + 3,
+          },
+          global: { sessionId: "sess-global", updatedAt: now + 4 },
         },
       });
 
@@ -129,14 +134,18 @@ describe("agents delete command", () => {
 
       expect(runtime.exit).not.toHaveBeenCalled();
       expectSessionStore(storePath, {
-        "agent:main:discord:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
-        global: { sessionId: "sess-global", updatedAt: 4 },
+        "agent:main:quietchat:direct:u2": {
+          sessionId: "sess-stale-main",
+          updatedAt: now + 3,
+        },
+        global: { sessionId: "sess-global", updatedAt: now + 4 },
       });
     });
   });
 
   it("preserves shared-store legacy default keys when deleting another agent", async () => {
     await withStateDirEnv("openclaw-agents-delete-shared-store-", async ({ stateDir }) => {
+      const now = Date.now();
       const cfg: OpenClawConfig = {
         session: { store: path.join(stateDir, "sessions.json") },
         agents: {
@@ -150,10 +159,10 @@ describe("agents delete command", () => {
         stateDir,
         cfg,
         sessions: {
-          main: { sessionId: "sess-main", updatedAt: 1 },
-          "discord:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
-          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: 3 },
-          "agent:ops:discord:direct:u2": { sessionId: "sess-ops-direct", updatedAt: 4 },
+          main: { sessionId: "sess-main", updatedAt: now + 1 },
+          "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 3 },
+          "agent:ops:quietchat:direct:u2": { sessionId: "sess-ops-direct", updatedAt: now + 4 },
         },
       });
 
@@ -161,8 +170,8 @@ describe("agents delete command", () => {
 
       expect(runtime.exit).not.toHaveBeenCalled();
       expectSessionStore(storePath, {
-        main: { sessionId: "sess-main", updatedAt: 1 },
-        "discord:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
+        main: { sessionId: "sess-main", updatedAt: now + 1 },
+        "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
       });
     });
   });

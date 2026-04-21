@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const {
@@ -168,12 +171,12 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes contract tests to the contracts config", () => {
+  it("routes plugin contract tests to the plugin contracts config", () => {
     expect(
       buildVitestRunPlans(["src/plugins/contracts/memory-embedding-provider.contract.test.ts"]),
     ).toEqual([
       {
-        config: "test/vitest/vitest.contracts.config.ts",
+        config: "test/vitest/vitest.contracts-plugin.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugins/contracts/memory-embedding-provider.contract.test.ts"],
         watchMode: false,
@@ -973,6 +976,40 @@ describe("test-projects args", () => {
     ]);
     expect(spec?.includeFilePath).toContain("openclaw-vitest-include-");
     expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec?.includeFilePath);
+  });
+
+  it("skips channel contract configs with no matching external include patterns", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-contract-include-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(
+        includeFile,
+        JSON.stringify([
+          "src/channels/plugins/contracts/surfaces-only.registry-backed-shard-b.contract.test.ts",
+        ]),
+        "utf8",
+      );
+
+      const specs = createVitestRunSpecs(
+        [
+          "test/vitest/vitest.contracts-channel-surface.config.ts",
+          "test/vitest/vitest.contracts-channel-config.config.ts",
+          "test/vitest/vitest.contracts-channel-registry.config.ts",
+          "test/vitest/vitest.contracts-channel-session.config.ts",
+        ],
+        {
+          baseEnv: {
+            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+          } as NodeJS.ProcessEnv,
+        },
+      );
+
+      expect(specs.map((spec) => spec.config)).toEqual([
+        "test/vitest/vitest.contracts-channel-config.config.ts",
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects watch mode when a command spans multiple suites", () => {

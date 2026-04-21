@@ -228,6 +228,10 @@ export type GatewayServerOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   /**
+   * Test-only: wait for post-listen sidecars such as plugin services before returning.
+   */
+  awaitStartupSidecars?: boolean;
+  /**
    * Optional startup timestamp used for concise readiness logging.
    */
   startupStartedAt?: number;
@@ -479,6 +483,7 @@ export async function startGatewayServer(
     httpServer,
     httpServers,
     httpBindHosts,
+    startListening,
     wss,
     preauthConnectionBudget,
     clients,
@@ -526,7 +531,6 @@ export async function startGatewayServer(
       getReadiness,
     }),
   );
-  startupTrace.mark("http.bound");
   const {
     nodeRegistry,
     nodePresenceTimers,
@@ -796,6 +800,8 @@ export async function startGatewayServer(
       broadcast,
       context: gatewayRequestContext,
     });
+    await startListening();
+    startupTrace.mark("http.bound");
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -830,6 +836,8 @@ export async function startGatewayServer(
         onSidecarsReady: () => {
           startupSidecarsReady = true;
         },
+        startupTrace,
+        awaitSidecars: opts.awaitStartupSidecars,
       }),
     ));
     startupTrace.mark("ready");

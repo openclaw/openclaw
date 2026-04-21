@@ -4,7 +4,7 @@ import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js"
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
   getBootstrapChannelPlugin: (
     await import("./message-action-test-fixtures.js")
-  ).createFeishuMessageActionBootstrapRegistryMock(),
+  ).createPinboardMessageActionBootstrapRegistryMock(),
 }));
 
 describe("actionRequiresTarget", () => {
@@ -26,32 +26,32 @@ describe("actionHasTarget", () => {
     {
       action: "read",
       params: { messageId: "msg_123" },
-      ctx: { channel: "feishu" },
+      ctx: { channel: "pinboard" },
       expected: true,
     },
     { action: "edit", params: { messageId: "  msg_123  " }, expected: true },
     {
       action: "pin",
       params: { messageId: "msg_123" },
-      ctx: { channel: "feishu" },
+      ctx: { channel: "pinboard" },
       expected: true,
     },
     {
       action: "unpin",
       params: { messageId: "msg_123" },
-      ctx: { channel: "feishu" },
+      ctx: { channel: "pinboard" },
       expected: true,
     },
     {
       action: "list-pins",
       params: { chatId: "oc_123" },
-      ctx: { channel: "feishu" },
+      ctx: { channel: "pinboard" },
       expected: true,
     },
     {
       action: "channel-info",
       params: { chatId: "oc_123" },
-      ctx: { channel: "feishu" },
+      ctx: { channel: "pinboard" },
       expected: true,
     },
     { action: "react", params: { chatGuid: "chat-guid" }, expected: true },
@@ -61,13 +61,13 @@ describe("actionHasTarget", () => {
     {
       action: "pin",
       params: { messageId: "msg_123" },
-      ctx: { channel: "slack" },
+      ctx: { channel: "workspace" },
       expected: false,
     },
     {
       action: "channel-info",
       params: { chatId: "oc_123" },
-      ctx: { channel: "discord" },
+      ctx: { channel: "richchat" },
       expected: false,
     },
     { action: "edit", params: { messageId: "   " }, expected: false },

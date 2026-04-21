@@ -465,7 +465,7 @@ describe("openai codex provider", () => {
 
     expect(model).toMatchObject({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 
@@ -491,7 +491,59 @@ describe("openai codex provider", () => {
 
     expect(model).toMatchObject({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("normalizes legacy completions metadata to the codex transport", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("normalizes legacy GitHub Copilot Codex metadata to the codex transport", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.githubcopilot.com",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 
@@ -506,7 +558,49 @@ describe("openai codex provider", () => {
       } as never),
     ).toEqual({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
+  });
+
+  it("normalizes transport metadata for legacy completions codex routes", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("normalizes transport metadata for legacy GitHub Copilot Codex routes", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.githubcopilot.com/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("leaves custom proxy completions transport metadata unchanged", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+      } as never),
+    ).toBeUndefined();
   });
 });

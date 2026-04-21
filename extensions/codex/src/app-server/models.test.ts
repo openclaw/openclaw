@@ -1,7 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
-import { listCodexAppServerModels } from "./models.js";
-import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 
 const mocks = vi.hoisted(() => {
@@ -22,7 +20,15 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   resolveOpenClawAgentDir: mocks.providerAuth.agentDir,
 }));
 
+let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
+let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
+
 describe("listCodexAppServerModels", () => {
+  beforeAll(async () => {
+    ({ listCodexAppServerModels } = await import("./models.js"));
+    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.js"));
+  });
+
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
     vi.restoreAllMocks();

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import "./message-handler-mock-support.test-support.js";
+import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
 
@@ -15,14 +17,7 @@ type TestAttachment = {
   content: string;
 };
 
-const runtimeApiMockState = vi.hoisted(() => ({
-  dispatchReplyFromConfigWithSettledDispatcher: vi.fn(async (params: { ctxPayload: unknown }) => ({
-    queuedFinal: false,
-    counts: {},
-    capturedCtxPayload: params.ctxPayload,
-  })),
-}));
-
+const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
   resolveTeamGroupId: vi.fn(async () => "group-1"),
   fetchChannelMessage: vi.fn<
@@ -44,16 +39,6 @@ const graphThreadMockState = vi.hoisted(() => ({
   >(async () => []),
 }));
 
-vi.mock("../../runtime-api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
-  return {
-    ...actual,
-    dispatchReplyFromConfigWithSettledDispatcher:
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-  };
-});
-
 vi.mock("../graph-thread.js", async () => {
   const actual = await vi.importActual<typeof import("../graph-thread.js")>("../graph-thread.js");
   return {
@@ -63,14 +48,6 @@ vi.mock("../graph-thread.js", async () => {
     fetchThreadReplies: graphThreadMockState.fetchThreadReplies,
   };
 });
-
-vi.mock("../reply-dispatcher.js", () => ({
-  createMSTeamsReplyDispatcher: () => ({
-    dispatcher: {},
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-  }),
-}));
 
 describe("msteams monitor handler authz", () => {
   function createDeps(cfg: OpenClawConfig) {

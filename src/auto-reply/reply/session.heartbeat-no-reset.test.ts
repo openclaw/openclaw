@@ -55,8 +55,8 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     From: "user123",
     To: "bot123",
     SessionKey: "main:user123",
-    Provider: "telegram",
-    Surface: "telegram",
+    Provider: "quietchat",
+    Surface: "quietchat",
     ChatType: "direct",
     CommandAuthorized: true,
     ...overrides,
@@ -107,7 +107,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
 
     const cfg = createBaseConfig();
     const ctx = createBaseCtx({
-      Provider: "telegram", // Regular provider - SHOULD trigger reset if stale
+      Provider: "quietchat", // Regular provider - SHOULD trigger reset if stale
       Body: "test message",
     });
 

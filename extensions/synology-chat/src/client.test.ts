@@ -4,15 +4,16 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 
 // Mock http and https modules before importing the client
 vi.mock("node:https", () => {
-  const mockRequest = vi.fn();
-  const mockGet = vi.fn();
-  return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
+  const httpsRequest = vi.fn();
+  const httpsGet = vi.fn();
+  const httpsModule = { request: httpsRequest, get: httpsGet };
+  return { default: httpsModule, request: httpsRequest, get: httpsGet };
 });
 
 vi.mock("node:http", () => {
-  const mockRequest = vi.fn();
-  const mockGet = vi.fn();
-  return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
+  const httpRequest = vi.fn();
+  const httpGet = vi.fn();
+  return { default: { request: httpRequest, get: httpGet }, request: httpRequest, get: httpGet };
 });
 
 const https = await import("node:https");
