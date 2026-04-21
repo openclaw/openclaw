@@ -2,11 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  areSessionSummaryDailyMemoryDependenciesCurrent,
   compareDailyVariantPathPreference,
   extractDailyMemoryDayFromPath,
+  isSupportedShortTermMemoryPath,
+  isSessionSummaryDailyMemory,
+  isSessionSummaryDailyMemoryPath,
   parseDailyMemoryPathInfo,
   parseDailyMemoryFileName,
   type MemorySearchResult,
+  type SessionSummaryDailyMemoryDependency,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
@@ -19,10 +24,6 @@ import {
 } from "./concept-vocabulary.js";
 import { asRecord } from "./dreaming-shared.js";
 
-const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
-const SHORT_TERM_MEMORY_DIR_RE = /(?:^|\/)memory\/(?:[^/]+\/)*[^/]+$/;
-const SHORT_TERM_SESSION_CORPUS_RE =
-  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
@@ -47,6 +48,7 @@ const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
+const shortTermStoreCache = new Map<string, ShortTermStoreCacheEntry>();
 
 type PromotionWeights = {
   frequency: number;
@@ -90,6 +92,7 @@ export type ShortTermRecallEntry = {
 type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
+  sessionSummaryPurgedAt?: string;
   entries: Record<string, ShortTermRecallEntry>;
 };
 
@@ -107,7 +110,14 @@ type ShortTermPhaseSignalStore = {
   entries: Record<string, ShortTermPhaseSignalEntry>;
 };
 
-type PromotionComponents = {
+type ShortTermStoreCacheEntry = {
+  rawHash: string;
+  recentDailyIndexHash: string;
+  dependencies: SessionSummaryDailyMemoryDependency[];
+  store: ShortTermRecallStore;
+};
+
+export type PromotionComponents = {
   frequency: number;
   relevance: number;
   diversity: number;
@@ -364,6 +374,57 @@ function mergeRecentDistinct(existing: string[], nextValue: string, limit: numbe
   return next.slice(next.length - limit);
 }
 
+function buildShortTermStoreRawHash(raw: string): string {
+  return createHash("sha1").update(raw).digest("hex");
+}
+
+function serializeShortTermRecallStore(store: ShortTermRecallStore): string {
+  return `${JSON.stringify(store, null, 2)}\n`;
+}
+
+async function readRecentDailyIndexHash(workspaceDir: string): Promise<string> {
+  const indexPath = path.join(workspaceDir, ".openclaw", ".recent-daily-files.json");
+  try {
+    return `present:${buildShortTermStoreRawHash(await fs.readFile(indexPath, "utf-8"))}`;
+  } catch (error) {
+    if (isBenignSourcePathProbeError(error)) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "missing";
+      return `missing:${code}`;
+    }
+    throw error;
+  }
+}
+
+function cloneShortTermRecallEntry(entry: ShortTermRecallEntry): ShortTermRecallEntry {
+  return {
+    ...entry,
+    queryHashes: [...entry.queryHashes],
+    recallDays: [...entry.recallDays],
+    conceptTags: [...entry.conceptTags],
+  };
+}
+
+function cloneShortTermRecallStore(store: ShortTermRecallStore): ShortTermRecallStore {
+  return {
+    ...store,
+    entries: Object.fromEntries(
+      Object.entries(store.entries).map(([key, entry]) => [key, cloneShortTermRecallEntry(entry)]),
+    ),
+  };
+}
+
+function cloneSessionSummaryDailyMemoryDependencies(
+  dependencies: SessionSummaryDailyMemoryDependency[],
+): SessionSummaryDailyMemoryDependency[] {
+  return dependencies.map((dependency) => ({ ...dependency }));
+}
+
+function buildSessionSummaryDailyMemoryDependencyKey(
+  dependency: SessionSummaryDailyMemoryDependency,
+): string {
+  return `${dependency.kind}\u0000${dependency.absolutePath}`;
+}
+
 function normalizeIsoDay(isoLike: string): string | null {
   if (typeof isoLike !== "string") {
     return null;
@@ -372,22 +433,68 @@ function normalizeIsoDay(isoLike: string): string | null {
   return match?.[1] ?? null;
 }
 
+function resolveDailyVariantComparableDir(filePath: string): string | null {
+  const normalizedPath = normalizeMemoryPath(filePath);
+  const parsed = parseDailyMemoryFileName(path.posix.basename(normalizedPath));
+  if (!parsed) {
+    return null;
+  }
+  const relativeFromMemory = normalizedPath.match(/(?:^|.*\/)(memory\/.+)$/)?.[1];
+  if (relativeFromMemory) {
+    return path.posix.dirname(relativeFromMemory);
+  }
+  if (normalizedPath === parsed.fileName) {
+    return "memory";
+  }
+  return path.posix.dirname(normalizedPath);
+}
+
+function isLegacyBasenameDailyMemoryPath(filePath: string): boolean {
+  const normalizedPath = normalizeMemoryPath(filePath);
+  const parsed = parseDailyMemoryFileName(path.posix.basename(normalizedPath));
+  return parsed !== null && normalizedPath === parsed.fileName;
+}
+
+function isMergeableSameDayDailyVariantPair(leftPath: string, rightPath: string): boolean {
+  const left = parseDailyMemoryPathInfo(leftPath);
+  const right = parseDailyMemoryPathInfo(rightPath);
+  if (!left || !right || left.day !== right.day) {
+    return false;
+  }
+  if (resolveDailyVariantComparableDir(leftPath) !== resolveDailyVariantComparableDir(rightPath)) {
+    return false;
+  }
+  if (left.normalizedPath === right.normalizedPath) {
+    return true;
+  }
+  return left.canonical || right.canonical;
+}
+
 function findExistingDailyVariantEntryKey(params: {
   entries: Record<string, ShortTermRecallEntry>;
   claimHash?: string;
   candidatePath?: string;
+  candidateStartLine?: number;
+  candidateEndLine?: number;
 }): string | null {
   if (!params.claimHash || !params.candidatePath) {
     return null;
   }
   const normalizedCandidatePath = normalizeMemoryPath(params.candidatePath);
+  const candidateStartLine = Math.max(1, Math.floor(params.candidateStartLine ?? 1));
+  const candidateEndLine = Math.max(1, Math.floor(params.candidateEndLine ?? candidateStartLine));
   const candidateDay = extractDailyMemoryDayFromPath(normalizedCandidatePath);
   if (!candidateDay) {
     return null;
   }
-  const candidateDir = path.posix.dirname(normalizedCandidatePath);
+  const candidateDir = resolveDailyVariantComparableDir(normalizedCandidatePath);
+  if (!candidateDir) {
+    return null;
+  }
+  let exactVariantKey: string | null = null;
   let preferredKey: string | null = null;
   let preferredPath: string | null = null;
+  let preferredLineDistance = Number.POSITIVE_INFINITY;
   for (const [key, entry] of Object.entries(params.entries)) {
     if (!entry || entry.source !== "memory" || entry.claimHash !== params.claimHash) {
       continue;
@@ -396,22 +503,34 @@ function findExistingDailyVariantEntryKey(params: {
     if (extractDailyMemoryDayFromPath(normalizedEntryPath) !== candidateDay) {
       continue;
     }
-    if (path.posix.dirname(normalizedEntryPath) !== candidateDir) {
+    if (resolveDailyVariantComparableDir(normalizedEntryPath) !== candidateDir) {
+      continue;
+    }
+    if (!isMergeableSameDayDailyVariantPair(normalizedEntryPath, normalizedCandidatePath)) {
       continue;
     }
     if (normalizedEntryPath === normalizedCandidatePath) {
-      continue;
+      if (entry.startLine !== candidateStartLine || entry.endLine !== candidateEndLine) {
+        continue;
+      }
+      exactVariantKey = key;
+      break;
     }
+    const lineDistance =
+      Math.abs(entry.startLine - candidateStartLine) + Math.abs(entry.endLine - candidateEndLine);
     if (
       preferredKey === null ||
-      preferredPath === null ||
-      compareDailyVariantPathPreference(normalizedEntryPath, preferredPath) < 0
+      lineDistance < preferredLineDistance ||
+      (lineDistance === preferredLineDistance &&
+        (preferredPath === null ||
+          compareDailyVariantPathPreference(normalizedEntryPath, preferredPath) < 0))
     ) {
       preferredKey = key;
       preferredPath = normalizedEntryPath;
+      preferredLineDistance = lineDistance;
     }
   }
-  return preferredKey;
+  return exactVariantKey ?? preferredKey;
 }
 
 function resolveMergedEntryLocation(params: {
@@ -445,6 +564,26 @@ function resolveMergedEntryLocation(params: {
   if (preference > 0) {
     return candidateLocation;
   }
+  if (
+    isLegacyBasenameDailyMemoryPath(normalizedExistingPath) &&
+    !isLegacyBasenameDailyMemoryPath(normalizedCandidatePath) &&
+    resolveDailyVariantComparableDir(normalizedExistingPath) ===
+      resolveDailyVariantComparableDir(normalizedCandidatePath) &&
+    extractDailyMemoryDayFromPath(normalizedExistingPath) ===
+      extractDailyMemoryDayFromPath(normalizedCandidatePath)
+  ) {
+    return candidateLocation;
+  }
+  if (
+    !normalizedExistingPath.startsWith("memory/") &&
+    normalizedCandidatePath.startsWith("memory/") &&
+    resolveDailyVariantComparableDir(normalizedExistingPath) ===
+      resolveDailyVariantComparableDir(normalizedCandidatePath) &&
+    extractDailyMemoryDayFromPath(normalizedExistingPath) ===
+      extractDailyMemoryDayFromPath(normalizedCandidatePath)
+  ) {
+    return candidateLocation;
+  }
   if (normalizedExistingPath !== normalizedCandidatePath) {
     return {
       path: existing.path,
@@ -458,6 +597,11 @@ function resolveMergedEntryLocation(params: {
 function isBenignSourcePathProbeError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM";
+}
+
+function isBenignReadOnlyStoreWritebackError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EACCES" || code === "EPERM" || code === "EROFS" || code === "ENOSPC";
 }
 
 function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
@@ -529,6 +673,11 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
     return emptyStore(nowIso);
   }
   const record = raw as Record<string, unknown>;
+  const sessionSummaryPurgedAt =
+    typeof record.sessionSummaryPurgedAt === "string" &&
+    record.sessionSummaryPurgedAt.trim().length > 0
+      ? record.sessionSummaryPurgedAt
+      : undefined;
   const entriesRaw = record.entries;
   const entries: Record<string, ShortTermRecallEntry> = {};
 
@@ -609,6 +758,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   return {
     version: 1,
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso,
+    ...(sessionSummaryPurgedAt ? { sessionSummaryPurgedAt } : {}),
     entries,
   };
 }
@@ -848,18 +998,125 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
   });
 }
 
-async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
+async function sanitizePersistedShortTermStore(params: {
+  workspaceDir: string;
+  store: ShortTermRecallStore;
+  nowIso: string;
+}): Promise<{
+  store: ShortTermRecallStore;
+  removedSessionSummaryEntries: number;
+  dependencies: SessionSummaryDailyMemoryDependency[];
+}> {
+  const cache = new Map<string, boolean>();
+  const dependencyMap = new Map<string, SessionSummaryDailyMemoryDependency>();
+  const nextEntries: Record<string, ShortTermRecallEntry> = {};
+  let removedSessionSummaryEntries = 0;
+  for (const [key, entry] of Object.entries(params.store.entries)) {
+    if (
+      await isSessionSummaryShortTermPath({
+        workspaceDir: params.workspaceDir,
+        filePath: entry.path,
+        cache,
+        snippet: entry.snippet,
+        startLine: entry.startLine,
+        recordDependency: (dependency) => {
+          dependencyMap.set(buildSessionSummaryDailyMemoryDependencyKey(dependency), dependency);
+        },
+      })
+    ) {
+      removedSessionSummaryEntries += 1;
+      continue;
+    }
+    nextEntries[key] = entry;
+  }
+  const sessionSummaryPurgedAt =
+    removedSessionSummaryEntries > 0 || params.store.sessionSummaryPurgedAt
+      ? (params.store.sessionSummaryPurgedAt ?? params.nowIso)
+      : undefined;
+  return {
+    store: {
+      ...params.store,
+      entries: nextEntries,
+      ...(sessionSummaryPurgedAt ? { sessionSummaryPurgedAt } : {}),
+    },
+    removedSessionSummaryEntries,
+    dependencies: [...dependencyMap.values()].toSorted((left, right) =>
+      left.absolutePath === right.absolutePath
+        ? left.kind.localeCompare(right.kind)
+        : left.absolutePath.localeCompare(right.absolutePath),
+    ),
+  };
+}
+
+type ReadShortTermStoreResult = {
+  rawHash: string | null;
+  recentDailyIndexHash: string;
+  dependencies: SessionSummaryDailyMemoryDependency[];
+  store: ShortTermRecallStore;
+  removedSessionSummaryEntries: number;
+};
+
+async function readStoreResult(
+  workspaceDir: string,
+  nowIso: string,
+): Promise<ReadShortTermStoreResult> {
   const storePath = resolveStorePath(workspaceDir);
   try {
     const raw = await fs.readFile(storePath, "utf-8");
+    const rawHash = buildShortTermStoreRawHash(raw);
+    const recentDailyIndexHash = await readRecentDailyIndexHash(workspaceDir);
+    const cached = shortTermStoreCache.get(storePath);
+    if (
+      cached &&
+      cached.rawHash === rawHash &&
+      cached.recentDailyIndexHash === recentDailyIndexHash &&
+      (await areSessionSummaryDailyMemoryDependenciesCurrent(cached.dependencies))
+    ) {
+      return {
+        rawHash,
+        recentDailyIndexHash,
+        dependencies: cloneSessionSummaryDailyMemoryDependencies(cached.dependencies),
+        store: cloneShortTermRecallStore(cached.store),
+        removedSessionSummaryEntries: 0,
+      };
+    }
     const parsed = JSON.parse(raw) as unknown;
-    return normalizeStore(parsed, nowIso);
+    const { store, removedSessionSummaryEntries, dependencies } =
+      await sanitizePersistedShortTermStore({
+        workspaceDir,
+        store: normalizeStore(parsed, nowIso),
+        nowIso,
+      });
+    shortTermStoreCache.set(storePath, {
+      rawHash,
+      recentDailyIndexHash,
+      dependencies: cloneSessionSummaryDailyMemoryDependencies(dependencies),
+      store: cloneShortTermRecallStore(store),
+    });
+    return {
+      rawHash,
+      recentDailyIndexHash,
+      dependencies: cloneSessionSummaryDailyMemoryDependencies(dependencies),
+      store: cloneShortTermRecallStore(store),
+      removedSessionSummaryEntries,
+    };
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return emptyStore(nowIso);
+      shortTermStoreCache.delete(storePath);
+      return {
+        rawHash: null,
+        recentDailyIndexHash: "missing:ENOENT",
+        dependencies: [],
+        store: emptyStore(nowIso),
+        removedSessionSummaryEntries: 0,
+      };
     }
     throw err;
   }
+}
+
+async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
+  return (await readStoreResult(workspaceDir, nowIso)).store;
 }
 
 function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
@@ -945,27 +1202,95 @@ async function writePhaseSignalStore(
   await fs.rename(tmpPath, phaseSignalPath);
 }
 
-async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
+async function writeSerializedStore(workspaceDir: string, raw: string): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
+  shortTermStoreCache.delete(storePath);
   await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+  await fs.writeFile(tmpPath, raw, "utf-8");
   await fs.rename(tmpPath, storePath);
 }
 
-export function isShortTermMemoryPath(filePath: string): boolean {
-  const normalized = normalizeMemoryPath(filePath);
-  if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
-    return false;
+async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
+  await writeSerializedStore(workspaceDir, serializeShortTermRecallStore(store));
+}
+
+async function persistReadOnlyStoreSanitization(params: {
+  workspaceDir: string;
+  nowIso: string;
+  result: ReadShortTermStoreResult;
+}): Promise<ShortTermRecallStore> {
+  const { workspaceDir } = params;
+  const { rawHash, recentDailyIndexHash, removedSessionSummaryEntries, dependencies, store } =
+    params.result;
+  if (!rawHash || removedSessionSummaryEntries <= 0) {
+    return store;
   }
-  if (SHORT_TERM_SESSION_CORPUS_RE.test(normalized)) {
+
+  const storePath = resolveStorePath(workspaceDir);
+  const serializedStore = serializeShortTermRecallStore(store);
+  const nextRawHash = buildShortTermStoreRawHash(serializedStore);
+  const persisted = await withShortTermLock(workspaceDir, async () => {
+    let currentRaw: string;
+    try {
+      currentRaw = await fs.readFile(storePath, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        shortTermStoreCache.delete(storePath);
+        return false;
+      }
+      throw error;
+    }
+    if (buildShortTermStoreRawHash(currentRaw) !== rawHash) {
+      return false;
+    }
+    if ((await readRecentDailyIndexHash(workspaceDir)) !== recentDailyIndexHash) {
+      return false;
+    }
+    if (!(await areSessionSummaryDailyMemoryDependenciesCurrent(dependencies))) {
+      return false;
+    }
+    if (currentRaw !== serializedStore) {
+      try {
+        await writeSerializedStore(workspaceDir, serializedStore);
+      } catch (error) {
+        if (!isBenignReadOnlyStoreWritebackError(error)) {
+          throw error;
+        }
+        shortTermStoreCache.set(storePath, {
+          rawHash,
+          recentDailyIndexHash,
+          dependencies: cloneSessionSummaryDailyMemoryDependencies(dependencies),
+          store: cloneShortTermRecallStore(store),
+        });
+        return true;
+      }
+    } else {
+      shortTermStoreCache.delete(storePath);
+    }
+    shortTermStoreCache.set(storePath, {
+      rawHash: nextRawHash,
+      recentDailyIndexHash,
+      dependencies: cloneSessionSummaryDailyMemoryDependencies(dependencies),
+      store: cloneShortTermRecallStore(store),
+    });
     return true;
-  }
-  const baseName = path.posix.basename(normalized);
-  if (!parseDailyMemoryFileName(baseName)) {
-    return false;
-  }
-  return normalized === baseName || SHORT_TERM_MEMORY_DIR_RE.test(normalized);
+  });
+
+  return persisted ? store : await readStore(workspaceDir, params.nowIso);
+}
+
+export const isShortTermMemoryPath = isSupportedShortTermMemoryPath;
+
+async function isSessionSummaryShortTermPath(params: {
+  workspaceDir: string;
+  filePath: string;
+  cache: Map<string, boolean>;
+  snippet?: string;
+  startLine?: number;
+  recordDependency?: (dependency: SessionSummaryDailyMemoryDependency) => void;
+}): Promise<boolean> {
+  return await isSessionSummaryDailyMemoryPath(params);
 }
 
 async function shortTermRecallSourceExists(params: {
@@ -1023,9 +1348,25 @@ export async function recordShortTermRecalls(params: {
   if (!query) {
     return;
   }
-  const relevant = params.results.filter(
-    (result) => result.source === "memory" && isShortTermMemoryPath(result.path),
-  );
+  const sessionSummaryCache = new Map<string, boolean>();
+  const relevant: MemorySearchResult[] = [];
+  for (const result of params.results) {
+    if (result.source !== "memory" || !isShortTermMemoryPath(result.path)) {
+      continue;
+    }
+    if (
+      await isSessionSummaryShortTermPath({
+        workspaceDir,
+        filePath: result.path,
+        cache: sessionSummaryCache,
+        snippet: result.snippet,
+        startLine: result.startLine,
+      })
+    ) {
+      continue;
+    }
+    relevant.push(result);
+  }
   if (relevant.length === 0) {
     return;
   }
@@ -1038,6 +1379,7 @@ export async function recordShortTermRecalls(params: {
     normalizeIsoDay(params.dayBucket ?? "") ?? formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
+    const seenMergedKeys = new Set<string>();
 
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
@@ -1062,10 +1404,14 @@ export async function recordShortTermRecalls(params: {
               entries: store.entries,
               claimHash,
               candidatePath: normalizedPath,
+              candidateStartLine: result.startLine,
+              candidateEndLine: result.endLine,
             }) ?? null)
         : null;
       const baseKey = buildEntryKey(result);
       const key = groundedKey && store.entries[groundedKey] ? groundedKey : baseKey;
+      const duplicateSignalInCall = seenMergedKeys.has(key);
+      seenMergedKeys.add(key);
       const existing = store.entries[key];
       const location = resolveMergedEntryLocation({
         existing,
@@ -1077,9 +1423,10 @@ export async function recordShortTermRecalls(params: {
       const recallDaysBase = existing?.recallDays ?? [];
       const queryHashesBase = existing?.queryHashes ?? [];
       const dedupeSignal =
-        Boolean(params.dedupeByQueryPerDay) &&
-        queryHashesBase.includes(queryHash) &&
-        recallDaysBase.includes(todayBucket);
+        duplicateSignalInCall ||
+        (Boolean(params.dedupeByQueryPerDay) &&
+          queryHashesBase.includes(queryHash) &&
+          recallDaysBase.includes(todayBucket));
       const recallCount =
         signalType === "recall"
           ? Math.max(0, Math.floor(existing?.recallCount ?? 0) + (dedupeSignal ? 0 : 1))
@@ -1152,14 +1499,14 @@ export async function recordGroundedShortTermCandidates(params: {
   dayBucket?: string;
   nowMs?: number;
   timezone?: string;
-}): Promise<void> {
+}): Promise<number> {
   const workspaceDir = params.workspaceDir?.trim();
   if (!workspaceDir) {
-    return;
+    return 0;
   }
   const query = params.query.trim();
   if (!query) {
-    return;
+    return 0;
   }
   const relevant = params.items
     .map((item) => {
@@ -1188,14 +1535,15 @@ export async function recordGroundedShortTermCandidates(params: {
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
   if (relevant.length === 0) {
-    return;
+    return 0;
   }
 
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const nowIso = new Date(nowMs).toISOString();
   const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
-  await withShortTermLock(workspaceDir, async () => {
+  return await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
+    const stagedKeys = new Set<string>();
 
     for (const item of relevant) {
       const dayBucket = item.dayBucket ?? fallbackDayBucket;
@@ -1219,7 +1567,10 @@ export async function recordGroundedShortTermCandidates(params: {
               entries: store.entries,
               claimHash,
               candidatePath: item.path,
+              candidateStartLine: item.startLine,
+              candidateEndLine: item.endLine,
             }) ?? requestedKey);
+      stagedKeys.add(existingKey);
       const existing = store.entries[existingKey];
       const location = resolveMergedEntryLocation({
         existing,
@@ -1270,6 +1621,7 @@ export async function recordGroundedShortTermCandidates(params: {
 
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    return stagedKeys.size;
   });
 }
 
@@ -1355,7 +1707,14 @@ export async function rankShortTermPromotionCandidates(
   const weights = normalizeWeights(options.weights);
 
   const [store, phaseSignals] = await Promise.all([
-    readStore(workspaceDir, nowIso),
+    (async () => {
+      const result = await readStoreResult(workspaceDir, nowIso);
+      return await persistReadOnlyStoreSanitization({
+        workspaceDir,
+        nowIso,
+        result,
+      });
+    })(),
     readPhaseSignalStore(workspaceDir, nowIso),
   ]);
   const candidates: PromotionCandidate[] = [];
@@ -1478,11 +1837,28 @@ export async function readShortTermRecallEntries(params: {
   }
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const nowIso = new Date(nowMs).toISOString();
-  const store = await readStore(workspaceDir, nowIso);
+  const store = await persistReadOnlyStoreSanitization({
+    workspaceDir,
+    nowIso,
+    result: await readStoreResult(workspaceDir, nowIso),
+  });
   return Object.values(store.entries).filter(
     (entry): entry is ShortTermRecallEntry =>
       Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
   );
+}
+
+function resolveWorkspaceRelativeShortTermPath(
+  workspaceDir: string,
+  filePath: string,
+): string | null {
+  const normalizedPath = normalizeMemoryPath(filePath);
+  const absolutePath = path.resolve(workspaceDir, normalizedPath);
+  const relativePath = normalizeMemoryPath(path.relative(workspaceDir, absolutePath));
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return null;
+  }
+  return relativePath;
 }
 
 function resolveShortTermSourcePathCandidates(
@@ -1490,24 +1866,41 @@ function resolveShortTermSourcePathCandidates(
   candidatePath: string,
 ): Promise<Array<{ absolutePath: string; relativePath: string }>> {
   return (async () => {
-    const normalizedPath = normalizeMemoryPath(candidatePath);
-    const relativeRoots = [normalizedPath];
-    if (!normalizedPath.startsWith("memory/")) {
-      relativeRoots.push(path.posix.join("memory", path.posix.basename(normalizedPath)));
+    const rootRelativePath = resolveWorkspaceRelativeShortTermPath(workspaceDir, candidatePath);
+    if (!rootRelativePath) {
+      return [];
+    }
+    const relativeRoots = [rootRelativePath];
+    if (!rootRelativePath.startsWith("memory/")) {
+      const memoryAliasPath = resolveWorkspaceRelativeShortTermPath(
+        workspaceDir,
+        path.posix.join("memory", path.posix.basename(rootRelativePath)),
+      );
+      if (memoryAliasPath) {
+        relativeRoots.push(memoryAliasPath);
+      }
     }
     const seenAbsolutePaths = new Set<string>();
-    const seenRelativePaths = new Set<string>();
     const candidates: Array<{ absolutePath: string; relativePath: string }> = [];
     const addRelativePath = (relativePath: string) => {
-      const normalizedRelativePath = normalizeMemoryPath(relativePath);
+      const normalizedRelativePath = resolveWorkspaceRelativeShortTermPath(
+        workspaceDir,
+        relativePath,
+      );
+      if (!normalizedRelativePath) {
+        return;
+      }
       const absolutePath = path.resolve(workspaceDir, normalizedRelativePath);
       if (seenAbsolutePaths.has(absolutePath)) {
         return;
       }
       seenAbsolutePaths.add(absolutePath);
-      seenRelativePaths.add(normalizedRelativePath);
       candidates.push({ absolutePath, relativePath: normalizedRelativePath });
     };
+
+    for (const relativeRoot of relativeRoots) {
+      addRelativePath(relativeRoot);
+    }
 
     for (const relativeRoot of relativeRoots) {
       const parsedRoot = parseDailyMemoryPathInfo(relativeRoot);
@@ -1545,12 +1938,6 @@ function resolveShortTermSourcePathCandidates(
       }
     }
 
-    for (const relativeRoot of relativeRoots) {
-      if (!seenRelativePaths.has(relativeRoot)) {
-        addRelativePath(relativeRoot);
-      }
-    }
-
     return candidates;
   })();
 }
@@ -1568,6 +1955,9 @@ function resolveShortTermSourcePathCandidatesLegacy(
   const resolved: string[] = [];
   for (const relativePath of basenames) {
     const absolutePath = path.resolve(workspaceDir, relativePath);
+    if (!resolveWorkspaceRelativeShortTermPath(workspaceDir, relativePath)) {
+      continue;
+    }
     if (seen.has(absolutePath)) {
       continue;
     }
@@ -1701,6 +2091,9 @@ async function rehydratePromotionCandidate(
         continue;
       }
       throw err;
+    }
+    if (isSessionSummaryDailyMemory(rawSource)) {
+      continue;
     }
 
     const lines = rawSource.split(/\r?\n/);
@@ -1942,7 +2335,12 @@ export async function auditShortTermPromotionArtifacts(params: {
     } else {
       const nowIso = new Date().toISOString();
       const parsed = JSON.parse(raw) as unknown;
-      const store = normalizeStore(parsed, nowIso);
+      const normalized = normalizeStore(parsed, nowIso);
+      const { store } = await sanitizePersistedShortTermStore({
+        workspaceDir,
+        store: normalized,
+        nowIso,
+      });
       updatedAt = store.updatedAt;
       entryCount = Object.keys(store.entries).length;
       promotedCount = Object.values(store.entries).filter((entry) =>
@@ -1964,7 +2362,7 @@ export async function auditShortTermPromotionArtifacts(params: {
         issues.push({
           severity: "warn",
           code: "recall-store-invalid",
-          message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
+          message: `Short-term recall store contains ${invalidEntryCount} invalid or bookkeeping entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
           fixable: true,
         });
       }
@@ -2093,9 +2491,14 @@ export async function repairShortTermPromotionArtifacts(params: {
       const parsed = raw.trim().length > 0 ? (JSON.parse(raw) as unknown) : emptyStore(nowIso);
       const rawEntries = Object.keys(asRecord(parsed)?.entries ?? {}).length;
       const normalized = normalizeStore(parsed, nowIso);
-      removedInvalidEntries = Math.max(0, rawEntries - Object.keys(normalized.entries).length);
+      const { store } = await sanitizePersistedShortTermStore({
+        workspaceDir,
+        store: normalized,
+        nowIso,
+      });
+      removedInvalidEntries = Math.max(0, rawEntries - Object.keys(store.entries).length);
       const nextEntries = Object.fromEntries(
-        Object.entries(normalized.entries).map(([key, entry]) => {
+        Object.entries(store.entries).map(([key, entry]) => {
           const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
           const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
           return [
@@ -2119,7 +2522,10 @@ export async function repairShortTermPromotionArtifacts(params: {
       );
       const comparableStore: ShortTermRecallStore = {
         version: 1,
-        updatedAt: normalized.updatedAt,
+        updatedAt: store.updatedAt,
+        ...(store.sessionSummaryPurgedAt
+          ? { sessionSummaryPurgedAt: store.sessionSummaryPurgedAt }
+          : {}),
         entries: nextEntries,
       };
       const comparableRaw = `${JSON.stringify(comparableStore, null, 2)}\n`;
@@ -2197,6 +2603,7 @@ export const __testing = {
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,
   buildClaimHash,
+  findExistingDailyVariantEntryKey,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
 };

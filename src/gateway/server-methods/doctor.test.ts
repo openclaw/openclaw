@@ -22,6 +22,7 @@ const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
+const SESSION_SUMMARY_DAILY_MEMORY_SENTINEL = "<!-- openclaw:session-memory-summary -->";
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig,
@@ -675,6 +676,619 @@ describe("doctor.memory.status", () => {
     }
   });
 
+  it("excludes bookkeeping session-summary entries from dreaming status when the sentinel file exists", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-bookkeeping-"));
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    const summaryPath = path.join(workspaceDir, "memory", "2026-04-03-reset-summary.md");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      summaryPath,
+      [
+        "# Session: 2026-04-03 19:30:00 America/Chicago",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: reset-123",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      "Durable router note.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            bookkeeping: {
+              path: "memory/2026-04-03-reset-summary.md",
+              source: "memory",
+              snippet: "assistant: bookkeeping only",
+              recallCount: 3,
+              dailyCount: 1,
+            },
+            durable: {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              snippet: "Durable router note.",
+              recallCount: 2,
+              dailyCount: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+
+    const respond = vi.fn();
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            shortTermCount: 1,
+            recallSignalCount: 2,
+            dailySignalCount: 1,
+            totalSignalCount: 3,
+            shortTermEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-03.md",
+                snippet: "Durable router note.",
+              }),
+            ],
+          }),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes deleted bookkeeping session-summary entries from dreaming status totals", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "doctor-memory-bookkeeping-deleted-"),
+    );
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      "Durable router note.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            bookkeeping: {
+              path: "memory/2026-04-03-session-reset.md",
+              source: "memory",
+              snippet: "assistant: bookkeeping only",
+              recallCount: 3,
+              dailyCount: 1,
+            },
+            durable: {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              snippet: "Durable router note.",
+              recallCount: 2,
+              dailyCount: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+
+    const respond = vi.fn();
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            shortTermCount: 1,
+            recallSignalCount: 2,
+            dailySignalCount: 1,
+            totalSignalCount: 3,
+            shortTermEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-03.md",
+                snippet: "Durable router note.",
+              }),
+            ],
+          }),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let snippet-only deleted-summary guesses hide later durable entries for the same missing path", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "doctor-memory-bookkeeping-mixed-"),
+    );
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      "Durable router note.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            bookkeeping: {
+              path: "memory/2026-04-03-session-reset.md",
+              source: "memory",
+              snippet: "assistant: bookkeeping only",
+              recallCount: 3,
+              dailyCount: 1,
+            },
+            durable: {
+              path: "memory/2026-04-03-session-reset.md",
+              source: "memory",
+              snippet: "Durable router note.",
+              recallCount: 2,
+              dailyCount: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+
+    const respond = vi.fn();
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            shortTermCount: 1,
+            recallSignalCount: 2,
+            dailySignalCount: 1,
+            totalSignalCount: 3,
+            shortTermEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-03-session-reset.md",
+                snippet: "Durable router note.",
+              }),
+            ],
+          }),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps missing slugged durable entries even when their snippet starts like a transcript", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "doctor-memory-missing-transcript-like-"),
+    );
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            durable: {
+              path: "memory/2026-04-03-vendor-pitch.md",
+              source: "memory",
+              snippet: "assistant: follow up with the vendor tomorrow.",
+              recallCount: 2,
+              dailyCount: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+
+    const respond = vi.fn();
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            shortTermCount: 1,
+            recallSignalCount: 2,
+            dailySignalCount: 1,
+            totalSignalCount: 3,
+            shortTermEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-03-vendor-pitch.md",
+                snippet: "assistant: follow up with the vendor tomorrow.",
+              }),
+            ],
+          }),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores nested dated files that the runtime will never treat as short-term memory", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-nested-paths-"));
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.join(workspaceDir, "memory", "archive"), { recursive: true });
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-04.md"),
+      "Durable router note.\n",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "archive", "2026-04-03.md"),
+      "Archived note.\n",
+    );
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            active: {
+              path: "memory/2026-04-04.md",
+              source: "memory",
+              snippet: "Durable router note.",
+              recallCount: 2,
+              dailyCount: 1,
+            },
+            archived: {
+              path: "memory/archive/2026-04-03.md",
+              source: "memory",
+              snippet: "Archived note.",
+              recallCount: 9,
+              dailyCount: 4,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+
+    const respond = vi.fn();
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            shortTermCount: 1,
+            recallSignalCount: 2,
+            dailySignalCount: 1,
+            totalSignalCount: 3,
+            shortTermEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-04.md",
+                snippet: "Durable router note.",
+              }),
+            ],
+          }),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes canonical daily files whose contents are bookkeeping session summaries", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "doctor-memory-bookkeeping-canonical-"),
+    );
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      [
+        "# Session: 2026-04-03 19:30:00 America/Chicago",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: reset-123",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-04.md"),
+      "Durable router note.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            bookkeeping: {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              snippet: "assistant: bookkeeping only",
+              recallCount: 3,
+              dailyCount: 1,
+            },
+            durable: {
+              path: "memory/2026-04-04.md",
+              source: "memory",
+              snippet: "Durable router note.",
+              recallCount: 2,
+              dailyCount: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+
+    const respond = vi.fn();
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            shortTermCount: 1,
+            recallSignalCount: 2,
+            dailySignalCount: 1,
+            totalSignalCount: 3,
+            shortTermEntries: [
+              expect.objectContaining({
+                path: "memory/2026-04-04.md",
+                snippet: "Durable router note.",
+              }),
+            ],
+          }),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("reads dreaming config from the selected memory slot plugin", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {
@@ -829,6 +1443,107 @@ describe("doctor.memory.status", () => {
     } finally {
       readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let basename and memory aliases poison each other's doctor visibility cache", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-alias-cache-"));
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      "Durable router note.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            legacy: {
+              path: "2026-04-03.md",
+              source: "memory",
+              snippet: "Durable router note.",
+              recallCount: 1,
+              dailyCount: 0,
+            },
+            rooted: {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              snippet: "Durable router note.",
+              recallCount: 2,
+              dailyCount: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+
+    const respond = vi.fn();
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            shortTermCount: 2,
+            recallSignalCount: 3,
+            dailySignalCount: 1,
+            totalSignalCount: 4,
+            shortTermEntries: expect.arrayContaining([
+              expect.objectContaining({
+                path: "2026-04-03.md",
+                snippet: "Durable router note.",
+              }),
+              expect.objectContaining({
+                path: "memory/2026-04-03.md",
+                snippet: "Durable router note.",
+              }),
+            ]),
+          }),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 });
@@ -1143,6 +1858,8 @@ describe("doctor.memory.dreamDiary", () => {
       [
         "# Session: 2026-02-19 10:00:00 America/New_York",
         "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
         "- **Session Key**: agent:main:main",
         "- **Session ID**: abc123",
         "- **Source**: cli",
@@ -1190,6 +1907,47 @@ describe("doctor.memory.dreamDiary", () => {
     }
   });
 
+  it("surfaces unreadable notes during dream-diary backfill instead of skipping them", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-unreadable-"));
+    const memoryDir = path.join(workspaceDir, "memory");
+    const readablePath = path.join(memoryDir, "2026-02-19.md");
+    const unreadablePath = path.join(memoryDir, "2026-02-20.md");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(readablePath, "durable\n", "utf-8");
+    await fs.writeFile(unreadablePath, "blocked\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+    const originalReadFile = fs.readFile.bind(fs);
+    const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+      const resolvedTarget =
+        typeof target === "string"
+          ? target
+          : Buffer.isBuffer(target)
+            ? target.toString("utf-8")
+            : target instanceof URL
+              ? target.pathname
+              : "";
+      if (path.resolve(resolvedTarget) === unreadablePath) {
+        const error = new Error("permission denied") as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      }
+      return await originalReadFile(target, options);
+    });
+
+    try {
+      await expect(invokeDoctorMemoryBackfillDreamDiary(respond)).rejects.toMatchObject({
+        code: "EACCES",
+      });
+      expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
+      expect(writeBackfillDiaryEntries).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      readFile.mockRestore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("no-ops backfill when the workspace has no daily memory files", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-empty-"));
     resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
@@ -1224,6 +1982,8 @@ describe("doctor.memory.dreamDiary", () => {
       path.join(workspaceDir, "memory", "2026-02-19-session-reset.md"),
       [
         "# Session: 2026-02-19 10:00:00 America/New_York",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
         "",
         "- **Session Key**: agent:main:main",
         "- **Session ID**: abc123",

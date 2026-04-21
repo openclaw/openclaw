@@ -1,12 +1,15 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
 
+import { rememberRecentDailyMemoryFile } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -23,6 +26,8 @@ import {
   resolveShortTermRecallStorePath,
   __testing,
 } from "./short-term-promotion.js";
+
+const SESSION_SUMMARY_DAILY_MEMORY_SENTINEL = "<!-- openclaw:session-memory-summary -->";
 
 describe("short-term promotion", () => {
   let fixtureRoot = "";
@@ -77,18 +82,153 @@ describe("short-term promotion", () => {
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/network.md")).toBe(false);
-    expect(isShortTermMemoryPath("memory/daily/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/daily notes/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/日记/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/notes/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03.md")).toBe(true);
+    expect(isShortTermMemoryPath("memory/daily/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("memory/daily notes/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("memory/日记/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("memory/notes/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/dreaming/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("../../vault/memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("notes/daily/2026-04-03.md")).toBe(false);
   });
 
-  it("records short-term recall for notes stored in a memory/ subdirectory", async () => {
+  it("ignores session-summary daily files when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-session-reset.md"),
+        [
+          "# Session: 2026-04-03 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          "assistant: bookkeeping only",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "bookkeeping recall",
+        results: [
+          {
+            path: "memory/2026-04-03-session-reset.md",
+            startLine: 9,
+            endLine: 9,
+            score: 0.9,
+            snippet: "assistant: bookkeeping only",
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      expect(entries).toEqual([]);
+    });
+  });
+
+  it("hides persisted session-summary recall entries from reads and ranking", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Durable router note."]);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-session-reset.md"),
+        [
+          "# Session: 2026-04-03 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          "assistant: bookkeeping only",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              durable: {
+                key: "durable",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet: "Durable router note.",
+                recallCount: 2,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1.8,
+                maxScore: 0.95,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["a", "b"],
+                recallDays: ["2026-04-03"],
+                conceptTags: ["router"],
+              },
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+      expect(entries.map((entry) => entry.path)).toEqual(["memory/2026-04-03.md"]);
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+      expect(ranked.map((entry) => entry.path)).toEqual(["memory/2026-04-03.md"]);
+    });
+  });
+
+  it("ignores short-term recall for notes stored in a memory/ subdirectory", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const notePath = await writeDailyMemoryNoteInSubdir(workspaceDir, "daily", "2026-04-03", [
         "Subdirectory recall integration test note.",
@@ -109,13 +249,11 @@ describe("short-term promotion", () => {
         ],
       });
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
-      const raw = await fs.readFile(storePath, "utf-8");
-      const store = JSON.parse(raw) as Record<string, unknown>;
-      expect(Object.keys(store).length).toBeGreaterThan(0);
+      await expect(fs.readFile(storePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
-  it("records short-term recall for notes stored in spaced and Unicode memory subdirectories", async () => {
+  it("ignores short-term recall for notes stored in spaced and Unicode memory subdirectories", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const spacedPath = await writeDailyMemoryNoteInSubdir(
         workspaceDir,
@@ -150,9 +288,9 @@ describe("short-term promotion", () => {
         ],
       });
 
-      const raw = await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8");
-      expect(raw).toContain("memory/daily notes/2026-04-03.md");
-      expect(raw).toContain("memory/日记/2026-04-04.md");
+      await expect(
+        fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -491,7 +629,7 @@ describe("short-term promotion", () => {
         'Always use "Happy Together" calendar for flights and reservations.',
       ]);
 
-      await recordGroundedShortTermCandidates({
+      const stagedEntryCount = await recordGroundedShortTermCandidates({
         workspaceDir,
         query: "__dreaming_grounded_backfill__",
         items: [
@@ -519,6 +657,7 @@ describe("short-term promotion", () => {
         dedupeByQueryPerDay: true,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
       });
+      expect(stagedEntryCount).toBe(1);
 
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
@@ -676,6 +815,21 @@ describe("short-term promotion", () => {
         ],
         nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
       });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "calendar canonical follow-up",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.87,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:02:00.000Z"),
+      });
 
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
@@ -683,11 +837,18 @@ describe("short-term promotion", () => {
         minRecallCount: 0,
         minUniqueQueries: 0,
         includePromoted: true,
-        nowMs: Date.parse("2026-04-03T10:02:00.000Z"),
+        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
       });
 
       expect(ranked).toHaveLength(1);
       expect(ranked[0]?.path).toBe("memory/2026-04-03.md");
+      expect(ranked[0]?.recallCount).toBe(3);
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.path).toBe("memory/2026-04-03.md");
 
       await fs.rm(sluggedPath);
 
@@ -697,7 +858,7 @@ describe("short-term promotion", () => {
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
-        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+        nowMs: Date.parse("2026-04-03T10:04:00.000Z"),
       });
 
       expect(applied.applied).toBe(1);
@@ -707,7 +868,201 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("does not merge identical same-day snippets across different memory subdirectories", async () => {
+  it("counts a same-day variant search result as one recall event", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "calendar recall",
+        results: [
+          {
+            path: "memory/2026-04-03-reset-summary.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.88,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        recallCount: 1,
+        totalScore: 0.9,
+        maxScore: 0.9,
+      });
+      expect(entries[0]?.queryHashes).toHaveLength(1);
+    });
+  });
+
+  it("does not merge independent same-day dated-slug notes that share a sentence", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Shared reminder across separate same-day notes.";
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "shared reminder",
+        results: [
+          {
+            path: "memory/2026-04-03-workshop.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-03-travel.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.88,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      const entries = (
+        await readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        })
+      ).toSorted((left, right) => left.path.localeCompare(right.path));
+
+      expect(entries).toHaveLength(2);
+      expect(entries.map((entry) => entry.path)).toEqual([
+        "memory/2026-04-03-travel.md",
+        "memory/2026-04-03-workshop.md",
+      ]);
+    });
+  });
+
+  it("merges grounded same-day variants even when line refs shift between files", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Heading", "Context", snippet]);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-reset-summary.md"),
+        ["Session heading", "Context", "Other", snippet].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [
+          {
+            path: "memory/2026-04-03-reset-summary.md",
+            startLine: 4,
+            endLine: 4,
+            snippet,
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:lasting-update",
+            signalCount: 2,
+            dayBucket: "2026-04-03",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 3,
+            endLine: 3,
+            snippet,
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:lasting-update",
+            signalCount: 2,
+            dayBucket: "2026-04-03",
+          },
+        ],
+        dedupeByQueryPerDay: false,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        startLine: 3,
+        endLine: 3,
+        groundedCount: 4,
+        snippet,
+      });
+    });
+  });
+
+  it("falls back to the canonical same-day entry when another slugged note is not a true variant", () => {
+    const claimHash = __testing.buildClaimHash("same snippet");
+    const matchedKey = __testing.findExistingDailyVariantEntryKey({
+      entries: {
+        first: {
+          key: "first",
+          path: "memory/2026-04-03.md",
+          startLine: 3,
+          endLine: 3,
+          source: "memory",
+          snippet: "same snippet",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.9,
+          maxScore: 0.9,
+          firstRecalledAt: "2026-04-03T10:00:00.000Z",
+          lastRecalledAt: "2026-04-03T10:00:00.000Z",
+          queryHashes: ["a"],
+          recallDays: ["2026-04-03"],
+          conceptTags: [],
+          claimHash,
+        },
+        second: {
+          key: "second",
+          path: "memory/2026-04-03-reset-summary.md",
+          startLine: 19,
+          endLine: 19,
+          source: "memory",
+          snippet: "same snippet",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.8,
+          maxScore: 0.8,
+          firstRecalledAt: "2026-04-03T10:01:00.000Z",
+          lastRecalledAt: "2026-04-03T10:01:00.000Z",
+          queryHashes: ["b"],
+          recallDays: ["2026-04-03"],
+          conceptTags: [],
+          claimHash,
+        },
+      },
+      claimHash,
+      candidatePath: "memory/2026-04-03-other-reset.md",
+      candidateStartLine: 20,
+      candidateEndLine: 20,
+    });
+
+    expect(matchedKey).toBe("first");
+  });
+
+  it("ignores identical same-day snippets across different memory subdirectories", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNoteInSubdir(workspaceDir, "daily", "2026-04-03", ["same snippet"]);
       await writeDailyMemoryNoteInSubdir(workspaceDir, "travel", "2026-04-03", ["same snippet"]);
@@ -749,11 +1104,7 @@ describe("short-term promotion", () => {
         includePromoted: true,
       });
 
-      expect(ranked).toHaveLength(2);
-      expect(ranked.map((entry) => entry.path).toSorted()).toEqual([
-        "memory/daily/2026-04-03.md",
-        "memory/travel/2026-04-03.md",
-      ]);
+      expect(ranked).toEqual([]);
     });
   });
 
@@ -1736,6 +2087,154 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("merges legacy basename recall entries with canonical same-day recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Legacy basename path note.";
+      const claimHash = __testing.buildClaimHash(snippet);
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            sessionSummaryPurgedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              legacy: {
+                key: "legacy",
+                path: "2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet,
+                recallCount: 1,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 0.9,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-03T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+                claimHash,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "fresh recall",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        recallCount: 2,
+      });
+      expect(entries[0]?.queryHashes).toEqual(
+        expect.arrayContaining(["legacy-q", expect.any(String)]),
+      );
+    });
+  });
+
+  it("merges legacy absolute-path recall entries with canonical same-day recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Legacy absolute path note.";
+      const claimHash = __testing.buildClaimHash(snippet);
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            sessionSummaryPurgedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              legacy: {
+                key: "legacy",
+                path: path.join(workspaceDir, "memory", "2026-04-03.md"),
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet,
+                recallCount: 1,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 0.9,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-03T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+                claimHash,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "fresh recall",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        recallCount: 2,
+      });
+      expect(entries[0]?.queryHashes).toEqual(
+        expect.arrayContaining(["legacy-q", expect.any(String)]),
+      );
+    });
+  });
+
   it("rehydrates missing same-day source paths from surviving sibling daily variants", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await fs.writeFile(
@@ -1791,6 +2290,174 @@ describe("short-term promotion", () => {
       });
       expect(rankedAfterApply[0]?.path).toBe("memory/2026-04-01-reset.md");
       expect(rankedAfterApply[0]?.promotedAt).toBeTruthy();
+    });
+  });
+
+  it("does not rehydrate promotions from same-day bookkeeping siblings", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Durable shared fact here.";
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-01-reset.md"),
+        [
+          "# Session: 2026-04-01 10:00:00 America/New_York",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          `assistant: ${snippet}`,
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "shared fact",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-02T00:00:00.000Z"),
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:02:00.000Z"),
+      });
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(0);
+      await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  it("does not rehydrate promotions from same-day variants outside the workspace", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const outsideDir = await fs.mkdtemp(path.join(fixtureRoot, "outside-"));
+      const outsideCanonicalPath = path.join(outsideDir, "2026-04-01.md");
+      await fs.writeFile(outsideCanonicalPath, "Outside durable snippet.\n", "utf-8");
+
+      try {
+        const applied = await applyShortTermPromotions({
+          workspaceDir,
+          candidates: [
+            {
+              key: "outside-candidate",
+              path: path.join(outsideDir, "2026-04-01-missing.md"),
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Outside durable snippet.",
+              recallCount: 3,
+              dailyCount: 0,
+              groundedCount: 0,
+              signalCount: 3,
+              avgScore: 0.9,
+              maxScore: 0.9,
+              uniqueQueries: 2,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "2026-04-01T00:00:00.000Z",
+              ageDays: 0,
+              score: 0.9,
+              recallDays: ["2026-04-01"],
+              conceptTags: [],
+              components: {
+                frequency: 1,
+                relevance: 1,
+                diversity: 1,
+                recency: 1,
+                consolidation: 1,
+                conceptual: 1,
+              },
+            },
+          ],
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+        });
+
+        expect(applied.applied).toBe(0);
+        await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("rehydrates promotions from the originally recorded same-day file before sibling variants", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const exactSnippet =
+        "Router maintenance window requires draining the Slack bridge after midnight.";
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-01.md"),
+        "Router maintenance window\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-01-reset.md"),
+        `${exactSnippet}\n`,
+        "utf-8",
+      );
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router window",
+        results: [
+          {
+            path: "memory/2026-04-01-reset.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: exactSnippet,
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.path).toBe("memory/2026-04-01-reset.md");
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("source=memory/2026-04-01-reset.md:1-1");
     });
   });
 
@@ -1958,6 +2625,1102 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("purges stale session-summary recall entries even after the source file is deleted", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      await expect(
+        fs.readFile(storePath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        entries: {},
+        sessionSummaryPurgedAt: expect.any(String),
+      });
+    });
+  });
+
+  it("purges deleted session-summary recall entries for semantic LLM slugs when bookkeeping provenance was remembered", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await rememberRecentDailyMemoryFile({
+        memoryDir: path.join(workspaceDir, "memory"),
+        fileName: "2026-04-03-vendor-pitch.md",
+        sessionSummary: true,
+      });
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("purges deleted canonical session-summary recall entries when bookkeeping provenance was remembered", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await rememberRecentDailyMemoryFile({
+        memoryDir: path.join(workspaceDir, "memory"),
+        fileName: "2026-04-03.md",
+        sessionSummary: true,
+      });
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("does not purge deleted transcript-like semantic slugs without remembered bookkeeping provenance", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              durable: {
+                key: "durable",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "assistant: bookkeeping only",
+        }),
+      ]);
+    });
+  });
+
+  it("persists read-only session-summary cleanup before the filename is reused for a durable note", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+      await expect(
+        fs.readFile(storePath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        entries: {},
+        sessionSummaryPurgedAt: expect.any(String),
+      });
+
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-session-reset.md"),
+        "Durable follow-up note.\n",
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("keeps read-only session-summary cleanup visible when the cleanup writeback cannot persist", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const actualRename: typeof fs.rename = fs.rename.bind(fs);
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation((async (from, to) => {
+        if (String(to) === storePath) {
+          const error = new Error("no access") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        return await actualRename(from as never, to as never);
+      }) as typeof fs.rename);
+
+      try {
+        await expect(
+          readShortTermRecallEntries({
+            workspaceDir,
+            nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+          }),
+        ).resolves.toEqual([]);
+      } finally {
+        renameSpy.mockRestore();
+      }
+
+      await expect(
+        fs.readFile(storePath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        entries: {
+          bookkeeping: expect.any(Object),
+        },
+      });
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("purges deleted legacy-basename session-summary recall entries with plain conversation text when the file was remembered as bookkeeping", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await rememberRecentDailyMemoryFile({
+        memoryDir: path.join(workspaceDir, "memory"),
+        fileName: "2026-04-03-vendor-pitch.md",
+        sessionSummary: true,
+      });
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "2026-04-03-vendor-pitch.md",
+                startLine: 11,
+                endLine: 11,
+                source: "memory",
+                snippet: "We should follow up with the vendor tomorrow.",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("keeps sibling-backed deleted slugged recall entries during legacy session-summary cleanup", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Context",
+        "We should follow up with the vendor tomorrow.",
+      ]);
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              durable: {
+                key: "durable",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 11,
+                endLine: 11,
+                source: "memory",
+                snippet: "We should follow up with the vendor tomorrow.",
+                recallCount: 2,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1.8,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "We should follow up with the vendor tomorrow.",
+        }),
+      ]);
+    });
+  });
+
+  it("purges remembered session-summary entries even when a sibling note shares the same snippet", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Context",
+        "We should follow up with the vendor tomorrow.",
+      ]);
+      await rememberRecentDailyMemoryFile({
+        memoryDir: path.join(workspaceDir, "memory"),
+        fileName: "2026-04-03-vendor-pitch.md",
+        sessionSummary: true,
+      });
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 11,
+                endLine: 11,
+                source: "memory",
+                snippet: "We should follow up with the vendor tomorrow.",
+                recallCount: 2,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1.8,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("re-sanitizes legacy stores when remembered bookkeeping metadata changes without rewriting the store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              legacy: {
+                key: "legacy",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 11,
+                endLine: 11,
+                source: "memory",
+                snippet: "We should follow up with the vendor tomorrow.",
+                recallCount: 2,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1.8,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "We should follow up with the vendor tomorrow.",
+        }),
+      ]);
+
+      await rememberRecentDailyMemoryFile({
+        memoryDir: path.join(workspaceDir, "memory"),
+        fileName: "2026-04-03-vendor-pitch.md",
+        sessionSummary: true,
+      });
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("re-sanitizes normalized stores when remembered bookkeeping metadata changes", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            sessionSummaryPurgedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              normalized: {
+                key: "normalized",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 11,
+                endLine: 11,
+                source: "memory",
+                snippet: "We should follow up with the vendor tomorrow.",
+                recallCount: 2,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1.8,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "We should follow up with the vendor tomorrow.",
+        }),
+      ]);
+
+      await rememberRecentDailyMemoryFile({
+        memoryDir: path.join(workspaceDir, "memory"),
+        fileName: "2026-04-03-vendor-pitch.md",
+        sessionSummary: true,
+      });
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("invalidates the short-term store cache when the store is rewritten to the same size", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const preservedMtime = new Date("2026-04-04T00:00:00.000Z");
+      const buildStoreRaw = (snippet: string, queryHash: string) =>
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            sessionSummaryPurgedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              durable: {
+                key: "durable",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet,
+                recallCount: 1,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 0.9,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: [queryHash],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`;
+      const firstRaw = buildStoreRaw("same size A", "aaaaaaaaaaaa");
+      const secondRaw = buildStoreRaw("same size B", "bbbbbbbbbbbb");
+      expect(firstRaw.length).toBe(secondRaw.length);
+
+      await fs.writeFile(storePath, firstRaw, "utf-8");
+      await fs.utimes(storePath, preservedMtime, preservedMtime);
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          snippet: "same size A",
+          queryHashes: ["aaaaaaaaaaaa"],
+        }),
+      ]);
+
+      await fs.writeFile(storePath, secondRaw, "utf-8");
+      await fs.utimes(storePath, preservedMtime, preservedMtime);
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          snippet: "same size B",
+          queryHashes: ["bbbbbbbbbbbb"],
+        }),
+      ]);
+    });
+  });
+
+  it("drops mutated in-memory short-term snapshots after a failed store write", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const snippet = "Persisted durable note.";
+      const claimHash = __testing.buildClaimHash(snippet);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03.md"),
+        `${snippet}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            sessionSummaryPurgedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              durable: {
+                key: "durable",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet,
+                recallCount: 1,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 0.9,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["persisted-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+                claimHash,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (String(to) === storePath) {
+          const error = Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+          throw error;
+        }
+        return await vi
+          .importActual<typeof import("node:fs/promises")>("node:fs/promises")
+          .then((actual) => actual.rename(from, to));
+      });
+      try {
+        await expect(
+          recordShortTermRecalls({
+            workspaceDir,
+            query: "fresh recall",
+            results: [
+              {
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                score: 0.8,
+                snippet,
+                source: "memory",
+              },
+            ],
+            nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+          }),
+        ).rejects.toMatchObject({ code: "ENOSPC" });
+      } finally {
+        renameSpy.mockRestore();
+      }
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03.md",
+          recallCount: 1,
+          queryHashes: ["persisted-q"],
+        }),
+      ]);
+    });
+  });
+
+  it("does not rescan persisted session-summary sources after the store snapshot is cached", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-session-reset.md"),
+        [
+          "# Session: 2026-04-03 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          "assistant: bookkeeping only",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const sessionSummaryPath = path.join(workspaceDir, "memory", "2026-04-03-session-reset.md");
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const canonicalSessionSummaryPath = await fs.realpath(sessionSummaryPath);
+      const openSpy = vi.spyOn(fsSync, "openSync");
+      let sessionSummaryReads = 0;
+      try {
+        await readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        });
+        await readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        });
+        const resolveOpenedPath = (filePath: Parameters<typeof fsSync.openSync>[0]) =>
+          typeof filePath === "string"
+            ? path.resolve(filePath)
+            : filePath instanceof URL
+              ? path.resolve(fileURLToPath(filePath))
+              : Buffer.isBuffer(filePath)
+                ? path.resolve(filePath.toString("utf-8"))
+                : null;
+        sessionSummaryReads = openSpy.mock.calls.filter(
+          ([filePath]) => resolveOpenedPath(filePath) === canonicalSessionSummaryPath,
+        ).length;
+      } finally {
+        openSpy.mockRestore();
+      }
+
+      expect(sessionSummaryReads).toBe(1);
+    });
+  });
+
+  it("revalidates cached store dependencies with stat without rereading memory sources", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Durable router note.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router note",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Durable router note.",
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+      });
+
+      const canonicalNotePath = await fs.realpath(notePath);
+      const resolveReadPath = (filePath: Parameters<typeof fs.readFile>[0]) =>
+        typeof filePath === "string"
+          ? path.resolve(filePath)
+          : filePath instanceof URL
+            ? path.resolve(fileURLToPath(filePath))
+            : Buffer.isBuffer(filePath)
+              ? path.resolve(filePath.toString("utf-8"))
+              : null;
+      const readFileSpy = vi.spyOn(fs, "readFile");
+      const statSpy = vi.spyOn(fs, "stat");
+      const readdirSpy = vi.spyOn(fs, "readdir");
+      let sourceReads = 0;
+      let sourceStats = 0;
+      let siblingScans = 0;
+      try {
+        await readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:02:00.000Z"),
+        });
+        sourceReads = readFileSpy.mock.calls.filter(
+          ([filePath]) => resolveReadPath(filePath) === canonicalNotePath,
+        ).length;
+        sourceStats = statSpy.mock.calls.filter(
+          ([filePath]) => resolveReadPath(filePath) === canonicalNotePath,
+        ).length;
+        siblingScans = readdirSpy.mock.calls.filter(
+          ([filePath]) =>
+            resolveReadPath(filePath as Parameters<typeof fs.readFile>[0]) ===
+            path.join(workspaceDir, "memory"),
+        ).length;
+      } finally {
+        readFileSpy.mockRestore();
+        statSpy.mockRestore();
+        readdirSpy.mockRestore();
+      }
+
+      expect(sourceReads).toBe(0);
+      expect(sourceStats).toBeGreaterThan(0);
+      expect(siblingScans).toBe(0);
+    });
+  });
+
+  it("invalidates cached store sanitization when a referenced daily note changes in place", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Durable router note.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router note",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Durable router note.",
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      });
+
+      expect(
+        await readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).toHaveLength(1);
+
+      await fs.writeFile(
+        notePath,
+        [
+          "# Session: 2026-04-03 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          "assistant: bookkeeping only",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:02:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+      await expect(
+        rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          includePromoted: true,
+          nowMs: Date.parse("2026-04-04T10:03:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("repairs persisted session-summary recall entries out of the store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Durable router note."]);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-session-reset.md"),
+        [
+          "# Session: 2026-04-03 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          "assistant: bookkeeping only",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              durable: {
+                key: "durable",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet: "Durable router note.",
+                recallCount: 2,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1.8,
+                maxScore: 0.95,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["a", "b"],
+                recallDays: ["2026-04-03"],
+                conceptTags: ["router"],
+              },
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      expect(repair.removedInvalidEntries).toBe(1);
+
+      const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        entries: Record<string, { path: string }>;
+      };
+      expect(Object.values(repaired.entries).map((entry) => entry.path)).toEqual([
+        "memory/2026-04-03.md",
+      ]);
+    });
+  });
+
   it("does not rewrite an already normalized healthy recall store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
@@ -1966,6 +3729,7 @@ describe("short-term promotion", () => {
         {
           version: 1,
           updatedAt: "2026-04-04T00:00:00.000Z",
+          sessionSummaryPurgedAt: "2026-04-04T00:00:00.000Z",
           entries: {
             good: {
               key: "good",

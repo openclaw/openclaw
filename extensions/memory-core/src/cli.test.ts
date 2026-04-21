@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import {
   firstWrittenJsonArg,
@@ -20,6 +21,7 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
     diagnostics: [] as string[],
   })),
 );
+const SESSION_SUMMARY_DAILY_MEMORY_SENTINEL = "<!-- openclaw:session-memory-summary -->";
 
 vi.mock("./cli.host.runtime.js", async () => {
   const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
@@ -1225,6 +1227,47 @@ describe("memory cli", () => {
     });
   });
 
+  it("rejects summary-only historical daily files for rem harness", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01-session-reset.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "# Session: 2025-01-01 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-123",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          "assistant: bookkeeping only",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const errors = spyRuntimeErrors(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--path", historyPath]);
+
+      expect(
+        errors.mock.calls.some((call) =>
+          String(call[0]).includes("found no non-bookkeeping dated memory files"),
+        ),
+      ).toBe(true);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("previews grounded rem output from a historical daily file path", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const historyDir = path.join(workspaceDir, "history");
@@ -1341,6 +1384,95 @@ describe("memory cli", () => {
     });
   });
 
+  it("does not probe unreadable old daily notes before applying the live grounded day limit", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      loadConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 1,
+                      lookbackDays: 3650,
+                      minPatternStrength: 0,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      const olderPath = path.join(memoryDir, "2025-01-01.md");
+      const recentPath = path.join(memoryDir, "2025-01-02.md");
+      await fs.writeFile(olderPath, ["## Older Day", "- Older detail."].join("\n") + "\n", "utf-8");
+      await fs.writeFile(
+        recentPath,
+        ["## Canonical Recent", "- Canonical detail."].join("\n") + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(memoryDir, "2025-01-02-reset-summary.md"),
+        ["## Recent Summary", "- Reset detail."].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const actualReadFile: typeof fs.readFile = fs.readFile.bind(fs);
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+        filePath: Parameters<typeof fs.readFile>[0],
+        options?: Parameters<typeof fs.readFile>[1],
+      ) => {
+        const resolvedPath =
+          typeof filePath === "string"
+            ? filePath
+            : Buffer.isBuffer(filePath)
+              ? filePath.toString("utf-8")
+              : filePath instanceof URL
+                ? filePath.pathname
+                : "";
+        if (path.resolve(resolvedPath) === olderPath) {
+          const error = new Error("permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        return await actualReadFile(filePath as never, options as never);
+      }) as typeof fs.readFile);
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      try {
+        await runMemoryCli(["rem-harness", "--json", "--grounded"]);
+      } finally {
+        readFileSpy.mockRestore();
+      }
+
+      const payload = firstWrittenJsonArg<{
+        grounded?: {
+          scannedFiles?: number;
+          files?: Array<{ path?: string }>;
+        } | null;
+      }>(writeJson);
+      expect(payload?.grounded?.scannedFiles).toBe(2);
+      expect(payload?.grounded?.files?.map((file) => file.path)).toEqual(
+        expect.arrayContaining(["memory/2025-01-02.md", "memory/2025-01-02-reset-summary.md"]),
+      );
+      expect(payload?.grounded?.files?.map((file) => file.path)).not.toContain(
+        "memory/2025-01-01.md",
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("ignores session-summary bookkeeping files when choosing live grounded rem inputs", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       loadConfig.mockReturnValue({
@@ -1374,6 +1506,8 @@ describe("memory cli", () => {
         [
           "# Session: 2025-01-02 19:30:00 America/Chicago",
           "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
           "- **Session Key**: agent:main:main",
           "- **Session ID**: reset-123",
           "- **Source**: cli",
@@ -1402,6 +1536,79 @@ describe("memory cli", () => {
       }>(writeJson);
       expect(payload?.grounded?.scannedFiles).toBe(1);
       expect(payload?.grounded?.files?.map((file) => file.path)).toEqual(["memory/2025-01-01.md"]);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("surfaces unreadable live grounded daily notes instead of silently skipping them", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      loadConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 1,
+                      lookbackDays: 7,
+                      minPatternStrength: 0,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2025-01-01.md"),
+        ["## Older Day", "- Older detail."].join("\n") + "\n",
+        "utf-8",
+      );
+      const unreadablePath = path.join(workspaceDir, "memory", "2025-01-02.md");
+      await fs.writeFile(
+        unreadablePath,
+        ["## Current Day", "- Current detail."].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const actualReadFile: typeof fs.readFile = fs.readFile.bind(fs);
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(((
+        filePath: Parameters<typeof fs.readFile>[0],
+        options?: Parameters<typeof fs.readFile>[1],
+      ) => {
+        const resolvedPath =
+          typeof filePath === "string"
+            ? path.resolve(filePath)
+            : filePath instanceof URL
+              ? path.resolve(fileURLToPath(filePath))
+              : Buffer.isBuffer(filePath)
+                ? path.resolve(filePath.toString("utf-8"))
+                : "";
+        if (resolvedPath === unreadablePath) {
+          const error = new Error("permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          return Promise.reject(error);
+        }
+        return actualReadFile(filePath as never, options as never);
+      }) as typeof fs.readFile);
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      try {
+        await expect(runMemoryCli(["rem-harness", "--json", "--grounded"])).rejects.toMatchObject({
+          code: "EACCES",
+        });
+      } finally {
+        readFileSpy.mockRestore();
+      }
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1457,6 +1664,8 @@ describe("memory cli", () => {
         [
           "# Session: 2025-01-01 19:30:00 America/Chicago",
           "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
           "- **Session Key**: agent:main:main",
           "- **Session ID**: reset-123",
           "- **Source**: cli",
@@ -1496,6 +1705,8 @@ describe("memory cli", () => {
         path.join(historyDir, "2025-01-01-session-reset.md"),
         [
           "# Session: 2025-01-01 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
           "",
           "- **Session Key**: agent:main:main",
           "- **Session ID**: reset-123",
@@ -1730,13 +1941,49 @@ describe("memory cli", () => {
         close,
       });
 
-      await runMemoryCli(["rem-backfill", "--path", historyDir, "--stage-short-term"]);
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-backfill", "--json", "--path", historyDir, "--stage-short-term"]);
 
       const entries = await readShortTermRecallEntries({ workspaceDir });
+      const payload = firstWrittenJsonArg<{
+        stagedShortTermEntries?: number;
+        replacedShortTermEntries?: number;
+      }>(writeJson);
       expect(entries).toHaveLength(1);
       expect(entries[0]?.snippet).toContain("Happy Together");
       expect(entries[0]?.groundedCount).toBe(3);
       expect(entries[0]?.queryHashes).toHaveLength(2);
+      expect(payload?.stagedShortTermEntries).toBe(1);
+      expect(payload?.replacedShortTermEntries).toBe(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps same-day slugged grounded seeds distinct when staging short-term memory", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const workshopPath = path.join(historyDir, "2025-01-01-workshop.md");
+      const travelPath = path.join(historyDir, "2025-01-01-travel.md");
+      const content = ["## Preferences Learned", "- Shared reminder."].join("\n") + "\n";
+      await fs.writeFile(workshopPath, content, "utf-8");
+      await fs.writeFile(travelPath, content, "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--path", historyDir, "--stage-short-term"]);
+
+      const entries = await readShortTermRecallEntries({ workspaceDir });
+      expect(entries).toHaveLength(2);
+      expect(entries.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/2025-01-01-travel.md",
+        "memory/2025-01-01-workshop.md",
+      ]);
+      expect(entries.every((entry) => entry.snippet.includes("Shared reminder"))).toBe(true);
       expect(close).toHaveBeenCalled();
     });
   });

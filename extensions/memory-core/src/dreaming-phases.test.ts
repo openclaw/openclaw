@@ -27,6 +27,7 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
+const SESSION_SUMMARY_DAILY_MEMORY_SENTINEL = "<!-- openclaw:session-memory-summary -->";
 const DREAMING_TEST_DAY = "2026-04-05";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
@@ -600,6 +601,8 @@ describe("memory-core dreaming phases", () => {
       [
         "# Session: 2026-04-05 19:30:00 America/Chicago",
         "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
         "- **Session Key**: agent:main:main",
         "- **Session ID**: reset-123",
         "- **Source**: cli",
@@ -646,6 +649,8 @@ describe("memory-core dreaming phases", () => {
         path.join(workspaceDir, "memory", `2026-04-05-session-${index}.md`),
         [
           "# Session: 2026-04-05 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
           "",
           "- **Session Key**: agent:main:main",
           "- **Session ID**: reset-123",
@@ -731,6 +736,8 @@ describe("memory-core dreaming phases", () => {
       [
         "# Session: 2026-04-06 19:30:00 America/Chicago",
         "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
         "- **Session Key**: agent:main:main",
         "- **Session ID**: reset-456",
         "- **Source**: cli",
@@ -774,6 +781,8 @@ describe("memory-core dreaming phases", () => {
         [
           "# Session: 2026-04-06 19:30:00 America/Chicago",
           "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
           "- **Session Key**: agent:main:main",
           "- **Session ID**: reset-456",
           "- **Source**: cli",
@@ -800,8 +809,191 @@ describe("memory-core dreaming phases", () => {
       "memory/2026-04-06.md": expect.objectContaining({
         mtimeMs: expect.any(Number),
         size: expect.any(Number),
+        contentKind: "durable",
       }),
     });
+  });
+
+  it("drops unchanged legacy session-summary files from the daily-ingestion checkpoint", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-06.md"),
+      [
+        "# 2026-04-06",
+        "",
+        ...Array.from({ length: 28 }, (_unused, index) => `- Durable ${index + 1}.`),
+      ].join("\n"),
+      "utf-8",
+    );
+    const legacyState: Record<string, { mtimeMs: number; size: number }> = {};
+    for (let index = 0; index < 10; index += 1) {
+      const fileName = `2026-04-06-session-${index}.md`;
+      const filePath = path.join(workspaceDir, "memory", fileName);
+      await fs.writeFile(
+        filePath,
+        [
+          "# Session: 2026-04-06 19:30:00 America/Chicago",
+          "",
+          SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+          "",
+          "- **Session Key**: agent:main:main",
+          "- **Session ID**: reset-456",
+          "- **Source**: cli",
+          "",
+          "## Conversation Summary",
+          "",
+          `assistant: bookkeeping only ${index}`,
+        ].join("\n"),
+        "utf-8",
+      );
+      const stat = await fs.stat(filePath);
+      legacyState[`memory/${fileName}`] = {
+        mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
+        size: Math.floor(Math.max(0, stat.size)),
+      };
+    }
+
+    const collected = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 3,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
+      state: {
+        version: 1,
+        files: legacyState,
+      },
+    });
+
+    expect(collected.batches).toHaveLength(1);
+    expect(collected.batches[0]?.results).toHaveLength(7);
+    expect(Object.keys(collected.nextState.files)).toEqual(["memory/2026-04-06.md"]);
+    expect(collected.nextState.files["memory/2026-04-06.md"]).toMatchObject({
+      contentKind: "durable",
+    });
+  });
+
+  it("drops unchanged canonical session-summary files from legacy daily-ingestion checkpoints", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const canonicalPath = path.join(workspaceDir, "memory", "2026-04-06.md");
+    await fs.writeFile(
+      canonicalPath,
+      [
+        "# Session: 2026-04-06 19:30:00 America/Chicago",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: reset-456",
+        "- **Source**: cli",
+        "",
+        "## Conversation Summary",
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n"),
+      "utf-8",
+    );
+    const stat = await fs.stat(canonicalPath);
+
+    const collected = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 3,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
+      state: {
+        version: 1,
+        files: {
+          "memory/2026-04-06.md": {
+            mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
+            size: Math.floor(Math.max(0, stat.size)),
+          },
+        },
+      },
+    });
+
+    expect(collected.batches).toEqual([]);
+    expect(collected.nextState.files).toEqual({});
+  });
+
+  it("keeps capped daily files pending until a later ingestion pass", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    for (const day of ["2026-04-06", "2026-04-05", "2026-04-04", "2026-04-03", "2026-04-02"]) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${day}.md`),
+        [
+          `# ${day}`,
+          "",
+          ...Array.from({ length: 28 }, (_unused, index) => `- Durable ${day} ${index + 1}.`),
+        ].join("\n"),
+        "utf-8",
+      );
+    }
+
+    const first = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 10,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
+      state: { version: 1, files: {} },
+    });
+
+    expect(first.batches.map((batch) => batch.results[0]?.path)).toEqual([
+      "memory/2026-04-06.md",
+      "memory/2026-04-05.md",
+      "memory/2026-04-04.md",
+      "memory/2026-04-03.md",
+    ]);
+    expect(first.batches[3]?.results).toHaveLength(2);
+    expect(Object.keys(first.nextState.files)).not.toContain("memory/2026-04-02.md");
+
+    const second = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 10,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
+      state: first.nextState,
+    });
+
+    expect(second.batches).toHaveLength(1);
+    expect(second.batches[0]?.results[0]?.path).toBe("memory/2026-04-02.md");
+    expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-02.md");
+  });
+
+  it("skips rereading unchanged daily notes that already match the checkpoint", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const relativePath = "memory/2026-04-06.md";
+    const notePath = path.join(workspaceDir, relativePath);
+    await fs.writeFile(notePath, "# 2026-04-06\n\n- Durable note.\n", "utf-8");
+    const stat = await fs.stat(notePath);
+    const fingerprint = {
+      mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
+      size: Math.floor(Math.max(0, stat.size)),
+      contentKind: "durable" as const,
+    };
+    const readFileSpy = vi.spyOn(fs, "readFile");
+
+    try {
+      const collected = await __testing.collectDailyIngestionBatches({
+        workspaceDir,
+        lookbackDays: 3,
+        limit: 5,
+        nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
+        state: {
+          version: 1,
+          files: {
+            [relativePath]: fingerprint,
+          },
+        },
+      });
+
+      expect(collected.batches).toEqual([]);
+      expect(collected.changed).toBe(false);
+      expect(collected.nextState.files).toEqual({
+        [relativePath]: fingerprint,
+      });
+      expect(readFileSpy).not.toHaveBeenCalledWith(notePath, "utf-8");
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   it("renders non-zero light-sleep confidence for dreaming-ingested candidates", async () => {
