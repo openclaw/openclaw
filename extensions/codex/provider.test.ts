@@ -160,7 +160,11 @@ describe("codex provider", () => {
       reasoning: true,
       compat: { supportsReasoningEffort: true },
     });
-    expect(provider.supportsXHighThinking?.({ provider: "codex", modelId: "o4-mini" })).toBe(true);
+    expect(
+      provider
+        .resolveThinkingProfile?.({ provider: "codex", modelId: "o4-mini" } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
+    ).toBe(true);
   });
 
   it("declares synthetic auth because the harness owns Codex credentials", () => {
