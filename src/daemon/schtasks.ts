@@ -129,6 +129,7 @@ export async function readScheduledTaskCommand(
     const content = await fs.readFile(scriptPath, "utf8");
     let workingDirectory = "";
     let commandLine = "";
+    let requiresCmdScriptLaunch = false;
     const environment: Record<string, string> = {};
     for (const rawLine of content.split(/\r?\n/)) {
       const line = rawLine.trim();
@@ -161,6 +162,11 @@ export async function readScheduledTaskCommand(
         continue;
       }
       if (isCmdControlFlowLine(lower)) {
+        // Keep parsing so we can still recover the gateway command/port, but any
+        // fallback relaunch must execute the original script so control-flow
+        // driven env setup (for example loading token/password from a .env loop)
+        // still runs.
+        requiresCmdScriptLaunch = true;
         continue;
       }
       commandLine = line;
@@ -173,6 +179,7 @@ export async function readScheduledTaskCommand(
       programArguments: parseCmdScriptCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      ...(requiresCmdScriptLaunch ? { requiresCmdScriptLaunch: true } : {}),
       sourcePath: scriptPath,
     };
   } catch {
@@ -339,7 +346,7 @@ async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolea
 async function launchFallbackTaskScript(env: GatewayServiceEnv): Promise<void> {
   const scriptPath = resolveTaskScriptPath(env);
   const command = await readScheduledTaskCommand(env);
-  if (command?.programArguments.length) {
+  if (command?.programArguments.length && command.requiresCmdScriptLaunch !== true) {
     const [executable, ...args] = command.programArguments;
     const child = spawn(executable, args, {
       cwd: command.workingDirectory || undefined,

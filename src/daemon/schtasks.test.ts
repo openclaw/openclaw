@@ -292,6 +292,7 @@ describe("readScheduledTaskCommand", () => {
             "18789",
           ],
           workingDirectory: "C:\\Projects\\openclaw",
+          requiresCmdScriptLaunch: true,
           sourcePath: resolveTaskScriptPath(env),
         });
       },
