@@ -224,6 +224,26 @@ function parseSlackThreadSessionKey(sessionKey?: string | null): {
   };
 }
 
+function shouldRecoverSlackThreadFromCurrentSession(params: {
+  cfg: OpenClawConfig;
+  peerKind: RoutePeer["kind"];
+  currentBaseSessionKey?: string;
+  nextBaseSessionKey: string;
+}): boolean {
+  if (
+    normalizeOptionalLowercaseString(params.currentBaseSessionKey) !==
+    normalizeOptionalLowercaseString(params.nextBaseSessionKey)
+  ) {
+    return false;
+  }
+  // Shared DM sessions (dmScope="main") do not encode the DM peer in the base key,
+  // so inheriting a prior thread can bleed across unrelated direct-message targets.
+  if (params.peerKind === "direct" && (params.cfg.session?.dmScope ?? "main") === "main") {
+    return false;
+  }
+  return true;
+}
+
 async function resolveSlackOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -263,11 +283,14 @@ async function resolveSlackOutboundSessionRoute(params: {
     peer,
   });
   const currentSessionThread = parseSlackThreadSessionKey(params.currentSessionKey);
-  const recoveredThreadId =
-    normalizeOptionalLowercaseString(currentSessionThread.baseSessionKey) ===
-    normalizeOptionalLowercaseString(baseSessionKey)
-      ? currentSessionThread.threadId
-      : undefined;
+  const recoveredThreadId = shouldRecoverSlackThreadFromCurrentSession({
+    cfg: params.cfg,
+    peerKind,
+    currentBaseSessionKey: currentSessionThread.baseSessionKey,
+    nextBaseSessionKey: baseSessionKey,
+  })
+    ? currentSessionThread.threadId
+    : undefined;
   const threadId = normalizeOutboundThreadId(
     params.replyToId ?? params.threadId ?? recoveredThreadId,
   );

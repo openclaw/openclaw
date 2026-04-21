@@ -421,6 +421,51 @@ describe("slackPlugin outbound", () => {
     });
   });
 
+  it('does not recover a thread from currentSessionKey for shared dmScope "main" DMs', async () => {
+    const resolveRoute = requireSlackResolveOutboundSessionRoute();
+
+    const route = await resolveRoute({
+      cfg,
+      agentId: "main",
+      target: "user:U999",
+      currentSessionKey: "agent:main:main:thread:1712345678.123456",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+      peer: { kind: "direct", id: "U999" },
+      chatType: "direct",
+      from: "slack:U999",
+      to: "user:U999",
+    });
+    expect(route?.threadId).toBeUndefined();
+  });
+
+  it("recovers a DM thread from currentSessionKey when dmScope isolates DM peers", async () => {
+    const resolveRoute = requireSlackResolveOutboundSessionRoute();
+
+    const route = await resolveRoute({
+      cfg: {
+        ...cfg,
+        session: { dmScope: "per-channel-peer" },
+      },
+      agentId: "main",
+      target: "user:U123",
+      currentSessionKey: "agent:main:slack:direct:u123:thread:1712345678.123456",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:direct:u123:thread:1712345678.123456",
+      baseSessionKey: "agent:main:slack:direct:u123",
+      peer: { kind: "direct", id: "U123" },
+      chatType: "direct",
+      from: "slack:U123",
+      to: "user:U123",
+      threadId: "1712345678.123456",
+    });
+  });
+
   it("prefers replyToId over threadId for outbound route derivation", async () => {
     const resolveRoute = requireSlackResolveOutboundSessionRoute();
 

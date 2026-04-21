@@ -809,6 +809,41 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("stringifies numeric derived thread ids before classifying and delivering them", async () => {
+    mockDeliverySuccess("m-derived-thread-numeric");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:slack:channel:resolved:thread:42",
+      baseSessionKey: "agent:main:slack:channel:resolved",
+      peer: { kind: "channel" as const, id: "resolved" },
+      chatType: "channel" as const,
+      from: "slack:channel:resolved",
+      to: "channel:resolved",
+      threadId: 42,
+    });
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:resolved",
+      idempotencyKey: "idem-derived-thread-numeric",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "main",
+          key: "agent:main:slack:channel:resolved:thread:42",
+        }),
+        threadId: "42",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:resolved:thread:42",
+          agentId: "main",
+        }),
+      }),
+    );
+  });
+
   it("keeps the provided thread session but still delivers to the derived thread", async () => {
     mockDeliverySuccess("m-thread-session");
     const derivedThreadRoute = {

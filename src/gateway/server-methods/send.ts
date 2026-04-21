@@ -19,6 +19,7 @@ import {
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import { normalizeOutboundThreadId } from "../../infra/outbound/thread-id.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -271,7 +272,7 @@ function classifyDerivedThreadRelationship(params: {
   derivedRoute?: GatewayDerivedRoute | null;
 }): "none" | "base_refinement" | "same_thread" {
   const providedSessionKey = normalizeOptionalLowercaseString(params.providedSessionKey);
-  const derivedThreadId = normalizeOptionalString(params.derivedRoute?.threadId);
+  const derivedThreadId = normalizeOutboundThreadId(params.derivedRoute?.threadId);
   if (!providedSessionKey || !params.derivedRoute || !derivedThreadId) {
     return "none";
   }
@@ -315,7 +316,7 @@ function resolveGatewayDeliveryThreadId(params: {
   if (explicitThreadId) {
     return explicitThreadId;
   }
-  const derivedThreadId = normalizeOptionalString(params.derivedRoute?.threadId);
+  const derivedThreadId = normalizeOutboundThreadId(params.derivedRoute?.threadId);
   if (!derivedThreadId) {
     return null;
   }
