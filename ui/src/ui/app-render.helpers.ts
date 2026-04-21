@@ -18,6 +18,7 @@ import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 
