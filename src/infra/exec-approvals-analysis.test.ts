@@ -444,6 +444,15 @@ describe("exec approvals shell analysis", () => {
       expect(res.reason).toBe("heredoc logical line too large");
     });
 
+    it("rejects too many empty heredoc continuation chunks", () => {
+      const continuedLines = "\\\n".repeat(1025);
+      const res = analyzeShellCommand({
+        command: `/usr/bin/cat <<EOF\n${continuedLines}done\nEOF`,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("heredoc continuation too long");
+    });
+
     it("parses windows quoted executables", () => {
       const res = analyzeShellCommand({
         command: '"C:\\Program Files\\Tool\\tool.exe" --version',

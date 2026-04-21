@@ -44,6 +44,7 @@ export type ShellChainPart = {
 
 const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`"]);
+const MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES = 1024;
 const MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH = 64 * 1024;
 const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   "&",
@@ -221,6 +222,16 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
             } else {
               const continued = stripUnquotedHeredocLineContinuation(line);
               unquotedHeredocLogicalChunks.push(continued.line);
+              if (
+                unquotedHeredocLogicalChunks.length >
+                MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES
+              ) {
+                return {
+                  ok: false,
+                  reason: "heredoc continuation too long",
+                  segments: [],
+                };
+              }
               unquotedHeredocLogicalLength += continued.line.length;
               if (unquotedHeredocLogicalLength > MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH) {
                 return {
