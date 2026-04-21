@@ -42,6 +42,13 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts sandbox escalation rejection for codex models", () => {
+    const text =
+      "I couldn’t list them because `codex models` requires running outside the sandbox here, and that approval was rejected.";
+
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
   it("accepts the interactive TUI current-model summary", () => {
     const text = [
       "`codex models` didn’t return a plain list in this environment; it dropped into the interactive TUI instead.",
