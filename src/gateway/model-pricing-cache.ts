@@ -153,6 +153,7 @@ type LiteLLMTierRaw = {
   input_cost_per_token?: unknown;
   output_cost_per_token?: unknown;
   cache_read_input_token_cost?: unknown;
+  cache_creation_input_token_cost?: unknown;
   range?: unknown;
 };
 
@@ -194,7 +195,7 @@ function parseLiteLLMTieredPricing(tiers: unknown): CachedPricingTier[] | undefi
       input: toPricePerMillion(inputPerToken),
       output: toPricePerMillion(outputPerToken),
       cacheRead: toPricePerMillion(parseNumberString(tier.cache_read_input_token_cost)),
-      cacheWrite: 0,
+      cacheWrite: toPricePerMillion(parseNumberString(tier.cache_creation_input_token_cost)),
       range: [start, end],
     });
   }
@@ -211,7 +212,7 @@ function parseLiteLLMPricing(entry: LiteLLMModelEntry): CachedModelPricing | nul
     input: toPricePerMillion(inputPerToken),
     output: toPricePerMillion(outputPerToken),
     cacheRead: toPricePerMillion(parseNumberString(entry.cache_read_input_token_cost)),
-    cacheWrite: 0,
+    cacheWrite: toPricePerMillion(parseNumberString(entry.cache_creation_input_token_cost)),
   };
   const tieredPricing = parseLiteLLMTieredPricing(entry.tiered_pricing);
   if (tieredPricing) {
