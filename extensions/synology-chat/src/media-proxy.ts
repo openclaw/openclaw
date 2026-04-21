@@ -60,7 +60,7 @@ function parseHttpUrl(sourceUrl: string): URL | null {
   }
 }
 
-function parsePublicOrigin(candidate: string | undefined): string | undefined {
+export function normalizeSynologyPublicOrigin(candidate: string | undefined): string | undefined {
   const trimmed = candidate?.trim();
   if (!trimmed) {
     return undefined;
@@ -138,12 +138,15 @@ function buildContentDisposition(fileName?: string): string | undefined {
 
 function resolveForwardedHeaderValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
-    value = value[0];
+    value = value[value.length - 1];
   }
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.split(",")[0]?.trim();
+  const trimmed = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .findLast((entry) => entry.length > 0);
   return trimmed || undefined;
 }
 
@@ -156,8 +159,8 @@ export function registerSynologyHostedMediaTransport(account: ResolvedSynologyCh
   mediaProxyStateByAccountId.set(account.accountId, {
     publicOrigin:
       previousOrigin ??
-      parsePublicOrigin(account.publicOrigin) ??
-      parsePublicOrigin(process.env.OPENCLAW_GATEWAY_URL),
+      normalizeSynologyPublicOrigin(account.publicOrigin) ??
+      normalizeSynologyPublicOrigin(process.env.OPENCLAW_GATEWAY_URL),
   });
 }
 

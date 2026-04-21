@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { listAccountIds, resolveAccount } from "./accounts.js";
+import { normalizeSynologyPublicOrigin } from "./media-proxy.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
 const channel = "synology-chat" as const;
@@ -135,13 +136,17 @@ function validatePublicOrigin(value: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
+  let parsed: URL;
   try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return "Public gateway origin must use http:// or https://.";
-    }
+    parsed = new URL(trimmed);
   } catch {
     return "Public gateway origin must be a valid URL.";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return "Public gateway origin must use http:// or https://.";
+  }
+  if (!normalizeSynologyPublicOrigin(trimmed)) {
+    return "Public gateway origin must use a non-private, non-loopback host.";
   }
   return undefined;
 }
@@ -191,29 +196,38 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
       return urlError;
     }
     if (input.webhookPath?.trim()) {
-      return validateWebhookPath(input.webhookPath.trim()) ?? null;
+      const webhookPathError = validateWebhookPath(input.webhookPath.trim());
+      if (webhookPathError) {
+        return webhookPathError;
+      }
     }
     if (input.publicOrigin?.trim()) {
-      return validatePublicOrigin(input.publicOrigin.trim()) ?? null;
+      const publicOriginError = validatePublicOrigin(input.publicOrigin.trim());
+      if (publicOriginError) {
+        return publicOriginError;
+      }
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) =>
-    patchSynologyChatAccountConfig({
+  applyAccountConfig: ({ cfg, accountId, input }) => {
+    const hasExplicitPublicOrigin = Object.hasOwn(input, "publicOrigin");
+    const publicOriginValue = input.publicOrigin?.trim();
+    return patchSynologyChatAccountConfig({
       cfg,
       accountId,
       enabled: true,
       clearFields: [
         ...(input.useEnv ? ["token"] : []),
-        ...(input.publicOrigin?.trim() ? [] : ["publicOrigin"]),
+        ...(hasExplicitPublicOrigin && !publicOriginValue ? ["publicOrigin"] : []),
       ],
       patch: {
         ...(input.useEnv ? {} : { token: input.token?.trim() }),
         incomingUrl: input.url?.trim(),
-        ...(input.publicOrigin?.trim() ? { publicOrigin: input.publicOrigin.trim() } : {}),
+        ...(publicOriginValue ? { publicOrigin: publicOriginValue } : {}),
         ...(input.webhookPath?.trim() ? { webhookPath: input.webhookPath.trim() } : {}),
       },
-    }),
+    });
+  },
 };
 
 export const synologyChatSetupWizard: ChannelSetupWizard = {

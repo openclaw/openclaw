@@ -10,6 +10,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 
 const {
   clearSynologyHostedMediaStateForTest,
+  deriveSynologyPublicOrigin,
   registerSynologyHostedMediaTransport,
   rememberSynologyHostedMediaOrigin,
   resolveSynologyWebhookFileUrl,
@@ -117,5 +118,17 @@ describe("resolveSynologyWebhookFileUrl", () => {
     expect(resolved).toMatch(
       /^https:\/\/hooks\.example\.com\/webhook\/synology\/__openclaw-media\/.+$/,
     );
+  });
+
+  it("uses the last forwarded host and proto values when deriving the public origin", () => {
+    const origin = deriveSynologyPublicOrigin({
+      headers: {
+        "x-forwarded-host": "attacker.example.com, openclaw.example.com",
+        "x-forwarded-proto": "http, https",
+      },
+      socket: {},
+    } as never);
+
+    expect(origin).toBe("https://openclaw.example.com");
   });
 });

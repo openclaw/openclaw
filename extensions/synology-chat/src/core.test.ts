@@ -16,7 +16,7 @@ import {
   validateToken,
 } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
-import { synologyChatSetupWizard } from "./setup-surface.js";
+import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 
 const synologyChatSetupPlugin = {
   id: "synology-chat",
@@ -159,6 +159,55 @@ describe("synology-chat core", () => {
     expect(result.cfg.channels?.["synology-chat"]?.publicOrigin).toBe(
       "https://gateway.example.com",
     );
+  });
+
+  it("rejects private publicOrigin values during setup validation", () => {
+    expect(
+      synologyChatSetupAdapter.validateInput({
+        accountId: "default",
+        input: {
+          token: "synology-token",
+          url: "https://nas.example.com/webapi/entry.cgi?token=incoming",
+          publicOrigin: "http://127.0.0.1:3000",
+        },
+      }),
+    ).toBe("Public gateway origin must use a non-private, non-loopback host.");
+  });
+
+  it("validates publicOrigin even when webhookPath is also provided", () => {
+    expect(
+      synologyChatSetupAdapter.validateInput({
+        accountId: "default",
+        input: {
+          token: "synology-token",
+          url: "https://nas.example.com/webapi/entry.cgi?token=incoming",
+          webhookPath: "/webhook/custom",
+          publicOrigin: "not a url",
+        },
+      }),
+    ).toBe("Public gateway origin must be a valid URL.");
+  });
+
+  it("preserves an existing publicOrigin when setup input omits the field", () => {
+    const cfg = synologyChatSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          "synology-chat": {
+            enabled: true,
+            token: "old-token",
+            incomingUrl: "https://nas.example.com/old",
+            publicOrigin: "https://gateway.example.com",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      input: {
+        token: "new-token",
+        url: "https://nas.example.com/new",
+      },
+    });
+
+    expect(cfg.channels?.["synology-chat"]?.publicOrigin).toBe("https://gateway.example.com");
   });
 });
 

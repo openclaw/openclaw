@@ -44,8 +44,7 @@ Details: [Plugins](/tools/plugin)
 4. Finish setup in OpenClaw.
    - Guided: `openclaw onboard`
    - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
-   - Bootstrap hosted media before the first inbound webhook: add `--public-origin https://gateway-host` or set `SYNOLOGY_CHAT_PUBLIC_ORIGIN=https://gateway-host`
-   - If you need outbound media before the first inbound webhook arrives, also set `publicOrigin` to your public Gateway origin, for example `https://gateway-host`.
+   - If you need outbound media before the first inbound webhook arrives, set `publicOrigin` in config or `SYNOLOGY_CHAT_PUBLIC_ORIGIN=https://gateway-host`.
 5. Restart gateway and send a DM to the Synology Chat bot.
 
 Webhook auth details:
