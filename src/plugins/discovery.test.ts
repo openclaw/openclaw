@@ -424,8 +424,6 @@ describe("discoverOpenClawPlugins", () => {
     });
     writePluginEntry(path.join(pluginDir, "src", "index.ts"));
     writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
-    writePluginEntry(path.join(pluginDir, "src", "index.js"));
-    writePluginEntry(path.join(pluginDir, "src", "setup-entry.js"));
     writePluginEntry(path.join(pluginDir, "dist", "index.js"));
     writePluginEntry(path.join(pluginDir, "dist", "setup-entry.js"));
 
@@ -448,11 +446,13 @@ describe("discoverOpenClawPlugins", () => {
     writePluginPackageManifest({
       packageDir: pluginDir,
       packageName: "@openclaw/built-peer-pack",
-      extensions: ["./src/index.ts"],
-      setupEntry: "./src/setup-entry.ts",
+      extensions: ["src/index.ts"],
+      setupEntry: "src/setup-entry.ts",
     });
     writePluginEntry(path.join(pluginDir, "src", "index.ts"));
     writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "index.js"));
+    writePluginEntry(path.join(pluginDir, "src", "setup-entry.js"));
     writePluginEntry(path.join(pluginDir, "dist", "index.js"));
     writePluginEntry(path.join(pluginDir, "dist", "setup-entry.js"));
 
