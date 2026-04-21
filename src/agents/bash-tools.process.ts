@@ -513,7 +513,6 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          scopedSession.exitNotified = true;
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
             const terminated = terminateSessionFallback(scopedSession);
@@ -524,6 +523,7 @@ export function createProcessTool(
             }
             markExited(scopedSession, null, "SIGKILL", "failed");
           }
+          scopedSession.exitNotified = true;
           resetPollRetrySuggestion(params.sessionId);
           return {
             content: [
