@@ -2262,7 +2262,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryRuntime = getMemoryRuntime();
 
       try {
-        runPluginRegisterSync(register, api);
+        profilePluginLoaderSync({
+          phase: `${registrationMode}:register`,
+          pluginId: record.id,
+          source: record.source,
+          run: () => runPluginRegisterSync(register, api),
+        });
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
@@ -2683,7 +2688,12 @@ export async function loadOpenClawPluginCliRegistry(
 
     const registrySnapshot = snapshotPluginRegistry(registry);
     try {
-      runPluginRegisterSync(register, api);
+      profilePluginLoaderSync({
+        phase: "cli-metadata:register",
+        pluginId: record.id,
+        source: record.source,
+        run: () => runPluginRegisterSync(register, api),
+      });
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
