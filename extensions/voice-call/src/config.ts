@@ -232,6 +232,48 @@ export const VoiceCallRealtimeConfigSchema = z
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
 
 // -----------------------------------------------------------------------------
+// Post-call Transcript Relay Configuration
+// -----------------------------------------------------------------------------
+
+export const VoiceCallPostCallConfigSchema = z
+  .object({
+    /**
+     * Enable post-call transcript relay. When a call ends, the transcript is
+     * submitted to the main agent's reasoning loop so it can extract
+     * actionable commitments, persist them to memory, and reply to the
+     * operator via the configured channel. Disabled by default — voice calls
+     * stay fire-and-forget unless the operator opts in.
+     */
+    enabled: z.boolean().default(false),
+    /**
+     * Minimum number of transcript entries (combined caller + assistant
+     * turns) required before a relay is triggered. Calls that end with no
+     * spoken content are skipped to avoid flooding the agent with empty
+     * tasks from e.g. missed calls or immediate hangups. Default 2.
+     */
+    minTranscriptEntries: z.number().int().nonnegative().default(2),
+    /**
+     * Custom system-prompt template supplied to the agent. If omitted, the
+     * plugin uses a sensible default that asks the agent to extract
+     * commitments, persist them to memory, and confirm via the configured
+     * channel. Available placeholders (all optional):
+     *   {{channel}} — resolved `channelMention` or "the configured channel"
+     */
+    instruction: z.string().optional(),
+    /**
+     * Free-form channel mention to splice into the default instruction so the
+     * agent knows where to reply. Example: "your Slack DM". Ignored when
+     * `instruction` is provided.
+     */
+    channelMention: z.string().optional(),
+    /** Timeout for the post-call agent task in ms. Default 60s. */
+    timeoutMs: z.number().int().positive().default(60_000),
+  })
+  .strict()
+  .default({ enabled: false, minTranscriptEntries: 2, timeoutMs: 60_000 });
+export type VoiceCallPostCallConfig = z.infer<typeof VoiceCallPostCallConfigSchema>;
+
+// -----------------------------------------------------------------------------
 // Streaming Configuration (Realtime Transcription)
 // -----------------------------------------------------------------------------
 
@@ -348,6 +390,9 @@ export const VoiceCallConfigSchema = z
 
     /** Realtime voice-to-voice configuration */
     realtime: VoiceCallRealtimeConfigSchema,
+
+    /** Post-call transcript relay configuration */
+    postCall: VoiceCallPostCallConfigSchema,
 
     /** Public webhook URL override (if set, bypasses tunnel auto-detection) */
     publicUrl: z.string().url().optional(),
@@ -481,6 +526,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
       providers: realtimeProviders,
     },
+    postCall: { ...defaults.postCall, ...config.postCall },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
 }

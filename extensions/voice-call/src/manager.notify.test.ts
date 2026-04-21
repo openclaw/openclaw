@@ -280,6 +280,58 @@ describe("CallManager notify and mapping", () => {
     );
   });
 
+  it("fires onCallEnded hook with a terminal call record after finalizeCall", async () => {
+    const { manager } = await createManagerHarness();
+
+    const callEndedHandler = vi.fn();
+    manager.setHooks({ onCallEnded: callEndedHandler });
+
+    const { callId } = await manager.initiateCall("+15550000012");
+    await answerCall(manager, callId, "evt-hook-answered");
+
+    manager.processEvent({
+      id: "evt-hook-ended",
+      type: "call.ended",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+      reason: "hangup-user",
+    });
+
+    expect(callEndedHandler).toHaveBeenCalledTimes(1);
+    const [terminalCall] = callEndedHandler.mock.calls[0] as [ReturnType<typeof manager.getCall>];
+    expect(terminalCall).toBeDefined();
+    expect(terminalCall?.callId).toBe(callId);
+    expect(terminalCall?.endReason).toBe("hangup-user");
+    expect(terminalCall?.endedAt).toBeDefined();
+  });
+
+  it("still finalizes the call when onCallEnded hook throws", async () => {
+    const { manager } = await createManagerHarness();
+    const callEndedHandler = vi.fn(() => {
+      throw new Error("hook boom");
+    });
+    manager.setHooks({ onCallEnded: callEndedHandler });
+
+    const { callId } = await manager.initiateCall("+15550000013");
+    await answerCall(manager, callId, "evt-hook-throw-answered");
+
+    expect(() =>
+      manager.processEvent({
+        id: "evt-hook-throw-ended",
+        type: "call.ended",
+        callId,
+        providerCallId: "call-uuid",
+        timestamp: Date.now(),
+        reason: "hangup-user",
+      }),
+    ).not.toThrow();
+
+    expect(callEndedHandler).toHaveBeenCalledTimes(1);
+    // Call should be removed from active set even when the hook throws.
+    expect(manager.getCall(callId)).toBeUndefined();
+  });
+
   it("still speaks initial message in notify mode when realtime is enabled", async () => {
     // realtime + notify is an odd combination, but the gate should only apply
     // to conversation mode: notify's TwiML `<Say>` payload is the canonical

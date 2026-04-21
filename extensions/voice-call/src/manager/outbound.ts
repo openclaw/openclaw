@@ -20,7 +20,13 @@ import { generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "provider" | "config" | "storePath" | "webhookUrl"
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "provider"
+  | "config"
+  | "storePath"
+  | "webhookUrl"
+  | "onCallEnded"
 >;
 
 type SpeakContext = Pick<
@@ -49,6 +55,7 @@ type EndCallContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "onCallEnded"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;

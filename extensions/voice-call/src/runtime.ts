@@ -8,6 +8,7 @@ import type { VoiceCallConfig } from "./config.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
+import { createPostCallRelayHook } from "./post-call-relay.js";
 import { resolveConfiguredCapabilityProvider } from "./provider-runtime-resolution.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
@@ -264,6 +265,23 @@ export async function createVoiceCallRuntime(params: {
 
   const provider = await resolveProvider(config);
   const manager = new CallManager(config);
+  // Post-call transcript relay: when the operator opts in, install a hook
+  // that submits the transcript to the agent reasoning loop once each call
+  // finalizes. The relay runs fire-and-forget so manager lifecycle stays on
+  // its own timeline. See post-call-relay.ts for formatting + dispatch.
+  if (config.postCall?.enabled) {
+    manager.setHooks({
+      onCallEnded: createPostCallRelayHook({
+        voiceConfig: config,
+        coreConfig,
+        agentRuntime,
+        logger: log,
+      }),
+    });
+    log.info(
+      `[voice-call] Post-call transcript relay enabled (min entries: ${config.postCall.minTranscriptEntries}, timeout: ${config.postCall.timeoutMs}ms)`,
+    );
+  }
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,

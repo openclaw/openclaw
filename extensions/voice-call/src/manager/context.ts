@@ -34,6 +34,14 @@ export type CallManagerTransientState = {
 export type CallManagerHooks = {
   /** Optional runtime hook invoked after an event transitions a call into answered state. */
   onCallAnswered?: (call: CallRecord) => void;
+  /**
+   * Optional runtime hook invoked once a call has fully transitioned into a
+   * terminal state (after `finalizeCall`). Receives a snapshot of the call
+   * record including the full transcript collected during the call. Used by
+   * the runtime to relay post-call transcripts into the agent reasoning loop.
+   * Hooks must not throw — wrap the body in try/catch.
+   */
+  onCallEnded?: (call: CallRecord) => void;
 };
 
 export type CallManagerContext = CallManagerRuntimeState &

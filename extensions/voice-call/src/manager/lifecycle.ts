@@ -8,7 +8,7 @@ type CallLifecycleContext = Pick<
   CallManagerContext,
   "activeCalls" | "providerCallIdMap" | "storePath"
 > &
-  Partial<Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers">>;
+  Partial<Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "onCallEnded">>;
 
 function removeProviderCallMapping(
   providerCallIdMap: Map<string, string>,
@@ -50,4 +50,19 @@ export function finalizeCall(params: {
 
   ctx.activeCalls.delete(call.callId);
   removeProviderCallMapping(ctx.providerCallIdMap, call);
+
+  // Fire the post-finalize hook last, after all state cleanup is complete.
+  // Wrap in try/catch so a misbehaving hook can't leave the manager in a
+  // corrupted state — terminal-state cleanup must always succeed.
+  if (ctx.onCallEnded) {
+    try {
+      ctx.onCallEnded(call);
+    } catch (err) {
+      console.warn(
+        `[voice-call] onCallEnded hook threw for ${call.callId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 }

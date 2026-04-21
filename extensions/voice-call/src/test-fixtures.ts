@@ -49,6 +49,11 @@ export function createVoiceCallBaseConfig(params?: {
       tools: [],
       providers: {},
     },
+    postCall: {
+      enabled: false,
+      minTranscriptEntries: 2,
+      timeoutMs: 60_000,
+    },
     skipSignatureVerification: false,
     tts: {
       provider: "openai",
