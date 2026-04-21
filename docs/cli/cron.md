@@ -19,9 +19,9 @@ Tip: run `openclaw cron --help` for the full command surface.
 Note: isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep
 output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
-Note: cron-owned isolated runs expect a plain-text summary and the runner owns
-the final send path. `--no-deliver` keeps the run internal; it does not hand
-delivery back to the agent's message tool.
+Note: isolated cron chat delivery is shared. `--announce` is runner fallback
+delivery for the final reply; `--no-deliver` disables that fallback but does
+not remove the agent's `message` tool when a chat route is available.
 
 Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
