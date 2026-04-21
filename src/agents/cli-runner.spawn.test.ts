@@ -14,6 +14,7 @@ import {
   restoreCliRunnerPrepareTestDeps,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
+import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.js";
 import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
@@ -22,6 +23,7 @@ import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fix
 
 beforeEach(() => {
   resetAgentEventsForTest();
+  resetClaudeLiveSessionsForTest();
   restoreCliRunnerPrepareTestDeps();
   supervisorSpawnMock.mockClear();
 });
@@ -616,6 +618,185 @@ describe("runCliAgent spawn path", () => {
       ]);
     } finally {
       stop();
+    }
+  });
+
+  it("reuses a Claude live session process across turns", async () => {
+    const agentEvents: unknown[] = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.stream === "assistant") {
+        agentEvents.push(evt.data);
+      }
+    });
+    const writes: string[] = [];
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        const prompt = (JSON.parse(data) as { message: { content: string } }).message.content;
+        const text = prompt === "first" ? "one" : "two";
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-session-1" }),
+            JSON.stringify({
+              type: "stream_event",
+              event: {
+                type: "content_block_delta",
+                delta: { type: "text_delta", text },
+              },
+            }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-session-1",
+              result: text,
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    try {
+      const first = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-1",
+          prompt: "first",
+          backend: {
+            args: [
+              "-p",
+              "--output-format",
+              "stream-json",
+              "--strict-mcp-config",
+              "--mcp-config",
+              "/tmp/mcp-one.json",
+            ],
+            liveSession: "claude-stdio",
+          },
+        }),
+      );
+      const second = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-2",
+          prompt: "second",
+          backend: {
+            args: [
+              "-p",
+              "--output-format",
+              "stream-json",
+              "--strict-mcp-config",
+              "--mcp-config",
+              "/tmp/mcp-two.json",
+            ],
+            liveSession: "claude-stdio",
+          },
+        }),
+      );
+
+      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as {
+        argv?: string[];
+        stdinMode?: string;
+      };
+      expect(first.text).toBe("one");
+      expect(second.text).toBe("two");
+      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+      expect(spawnInput.stdinMode).toBe("pipe-open");
+      expect(spawnInput.argv).toContain("--input-format");
+      expect(spawnInput.argv).toContain("stream-json");
+      expect(spawnInput.argv).toContain("--replay-user-messages");
+      expect(spawnInput.argv).not.toContain("--session-id");
+      expect(spawnInput.argv).toContain("/tmp/mcp-one.json");
+      expect(
+        writes.map(
+          (entry) => (JSON.parse(entry) as { message: { content: string } }).message.content,
+        ),
+      ).toEqual(["first", "second"]);
+      expect(agentEvents).toEqual([
+        { text: "one", delta: "one" },
+        { text: "two", delta: "two" },
+      ]);
+    } finally {
+      stop();
+    }
+  });
+
+  it("closes idle Claude live sessions after ten minutes", async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const cancel = vi.fn();
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-session-idle" }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-session-idle",
+              result: "idle-ok",
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+
+    try {
+      const result = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-idle",
+          prompt: "idle",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      );
+
+      expect(result.text).toBe("idle-ok");
+      expect(cancel).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1_000 - 1);
+      expect(cancel).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(cancel).toHaveBeenCalledWith("manual-cancel");
+      expect(
+        writes.map(
+          (entry) => (JSON.parse(entry) as { message: { content: string } }).message.content,
+        ),
+      ).toEqual(["idle"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
