@@ -69,6 +69,11 @@ export type CronDeliveryTrace = {
   delivered?: boolean;
 };
 
+export type CronDeliveryPreview = {
+  label: string;
+  detail: string;
+};
+
 export type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;

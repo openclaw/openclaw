@@ -390,13 +390,8 @@ export async function readCronRunLogEntriesPage(
         entry.error ?? "",
         entry.jobId,
         entry.delivery?.intended?.channel ?? "",
-        entry.delivery?.intended?.to ?? "",
         entry.delivery?.resolved?.channel ?? "",
-        entry.delivery?.resolved?.to ?? "",
-        ...(entry.delivery?.messageToolSentTo ?? []).flatMap((target) => [
-          target.channel,
-          target.to ?? "",
-        ]),
+        ...(entry.delivery?.messageToolSentTo ?? []).map((target) => target.channel),
       ].join(" "),
   });
   const sorted =
@@ -460,13 +455,8 @@ export async function readCronRunLogEntriesPageAll(
         entry.jobId,
         jobName,
         entry.delivery?.intended?.channel ?? "",
-        entry.delivery?.intended?.to ?? "",
         entry.delivery?.resolved?.channel ?? "",
-        entry.delivery?.resolved?.to ?? "",
-        ...(entry.delivery?.messageToolSentTo ?? []).flatMap((target) => [
-          target.channel,
-          target.to ?? "",
-        ]),
+        ...(entry.delivery?.messageToolSentTo ?? []).map((target) => target.channel),
       ].join(" ");
     },
   });

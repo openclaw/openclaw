@@ -12,11 +12,11 @@ import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
+  coerceCronDeliveryPreviews,
   handleCronCliError,
   parseCronToolsAllow,
   printCronJson,
   printCronList,
-  resolveCronDeliveryPreviews,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 
@@ -54,7 +54,7 @@ export function registerCronListCommand(cron: Command) {
             return;
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
-          const deliveryPreviews = await resolveCronDeliveryPreviews(jobs);
+          const deliveryPreviews = coerceCronDeliveryPreviews(res);
           printCronList(jobs, defaultRuntime, { deliveryPreviews });
         } catch (err) {
           handleCronCliError(err);

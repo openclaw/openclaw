@@ -1,7 +1,7 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
-import type { CronJob, CronSchedule } from "../../cron/types.js";
+import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
@@ -225,99 +225,26 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-export type CronDeliveryPreview = {
-  label: string;
-  detail: string;
-};
-
-function formatTarget(channel?: string, to?: string | null): string {
-  if (!channel) {
-    return "last";
+export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeliveryPreview> {
+  const previews =
+    value && typeof value === "object"
+      ? (value as { deliveryPreviews?: unknown }).deliveryPreviews
+      : undefined;
+  if (!previews || typeof previews !== "object") {
+    return new Map();
   }
-  if (to) {
-    return `${channel}:${to}`;
-  }
-  return channel;
-}
-
-function formatDeliveryDetail(params: {
-  requestedChannel?: string;
-  resolved: boolean;
-  sessionKey?: string;
-  error?: string;
-}): string {
-  if (params.requestedChannel === "last" || !params.requestedChannel) {
-    if (!params.resolved) {
-      return params.error
-        ? `last -> no route, will fail-closed: ${params.error}`
-        : "last -> no route, will fail-closed";
-    }
-    return params.sessionKey
-      ? `resolved from last, session ${params.sessionKey}`
-      : "resolved from last, main session";
-  }
-  return params.resolved ? "explicit" : (params.error ?? "unresolved");
-}
-
-export async function resolveCronDeliveryPreview(job: CronJob): Promise<CronDeliveryPreview> {
-  const { resolveCronDeliveryPlan } = await import("../../cron/delivery-plan.js");
-  const plan = resolveCronDeliveryPlan(job);
-  if (!plan.requested && plan.mode === "none" && !job.delivery) {
-    return { label: "not requested", detail: "not requested" };
-  }
-  if (plan.mode === "webhook") {
-    const target = plan.to ? `webhook:${plan.to}` : "webhook";
-    return { label: target, detail: plan.to ? "webhook" : "webhook target missing" };
-  }
-
-  const requestedChannel = plan.channel ?? "last";
-  const [{ loadConfig }, { resolveDefaultAgentId }, { resolveDeliveryTarget }] = await Promise.all([
-    import("../../config/config.js"),
-    import("../../agents/agent-scope-config.js"),
-    import("../../cron/isolated-agent/delivery-target.js"),
-  ]);
-  const cfg = loadConfig();
-  const agentId = job.agentId?.trim() || resolveDefaultAgentId(cfg);
-  const resolved = await resolveDeliveryTarget(
-    cfg,
-    agentId,
-    {
-      channel: requestedChannel,
-      to: plan.to,
-      threadId: plan.threadId,
-      accountId: plan.accountId,
-      sessionKey: job.sessionKey,
-    },
-    { dryRun: true },
-  );
-  if (!resolved.ok) {
-    return {
-      label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
-      detail: formatDeliveryDetail({
-        requestedChannel,
-        resolved: false,
-        sessionKey: job.sessionKey,
-        error: resolved.error.message,
-      }),
-    };
-  }
-  return {
-    label: `${plan.mode} -> ${formatTarget(resolved.channel, resolved.to)}`,
-    detail: formatDeliveryDetail({
-      requestedChannel,
-      resolved: true,
-      sessionKey: job.sessionKey,
+  return new Map(
+    Object.entries(previews as Record<string, unknown>).flatMap(([jobId, preview]) => {
+      if (!preview || typeof preview !== "object") {
+        return [];
+      }
+      const record = preview as { label?: unknown; detail?: unknown };
+      if (typeof record.label !== "string" || typeof record.detail !== "string") {
+        return [];
+      }
+      return [[jobId, { label: record.label, detail: record.detail }]];
     }),
-  };
-}
-
-export async function resolveCronDeliveryPreviews(
-  jobs: CronJob[],
-): Promise<Map<string, CronDeliveryPreview>> {
-  const entries = await Promise.all(
-    jobs.map(async (job) => [job.id, await resolveCronDeliveryPreview(job)] as const),
   );
-  return new Map(entries);
 }
 
 export function printCronList(
@@ -421,8 +348,12 @@ export function printCronList(
   }
 }
 
-export async function printCronShow(job: CronJob, runtime: RuntimeEnv = defaultRuntime) {
-  const preview = await resolveCronDeliveryPreview(job);
+export function printCronShow(
+  job: CronJob,
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { deliveryPreview?: CronDeliveryPreview },
+) {
+  const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
   runtime.log(`id: ${job.id}`);
   runtime.log(`name: ${job.name}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
