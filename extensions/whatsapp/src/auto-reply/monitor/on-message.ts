@@ -159,6 +159,12 @@ export function createWebOnMessageHandler(params: {
       }
     }
 
+    // When selfChatMode is false, skip self-messages to prevent the outbound
+    // self-loop from triggering agent model evaluation ($1+/day waste).
+    if (params.account.selfChatMode !== true && msg.fromMe === true) {
+      return;
+    }
+
     // Broadcast groups: when we'd reply anyway, run multiple agents.
     // Does not bypass group mention/activation gating above.
     if (
