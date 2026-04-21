@@ -773,7 +773,13 @@ describe("update-cli", () => {
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("2026.4.15");
     resolveGlobalManager.mockResolvedValue("npm");
+    // Mock both resolution paths so versions genuinely match — proving
+    // that !explicitTag is the guard that bypasses the early exit.
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.15",
+    });
+    vi.mocked(fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
       version: "2026.4.15",
     });
