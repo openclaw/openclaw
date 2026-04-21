@@ -720,12 +720,47 @@ export class AcpSessionManager {
           this.createBackgroundTaskRecord(taskContext, turnStartedAt);
         }
         let taskProgressSummary = "";
-        for (let attempt = 0; attempt < 2; attempt += 1) {
+        // Build candidate backend list for failover: primary + fallbacks
+        const primaryBackend = (input.cfg.acp?.backend || "").trim();
+        const fallbackBackends = Array.isArray(input.cfg.acp?.fallbacks)
+          ? input.cfg.acp.fallbacks.filter((b): b is string => typeof b === "string" && b.trim().length > 0)
+          : [];
+        const candidateBackends = [primaryBackend, ...fallbackBackends].filter(
+          (b): b is string => b.length > 0,
+        );
+        if (candidateBackends.length === 0) {
+          throw new AcpRuntimeError(
+            "ACP_BACKEND_MISSING",
+            "No ACP backend configured. Set acp.backend or install an ACP runtime plugin.",
+          );
+        }
+
+        type BackendAttempt = {
+          backend: string;
+          error: string;
+          code: string;
+        };
+        const backendAttempts: BackendAttempt[] = [];
+
+        for (let backendIdx = 0; backendIdx < candidateBackends.length; backendIdx += 1) {
+          const currentBackend = candidateBackends[backendIdx];
+          // Clear cached runtime state so ensureRuntimeHandle picks up the new backend
+          if (backendIdx > 0) {
+            this.clearCachedRuntimeState(sessionKey);
+            logVerbose(
+              `acp-manager: switching backend for ${sessionKey} from ${candidateBackends[backendIdx - 1]} to ${currentBackend}`,
+            );
+          }
+
+          for (let attempt = 0; attempt < 2; attempt += 1) {
           const resolution = this.resolveSession({
             cfg: input.cfg,
             sessionKey,
           });
           const resolvedMeta = requireReadySessionMeta(resolution);
+          // Override backend in meta for failover
+          const metaWithBackend: SessionAcpMeta =
+            backendIdx > 0 ? { ...resolvedMeta, backend: currentBackend } : resolvedMeta;
           let runtime: AcpRuntime | undefined;
           let handle: AcpRuntimeHandle | undefined;
           let meta: SessionAcpMeta | undefined;
@@ -740,7 +775,7 @@ export class AcpSessionManager {
             const ensured = await this.ensureRuntimeHandle({
               cfg: input.cfg,
               sessionKey,
-              meta: resolvedMeta,
+              meta: metaWithBackend,
             });
             runtime = ensured.runtime;
             handle = ensured.handle;
@@ -893,6 +928,37 @@ export class AcpSessionManager {
             if (retryFreshHandle) {
               continue;
             }
+
+            // Check if we should failover to the next backend
+            const isFailoverCandidate =
+              acpError.code === "ACP_TURN_FAILED" &&
+              backendIdx < candidateBackends.length - 1;
+            if (isFailoverCandidate) {
+              const msg = acpError.message.toLowerCase();
+              const shouldFailover =
+                msg.includes("unavailable") ||
+                msg.includes("rate") ||
+                msg.includes("quota") ||
+                msg.includes("limit");
+              if (shouldFailover) {
+                backendAttempts.push({
+                  backend: currentBackend,
+                  error: acpError.message,
+                  code: acpError.code,
+                });
+                logVerbose(
+                  `acp-manager: backend ${currentBackend} failed with UNAVAILABLE-like error for ${sessionKey}, trying next backend`,
+                );
+                break; // Break inner attempt loop, continue outer backend loop
+              }
+            }
+
+            // Record this backend's failure before final throw
+            backendAttempts.push({
+              backend: currentBackend,
+              error: acpError.message,
+              code: acpError.code,
+            });
             this.recordTurnCompletion({
               startedAt: turnStartedAt,
               errorCode: acpError.code,
@@ -964,6 +1030,44 @@ export class AcpSessionManager {
           if (retryFreshHandle) {
             continue;
           }
+          // If we reach here, the inner retry loop exhausted without success.
+          // If there are more backends to try, break to the outer loop.
+          // Otherwise, throw the accumulated error.
+          break;
+        }
+
+        // If we exhausted all backends, throw a summary error
+        if (backendAttempts.length > 0) {
+          const lastAttempt = backendAttempts[backendAttempts.length - 1];
+          const summary = backendAttempts
+            .map((a) => `${a.backend}: ${a.error}`)
+            .join(" | ");
+          const lastError = new AcpRuntimeError(
+            lastAttempt.code as typeof lastAttempt.code,
+            `All ACP backends failed (${backendAttempts.length}): ${summary}`,
+          );
+          this.recordTurnCompletion({
+            startedAt: turnStartedAt,
+            errorCode: lastError.code,
+          });
+          if (taskContext) {
+            this.markBackgroundTaskTerminal(taskContext.runId, {
+              sessionKey,
+              status: resolveBackgroundTaskFailureStatus(lastError),
+              endedAt: Date.now(),
+              lastEventAt: Date.now(),
+              error: lastError.message,
+              progressSummary: taskProgressSummary || null,
+              terminalSummary: null,
+            });
+          }
+          await this.setSessionState({
+            cfg: input.cfg,
+            sessionKey,
+            state: "error",
+            lastError: lastError.message,
+          });
+          throw lastError;
         }
       },
       input.signal,
