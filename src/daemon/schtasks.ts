@@ -108,6 +108,19 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
+function parseCmdWorkingDirectory(line: string, command: "cd /d " | "pushd "): string {
+  return line.slice(command.length).trim().replace(/^"|"$/g, "");
+}
+
+function isCmdControlFlowLine(lower: string): boolean {
+  return (
+    lower === "(" ||
+    lower === ")" ||
+    lower.startsWith("if ") ||
+    lower.startsWith("for ")
+  );
+}
+
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -137,7 +150,17 @@ export async function readScheduledTaskCommand(
         continue;
       }
       if (lower.startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
+        workingDirectory = parseCmdWorkingDirectory(line, "cd /d ");
+        continue;
+      }
+      if (lower.startsWith("pushd ")) {
+        workingDirectory = parseCmdWorkingDirectory(line, "pushd ");
+        continue;
+      }
+      if (lower === "popd") {
+        continue;
+      }
+      if (isCmdControlFlowLine(lower)) {
         continue;
       }
       commandLine = line;
