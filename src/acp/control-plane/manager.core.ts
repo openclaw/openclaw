@@ -929,58 +929,12 @@ export class AcpSessionManager {
               continue;
             }
 
-            // Check if we should failover to the next backend
-            const isFailoverCandidate =
-              acpError.code === "ACP_TURN_FAILED" &&
-              backendIdx < candidateBackends.length - 1;
-            if (isFailoverCandidate) {
-              const msg = acpError.message.toLowerCase();
-              const shouldFailover =
-                msg.includes("unavailable") ||
-                msg.includes("rate") ||
-                msg.includes("quota") ||
-                msg.includes("limit");
-              if (shouldFailover) {
-                backendAttempts.push({
-                  backend: currentBackend,
-                  error: acpError.message,
-                  code: acpError.code,
-                });
-                logVerbose(
-                  `acp-manager: backend ${currentBackend} failed with UNAVAILABLE-like error for ${sessionKey}, trying next backend`,
-                );
-                break; // Break inner attempt loop, continue outer backend loop
-              }
-            }
-
-            // Record this backend's failure before final throw
+            // Record this backend's failure for potential failover
             backendAttempts.push({
               backend: currentBackend,
               error: acpError.message,
               code: acpError.code,
             });
-            this.recordTurnCompletion({
-              startedAt: turnStartedAt,
-              errorCode: acpError.code,
-            });
-            if (taskContext) {
-              this.markBackgroundTaskTerminal(taskContext.runId, {
-                sessionKey,
-                status: resolveBackgroundTaskFailureStatus(acpError),
-                endedAt: Date.now(),
-                lastEventAt: Date.now(),
-                error: acpError.message,
-                progressSummary: taskProgressSummary || null,
-                terminalSummary: null,
-              });
-            }
-            await this.setSessionState({
-              cfg: input.cfg,
-              sessionKey,
-              state: "error",
-              lastError: acpError.message,
-            });
-            throw acpError;
           } finally {
             if (input.signal && onCallerAbort) {
               input.signal.removeEventListener("abort", onCallerAbort);
@@ -1030,7 +984,9 @@ export class AcpSessionManager {
           if (retryFreshHandle) {
             continue;
           }
-          // Inner retry exhausted — check if we should try the next backend
+        } // end inner attempt loop
+
+          // After inner loop: check if we should try the next backend
           if (backendAttempts.length > 0) {
             const lastErr = backendAttempts[backendAttempts.length - 1];
             const msg = lastErr.error.toLowerCase();
