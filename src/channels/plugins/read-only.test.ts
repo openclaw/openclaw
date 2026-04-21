@@ -366,6 +366,33 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
+  it("treats process env maps with option-like keys as env maps", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        ...process.env,
+        cache: "true",
+        env: "prod",
+        EXTERNAL_CHAT_TOKEN: "configured",
+        workspaceDir: "workspace-env-value",
+      } as NodeJS.ProcessEnv,
+    );
+
+    const plugin = plugins.find((entry) => entry.id === "external-chat");
+    expect(plugin?.meta.blurb).toBe("setup entry");
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
   it("discovers trusted external channel plugins from the default agent workspace", () => {
     const workspaceDir = makeTempDir();
     const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "external-chat-plugin");

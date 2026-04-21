@@ -27,22 +27,59 @@ type ReadOnlyChannelPluginResolution = {
   missingConfiguredChannelIds: string[];
 };
 
+const READ_ONLY_CHANNEL_PLUGIN_OPTION_KEYS = new Set([
+  "env",
+  "workspaceDir",
+  "activationSourceConfig",
+  "includePersistedAuthState",
+  "cache",
+]);
+
+function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isReadOnlyChannelPluginOptions(
+  value: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
+): value is ReadOnlyChannelPluginOptions {
+  const record = value as Record<string, unknown>;
+  if (hasOwnRecordKey(record, "env")) {
+    return record.env === undefined || isRecordLike(record.env);
+  }
+  if (hasOwnRecordKey(record, "activationSourceConfig")) {
+    return (
+      record.activationSourceConfig === undefined || isRecordLike(record.activationSourceConfig)
+    );
+  }
+  if (hasOwnRecordKey(record, "includePersistedAuthState")) {
+    return (
+      record.includePersistedAuthState === undefined ||
+      typeof record.includePersistedAuthState === "boolean"
+    );
+  }
+  if (hasOwnRecordKey(record, "cache")) {
+    return record.cache === undefined || typeof record.cache === "boolean";
+  }
+  if (hasOwnRecordKey(record, "workspaceDir")) {
+    return Object.keys(record).every((key) => READ_ONLY_CHANNEL_PLUGIN_OPTION_KEYS.has(key));
+  }
+  return false;
+}
+
 function resolveReadOnlyChannelPluginOptions(
   envOrOptions?: NodeJS.ProcessEnv | ReadOnlyChannelPluginOptions,
 ): ReadOnlyChannelPluginOptions {
   if (!envOrOptions) {
     return {};
   }
-  if (
-    "env" in envOrOptions ||
-    "workspaceDir" in envOrOptions ||
-    "activationSourceConfig" in envOrOptions ||
-    "includePersistedAuthState" in envOrOptions ||
-    "cache" in envOrOptions
-  ) {
-    return envOrOptions as ReadOnlyChannelPluginOptions;
+  if (isReadOnlyChannelPluginOptions(envOrOptions)) {
+    return envOrOptions;
   }
-  return { env: envOrOptions as NodeJS.ProcessEnv };
+  return { env: envOrOptions };
 }
 
 function addChannelPlugins(
