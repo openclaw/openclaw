@@ -749,6 +749,47 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
   });
 
+  it("reads each session transcript once while evaluating committed records", async () => {
+    const firstFixture = await createFixture(stateDir, {
+      attachmentId: "att-1",
+      filename: "att-1.png",
+    });
+    const secondFixture = await createFixture(stateDir, {
+      attachmentId: "att-2",
+      filename: "att-2.png",
+    });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([
+      {
+        __openclaw: { id: "msg-1" },
+        content: [
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
+            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
+          },
+          {
+            type: "image",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
+            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
+          },
+        ],
+      },
+    ]);
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(result).toMatchObject({
+      deletedRecordCount: 0,
+      deletedFileCount: 0,
+      retainedCount: 2,
+    });
+    expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not delete files still referenced by other sessions during session-scoped cleanup", async () => {
     const retainedFixture = await createFixture(stateDir, {
       sessionKey: "agent:other:session",

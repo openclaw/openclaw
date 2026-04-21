@@ -79,6 +79,8 @@ type CleanupManagedOutgoingImageRecordsResult = {
   retainedCount: number;
 };
 
+type SessionManagedOutgoingAttachmentIndex = Set<string>;
+
 export function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
@@ -412,6 +414,10 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
   let deletedFileCount = 0;
   let retainedCount = 0;
   const retainedReferencedPaths = new Set<string>();
+  const transcriptAttachmentIndexCache = new Map<
+    string,
+    SessionManagedOutgoingAttachmentIndex | null
+  >();
   for (const name of names) {
     if (!name.endsWith(".json")) {
       continue;
@@ -444,7 +450,10 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
     ) {
       shouldDelete = true;
     } else if (record.messageId) {
-      shouldDelete = !(await recordMatchesTranscriptMessage(record));
+      shouldDelete = !(await recordMatchesTranscriptMessage(
+        record,
+        transcriptAttachmentIndexCache,
+      ));
     } else {
       const createdAtMs = Date.parse(record.createdAt);
       shouldDelete = Number.isFinite(createdAtMs) && nowMs - createdAtMs >= transientMaxAgeMs;
@@ -492,6 +501,10 @@ function buildManagedImageBlock(record: ManagedImageRecord): ManagedImageBlock {
     width: record.original.width,
     height: record.original.height,
   };
+}
+
+function buildManagedOutgoingAttachmentRefKey(messageId: string, attachmentId: string) {
+  return `${messageId}::${attachmentId}`;
 }
 
 function buildManagedImageResizeWarningBlock(params: {
@@ -565,38 +578,51 @@ function collectManagedOutgoingAttachmentRefs(
   return [...refs.values()];
 }
 
-function messageContainsManagedOutgoingAttachment(
-  message: unknown,
-  expected: { sessionKey: string; attachmentId: string },
+async function getSessionManagedOutgoingAttachmentIndex(
+  sessionKey: string,
+  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
 ) {
-  const content = Array.isArray((message as { content?: unknown[] } | null)?.content)
-    ? ((message as { content: unknown[] }).content as Record<string, unknown>[])
-    : [];
-  return collectManagedOutgoingAttachmentRefs(content, expected.sessionKey).some(
-    (ref) => ref.attachmentId === expected.attachmentId,
-  );
+  if (cache?.has(sessionKey)) {
+    return cache.get(sessionKey) ?? null;
+  }
+  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const sessionId = entry?.sessionId;
+  if (!sessionId) {
+    cache?.set(sessionKey, null);
+    return null;
+  }
+  const messages = readSessionMessages(sessionId, storePath, entry.sessionFile);
+  const index: SessionManagedOutgoingAttachmentIndex = new Set();
+  for (const message of messages) {
+    const meta = (message as { __openclaw?: { id?: string } } | null)?.__openclaw;
+    const messageId = meta?.id;
+    if (typeof messageId !== "string" || !messageId) {
+      continue;
+    }
+    for (const ref of collectManagedOutgoingAttachmentRefs(
+      Array.isArray((message as { content?: unknown[] } | null)?.content)
+        ? ((message as { content: unknown[] }).content as Record<string, unknown>[])
+        : [],
+      sessionKey,
+    )) {
+      index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+    }
+  }
+  cache?.set(sessionKey, index);
+  return index;
 }
 
-async function recordMatchesTranscriptMessage(record: ManagedImageRecord) {
+async function recordMatchesTranscriptMessage(
+  record: ManagedImageRecord,
+  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+) {
   if (!record.messageId) {
     return false;
   }
-  const { storePath, entry } = loadSessionEntry(record.sessionKey);
-  const sessionId = entry?.sessionId;
-  if (!sessionId) {
-    return false;
-  }
-  const messages = readSessionMessages(sessionId, storePath, entry.sessionFile);
-  return messages.some((message) => {
-    const meta = (message as { __openclaw?: { id?: string } } | null)?.__openclaw;
-    return (
-      meta?.id === record.messageId &&
-      messageContainsManagedOutgoingAttachment(message, {
-        sessionKey: record.sessionKey,
-        attachmentId: record.attachmentId,
-      })
-    );
-  });
+  const index = await getSessionManagedOutgoingAttachmentIndex(record.sessionKey, cache);
+  return (
+    index?.has(buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId)) ?? false
+  );
 }
 
 export async function attachManagedOutgoingImagesToMessage(params: {
