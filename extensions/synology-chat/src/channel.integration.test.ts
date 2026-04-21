@@ -1,20 +1,15 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
   resolveAgentRouteMock,
+  type RegisteredRoute as MockRegisteredRoute,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
-type _RegisteredRoute = {
-  path: string;
-  accountId: string;
-  match?: "exact" | "prefix";
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean | void>;
-};
+type _RegisteredRoute = MockRegisteredRoute;
 
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
 let clearSynologyHostedMediaStateForTest: typeof import("./media-proxy.js").clearSynologyHostedMediaStateForTest;
@@ -199,7 +194,7 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("does not activate hosted media when the media route registration conflicts", async () => {
-    type LoggedRegisteredRoute = _RegisteredRoute & {
+    type LoggedRegisteredRoute = MockRegisteredRoute & {
       log?: (message: string) => void;
     };
 
@@ -245,7 +240,7 @@ describe("Synology channel wiring integration", () => {
       nasHost: "localhost",
       publicOrigin: "https://gateway-config.example.com",
       webhookPath: "/webhook/synology-alerts",
-      webhookPathSource: "account",
+      webhookPathSource: "explicit",
       dangerouslyAllowNameMatching: false,
       dangerouslyAllowInheritedWebhookPath: false,
       dmPolicy: "allowlist",
