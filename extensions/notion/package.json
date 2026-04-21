@@ -5,8 +5,8 @@
   "description": "OpenClaw Notion plugin",
   "type": "module",
   "dependencies": {
-    "@notionhq/client": "5.12.0",
-    "@sinclair/typebox": "^0.34.41"
+    "@notionhq/client": "^5.13.0",
+    "@sinclair/typebox": "0.34.49"
   },
   "openclaw": {
     "extensions": [

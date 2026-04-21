@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { NotionApiClient } from "./client.js";
 import { resolveNotionToken } from "./credentials.js";
 import { mapNotionError } from "./errors.js";
@@ -71,7 +71,7 @@ const notionPlugin = definePluginEntry({
       },
     },
   },
-  register(api) {
+  register(api: OpenClawPluginApi) {
     const config = (api.pluginConfig as { safety?: { writeApprovalMode?: string } }) || {};
 
     const notionClient = new NotionApiClient({
@@ -444,6 +444,7 @@ const notionPlugin = definePluginEntry({
               type: "array",
               items: { type: "object" },
             },
+            position: { type: "object" },
           },
           required: ["blockId", "children"],
         },
@@ -451,6 +452,7 @@ const notionPlugin = definePluginEntry({
           const result = await notionClient.appendBlockChildren(
             params.blockId as string,
             params.children as unknown[],
+            params.position,
           );
           if (!result.ok) {
             throw mapNotionError(result.error);
@@ -509,8 +511,10 @@ const notionPlugin = definePluginEntry({
             throw mapNotionError(result.error);
           }
           return {
-            content: [{ type: "text", text: JSON.stringify({ id: params.blockId, archived: true }) }],
-            details: { id: params.blockId, archived: true },
+            content: [
+              { type: "text", text: JSON.stringify({ id: params.blockId, in_trash: true }) },
+            ],
+            details: { id: params.blockId, in_trash: true },
           };
         },
       }),

@@ -4,7 +4,7 @@ import notionPlugin from "./tools.js";
 
 type RegisteredTool = {
   name: string;
-  execute: (params: Record<string, unknown>) => Promise<unknown>;
+  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
 };
 
 function parseJsonBody(init: RequestInit | undefined): Record<string, unknown> {
@@ -33,7 +33,10 @@ function captureBeforeToolCallHandler() {
 
   notionPlugin.register({
     pluginConfig: { safety: { writeApprovalMode: "per_call" } },
-    on(eventName: string, handler: (event: { toolName: string; params: Record<string, unknown> }) => unknown) {
+    on(
+      eventName: string,
+      handler: (event: { toolName: string; params: Record<string, unknown> }) => unknown,
+    ) {
       if (eventName === "before_tool_call") {
         beforeToolCall = handler;
       }
@@ -76,7 +79,7 @@ describe("notion tools", () => {
     const createCommentTool = captureRegisteredTools().get("notion_create_comment");
     expect(createCommentTool).toBeDefined();
 
-    await createCommentTool?.execute({
+    await createCommentTool?.execute("tool-call-1", {
       blockId: "page-123",
       parentType: "page_id",
       richText: [{ text: { content: "Ship it" } }],
@@ -97,7 +100,7 @@ describe("notion tools", () => {
       }
       if (
         url ===
-        `https://api.notion.com/v1/blocks/${pageId}/children?page_size=5&start_cursor=cursor-3`
+        `https://api.notion.com/v1/blocks/${pageId}/children?start_cursor=cursor-3&page_size=5`
       ) {
         return new Response(JSON.stringify({ results: [] }), {
           status: 200,
@@ -111,7 +114,7 @@ describe("notion tools", () => {
     const fetchTool = captureRegisteredTools().get("notion_fetch");
     expect(fetchTool).toBeDefined();
 
-    await fetchTool?.execute({
+    await fetchTool?.execute("tool-call-2", {
       target: pageId,
       targetType: "page",
       includeBlocks: true,

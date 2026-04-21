@@ -11,7 +11,7 @@ metadata:
 
 # notion
 
-Use the Notion API to create/read/update pages, data sources (databases), and blocks.
+Use the Notion API to create/read/update pages, database containers, data sources, and blocks.
 
 ## Setup
 
@@ -36,7 +36,7 @@ curl -X GET "https://api.notion.com/v1/..." \
   -H "Content-Type: application/json"
 ```
 
-> **Note:** The `Notion-Version` header is required. This skill uses `2026-03-11` (latest). In this version, databases are called "data sources" in the API.
+> **Note:** The `Notion-Version` header is required. This skill uses `2026-03-11` (latest). The big database/data-source split happened in `2025-09-03`; `2026-03-11` mainly switches `archived` to `in_trash`, `after` to `position`, and `transcription` to `meeting_notes`.
 
 ## Common Operations
 
@@ -74,10 +74,29 @@ curl -X POST "https://api.notion.com/v1/pages" \
   -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
-    "parent": {"database_id": "xxx"},
+    "parent": {"data_source_id": "xxx"},
     "properties": {
       "Name": {"title": [{"text": {"content": "New Item"}}]},
       "Status": {"select": {"name": "Todo"}}
+    }
+  }'
+```
+
+**Create a database container with its initial data source:**
+
+```bash
+curl -X POST "https://api.notion.com/v1/databases" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent": {"type": "page_id", "page_id": "xxx"},
+    "title": [{"text": {"content": "My Database"}}],
+    "initial_data_source": {
+      "properties": {
+        "Name": {"title": {}},
+        "Status": {"select": {"options": [{"name": "Todo"}, {"name": "Done"}]}}
+      }
     }
   }'
 ```
@@ -228,19 +247,18 @@ Common property formats for database items:
 - **Email:** `{"email": "a@b.com"}`
 - **Relation:** `{"relation": [{"id": "page_id"}]}`
 
-## Key Differences in 2026-03-11
+## Version Notes
 
-- **Databases → Data Sources:** Use `/data_sources/` endpoints for queries and retrieval
-- **Two IDs:** Each database now has both a `database_id` and a `data_source_id`
-  - Use `database_id` when creating pages (`parent: {"database_id": "..."}`)
-  - Use `data_source_id` when querying (`POST /v1/data_sources/{id}/query`)
-- **Search results:** Databases return as `"object": "data_source"` with their `data_source_id`
-- **Parent in responses:** Pages show `parent.data_source_id` alongside `parent.database_id`
-- **Finding the data_source_id:** Search for the database, or call `GET /v1/data_sources/{data_source_id}`
+- **2025-09-03:** Databases split into database containers plus child data sources.
+- **Page creation:** Use `parent.data_source_id` when creating rows in a table.
+- **Data source operations:** Use `/data_sources/*` or `notion.dataSources.*` for retrieve/query/create/update.
+- **Database container operations:** Use `/databases/*` or `notion.databases.*` to create or inspect the container and discover its `data_sources`.
+- **2026-03-11:** Replace `archived` with `in_trash`, replace append-block `after` with `position`, and replace `transcription` blocks with `meeting_notes`.
+- **Finding the data source ID:** Retrieve the database container and read `data_sources[]`, or copy the data source ID directly from Notion.
 
 ## SDK Integration
 
-The OpenClaw Notion plugin uses the official `@notionhq/client` SDK (v5.12.0) internally. The SDK handles:
+The OpenClaw Notion plugin uses the official `@notionhq/client` SDK (`v5.19.0` at the time of writing) internally. The SDK handles:
 
 - **Authentication:** Bearer token via `NOTION_TOKEN` env var
 - **API versioning:** `Notion-Version: 2026-03-11` header automatically applied

@@ -30,6 +30,14 @@ type NotionPageWithOptionalChildren = Record<string, unknown> & {
   appended_children?: unknown;
 };
 
+function buildPlainTextRichText(content: string) {
+  return [{ type: "text" as const, text: { content } }];
+}
+
+function normalizeClientBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/v1\/?$/, "");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -79,8 +87,8 @@ function extractNotionIdCandidate(value: string): string | null {
 }
 
 function mapCreatePageParent(parent: NotionPageParentInput): any {
-  return parent.type === "page" 
-    ? { page_id: parent.id, type: "page_id" as const } 
+  return parent.type === "page"
+    ? { page_id: parent.id, type: "page_id" as const }
     : { data_source_id: parent.id, type: "data_source_id" as const };
 }
 
@@ -136,54 +144,16 @@ function mapNotionError(error: unknown): NotionApiError {
 }
 
 export class NotionApiClient {
-  private config: NotionApiClientConfig;
   private notionClient: Client;
 
   constructor(config: NotionApiClientConfig) {
-    this.config = config;
     // Initialize official SDK with all relevant runtime config
     // SDK handles retries for 429 rate limits and server errors by default
     this.notionClient = new Client({
       auth: config.token,
+      baseUrl: normalizeClientBaseUrl(config.baseUrl),
       notionVersion: NOTION_API_VERSION, // Explicitly set to 2026-03-11 (SDK default is 2025-09-03)
     });
-  }
-
-  private async request<T>(
-    endpoint: string,
-    options: RequestInit = {},
-  ): Promise<NotionApiResponse<T>> {
-    const url = `${this.config.baseUrl}${endpoint}`;
-
-    try {
-      const response = await fetch(url, {
-        ...options,
-        headers: Object.assign(
-          {
-            Authorization: `Bearer ${this.config.token}`,
-            "Notion-Version": NOTION_API_VERSION,
-            "Content-Type": "application/json",
-          },
-          options.headers || {},
-        ),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        return {
-          ok: false as const,
-          error: `Notion API error: ${response.status} ${response.statusText} - ${errorText}`,
-        };
-      }
-
-      const data = await response.json();
-      return {
-        ok: true as const,
-        data,
-      };
-    } catch (error) {
-      return mapNotionError(error);
-    }
   }
 
   async getBlock(blockId: string) {
@@ -208,11 +178,12 @@ export class NotionApiClient {
     }
   }
 
-  async appendBlockChildren(blockId: string, children: unknown[]) {
+  async appendBlockChildren(blockId: string, children: unknown[], position?: unknown) {
     try {
       const result = await this.notionClient.blocks.children.append({
         block_id: blockId,
         children: children as any,
+        ...(position === undefined ? {} : { position: position as any }),
       });
       return { ok: true as const, data: result };
     } catch (error) {
@@ -251,15 +222,21 @@ export class NotionApiClient {
   }
 
   async getDataSource(dataSourceId: string) {
-    // SDK doesn't have dataSources methods yet, fall back to manual request
-    return this.request(`/data_sources/${dataSourceId}`);
+    try {
+      const dataSource = await this.notionClient.dataSources.retrieve({
+        data_source_id: dataSourceId,
+      });
+      return { ok: true as const, data: dataSource };
+    } catch (error) {
+      return mapNotionError(error);
+    }
   }
 
   async deletePage(pageId: string) {
     try {
       const deleted = await this.notionClient.pages.update({
         page_id: pageId,
-        archived: true,
+        in_trash: true,
       });
       return { ok: true as const, data: deleted };
     } catch (error) {
@@ -270,9 +247,7 @@ export class NotionApiClient {
   async search(query?: string, kind?: NotionSearchKind, pageSize?: number, cursor?: string) {
     try {
       const filter =
-        kind && kind !== "all"
-          ? ({ property: "object", value: kind } as any)
-          : undefined;
+        kind && kind !== "all" ? ({ property: "object", value: kind } as any) : undefined;
 
       const results = await this.notionClient.search({
         query: query || "",
@@ -392,25 +367,18 @@ export class NotionApiClient {
     pageSize?: number,
     cursor?: string,
   ) {
-    // SDK doesn't have dataSources.query yet, fall back to manual request
-    const body: Record<string, unknown> = {};
-    if (filter) {
-      body.filter = filter;
+    try {
+      const results = await this.notionClient.dataSources.query({
+        data_source_id: dataSourceId,
+        filter: filter as any,
+        sorts: sorts as any,
+        page_size: pageSize,
+        start_cursor: cursor,
+      });
+      return { ok: true as const, data: results };
+    } catch (error) {
+      return mapNotionError(error);
     }
-    if (sorts) {
-      body.sorts = sorts;
-    }
-    if (pageSize) {
-      body.page_size = pageSize;
-    }
-    if (cursor) {
-      body.start_cursor = cursor;
-    }
-
-    return this.request(`/data_sources/${dataSourceId}/query`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
   }
 
   async createPage(
@@ -459,10 +427,10 @@ export class NotionApiClient {
         updateData.erase_content = true;
       }
       if (archive) {
-        updateData.archived = true;
+        updateData.in_trash = true;
       }
       if (restore) {
-        updateData.archived = false;
+        updateData.in_trash = false;
       }
 
       const pageResult = await this.notionClient.pages.update({
@@ -497,22 +465,20 @@ export class NotionApiClient {
     properties?: unknown,
     icon?: unknown,
   ) {
-    const body: Record<string, unknown> = {
-      parent: { database_id: parentDatabaseId },
-      title: [{ text: { content: title } }],
-      properties:
-        isRecord(properties) && Object.keys(properties).length > 0
-          ? properties
-          : { Name: { title: {} } },
-    };
-    if (icon) {
-      body.icon = icon;
+    try {
+      const dataSource = await this.notionClient.dataSources.create({
+        parent: { database_id: parentDatabaseId },
+        title: buildPlainTextRichText(title),
+        properties:
+          isRecord(properties) && Object.keys(properties).length > 0
+            ? (properties as any)
+            : ({ Name: { title: {} } } as any),
+        ...(icon === undefined ? {} : { icon: icon as any }),
+      });
+      return { ok: true as const, data: dataSource };
+    } catch (error) {
+      return mapNotionError(error);
     }
-
-    return this.request("/data_sources", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
   }
 
   async updateDataSource(
@@ -524,28 +490,20 @@ export class NotionApiClient {
     inTrash?: boolean,
     icon?: unknown,
   ) {
-    const body: Record<string, unknown> = {};
-    if (title) {
-      body.title = [{ text: { content: title } }];
+    try {
+      const properties = buildDataSourcePropertiesPatch(addProperties, renameProperties);
+      const dataSource = await this.notionClient.dataSources.update({
+        data_source_id: dataSourceId,
+        ...(title === undefined ? {} : { title: buildPlainTextRichText(title) }),
+        ...(properties === undefined ? {} : { properties: properties as any }),
+        ...(parentDatabaseId === undefined ? {} : { parent: { database_id: parentDatabaseId } }),
+        ...(inTrash === undefined ? {} : { in_trash: inTrash }),
+        ...(icon === undefined ? {} : { icon: icon as any }),
+      });
+      return { ok: true as const, data: dataSource };
+    } catch (error) {
+      return mapNotionError(error);
     }
-    const properties = buildDataSourcePropertiesPatch(addProperties, renameProperties);
-    if (properties) {
-      body.properties = properties;
-    }
-    if (parentDatabaseId) {
-      body.parent = { database_id: parentDatabaseId };
-    }
-    if (inTrash !== undefined) {
-      body.in_trash = inTrash;
-    }
-    if (icon) {
-      body.icon = icon;
-    }
-
-    return this.request(`/data_sources/${dataSourceId}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    });
   }
 
   // Phase 3: User operations

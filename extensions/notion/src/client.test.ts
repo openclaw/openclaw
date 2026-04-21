@@ -206,7 +206,7 @@ describe("NotionApiClient", () => {
       if (url === `https://api.notion.com/v1/pages/${pageId}`) {
         return jsonResponse({ id: pageId, object: "page" });
       }
-      if (url === `https://api.notion.com/v1/blocks/${pageId}/children?`) {
+      if (url === `https://api.notion.com/v1/blocks/${pageId}/children`) {
         return new Response("forbidden", { status: 403 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -218,7 +218,8 @@ describe("NotionApiClient", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Notion API error: 403  - forbidden",
+      error:
+        "Notion API error: Request to Notion API failed with status: 403 (code: notionhq_client_response_error, status: 403)",
     });
   });
 

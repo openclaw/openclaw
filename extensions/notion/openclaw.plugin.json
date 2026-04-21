@@ -1,7 +1,7 @@
 {
   "id": "notion",
   "name": "Notion",
-  "description": "Native Notion REST tools for search, page reads, block operations, database operations, user operations, comments, and guarded writes.",
+  "description": "Native Notion REST tools for search, page reads, block operations, database container and data source operations, user operations, comments, and guarded writes.",
   "contracts": {
     "tools": [
       "notion_search",
@@ -42,10 +42,7 @@
         "properties": {
           "writeApprovalMode": {
             "type": "string",
-            "enum": [
-              "per_call",
-              "disabled"
-            ]
+            "enum": ["per_call", "disabled"]
           }
         }
       }
