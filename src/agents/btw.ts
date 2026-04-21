@@ -30,6 +30,7 @@ import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
+import { stripUnsupportedOllamaThinkingPayload } from "./pi-embedded-runner/model.provider-normalization.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
 import { streamWithPayloadPatch } from "./pi-embedded-runner/stream-payload-utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
@@ -490,6 +491,19 @@ export async function runBtwSideQuestion(
       if (Array.isArray(payloadObj.tools) && payloadObj.tools.length === 0) {
         delete payloadObj.tools;
       }
+      // Bug 3 defense: BTW calls streamWithPayloadPatch(streamSimple, ...)
+      // directly and bypasses applyExtraParamsToAgent, so the provider-normalization
+      // strip wrapper never runs on this path. Call it inline so thinking/reasoning
+      // fields — whether from model defaults, provider-runtime auth, or a future
+      // reasoning injection path — don't reach Ollama for models where
+      // ollamaSupportsThinking() is false (e.g. llama3.2:3b), which otherwise
+      // returns 400 {"error":"\"<model>\" does not support thinking"}.
+      stripUnsupportedOllamaThinkingPayload({
+        provider: runtimeModel.provider,
+        api: runtimeModel.api,
+        modelId: runtimeModel.id,
+        payload: payloadObj,
+      });
     },
   );
 

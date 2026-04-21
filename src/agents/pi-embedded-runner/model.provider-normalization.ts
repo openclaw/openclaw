@@ -38,6 +38,16 @@ export function stripUnsupportedOllamaThinkingPayload(params: {
   //   400 {"error":"\"<model>\" does not support thinking"}
   // Verified against ollama/v1/chat/completions with llama3.2:3b (2026-04-21).
   delete params.payload.reasoning_effort;
+  // OpenClaw's native Ollama adapter (createOllamaThinkingWrapper in
+  // src/extensions/ollama/stream.ts) writes `think: true|false` directly into
+  // the /api/chat payload whenever ctx.thinkingLevel is set (including "off").
+  // Because createOllamaThinkingCompatWrapper wraps OUTSIDE createOllamaThinkingWrapper
+  // in createConfiguredOllamaCompatStreamWrapper, this strip runs AFTER the add
+  // in the onPayload chain — so deleting `think` here removes it before the
+  // request is sent. Without this delete, llama3.2:3b (and any other model
+  // where ollamaSupportsThinking() is false) gets rejected by Ollama with
+  // 400 {"error":"\"<model>\" does not support thinking"} on /api/chat.
+  delete params.payload.think;
   // Qwen / Z.AI style thinking toggles also cause "does not support thinking"
   // rejections on Ollama for models that lack reasoning capability.
   delete params.payload.enable_thinking;
