@@ -104,6 +104,29 @@ function isHostedShipUrl(shipUrl: string): boolean {
   }
 }
 
+function isHostedTlonHostname(hostname: string): boolean {
+  return hostname.endsWith("tlon.network") || hostname.endsWith(".test.tlon.systems");
+}
+
+function assertTrustedMemexUploadUrl(rawUrl: string, label: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`${label} must be a valid https URL`);
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error(`${label} must use https`);
+  }
+
+  if (!isHostedTlonHostname(parsed.hostname)) {
+    throw new Error(`${label} must target a trusted hosted Tlon domain`);
+  }
+
+  return parsed.toString();
+}
+
 function prefixEndpoint(endpoint: string): string {
   return endpoint.match(/https?:\/\//) ? endpoint : `https://${endpoint}`;
 }
@@ -232,11 +255,12 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       contentType,
       fileName: fileKey,
     });
+    const trustedUploadUrl = assertTrustedMemexUploadUrl(uploadUrl, "Memex upload URL");
 
     let release: (() => Promise<void>) | undefined;
     try {
       const guarded = await fetchWithSsrFGuard({
-        url: uploadUrl,
+        url: trustedUploadUrl,
         init: {
           method: "PUT",
           body: params.blob,
@@ -249,6 +273,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         capture: false,
       });
       release = guarded.release;
+      assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
       if (!guarded.response.ok) {
         throw new Error(`Upload failed: ${guarded.response.status}`);
       }

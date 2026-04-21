@@ -49,6 +49,9 @@ function createMemexResponse(uploadUrl: string): Response {
 describe("uploadFile memex upload hardening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGuardedFetch.mockReset();
+    mockRelease.mockReset();
+    mockRelease.mockResolvedValue(undefined);
     vi.stubGlobal("fetch", vi.fn());
     mockAuthenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
     configureClient({
@@ -123,9 +126,9 @@ describe("uploadFile memex upload hardening", () => {
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces SSRF guard failures for the memex upload target", async () => {
+  it("surfaces guarded upload failures for hosted Memex targets", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
-    fetchMock.mockResolvedValueOnce(createMemexResponse("http://169.254.169.254/upload"));
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
     mockGuardedFetch.mockRejectedValueOnce(new Error("Blocked upload target"));
 
     await expect(
@@ -139,11 +142,50 @@ describe("uploadFile memex upload hardening", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockGuardedFetch).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "http://169.254.169.254/upload",
+        url: "https://uploads.tlon.network/put",
         auditContext: "tlon-memex-upload",
         capture: false,
       }),
     );
     expect(mockRelease).not.toHaveBeenCalled();
+  });
+
+  it("rejects Memex upload targets outside the hosted Tlon domain allowlist", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://attacker.example/upload"));
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex upload URL must target a trusted hosted Tlon domain");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockGuardedFetch).not.toHaveBeenCalled();
+    expect(mockRelease).not.toHaveBeenCalled();
+  });
+
+  it("rejects redirected Memex upload targets outside the hosted Tlon domain allowlist", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockResolvedValueOnce(createMemexResponse("https://uploads.tlon.network/put"));
+    mockGuardedFetch.mockResolvedValueOnce({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://attacker.example/upload",
+      release: mockRelease,
+    });
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex final upload URL must target a trusted hosted Tlon domain");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockGuardedFetch).toHaveBeenCalledOnce();
+    expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 });
