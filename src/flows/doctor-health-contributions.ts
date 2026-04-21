@@ -47,15 +47,8 @@ import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "../commands/doc
 import { noteOpenAIOAuthTlsPrerequisites } from "../commands/oauth-tls-preflight.js";
 import { applyWizardMetadata, randomToken } from "../commands/onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
-import {
-  CONFIG_PATH,
-  readConfigFileSnapshot,
-  writeConfigFile,
-  getRuntimeConfig,
-} from "../config/config.js";
-import { createMergePatch, projectSourceOntoRuntimeShape } from "../config/io.write-prepare.js";
+import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -462,26 +455,106 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
-    // Merge with source config to preserve unknown keys during repair, using
-    // the established merge-patch utilities. We intentionally avoid a naive
-    // shallow spread (e.g. `{ ...raw, ...repaired }`) because that would
-    // resurrect keys the doctor intentionally removed and would not perform a
-    // deep merge of nested custom keys. Instead we:
-    // 1) compute a merge-patch from the runtime snapshot -> repaired config
-    //    (createMergePatch) so deletions are represented as `null` in the
-    //    patch, and
-    // 2) project the original source onto the runtime shape and apply the
-    //    patch (applyMergePatch). This mirrors the config write pipeline and
-    //    preserves nested unknown/custom keys while honoring deletions made by
-    //    the doctor (they will not be resurrected).
+    // Merge with source config to preserve unknown keys during repair.
+    // We must not parse or validate runtime config here because that would
+    // trigger strict schema parsing on invalid configs (causing doctor to
+    // crash on the very files it should repair). The previous approach used
+    // runtime-shape merge utilities, but they required access to the runtime
+    // parse which is unsafe in this context. Instead we perform a safe,
+    // isolated deep merge that only restores truly unknown top-level keys from
+    // the original source config and never resurrects known/deprecated core
+    // keys that the doctor intentionally removed.
+    //
+    // Rule:
+    // - For each top-level key in the source config:
+    //   - if the key is unknown (not part of the standard OpenClaw top-level
+    //     schema), deep-merge/preserve it onto the repaired config.
+    //   - if the key is known, do not copy anything from the source (this
+    //     prevents resurrecting deleted core keys).
     if (ctx.configResult.sourceConfig) {
-      const runtimeSnapshot = getRuntimeConfig();
-      const runtimePatch = createMergePatch(runtimeSnapshot, ctx.cfg);
-      const projectedSource = projectSourceOntoRuntimeShape(
-        ctx.configResult.sourceConfig,
-        runtimeSnapshot,
-      );
-      ctx.cfg = applyMergePatch(projectedSource, runtimePatch) as OpenClawConfig;
+      const KNOWN_TOP_LEVEL = new Set<string>([
+        "$schema",
+        "meta",
+        "auth",
+        "acp",
+        "env",
+        "wizard",
+        "diagnostics",
+        "logging",
+        "cli",
+        "update",
+        "browser",
+        "ui",
+        "secrets",
+        "skills",
+        "plugins",
+        "surfaces",
+        "models",
+        "nodeHost",
+        "agents",
+        "tools",
+        "bindings",
+        "broadcast",
+        "audio",
+        "media",
+        "messages",
+        "commands",
+        "approvals",
+        "session",
+        "web",
+        "channels",
+        "cron",
+        "hooks",
+        "discovery",
+        "canvasHost",
+        "talk",
+        "gateway",
+        "memory",
+        "mcp",
+      ]);
+
+      const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+        !!v && typeof v === "object" && !Array.isArray(v);
+
+      const deepMergeInto = (target: unknown, source: unknown): void => {
+        if (!isPlainObject(source)) {
+          return;
+        }
+        if (!isPlainObject(target)) {
+          return;
+        }
+        const t = target;
+        const s = source;
+        for (const [k, v] of Object.entries(s)) {
+          if (isPlainObject(v)) {
+            if (!isPlainObject(t[k])) {
+              t[k] = structuredClone(v);
+            } else {
+              deepMergeInto(t[k], v);
+            }
+          } else if (Array.isArray(v)) {
+            if (t[k] === undefined) {
+              t[k] = structuredClone(v);
+            }
+          } else {
+            if (t[k] === undefined) {
+              t[k] = v;
+            }
+          }
+        }
+      };
+
+      const src = ctx.configResult.sourceConfig;
+      for (const [key, val] of Object.entries(src)) {
+        if (!KNOWN_TOP_LEVEL.has(key)) {
+          const cfgRecord = ctx.cfg as Record<string, unknown>;
+          if (cfgRecord[key] === undefined) {
+            cfgRecord[key] = structuredClone(val);
+          } else {
+            deepMergeInto(cfgRecord[key], val);
+          }
+        }
+      }
     }
     await writeConfigFile(ctx.cfg);
     logConfigUpdated(ctx.runtime);
