@@ -155,7 +155,12 @@ jobs:
                 process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
                 process.exit(run.status ?? 1);
               }
-              const parsed = JSON.parse(run.stdout);
+              // Filter out log lines (e.g., \"[plugins] ...\") before JSON.parse
+              const jsonLines = (run.stdout || \"\").split(\"\\n\").filter((line) => {
+                const trimmed = line.trim();
+                return trimmed.startsWith(\"{\") || trimmed.startsWith(\"[\");
+              });
+              const parsed = JSON.parse(jsonLines.join(\"\\n\"));
               const matrix = (parsed.plugins || []).find((entry) => entry.id === \"matrix\");
               if (!matrix) {
                 throw new Error(\"matrix plugin missing from bundled plugin list\");
