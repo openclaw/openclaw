@@ -284,18 +284,8 @@ function cloneMemoryPublicArtifact(
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const cap = activeMemoryCapability;
-  const artifacts = (await cap?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
-  if (process.env.OPENCLAW_DEBUG_PLUGIN_SCOPE === "1") {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[memory-bridge-probe] ${JSON.stringify({
-        capabilityPluginId: cap?.pluginId ?? null,
-        hasPublicArtifacts: cap?.capability.publicArtifacts !== undefined,
-        artifactCount: artifacts.length,
-      })}`,
-    );
-  }
+  const provider = activeMemoryCapability?.capability.publicArtifacts;
+  const artifacts = (await provider?.listArtifacts(params)) ?? [];
   return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
     const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
     if (workspaceOrder !== 0) {
