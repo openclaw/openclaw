@@ -9,7 +9,7 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { edgeTTS } from "./tts.js";
+import { edgeTTS } from "./edge-tts.js";
 
 const JANET_CLIENT_ID = "openclaw-ios";
 const JANET_TTS_STREAM_METHOD = "janet.tts_stream.start";
@@ -555,7 +555,7 @@ export function createJanetTtsStreamService(
   logger: PluginLogger,
 ): OpenClawPluginService {
   return {
-    id: "microsoft-janet-tts-stream",
+    id: "janet-tts-stream",
     start: async (_ctx: OpenClawPluginServiceContext) => {
       janetTtsStreamManager.start(runtime, logger);
     },

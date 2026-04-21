@@ -1,0 +1,44 @@
+{
+  "name": "@openclaw/janet-tts-stream",
+  "version": "2026.4.20",
+  "description": "Janet-specific low-latency Microsoft TTS streaming plugin",
+  "type": "module",
+  "dependencies": {
+    "node-edge-tts": "^1.2.10"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.20"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/janet-tts-stream",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.20"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.20"
+    },
+    "build": {
+      "openclawVersion": "2026.4.20"
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
