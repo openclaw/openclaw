@@ -59,8 +59,8 @@ export type EmbeddedRunLifecycleReceipt = {
   passIndex: number;
   passKind: EmbeddedRunPassKind;
   correlationId: string;
-  envelopeOnly: true;
-  decisionEffective: false;
+  envelopeOnly: boolean;
+  decisionEffective: boolean;
   outcome: "observed" | "noop" | "error";
   reason?: string;
   unsupportedCapabilities?: string[];
@@ -116,10 +116,8 @@ export function createEmbeddedRunLifecycleBaseEvent(params: {
 }
 
 /**
- * M14-A stable receipt envelope.
- * Observe events are fail-open at call sites and always remain envelope-only.
- * Decision events stay fail-closed in scaffold-only mode and must not become
- * decision-effective until a later gated slice explicitly enables that path.
+ * M14-A stable receipt envelope, later extended so live-effective decision slices
+ * can emit truthful non-envelope receipts without changing the persisted surface id.
  */
 export function buildEmbeddedRunLifecycleReceipt(params: {
   event:
@@ -130,6 +128,8 @@ export function buildEmbeddedRunLifecycleReceipt(params: {
   reason?: string;
   annotations?: Record<string, unknown>;
   unsupportedCapabilities?: string[];
+  envelopeOnly?: boolean;
+  decisionEffective?: boolean;
 }): EmbeddedRunLifecycleReceipt {
   return {
     runtimeSurface: params.event.runtimeSurface,
@@ -138,8 +138,8 @@ export function buildEmbeddedRunLifecycleReceipt(params: {
     passIndex: params.event.passIndex,
     passKind: params.event.passKind,
     correlationId: params.event.correlationId,
-    envelopeOnly: true,
-    decisionEffective: false,
+    envelopeOnly: params.envelopeOnly ?? true,
+    decisionEffective: params.decisionEffective ?? false,
     outcome: params.outcome,
     ...(params.reason ? { reason: params.reason } : {}),
     ...(params.unsupportedCapabilities

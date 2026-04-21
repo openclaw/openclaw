@@ -77,6 +77,47 @@ describe("embedded run lifecycle seam", () => {
     });
   });
 
+  it("allows live-effective decision receipts to declare non-envelope execution", () => {
+    expect(
+      buildEmbeddedRunLifecycleReceipt({
+        event: {
+          ...createEmbeddedRunLifecycleBaseEvent({
+            runId: "run-1",
+            sessionId: "session-1",
+            provider: "openai",
+            modelId: "gpt-5.4",
+            passIndex: 3,
+            passKind: "model_call",
+            correlationId: "corr-3",
+          }),
+          event: "pass_transition_decision",
+          source: "assistant",
+          proposedAction: "continue",
+          proposedReason: "rate_limit",
+          envelopeOnly: true,
+          decisionEffective: false,
+        },
+        outcome: "observed",
+        reason: "operator_override",
+        annotations: { lane: "live", retriesGranted: 1 },
+        envelopeOnly: false,
+        decisionEffective: true,
+      }),
+    ).toEqual({
+      runtimeSurface: EMBEDDED_RUN_LIFECYCLE_SURFACE,
+      lifecycleSeamVersion: EMBEDDED_RUN_LIFECYCLE_SEAM_VERSION,
+      event: "pass_transition_decision",
+      passIndex: 3,
+      passKind: "model_call",
+      correlationId: "corr-3",
+      envelopeOnly: false,
+      decisionEffective: true,
+      outcome: "observed",
+      reason: "operator_override",
+      annotations: { lane: "live", retriesGranted: 1 },
+    });
+  });
+
   it("defaults transition decisions to noop when no seam is installed", async () => {
     await expect(
       resolveEmbeddedRunPassTransitionDecision({
