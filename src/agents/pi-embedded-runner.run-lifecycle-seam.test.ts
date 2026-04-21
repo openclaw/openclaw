@@ -191,7 +191,7 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
     ).rejects.toThrow(/halted prompt transition/i);
   });
 
-  it("keeps continue decisions fail-closed in decide mode until live continue wiring exists", async () => {
+  it("continues prompt transitions in decide mode when the seam returns continue", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         promptError: new Error("plain prompt failure"),
@@ -206,6 +206,6 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
           onPassTransitionDecision: vi.fn(async () => ({ next: "continue" as const })),
         },
       }),
-    ).rejects.toThrow(/continue transition execution is wired/i);
+    ).rejects.toThrow(/plain prompt failure/i);
   });
 });

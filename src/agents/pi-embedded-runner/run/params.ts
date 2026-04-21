@@ -144,6 +144,6 @@ export type RunEmbeddedPiAgentParams = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Internal B1 scaffold seam for outer-run lifecycle observation/decision wiring. */
   lifecycleSeam?: EmbeddedRunLifecycleSeam;
-  /** Internal lifecycle decision gate. Defaults to observe_only; M15-A only executes halt. */
+  /** Internal lifecycle decision gate. Defaults to observe_only; M15 executes halt/continue. */
   lifecycleDecisionMode?: EmbeddedRunLifecycleDecisionMode;
 };

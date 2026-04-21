@@ -737,11 +737,6 @@ export async function runEmbeddedPiAgent(
               decisionEffective: false,
             },
           });
-          if (decision.next === "continue") {
-            throw new Error(
-              `Embedded run lifecycle seam returned continue before live continue transition execution is wired for ${params2.source}.`,
-            );
-          }
           return decision;
         };
         // Hoisted so the retry-limit error path can use the most recent API total.
