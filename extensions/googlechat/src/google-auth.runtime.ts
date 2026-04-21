@@ -432,9 +432,19 @@ export function createGoogleAuthFetch(
 }
 
 async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Array> {
+  const contentLengthHeader = response.headers.get("content-length");
+  if (contentLengthHeader) {
+    const contentLength = Number(contentLengthHeader);
+    if (Number.isFinite(contentLength) && contentLength > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
+      throw new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`);
+    }
+  }
+
   const reader = response.body?.getReader();
   if (!reader) {
-    return new Uint8Array(await response.arrayBuffer());
+    throw new Error(
+      "Google auth response body stream unavailable; refusing to buffer unbounded response.",
+    );
   }
 
   const chunks: Uint8Array[] = [];

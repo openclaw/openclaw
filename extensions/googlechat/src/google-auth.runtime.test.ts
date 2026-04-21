@@ -211,6 +211,60 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects non-stream guarded auth responses instead of buffering them unbounded", async () => {
+    const release = vi.fn();
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: {
+        arrayBuffer,
+        body: null,
+        headers: new Headers(),
+        status: 200,
+        statusText: "OK",
+      } as unknown as Response,
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+
+    await expect(
+      guardedFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+      } as RequestInit),
+    ).rejects.toThrow(
+      "Google auth response body stream unavailable; refusing to buffer unbounded response.",
+    );
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects oversized auth responses from content-length before reading the body", async () => {
+    const release = vi.fn();
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: {
+        arrayBuffer,
+        body: null,
+        headers: new Headers({
+          "content-length": String(2 * 1024 * 1024),
+        }),
+        status: 200,
+        statusText: "OK",
+      } as unknown as Response,
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+
+    await expect(
+      guardedFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+      } as RequestInit),
+    ).rejects.toThrow("Google auth response exceeds 1048576 bytes.");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("builds a scoped Gaxios transport without mutating global window", async () => {
     const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
     Reflect.deleteProperty(globalThis as object, "window");
