@@ -635,8 +635,8 @@ function listBuiltRuntimeEntryCandidates(entryPath: string): string[] {
     `${basePath}.cjs`,
   ];
   const candidates = [
-    ...withJavaScriptExtensions(withoutExtension),
     ...withJavaScriptExtensions(distWithoutExtension),
+    ...withJavaScriptExtensions(withoutExtension),
   ];
   return [...new Set(candidates)].filter((candidate) => candidate !== normalized);
 }

@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- CLI/doctor plugins: lazy-load doctor plugin paths and prefer installed plugin `dist/*` runtime entries over source-adjacent JavaScript fallbacks, keeping cold doctor startup on built plugin artifacts. (#69840) Thanks @gumadeiras.
+
 ## 2026.4.21
 
 ### Changes
