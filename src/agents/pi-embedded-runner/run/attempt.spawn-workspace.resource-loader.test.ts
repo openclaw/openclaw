@@ -21,7 +21,7 @@ describe("runEmbeddedAttempt resource loader wiring", () => {
 
   it("passes an explicit resourceLoader to createAgentSession even without extension factories", async () => {
     await createContextEngineAttemptRunner({
-      sessionKey: "agent:main:discord:dm:test-resource-loader",
+      sessionKey: "agent:main:guildchat:dm:test-resource-loader",
       tempPaths,
       contextEngine: {
         assemble: async ({ messages }) => ({
