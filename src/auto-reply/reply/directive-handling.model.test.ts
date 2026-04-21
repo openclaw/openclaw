@@ -63,6 +63,9 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 import type { ElevatedLevel } from "../thinking.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import {
@@ -140,7 +143,18 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   };
 }
 
+function setDirectiveTestProviders(providers: ProviderPlugin[]): void {
+  const registry = createEmptyPluginRegistry();
+  registry.providers = providers.map((provider) => ({
+    pluginId: "test",
+    provider,
+    source: "test",
+  }));
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
+  setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
   replaceRuntimeAuthProfileStoreSnapshots([
     {
@@ -156,6 +170,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -820,6 +835,24 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("reports current thinking status", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "adaptive" },
+            { id: "high" },
+          ],
+        }),
+      },
+    ]);
+
     const result = await handleDirectiveOnly(
       createHandleParams({
         directives: parseInlineDirectives("/think"),
