@@ -718,7 +718,19 @@ export async function runMessageAction(
   });
 
   const channel = await resolveChannel(cfg, params, input.toolContext);
-  let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+
+  // When sending cross-provider, do not leak the source session's defaultAccountId
+  // to the target channel — let the target resolve its own account instead.
+  const explicitlyProvidedAccountId = readStringParam(params, "accountId");
+  const allowAcrossProviders = cfg.tools?.message?.crossContext?.allowAcrossProviders === true;
+  const isCrossProvider = Boolean(
+    allowAcrossProviders &&
+    input.toolContext?.currentChannelProvider &&
+    input.toolContext.currentChannelProvider !== channel,
+  );
+
+  let accountId =
+    explicitlyProvidedAccountId ?? (isCrossProvider ? undefined : input.defaultAccountId);
   if (!accountId && resolvedAgentId) {
     const byAgent = buildChannelAccountBindings(cfg).get(channel);
     const boundAccountIds = byAgent?.get(normalizeAgentId(resolvedAgentId));

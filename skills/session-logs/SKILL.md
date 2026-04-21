@@ -1,6 +1,6 @@
 ---
 name: session-logs
-description: Search and analyze your own session logs (older/parent conversations) using jq.
+description: Search and analyze your own session logs (older/parent conversations) using jq. Use when: (1) recalling what a prior session said or did, (2) auditing your own tool usage, (3) debugging cross-session state. Triggers on phrases like "what did I say earlier", "check my prior session", "search my conversation logs".
 metadata: { "openclaw": { "emoji": "📜", "requires": { "bins": ["jq", "rg"] } } }
 ---
 

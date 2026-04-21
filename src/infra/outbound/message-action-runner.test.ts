@@ -1254,4 +1254,70 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.accountId).toBe("account-b");
     expect(ctx.params.accountId).toBe("account-b");
   });
+
+  it("does not leak defaultAccountId to target channel on cross-provider send", async () => {
+    const sourceHandleAction = vi.fn(async () => jsonResult({ ok: true }));
+    const targetHandleAction = vi.fn(async () => jsonResult({ ok: true }));
+
+    const sourcePlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "",
+        blurb: "",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
+      actions: { listActions: () => ["send"], handleAction: sourceHandleAction },
+    };
+
+    const targetPlugin: ChannelPlugin = {
+      id: "feishu",
+      meta: { id: "feishu", label: "Feishu", selectionLabel: "Feishu", docsPath: "", blurb: "" },
+      capabilities: { chatTypes: ["direct"] },
+      config: { listAccountIds: () => ["feishu-account"], resolveAccount: () => ({}) },
+      actions: { listActions: () => ["send"], handleAction: targetHandleAction },
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: sourcePlugin },
+        { pluginId: "feishu", source: "test", plugin: targetPlugin },
+      ]),
+    );
+
+    try {
+      await runMessageAction({
+        cfg: {
+          tools: {
+            message: {
+              crossContext: { allowAcrossProviders: true },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "feishu",
+          target: "user:ou_123",
+          message: "hi",
+        },
+        defaultAccountId: "default",
+        toolContext: { currentChannelProvider: "telegram" },
+      });
+
+      expect(targetHandleAction).toHaveBeenCalled();
+      const ctx = (targetHandleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+        | { accountId?: string | null; params: Record<string, unknown> }
+        | undefined;
+      if (!ctx) {
+        throw new Error("expected action context");
+      }
+      // accountId must NOT be "default" — feishu has no account by that name
+      expect(ctx.accountId ?? ctx.params.accountId).not.toBe("default");
+    } finally {
+      setActivePluginRegistry(createTestRegistry([]));
+    }
+  });
 });
