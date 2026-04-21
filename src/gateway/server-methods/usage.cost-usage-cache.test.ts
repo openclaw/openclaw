@@ -21,26 +21,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
+const mocks = vi.hoisted(() => ({
+  loadCostUsageSummary: vi.fn(),
+}));
+
+function createSummary() {
+  return {
+    updatedAt: Date.now(),
+    startDate: "2026-02-01",
+    endDate: "2026-02-02",
+    daily: [],
+    totals: {
+      totalTokens: 1,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalCost: 0,
+    },
+  };
+}
+
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
   );
   return {
     ...actual,
-    loadCostUsageSummary: vi.fn(async () => ({
-      updatedAt: Date.now(),
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
-      daily: [],
-      totals: {
-        totalTokens: 1,
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalCost: 0,
-      },
-    })),
+    loadCostUsageSummary: mocks.loadCostUsageSummary,
   };
 });
 
@@ -53,6 +61,7 @@ describe("costUsageCache bounded growth", () => {
     __test.costUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
+    mocks.loadCostUsageSummary.mockResolvedValue(createSummary());
   });
 
   it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
@@ -86,5 +95,39 @@ describe("costUsageCache bounded growth", () => {
     const firstEndMs = firstStartMs + DAY_MS - 1;
     const firstCacheKey = `${firstStartMs}-${firstEndMs}`;
     expect(__test.costUsageCache.has(firstCacheKey)).toBe(false);
+  });
+
+  it("evicts settled entries before in-flight entries when possible", async () => {
+    const config = {} as OpenClawConfig;
+    const pending = new Promise<ReturnType<typeof createSummary>>(() => {});
+    mocks.loadCostUsageSummary.mockReturnValueOnce(pending);
+
+    const inFlight = __test.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+    });
+    await Promise.resolve();
+
+    for (let i = 0; i < 256; i++) {
+      const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
+      await __test.loadCostUsageSummaryCached({
+        startMs,
+        endMs: startMs + DAY_MS - 1,
+        config,
+      });
+    }
+
+    const repeated = __test.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+    });
+    await Promise.resolve();
+
+    expect(__test.costUsageCache.has("1-2")).toBe(true);
+    expect(mocks.loadCostUsageSummary).toHaveBeenCalledTimes(257);
+    void inFlight.catch(() => {});
+    void repeated.catch(() => {});
   });
 });
