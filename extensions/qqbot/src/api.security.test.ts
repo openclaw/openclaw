@@ -23,7 +23,7 @@ describe("qqbot direct upload SSRF guard", () => {
     vi.clearAllMocks();
     clearUploadCache();
     ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
-      hostname: "cdn.qpic.cn",
+      hostname: "example.com",
       addresses: ["203.0.113.10"],
       lookup: vi.fn(),
     });
@@ -36,9 +36,9 @@ describe("qqbot direct upload SSRF guard", () => {
     });
   });
 
-  it("blocks direct-upload URLs that are outside the QQ Bot media allowlist", async () => {
+  it("blocks direct-upload URLs that target private or internal hosts", async () => {
     ssrfMocks.resolvePinnedHostnameWithPolicy.mockRejectedValueOnce(
-      new Error("Blocked hostname (not in allowlist): example.com"),
+      new Error("Blocked hostname or private/internal/special-use IP address"),
     );
 
     await expect(
@@ -46,9 +46,9 @@ describe("qqbot direct upload SSRF guard", () => {
         "access-token",
         "user-1",
         MediaFileType.IMAGE,
-        "https://example.com/payload.png",
+        "https://169.254.169.254/latest/meta-data/iam/security-credentials/",
       ),
-    ).rejects.toThrow("Blocked hostname");
+    ).rejects.toThrow("Blocked hostname or private/internal/special-use IP address");
 
     expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
@@ -67,37 +67,29 @@ describe("qqbot direct upload SSRF guard", () => {
     expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it("allows QQ-approved HTTPS direct-upload URLs", async () => {
+  it("allows public HTTPS direct-upload URLs", async () => {
     const result = await uploadC2CMedia(
       "access-token",
       "user-1",
       MediaFileType.IMAGE,
-      "https://cdn.qpic.cn/payload.png",
+      "https://example.com/payload.png",
     );
 
     expect(result).toEqual({ file_uuid: "uuid", file_info: "info", ttl: 3600 });
-    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("cdn.qpic.cn", {
-      policy: expect.objectContaining({
-        hostnameAllowlist: expect.arrayContaining(["*.qpic.cn"]),
-      }),
-    });
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com");
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 
-  it("allows QQ-approved HTTPS direct-upload URLs for group uploads", async () => {
+  it("allows public HTTPS direct-upload URLs for group uploads", async () => {
     const result = await uploadGroupMedia(
       "access-token",
       "group-1",
       MediaFileType.FILE,
-      "https://cdn.qpic.cn/payload.txt",
+      "https://example.com/payload.txt",
     );
 
     expect(result).toEqual({ file_uuid: "uuid", file_info: "info", ttl: 3600 });
-    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("cdn.qpic.cn", {
-      policy: expect.objectContaining({
-        hostnameAllowlist: expect.arrayContaining(["*.qpic.cn"]),
-      }),
-    });
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com");
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 

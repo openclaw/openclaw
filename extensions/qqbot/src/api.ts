@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
-import { QQBOT_MEDIA_SSRF_POLICY } from "./utils/file-utils.js";
 import { sanitizeFileName } from "./utils/platform.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
 
@@ -550,9 +549,7 @@ async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
     throw new Error("Direct-upload media URL must use HTTPS");
   }
 
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: QQBOT_MEDIA_SSRF_POLICY,
-  });
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
   return parsed.toString();
 }
 
