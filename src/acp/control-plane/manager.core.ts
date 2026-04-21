@@ -1030,45 +1030,54 @@ export class AcpSessionManager {
           if (retryFreshHandle) {
             continue;
           }
-          // If we reach here, the inner retry loop exhausted without success.
-          // If there are more backends to try, break to the outer loop.
-          // Otherwise, throw the accumulated error.
-          break;
-        }
-
-        // If we exhausted all backends, throw a summary error
-        if (backendAttempts.length > 0) {
-          const lastAttempt = backendAttempts[backendAttempts.length - 1];
-          const summary = backendAttempts
-            .map((a) => `${a.backend}: ${a.error}`)
-            .join(" | ");
-          const lastError = new AcpRuntimeError(
-            lastAttempt.code as typeof lastAttempt.code,
-            `All ACP backends failed (${backendAttempts.length}): ${summary}`,
-          );
-          this.recordTurnCompletion({
-            startedAt: turnStartedAt,
-            errorCode: lastError.code,
-          });
-          if (taskContext) {
-            this.markBackgroundTaskTerminal(taskContext.runId, {
-              sessionKey,
-              status: resolveBackgroundTaskFailureStatus(lastError),
-              endedAt: Date.now(),
-              lastEventAt: Date.now(),
-              error: lastError.message,
-              progressSummary: taskProgressSummary || null,
-              terminalSummary: null,
-            });
+          // Inner retry exhausted — check if we should try the next backend
+          if (backendAttempts.length > 0) {
+            const lastErr = backendAttempts[backendAttempts.length - 1];
+            const msg = lastErr.error.toLowerCase();
+            const isFailoverWorthy =
+              lastErr.code === "ACP_TURN_FAILED" &&
+              (msg.includes("unavailable") ||
+                msg.includes("rate") ||
+                msg.includes("quota") ||
+                msg.includes("limit"));
+            if (isFailoverWorthy && backendIdx < candidateBackends.length - 1) {
+              continue; // Try next backend
+            }
           }
-          await this.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            state: "error",
-            lastError: lastError.message,
-          });
-          throw lastError;
-        }
+          // Either no failover-worthy error, or last backend — fall through to throw
+          if (backendAttempts.length > 0) {
+            const lastAttempt = backendAttempts[backendAttempts.length - 1];
+            const summary = backendAttempts
+              .map((a) => `${a.backend}: ${a.error}`)
+              .join(" | ");
+            const lastError = new AcpRuntimeError(
+              lastAttempt.code as typeof lastAttempt.code,
+              `All ACP backends failed (${backendAttempts.length}): ${summary}`,
+            );
+            this.recordTurnCompletion({
+              startedAt: turnStartedAt,
+              errorCode: lastError.code,
+            });
+            if (taskContext) {
+              this.markBackgroundTaskTerminal(taskContext.runId, {
+                sessionKey,
+                status: resolveBackgroundTaskFailureStatus(lastError),
+                endedAt: Date.now(),
+                lastEventAt: Date.now(),
+                error: lastError.message,
+                progressSummary: taskProgressSummary || null,
+                terminalSummary: null,
+              });
+            }
+            await this.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              state: "error",
+              lastError: lastError.message,
+            });
+            throw lastError;
+          }
+        } // end backend loop
       },
       input.signal,
     );
