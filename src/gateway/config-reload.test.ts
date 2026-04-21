@@ -252,6 +252,41 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(true);
   });
 
+  it("does not restart for plugins.installs.*.resolvedAt metadata writes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.installs.openclaw-web-search.resolvedAt"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("plugins.installs.openclaw-web-search.resolvedAt");
+  });
+
+  it("does not restart for plugins.installs.*.installedAt metadata writes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.installs.openclaw-web-search.installedAt"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("plugins.installs.openclaw-web-search.installedAt");
+  });
+
+  it("does not restart when only metadata timestamps change", () => {
+    const plan = buildGatewayReloadPlan([
+      "meta.lastTouchedAt",
+      "plugins.installs.openclaw-web-search.resolvedAt",
+      "plugins.installs.openclaw-web-search.installedAt",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toEqual([]);
+    expect(plan.noopPaths).toEqual(
+      expect.arrayContaining([
+        "meta.lastTouchedAt",
+        "plugins.installs.openclaw-web-search.resolvedAt",
+        "plugins.installs.openclaw-web-search.installedAt",
+      ]),
+    );
+  });
+
+  it("still restarts when a non-metadata plugins.installs.* field changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.installs.openclaw-web-search.resolvedVersion"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("plugins.installs.openclaw-web-search.resolvedVersion");
+  });
+
   it.each([
     {
       path: "browser.enabled",
