@@ -32,6 +32,7 @@ import {
   resolveProviderAdaptiveThinking,
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
+  resolveProviderMaxThinking,
   resolveProviderXHighThinking,
 } from "../plugins/provider-thinking.js";
 import {
@@ -101,6 +102,26 @@ export function supportsAdaptiveThinking(provider?: string | null, model?: strin
   return pluginDecision === true;
 }
 
+export function supportsMaxThinking(provider?: string | null, model?: string | null): boolean {
+  const modelKey = normalizeOptionalLowercaseString(model);
+  if (!modelKey) {
+    return false;
+  }
+  const providerRaw = normalizeOptionalString(provider);
+  const providerKey = providerRaw ? normalizeProviderId(providerRaw) : "";
+  if (!providerKey) {
+    return false;
+  }
+  const pluginDecision = resolveProviderMaxThinking({
+    provider: providerKey,
+    context: {
+      provider: providerKey,
+      modelId: modelKey,
+    },
+  });
+  return pluginDecision === true;
+}
+
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
   const levels = listThinkingLevelsFallback(provider, model);
   if (supportsXHighThinking(provider, model)) {
@@ -108,6 +129,9 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
   }
   if (supportsAdaptiveThinking(provider, model)) {
     levels.push("adaptive");
+  }
+  if (supportsMaxThinking(provider, model)) {
+    levels.push("max");
   }
   return levels;
 }
@@ -148,4 +172,36 @@ export function resolveThinkingDefaultForModel(params: {
     return pluginDecision;
   }
   return resolveThinkingDefaultForModelFallback(params);
+}
+
+export function resolveLargestSupportedThinkingLevel(
+  provider?: string | null,
+  model?: string | null,
+): ThinkLevel {
+  if (isBinaryThinkingProvider(provider, model)) {
+    return "low";
+  }
+  if (supportsMaxThinking(provider, model)) {
+    return "max";
+  }
+  if (supportsXHighThinking(provider, model)) {
+    return "xhigh";
+  }
+  if (supportsAdaptiveThinking(provider, model)) {
+    return "adaptive";
+  }
+  return "high";
+}
+
+export function resolveSupportedThinkingLevel(params: {
+  provider?: string | null;
+  model?: string | null;
+  level: ThinkLevel;
+}): ThinkLevel {
+  if (params.level !== "max") {
+    return params.level;
+  }
+  return supportsMaxThinking(params.provider, params.model)
+    ? "max"
+    : resolveLargestSupportedThinkingLevel(params.provider, params.model);
 }

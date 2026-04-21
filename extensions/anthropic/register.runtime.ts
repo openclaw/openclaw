@@ -34,7 +34,7 @@ import {
 } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
-  normalizeAnthropicProviderConfig,
+  normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
@@ -483,7 +483,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
         },
       }),
     ],
-    normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
+    normalizeConfig: ({ provider, providerConfig }) =>
+      normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>
@@ -495,6 +496,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
     supportsAdaptiveThinking: ({ modelId }) => supportsAnthropicAdaptiveThinking(modelId),
+    supportsMaxThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
       isAnthropicOpus47Model(modelId)

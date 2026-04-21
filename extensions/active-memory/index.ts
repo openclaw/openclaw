@@ -216,7 +216,8 @@ type ActiveMemoryThinkingLevel =
   | "medium"
   | "high"
   | "xhigh"
-  | "adaptive";
+  | "adaptive"
+  | "max";
 type ActiveMemoryPromptStyle =
   | "balanced"
   | "strict"
@@ -698,7 +699,8 @@ function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
     thinking === "medium" ||
     thinking === "high" ||
     thinking === "xhigh" ||
-    thinking === "adaptive"
+    thinking === "adaptive" ||
+    thinking === "max"
   ) {
     return thinking;
   }

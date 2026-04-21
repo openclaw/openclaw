@@ -100,6 +100,36 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("defaults Claude CLI provider api through plugin config normalization", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "claude-cli",
+        providerConfig: {
+          models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+        },
+      } as never),
+    ).toMatchObject({
+      api: "anthropic-messages",
+    });
+  });
+
+  it("does not default non-Anthropic provider api through plugin config normalization", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const providerConfig = {
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+    };
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "openai-codex",
+        providerConfig,
+      } as never),
+    ).toBe(providerConfig);
+  });
+
   it("applies Anthropic pruning defaults through plugin hooks", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -214,6 +244,18 @@ describe("anthropic provider replay hooks", () => {
     ).toBe(true);
     expect(
       provider.supportsXHighThinking?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+      } as never),
+    ).toBe(false);
+    expect(
+      provider.supportsMaxThinking?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-7",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.supportsMaxThinking?.({
         provider: "anthropic",
         modelId: "claude-opus-4-6",
       } as never),

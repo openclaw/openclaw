@@ -7,6 +7,7 @@ import {
   formatXHighModelHint,
   normalizeThinkLevel,
   resolvePreferredOpenClawTmpDir,
+  resolveSupportedThinkingLevel,
   supportsXHighThinking,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
@@ -61,7 +62,7 @@ type LlmTaskParams = {
 };
 
 const INVALID_THINKING_LEVELS_HINT =
-  "off, minimal, low, medium, high, adaptive, and xhigh where supported";
+  "off, minimal, low, medium, high, adaptive, xhigh where supported, and max where supported";
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
@@ -143,8 +144,16 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           `Invalid thinking level "${thinkingRaw}". Use one of: ${INVALID_THINKING_LEVELS_HINT}.`,
         );
       }
+      let resolvedThinkLevel = thinkLevel;
       if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
         throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+      }
+      if (thinkLevel === "max") {
+        resolvedThinkLevel = resolveSupportedThinkingLevel({
+          provider,
+          model,
+          level: thinkLevel,
+        });
       }
 
       const timeoutMs =
@@ -204,7 +213,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           model,
           authProfileId,
           authProfileIdSource: authProfileId ? "user" : "auto",
-          thinkLevel,
+          thinkLevel: resolvedThinkLevel,
           streamParams,
           disableTools: true,
         });

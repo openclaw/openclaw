@@ -43,8 +43,10 @@ describe("doctor bundled plugin runtime deps", () => {
 
     writeJson(path.join(root, "dist", "extensions", "alpha", "package.json"), {
       dependencies: {
+        "@openclaw/plugin-sdk": "workspace:*",
         "dep-one": "1.0.0",
         "@scope/dep-two": "2.0.0",
+        openclaw: "workspace:*",
       },
       optionalDependencies: {
         "dep-opt": "3.0.0",
