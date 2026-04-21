@@ -112,15 +112,10 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
  * Uses tool name + deterministic JSON serialization digest of params.
  */
 export function hashToolCall(toolName: string, params: unknown): string {
-  // Handle undefined params to prevent digestStable from receiving undefined
-  // Hash undefined just like other values for consistency
-  if (params === undefined) {
-    return `${toolName}:${createHash("sha256").update("undefined").digest("hex")}`;
-  }
   return `${toolName}:${digestStable(params)}`;
 }
 
-function stableStringify(value: unknown): string {
+function stableStringify(value: unknown): string | undefined {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
@@ -134,10 +129,6 @@ function stableStringify(value: unknown): string {
 
 function digestStable(value: unknown): string {
   const serialized = stableStringifyFallback(value);
-  // Guard against undefined being passed to createHash
-  if (serialized === undefined) {
-    return createHash("sha256").update("undefined").digest("hex");
-  }
   return createHash("sha256").update(serialized).digest("hex");
 }
 
@@ -198,7 +189,7 @@ function formatErrorForHash(error: unknown): string {
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return `${error}`;
   }
-  return stableStringify(error);
+  return stableStringify(error) ?? String(error);
 }
 
 function extractUnknownToolName(error: unknown): string | undefined {
