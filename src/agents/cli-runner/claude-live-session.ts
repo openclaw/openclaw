@@ -10,6 +10,7 @@ import {
 } from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
+import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -99,20 +100,20 @@ function appendArg(args: string[], flag: string): string[] {
   return args.includes(flag) ? args : [...args, flag];
 }
 
-function stripFreshSessionArgs(args: string[], backend: CliBackendConfig): string[] {
-  const freshSessionFlags = new Set(
-    [backend.sessionArg, "--session-id", "--resume", "-r"].filter(
+function stripLiveProcessArgs(args: string[], backend: CliBackendConfig): string[] {
+  const liveProcessFlags = new Set(
+    [backend.sessionArg, backend.systemPromptArg, "--session-id", "--resume", "-r"].filter(
       (entry): entry is string => typeof entry === "string" && entry.length > 0,
     ),
   );
   const stripped: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] ?? "";
-    if (freshSessionFlags.has(arg)) {
+    if (liveProcessFlags.has(arg)) {
       i += 1;
       continue;
     }
-    if ([...freshSessionFlags].some((flag) => arg.startsWith(`${flag}=`))) {
+    if ([...liveProcessFlags].some((flag) => arg.startsWith(`${flag}=`))) {
       continue;
     }
     stripped.push(arg);
@@ -120,10 +121,34 @@ function stripFreshSessionArgs(args: string[], backend: CliBackendConfig): strin
   return stripped;
 }
 
-export function buildClaudeLiveArgs(args: string[], backend: CliBackendConfig): string[] {
+function appendSystemPromptArg(
+  args: string[],
+  backend: CliBackendConfig,
+  systemPrompt: string,
+): string[] {
+  const prompt = systemPrompt.trim();
+  if (!backend.systemPromptArg || !prompt) {
+    return args;
+  }
+  return upsertArgValue(args, backend.systemPromptArg, stripSystemPromptCacheBoundary(prompt));
+}
+
+export function buildClaudeLiveArgs(params: {
+  args: string[];
+  backend: CliBackendConfig;
+  systemPrompt: string;
+}): string[] {
   return appendArg(
     upsertArgValue(
-      upsertArgValue(stripFreshSessionArgs(args, backend), "--input-format", "stream-json"),
+      upsertArgValue(
+        appendSystemPromptArg(
+          stripLiveProcessArgs(params.args, params.backend),
+          params.backend,
+          params.systemPrompt,
+        ),
+        "--input-format",
+        "stream-json",
+      ),
       "--permission-prompt-tool",
       "stdio",
     ),
@@ -167,11 +192,6 @@ function buildClaudeLiveFingerprint(params: {
       )
     : undefined;
   const normalizePluginDir = Boolean(skillsFingerprint);
-  const omitValueFlags = new Set(
-    [params.context.preparedBackend.backend.systemPromptArg].filter(
-      (entry): entry is string => typeof entry === "string" && entry.length > 0,
-    ),
-  );
   const unstableValueFlags = new Set(
     [
       params.context.preparedBackend.backend.sessionArg,
@@ -185,13 +205,6 @@ function buildClaudeLiveFingerprint(params: {
   const stableArgv: string[] = [];
   for (let i = 0; i < params.argv.length; i += 1) {
     const entry = params.argv[i] ?? "";
-    if (omitValueFlags.has(entry)) {
-      i += 1;
-      continue;
-    }
-    if ([...omitValueFlags].some((flag) => entry.startsWith(`${flag}=`))) {
-      continue;
-    }
     if (unstableValueFlags.has(entry)) {
       stableArgv.push("<unstable>");
       i += 1;
@@ -749,7 +762,11 @@ export async function runClaudeLiveSessionTurn(params: {
   const key = buildClaudeLiveKey(params.context);
   const argv = [
     params.context.preparedBackend.backend.command,
-    ...buildClaudeLiveArgs(params.args, params.context.preparedBackend.backend),
+    ...buildClaudeLiveArgs({
+      args: params.args,
+      backend: params.context.preparedBackend.backend,
+      systemPrompt: params.context.systemPrompt,
+    }),
   ];
   const fingerprint = buildClaudeLiveFingerprint({
     context: params.context,
