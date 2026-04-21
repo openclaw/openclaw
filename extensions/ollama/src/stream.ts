@@ -540,7 +540,7 @@ export function buildAssistantMessage(
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
         name: toolCall.function.name,
-        arguments: toolCall.function.arguments,
+        arguments: ensureArgsObject(toolCall.function.arguments),
       });
     }
   }
