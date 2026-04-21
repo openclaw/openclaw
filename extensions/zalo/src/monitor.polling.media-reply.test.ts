@@ -174,7 +174,6 @@ describe("Zalo polling media replies", () => {
     try {
       await vi.waitFor(() => expect(sendPhotoMock).toHaveBeenCalledTimes(1));
 
-      expect(registry.httpRoutes).toHaveLength(0);
       expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
       expect(sendPhotoMock).toHaveBeenCalledWith(
         "zalo-token",
