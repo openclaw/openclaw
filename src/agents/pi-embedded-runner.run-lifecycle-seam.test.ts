@@ -188,10 +188,16 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
           onPassTransitionDecision: vi.fn(async () => ({
             next: "halt" as const,
             reason: "operator_requested",
+            annotations: {
+              lane: "pilot",
+              priority: 3,
+            },
           })),
         },
       }),
-    ).rejects.toThrow(/halted prompt transition before surface_error\. \(reason: operator_requested\)/i);
+    ).rejects.toThrow(
+      /halted prompt transition before surface_error\. \(reason: operator_requested, annotations: \{"lane":"pilot","priority":3\}\)/i,
+    );
   });
 
   it("continues prompt transitions in decide mode when the seam returns continue", async () => {

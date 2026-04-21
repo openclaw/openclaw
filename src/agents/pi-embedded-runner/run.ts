@@ -739,11 +739,21 @@ export async function runEmbeddedPiAgent(
           });
           return decision;
         };
-        const formatTransitionDecisionReason = (
+        const formatTransitionDecisionDetails = (
           decision: Awaited<ReturnType<typeof resolvePassTransitionDecision>>,
         ): string => {
+          const details: string[] = [];
           const reason = normalizeOptionalString(decision.reason);
-          return reason ? ` (reason: ${reason})` : "";
+          if (reason) {
+            details.push(`reason: ${reason}`);
+          }
+          if (decision.annotations && Object.keys(decision.annotations).length > 0) {
+            const sortedAnnotations = Object.fromEntries(
+              Object.entries(decision.annotations).sort(([a], [b]) => a.localeCompare(b)),
+            );
+            details.push(`annotations: ${JSON.stringify(sortedAnnotations)}`);
+          }
+          return details.length > 0 ? ` (${details.join(", ")})` : "";
         };
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
@@ -776,7 +786,7 @@ export async function runEmbeddedPiAgent(
             });
             if (retryLimitTransitionDecision.next === "halt") {
               throw new Error(
-                `Embedded run lifecycle seam halted retry_limit transition before ${retryLimitDecision.action}.${formatTransitionDecisionReason(retryLimitTransitionDecision)}`,
+                `Embedded run lifecycle seam halted retry_limit transition before ${retryLimitDecision.action}.${formatTransitionDecisionDetails(retryLimitTransitionDecision)}`,
               );
             }
             return handleRetryLimitExhaustion({
@@ -1590,7 +1600,7 @@ export async function runEmbeddedPiAgent(
             });
             if (promptTransitionDecision.next === "halt") {
               throw new Error(
-                `Embedded run lifecycle seam halted prompt transition before ${promptFailoverDecision.action}.${formatTransitionDecisionReason(promptTransitionDecision)}`,
+                `Embedded run lifecycle seam halted prompt transition before ${promptFailoverDecision.action}.${formatTransitionDecisionDetails(promptTransitionDecision)}`,
               );
             }
             // Throw FailoverError for prompt-side failover reasons when fallbacks
@@ -1788,7 +1798,7 @@ export async function runEmbeddedPiAgent(
                   : assistantFailoverOutcome.action === "throw"
                     ? "halt"
                     : "noop"
-              }.${formatTransitionDecisionReason(assistantTransitionDecision)}`,
+              }.${formatTransitionDecisionDetails(assistantTransitionDecision)}`,
             );
           }
           if (assistantFailoverOutcome.action === "retry") {
