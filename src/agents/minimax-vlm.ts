@@ -11,8 +11,11 @@ export function isMinimaxVlmProvider(provider: string): boolean {
   return provider === "minimax" || provider === "minimax-portal";
 }
 
+/** MiniMax models that support the VLM (/v1/coding_plan/vlm) endpoint */
+const MINIMAX_VLM_MODELS = new Set(["MiniMax-VL-01", "MiniMax-M2.7"]);
+
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
-  return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
+  return isMinimaxVlmProvider(provider) && MINIMAX_VLM_MODELS.has(modelId.trim());
 }
 
 function coerceApiHost(params: {

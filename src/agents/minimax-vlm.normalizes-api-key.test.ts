@@ -89,4 +89,10 @@ describe("isMinimaxVlmModel", () => {
     expect(isMinimaxVlmModel("minimax-portal", "custom-vision")).toBe(false);
     expect(isMinimaxVlmModel("openai", "MiniMax-VL-01")).toBe(false);
   });
+
+  it("matches MiniMax-M2.7 as a VLM-capable model", async () => {
+    expect(isMinimaxVlmModel("minimax", "MiniMax-M2.7")).toBe(true);
+    expect(isMinimaxVlmModel("minimax-portal", "MiniMax-M2.7")).toBe(true);
+    expect(isMinimaxVlmModel("openai", "MiniMax-M2.7")).toBe(false);
+  });
 });
