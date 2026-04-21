@@ -116,11 +116,9 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   const authHeader = getHeader(params.req, "authorization") ?? "";
-  const senderIsOwner = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`)
-    ? true
-    : safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`)
-      ? false
-      : null;
+  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
   if (senderIsOwner === null) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
