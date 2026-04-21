@@ -17,10 +17,29 @@ import type {
 
 export type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
-type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
+type CredentialRejectReason =
+  | "non_object"
+  | "invalid_type"
+  | "missing_provider"
+  | "sdk_marker_skipped";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
+
+/**
+ * Profile types that represent a non-secret-material marker rather than
+ * real credentials. These are silently skipped during store load: they are
+ * not rejected as "invalid_type" (which logs a scary warning and drops
+ * the entry), and they are not placed into the credential store where
+ * downstream resolvers would look for secret material.
+ *
+ * Amazon Bedrock on EC2/IMDS uses `"type": "aws-sdk"` as an informational
+ * marker in auth-profiles.json — the AWS SDK resolves real credentials
+ * independently at call time via its own chain. Other SDK-managed
+ * providers can be added here without touching the persisted store
+ * schema or downstream switches. (#69708)
+ */
+const AUTH_PROFILE_SDK_MARKER_TYPES = new Set<string>(["aws-sdk"]);
 
 function normalizeSecretBackedField(params: {
   entry: Record<string, unknown>;
@@ -59,6 +78,13 @@ function parseCredentialEntry(
     return { ok: false, reason: "non_object" };
   }
   const typed = normalizeRawCredentialEntry(raw as Record<string, unknown>);
+  const rawType = typeof typed.type === "string" ? typed.type : "";
+  // SDK-managed credential markers (Bedrock on EC2/IMDS, etc.) are not real
+  // credentials — skip them silently rather than rejecting as invalid_type.
+  // The AWS SDK resolves credentials independently at call time. (#69708)
+  if (AUTH_PROFILE_SDK_MARKER_TYPES.has(rawType)) {
+    return { ok: false, reason: "sdk_marker_skipped" };
+  }
   if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
     return { ok: false, reason: "invalid_type" };
   }
@@ -76,10 +102,14 @@ function parseCredentialEntry(
 }
 
 function warnRejectedCredentialEntries(source: string, rejected: RejectedCredentialEntry[]): void {
-  if (rejected.length === 0) {
+  // SDK-managed credential markers are intentionally skipped, not broken —
+  // don't include them in the user-facing "invalid entries" warning, which
+  // suggested the user had a corrupt auth-profiles.json. (#69708)
+  const genuinelyInvalid = rejected.filter((entry) => entry.reason !== "sdk_marker_skipped");
+  if (genuinelyInvalid.length === 0) {
     return;
   }
-  const reasons = rejected.reduce(
+  const reasons = genuinelyInvalid.reduce(
     (acc, current) => {
       acc[current.reason] = (acc[current.reason] ?? 0) + 1;
       return acc;
@@ -88,9 +118,9 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
   );
   log.warn("ignored invalid auth profile entries during store load", {
     source,
-    dropped: rejected.length,
+    dropped: genuinelyInvalid.length,
     reasons,
-    keys: rejected.slice(0, 10).map((entry) => entry.key),
+    keys: genuinelyInvalid.slice(0, 10).map((entry) => entry.key),
   });
 }
 
@@ -233,6 +263,11 @@ export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuth
         ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
         ...(cred.email ? { email: cred.email } : {}),
       };
+      continue;
+    }
+    // SDK-managed credential markers (aws-sdk) are not migrated into the
+    // credential store — the SDK resolves credentials independently. (#69708)
+    if (AUTH_PROFILE_SDK_MARKER_TYPES.has((cred as { type?: unknown }).type as string)) {
       continue;
     }
     store.profiles[profileId] = {

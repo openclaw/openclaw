@@ -519,6 +519,88 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
+  it("silently skips SDK-managed marker profiles (#69708)", () => {
+    // aws-sdk profiles (notably Bedrock on EC2/IMDS) are not real credentials:
+    // the AWS SDK resolves them independently at call time. Accepting them
+    // into the credential store would be wrong (no key material), but the
+    // pre-fix behavior rejected them as "invalid_type" and logged a scary
+    // warning, hiding real invalid entries in the aggregate count.
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      withTempAgentDir("openclaw-auth-aws-sdk-marker-", (agentDir) => {
+        const storeWithSdkMarker = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "amazon-bedrock:default": {
+              type: "aws-sdk",
+              provider: "amazon-bedrock",
+              createdAt: "2026-03-15T10:00:00.000Z",
+            },
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-ant-real-key", // pragma: allowlist secret
+            },
+          },
+        };
+        fs.writeFileSync(
+          path.join(agentDir, "auth-profiles.json"),
+          `${JSON.stringify(storeWithSdkMarker, null, 2)}\n`,
+          "utf8",
+        );
+
+        const store = ensureAuthProfileStore(agentDir);
+
+        // aws-sdk marker is silently skipped — not in the loaded store.
+        expect(Object.keys(store.profiles).toSorted()).toEqual(["anthropic:default"]);
+        expect(store.profiles["amazon-bedrock:default"]).toBeUndefined();
+        // No warning about "invalid auth profile entries" for the marker.
+        expect(warnSpy).not.toHaveBeenCalled();
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("still warns about genuine invalid types alongside SDK markers (#69708)", () => {
+    // If both an aws-sdk marker AND a truly-invalid entry are present, the
+    // warning must surface only the real invalid entry — not count the
+    // intentional marker in the dropped total.
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      withTempAgentDir("openclaw-auth-aws-sdk-mixed-", (agentDir) => {
+        const mixed = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "amazon-bedrock:default": {
+              type: "aws-sdk",
+              provider: "amazon-bedrock",
+            },
+            "brokenprovider:default": {
+              type: "wildcard-mystery", // genuinely invalid
+              provider: "brokenprovider",
+            },
+          },
+        };
+        fs.writeFileSync(
+          path.join(agentDir, "auth-profiles.json"),
+          `${JSON.stringify(mixed, null, 2)}\n`,
+          "utf8",
+        );
+
+        ensureAuthProfileStore(agentDir);
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const [, details] = warnSpy.mock.calls[0] as [string, Record<string, unknown>];
+        expect(details.dropped).toBe(1); // ONLY the genuinely invalid entry
+        expect(details.reasons).toEqual({ invalid_type: 1 });
+        expect(details.keys).toEqual(["brokenprovider:default"]);
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "migrates SecretRef object in `key` to `keyRef` and clears `key`",
