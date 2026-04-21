@@ -18,7 +18,7 @@ export default defineBundledChannelEntry({
   description: "QQ Bot channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./channel-plugin-api.js",
+    specifier: "./api.js",
     exportName: "qqbotPlugin",
   },
   runtime: {

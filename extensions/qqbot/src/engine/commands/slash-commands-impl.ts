@@ -33,8 +33,6 @@ function resolveRuntimeServiceVersion(): string {
   return _resolveVersion?.() ?? "unknown";
 }
 
-const require = createRequire(import.meta.url);
-
 // Re-export core types for backward compatibility.
 export type {
   SlashCommandContext,

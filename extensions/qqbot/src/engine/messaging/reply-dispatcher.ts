@@ -249,18 +249,6 @@ function resolveStructuredPayloadPath(
   return { path: resolvedPath, isHttpUrl };
 }
 
-function logUnsupportedStructuredMediaTarget(
-  ctx: ReplyContext,
-  mediaType: Exclude<StructuredPayloadMediaType, "image">,
-): void {
-  const label = formatMediaTypeLabel(mediaType);
-  if (ctx.target.type === "dm") {
-    ctx.log?.error(`[qqbot:${ctx.account.accountId}] ${label} not supported in DM`);
-  } else if (ctx.target.channelId) {
-    ctx.log?.error(`[qqbot:${ctx.account.accountId}] ${label} not supported in channel`);
-  }
-}
-
 function sanitizeForLog(value: string, maxLen = 200): string {
   return value
     .replace(/[\r\n\t]/g, " ")
