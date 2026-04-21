@@ -49,7 +49,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "./channel-runtime-api.js";
-import { createFeishuClient } from "./client.js";
 import { isRecord } from "./comment-shared.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
@@ -67,7 +66,7 @@ import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
-import { feishuSetupWizard } from "./setup-surface.js";
+import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
@@ -118,6 +117,11 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "feishuChannelRuntime",
 );
+
+async function createFeishuActionClient(account: ResolvedFeishuAccount) {
+  const { createFeishuClient } = await import("./client.js");
+  return createFeishuClient(account);
+}
 
 const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
   cfg: ClawdbotConfig;
@@ -841,7 +845,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu channel-info requires chatId or channelId.");
             }
             const runtime = await loadFeishuChannelRuntime();
-            const client = createFeishuClient(account);
+            const client = await createFeishuActionClient(account);
             const channel = await runtime.getChatInfo(client, chatId);
             const includeMembers =
               ctx.params.includeMembers === true || ctx.params.members === true;
@@ -871,7 +875,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
 
           if (ctx.action === "member-info") {
             const runtime = await loadFeishuChannelRuntime();
-            const client = createFeishuClient(account);
+            const client = await createFeishuActionClient(account);
             const memberId = resolveFeishuMemberId(ctx.params);
             if (memberId) {
               const member = await runtime.getFeishuMemberInfo(
@@ -1096,7 +1100,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
           const { writeConfigFile } = await import("openclaw/plugin-sdk/config-runtime");
           const prompter = createClackPrompter();
-          const { runFeishuLogin } = await import("./setup-surface.js");
           const nextCfg = await runFeishuLogin({ cfg, prompter });
           if (nextCfg !== cfg) {
             await writeConfigFile(nextCfg);

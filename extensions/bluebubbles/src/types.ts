@@ -1,3 +1,4 @@
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -9,6 +10,11 @@ export type BlueBubblesGroupConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this group. */
   tools?: { allow?: string[]; deny?: string[] };
+  /**
+   * Free-form directive appended to the system prompt on every turn that
+   * handles a message in this group.
+   */
+  systemPrompt?: string;
 };
 
 export type BlueBubblesActionConfig = {
@@ -62,6 +68,19 @@ export type BlueBubblesAccountConfig = {
   dms?: Record<string, unknown>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /**
+   * Per-request timeout (ms) for outbound text sends via
+   * `/api/v1/message/text` and the `createNewChatWithMessage` send path.
+   * Probes, chat lookups, catchup, and history keep the shorter default.
+   * Raise this on macOS 26 setups where Private API iMessage sends can stall
+   * for 60+s. Default: 30000.
+   *
+   * Reaction and edit paths (`sendBlueBubblesReaction`,
+   * `editBlueBubblesMessage`, `unsendBlueBubblesMessage`) still honor the
+   * shorter client default unless the caller passes `opts.timeoutMs` — covering
+   * those uniformly from config is tracked as a follow-up. (#67486)
+   */
+  sendTimeoutMs?: number;
   /** Chunking mode: "newline" (default) splits on every newline; "length" splits by size. */
   chunkMode?: "length" | "newline";
   blockStreaming?: boolean;
@@ -115,6 +134,16 @@ export type BlueBubblesAttachment = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+/**
+ * Default timeout for outbound message sends via `/api/v1/message/text` and
+ * the `createNewChatWithMessage` flow. Larger than `DEFAULT_TIMEOUT_MS` because
+ * Private API iMessage sends on macOS 26 (Tahoe) can stall for 60+ seconds
+ * inside the iMessage framework. Callers can override per-call via
+ * `opts.timeoutMs` or per-account via `channels.bluebubbles.sendTimeoutMs`.
+ * (#67486)
+ */
+export const DEFAULT_SEND_TIMEOUT_MS = 30_000;
 
 export function normalizeBlueBubblesServerUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -186,7 +215,10 @@ export async function blueBubblesFetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...safeInit, signal: controller.signal });
+    return await fetchWithRuntimeDispatcherOrMockedGlobal(url, {
+      ...safeInit,
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timer);
   }

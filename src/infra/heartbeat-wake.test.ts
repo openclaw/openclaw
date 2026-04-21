@@ -262,7 +262,8 @@ describe("heartbeat-wake", () => {
     requestHeartbeatNow({
       reason: "cron:job-1",
       agentId: "ops",
-      sessionKey: "agent:ops:discord:channel:alerts",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
+      heartbeat: { target: "last" },
       coalesceMs: 0,
     });
 
@@ -271,7 +272,8 @@ describe("heartbeat-wake", () => {
     expect(handler.mock.calls[0]?.[0]).toEqual({
       reason: "cron:job-1",
       agentId: "ops",
-      sessionKey: "agent:ops:discord:channel:alerts",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
+      heartbeat: { target: "last" },
     });
 
     await vi.advanceTimersByTimeAsync(1000);
@@ -279,7 +281,38 @@ describe("heartbeat-wake", () => {
     expect(handler.mock.calls[1]?.[0]).toEqual({
       reason: "cron:job-1",
       agentId: "ops",
-      sessionKey: "agent:ops:discord:channel:alerts",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
+      heartbeat: { target: "last" },
+    });
+  });
+
+  it("preserves heartbeat override when same-target wakes coalesce", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({
+      reason: "manual",
+      agentId: "ops",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
+      heartbeat: { target: "last" },
+      coalesceMs: 100,
+    });
+    requestHeartbeatNow({
+      reason: "manual",
+      agentId: "ops",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
+      coalesceMs: 100,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({
+      reason: "manual",
+      agentId: "ops",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
+      heartbeat: { target: "last" },
     });
   });
 
@@ -291,13 +324,13 @@ describe("heartbeat-wake", () => {
     requestHeartbeatNow({
       reason: "cron:job-a",
       agentId: "ops",
-      sessionKey: "agent:ops:discord:channel:alerts",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
       coalesceMs: 100,
     });
     requestHeartbeatNow({
       reason: "cron:job-b",
       agentId: "main",
-      sessionKey: "agent:main:telegram:group:-1001",
+      sessionKey: "agent:main:forum:group:-1001",
       coalesceMs: 100,
     });
 
@@ -309,12 +342,12 @@ describe("heartbeat-wake", () => {
         {
           reason: "cron:job-a",
           agentId: "ops",
-          sessionKey: "agent:ops:discord:channel:alerts",
+          sessionKey: "agent:ops:guildchat:channel:alerts",
         },
         {
           reason: "cron:job-b",
           agentId: "main",
-          sessionKey: "agent:main:telegram:group:-1001",
+          sessionKey: "agent:main:forum:group:-1001",
         },
       ]),
     );
