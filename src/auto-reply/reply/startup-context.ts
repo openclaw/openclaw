@@ -102,7 +102,7 @@ function buildStartupMemoryDateStamps(params: {
     ordered.add(shiftDateStampByCalendarDays(utcTodayStamp, offset));
   }
 
-  return [...ordered];
+  return [...ordered].toSorted((left, right) => right.localeCompare(left));
 }
 
 function trimStartupMemoryContent(content: string, maxChars: number): string {
