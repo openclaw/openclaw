@@ -396,6 +396,41 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
+  it("does not mark message tool delivery as matched when cron target resolution failed", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "last",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("sessionKey is required to resolve delivery.channel=last"),
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        deliveryRequested: true,
+        skipMessagingToolDelivery: false,
+        unverifiedMessagingToolDelivery: true,
+      }),
+    );
+  });
+
   it("marks no-deliver runs delivered when the message tool sends to the current target", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
