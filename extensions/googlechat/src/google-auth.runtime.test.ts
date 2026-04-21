@@ -167,6 +167,22 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("releases guarded auth fetch resources even when callers do not consume the body", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+    const response = await guardedFetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+    } as RequestInit);
+
+    expect(release).toHaveBeenCalledOnce();
+    await expect(response.text()).resolves.toBe("ok");
+  });
+
   it("builds a scoped Gaxios transport without mutating global window", async () => {
     const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
     Reflect.deleteProperty(globalThis as object, "window");

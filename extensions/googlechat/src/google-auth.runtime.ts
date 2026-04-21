@@ -402,71 +402,6 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
-async function releaseGuardedResponseBody(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  release: () => Promise<void>,
-): Promise<void> {
-  try {
-    await reader.cancel();
-  } catch {
-    // Ignore cancel failures; the guarded dispatcher still needs cleanup.
-  }
-  await release();
-}
-
-function wrapGuardedResponse(response: Response, release: () => Promise<void>): Response {
-  let released = false;
-  const releaseOnce = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release();
-  };
-
-  if (!response.body) {
-    void releaseOnce();
-    return new Response(null, {
-      headers: response.headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
-  }
-
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async cancel(reason) {
-      try {
-        await reader.cancel(reason);
-      } finally {
-        await releaseOnce();
-      }
-    },
-    async pull(controller) {
-      try {
-        const { done, value } = await reader.read();
-        if (done) {
-          controller.close();
-          await releaseOnce();
-          return;
-        }
-        if (value) {
-          controller.enqueue(value);
-        }
-      } catch (error) {
-        controller.error(error);
-        await releaseGuardedResponseBody(reader, releaseOnce);
-      }
-    },
-  });
-
-  return new Response(body, {
-    headers: response.headers,
-    status: response.status,
-    statusText: response.statusText,
-  });
-}
-
 export function createGoogleAuthFetch(
   baseFetch: FetchLike = globalThis.fetch.bind(globalThis),
 ): FetchLike {
@@ -481,7 +416,16 @@ export function createGoogleAuthFetch(
       policy: GOOGLE_AUTH_POLICY,
       url,
     });
-    return wrapGuardedResponse(response, release);
+    try {
+      const body = await response.arrayBuffer();
+      return new Response(body, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    } finally {
+      await release();
+    }
   };
 }
 
