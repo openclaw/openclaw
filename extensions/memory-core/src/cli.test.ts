@@ -422,6 +422,7 @@ describe("memory cli", () => {
         "Dreaming: 0 3 * * * (America/Sao_Paulo) · light on · deep off · rem off",
       ),
     );
+    expect(close).toHaveBeenCalled();
   });
 
   it("reports phase-level dreaming status for rem-only configs", async () => {
@@ -459,6 +460,7 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("Dreaming: 45 1 * * * · light off · deep off · rem on"),
     );
+    expect(close).toHaveBeenCalled();
   });
 
   it("reports phase-level dreaming status for deep-only configs", async () => {
@@ -496,6 +498,7 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("Dreaming: 30 5 * * * · light off · deep on · rem off"),
     );
+    expect(close).toHaveBeenCalled();
   });
 
   it("keeps legacy dreaming configs readable by showing default phase states", async () => {
@@ -528,6 +531,7 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("Dreaming: 15 2 * * * · light on · deep on · rem on"),
     );
+    expect(close).toHaveBeenCalled();
   });
 
   it("shows dreaming off when global dreaming is disabled even if per-phase toggles are present", async () => {
@@ -564,6 +568,7 @@ describe("memory cli", () => {
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Dreaming: 15 2 * * *"));
+    expect(close).toHaveBeenCalled();
   });
 
   it("fills missing dreaming phase toggles with defaults in status output", async () => {
@@ -599,6 +604,7 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("Dreaming: 0 4 * * * · light off · deep on · rem on"),
     );
+    expect(close).toHaveBeenCalled();
   });
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
