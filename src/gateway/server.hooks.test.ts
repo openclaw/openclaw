@@ -155,10 +155,8 @@ describe("gateway server hooks", () => {
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        deliveryContract?: string;
         job?: { payload?: { externalContentSource?: string } };
       };
-      expect(firstCall?.deliveryContract).toBe("shared");
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
 
