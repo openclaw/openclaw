@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import { type ExecHost, loadExecApprovals } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -28,8 +28,6 @@ import {
   type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
-  normalizeExecAsk,
-  normalizeExecSecurity,
   normalizeExecTarget,
   normalizePathPrepend,
   resolveExecTarget,
@@ -1465,15 +1463,20 @@ export function createExecTool(
       const approvalDefaults = loadExecApprovals().defaults;
       const configuredSecurity =
         defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
-      const requestedSecurity = normalizeExecSecurity(params.security);
-      let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
+      // Trust-boundary note: `security` is config-derived only. We intentionally do NOT
+      // read `params.security` — the exec tool schema no longer exposes it to the model.
+      // Prior behavior (`minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity)`)
+      // treated the configured tier as an upper bound and let the model downgrade
+      // per call, which silently broke cron agents whose training priors defaulted to
+      // `security="allowlist"` against `configured="full"`.
+      let security = configuredSecurity;
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
       const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
-      const requestedAsk = normalizeExecAsk(params.ask);
-      let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
+      // Same rationale as `security` above: `ask` is config-derived only.
+      let ask = configuredAsk;
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
       if (bypassApprovals) {
         ask = "off";
