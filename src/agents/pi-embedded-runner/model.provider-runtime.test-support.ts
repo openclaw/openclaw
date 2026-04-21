@@ -71,7 +71,8 @@ function isNativeOpenAICodexBaseUrl(baseUrl?: string): boolean {
 }
 
 function normalizeOpenRouterBaseUrl(baseUrl?: string): string | undefined {
-  const normalized = typeof baseUrl === "string" ? baseUrl.trim().replace(/\/+$/, "") : "";
+  const normalized =
+    typeof baseUrl === "string" ? baseUrl.trim().toLowerCase().replace(/\/+$/, "") : "";
   if (!normalized) {
     return undefined;
   }

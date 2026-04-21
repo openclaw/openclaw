@@ -5,7 +5,7 @@ export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return (baseUrl ?? "").trim().replace(/\/+$/, "");
+  return (baseUrl ?? "").trim().toLowerCase().replace(/\/+$/, "");
 }
 
 export function normalizeArceeOpenRouterBaseUrl(baseUrl: string | undefined): string | undefined {

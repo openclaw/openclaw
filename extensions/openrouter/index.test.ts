@@ -78,6 +78,42 @@ describe("openrouter provider hooks", () => {
     });
   });
 
+  it("canonicalizes case-insensitive and already-correct OpenRouter base URLs", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "openrouter",
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://OPENROUTER.AI/v1",
+          models: [],
+        },
+      } as never),
+    ).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "openrouter",
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/api/v1",
+          models: [],
+        },
+      } as never),
+    ).toBeUndefined();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openrouter",
+        api: "openai-completions",
+        baseUrl: "https://custom-proxy.example.com/v1",
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("injects provider routing into compat before applying stream wrappers", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const baseStreamFn = vi.fn(
