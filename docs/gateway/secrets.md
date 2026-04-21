@@ -265,7 +265,9 @@ Optional per-id errors:
 
 Use a small resolver wrapper when you want SecretRef ids to map directly to
 `pass` entries. Save this as `/usr/local/bin/openclaw-pass-resolver` and make it
-executable:
+executable. The `#!/usr/bin/env node` shebang resolves `node` from the
+resolver process `PATH`, so include your Node install directory in the provider
+environment below:
 
 ```js
 #!/usr/bin/env node
@@ -289,7 +291,7 @@ process.stdin.on("end", () => {
   for (const id of request.ids ?? []) {
     const result = spawnSync(passBin, ["show", id], { encoding: "utf8" });
     if (result.status === 0) {
-      values[id] = result.stdout.trimEnd();
+      values[id] = result.stdout.split(/\r?\n/, 1)[0] ?? "";
     } else {
       errors[id] = { message: (result.stderr || `pass exited ${result.status}`).trim() };
     }
@@ -309,7 +311,9 @@ Then configure the exec provider and point `apiKey` at the `pass` entry path:
         source: "exec",
         command: "/usr/local/bin/openclaw-pass-resolver",
         env: {
-          // Change this to /usr/bin/pass, /usr/local/bin/pass, or your install path.
+          // Include the directory that contains node for the shebang above.
+          PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+          // Change this to /usr/bin/pass, /usr/local/bin/pass, or your pass install path.
           PASS_BIN: "/opt/homebrew/bin/pass",
         },
         passEnv: ["HOME", "GNUPGHOME", "GPG_TTY", "PASSWORD_STORE_DIR"],
