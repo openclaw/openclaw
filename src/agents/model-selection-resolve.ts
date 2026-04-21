@@ -22,6 +22,10 @@ export {
 } from "./model-selection-shared.js";
 export type { ModelAliasIndex, ModelRefStatus } from "./model-selection-shared.js";
 
+function resolveDefaultFallbackModels(cfg: OpenClawConfig): string[] {
+  return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+}
+
 export function buildAllowedModelSet(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
@@ -32,12 +36,13 @@ export function buildAllowedModelSet(params: {
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
 } {
+  const { cfg, catalog, defaultProvider, defaultModel } = params;
   return buildAllowedModelSetWithFallbacks({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    fallbackModels: resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
+    cfg,
+    catalog,
+    defaultProvider,
+    defaultModel,
+    fallbackModels: resolveDefaultFallbackModels(cfg),
   });
 }
 
@@ -48,13 +53,14 @@ export function getModelRefStatus(params: {
   defaultProvider: string;
   defaultModel?: string;
 }): ModelRefStatus {
+  const { cfg, catalog, ref, defaultProvider, defaultModel } = params;
   return getModelRefStatusWithFallbackModels({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    ref: params.ref,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    fallbackModels: resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
+    cfg,
+    catalog,
+    ref,
+    defaultProvider,
+    defaultModel,
+    fallbackModels: resolveDefaultFallbackModels(cfg),
   });
 }
 

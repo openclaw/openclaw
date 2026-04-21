@@ -495,14 +495,14 @@ export function buildAllowedModelSetWithFallbacks(params: {
 
   const allowedKeys = new Set<string>();
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
-  for (const raw of rawAllowlist) {
+  const addAllowedModelRef = (raw: string) => {
     const parsed = parseModelRefWithCompatAlias({
       cfg: params.cfg,
       raw,
       defaultProvider: params.defaultProvider,
     });
     if (!parsed) {
-      continue;
+      return;
     }
     const key = modelKey(parsed.provider, parsed.model);
     allowedKeys.add(key);
@@ -510,23 +510,14 @@ export function buildAllowedModelSetWithFallbacks(params: {
     if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
       syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
     }
+  };
+
+  for (const raw of rawAllowlist) {
+    addAllowedModelRef(raw);
   }
 
   for (const fallback of params.fallbackModels) {
-    const parsed = parseModelRefWithCompatAlias({
-      cfg: params.cfg,
-      raw: fallback,
-      defaultProvider: params.defaultProvider,
-    });
-    if (!parsed) {
-      continue;
-    }
-    const key = modelKey(parsed.provider, parsed.model);
-    allowedKeys.add(key);
-
-    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
-      syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
-    }
+    addAllowedModelRef(fallback);
   }
 
   if (defaultKey) {
