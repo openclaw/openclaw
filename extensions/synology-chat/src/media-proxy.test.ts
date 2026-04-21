@@ -212,6 +212,17 @@ describe("resolveSynologyWebhookFileUrl", () => {
     expect(origin).toBeUndefined();
   });
 
+  it("rejects origin learning when forwarded host is present without forwarded proto", () => {
+    const origin = deriveSynologyPublicOrigin({
+      headers: {
+        "x-forwarded-host": "openclaw.example.com",
+      },
+      socket: { encrypted: true },
+    } as never);
+
+    expect(origin).toBeUndefined();
+  });
+
   it("rejects learned private origins derived from webhook headers", () => {
     const origin = deriveSynologyPublicOrigin({
       headers: {
