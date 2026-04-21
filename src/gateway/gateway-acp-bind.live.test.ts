@@ -15,8 +15,8 @@ import {
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
-import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
+import type { GatewayClient } from "./client.js";
+import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
 import {
   assertCronJobMatches,
   assertCronJobVisibleViaCli,
@@ -161,85 +161,16 @@ async function waitForGatewayPort(params: {
 
 async function connectClient(params: { url: string; token: string; timeoutMs?: number }) {
   const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
-  const startedAt = Date.now();
-  let attempt = 0;
-  let lastError: Error | null = null;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    attempt += 1;
-    const remainingMs = timeoutMs - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      break;
-    }
-    try {
-      return await connectClientOnce({
-        ...params,
-        timeoutMs: Math.min(remainingMs, 35_000),
-      });
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 5_000) {
-        throw lastError;
-      }
-      logLiveStep(`gateway connect warmup retry ${attempt}: ${lastError.message}`);
-      await sleep(Math.min(1_000 * attempt, 5_000));
-    }
-  }
-
-  throw lastError ?? new Error("gateway connect timeout");
-}
-
-async function connectClientOnce(params: { url: string; token: string; timeoutMs?: number }) {
-  const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let done = false;
-    let client: GatewayClient | undefined;
-    const finish = (result: { client?: GatewayClient; error?: Error }) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(connectTimeout);
-      if (result.error) {
-        if (client) {
-          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
-        }
-        reject(result.error);
-        return;
-      }
-      resolve(result.client as GatewayClient);
-    };
-
-    client = new GatewayClient({
-      url: params.url,
-      token: params.token,
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientVersion: "dev",
-      mode: "test",
-      requestTimeoutMs: timeoutMs,
-      connectChallengeTimeoutMs: timeoutMs,
-      onHelloOk: () => finish({ client }),
-      onConnectError: (error) => finish({ error }),
-      onClose: (code, reason) =>
-        finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) }),
-    });
-
-    const connectTimeout = setTimeout(
-      () => finish({ error: new Error("gateway connect timeout") }),
-      timeoutMs,
-    );
-    connectTimeout.unref();
-    client.start();
+  return await connectTestGatewayClient({
+    ...params,
+    timeoutMs,
+    maxAttemptTimeoutMs: 35_000,
+    clientDisplayName: null,
+    requestTimeoutMs: timeoutMs,
+    onRetry: (attempt, error) => {
+      logLiveStep(`gateway connect warmup retry ${attempt}: ${error.message}`);
+    },
   });
-}
-
-function isRetryableGatewayConnectError(error: Error): boolean {
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("gateway closed during connect (1000)") ||
-    message.includes("gateway connect timeout") ||
-    message.includes("gateway connect challenge timeout")
-  );
 }
 
 function isRetryableAcpBindWarmupText(texts: string[]): boolean {

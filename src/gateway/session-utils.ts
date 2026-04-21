@@ -438,19 +438,18 @@ export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
-  const matches = storeKeys
-    .map((key) => {
-      const entry = store[key];
-      return entry ? { key, entry } : undefined;
-    })
-    .filter((match): match is { key: string; entry: SessionEntry } => match !== undefined);
-  if (matches.length === 0) {
-    return undefined;
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of storeKeys) {
+    const entry = store[key];
+    if (!entry) {
+      continue;
+    }
+    const match = { key, entry };
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
   }
-  if (matches.length === 1) {
-    return matches[0];
-  }
-  return [...matches].toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
+  return freshest;
 }
 
 export function resolveFreshestSessionEntryFromStoreKeys(
@@ -484,9 +483,13 @@ function findFreshestStoreMatch(
   if (matches.size === 0) {
     return undefined;
   }
-  return [...matches.values()].toSorted(
-    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
-  )[0];
+  let freshest: { entry: SessionEntry; key: string } | undefined;
+  for (const match of matches.values()) {
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
+  }
+  return freshest;
 }
 
 /**

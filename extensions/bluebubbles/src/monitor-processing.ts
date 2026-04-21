@@ -70,10 +70,7 @@ import type {
 } from "./monitor-shared.js";
 import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-contact-names.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
-import {
-  normalizeBlueBubblesReactionInputStrict,
-  sendBlueBubblesReaction,
-} from "./reactions.js";
+import { normalizeBlueBubblesReactionInputStrict, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -1540,6 +1537,14 @@ async function processMessageAfterDedupe(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
+    // Exact group match wins over the "*" wildcard fallback, matching the
+    // pattern used by resolveChannelGroupRequireMention/toolsPolicy.
+    GroupSystemPrompt: isGroup
+      ? normalizeOptionalString(
+          account.config.groups?.[peerId]?.systemPrompt ??
+            account.config.groups?.["*"]?.systemPrompt,
+        )
+      : undefined,
   });
 
   let sentMessage = false;

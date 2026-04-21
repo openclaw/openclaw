@@ -207,7 +207,7 @@ describe("executeSlashCommand /kill", () => {
               spawnedBy: "agent:main:subagent:mine",
             }),
             row("agent:main:subagent:other-root", {
-              spawnedBy: "agent:main:discord:dm:alice",
+              spawnedBy: "agent:main:quietchat:dm:alice",
             }),
           ],
         };
