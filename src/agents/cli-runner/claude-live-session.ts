@@ -102,7 +102,7 @@ function appendArg(args: string[], flag: string): string[] {
 
 function stripLiveProcessArgs(args: string[], backend: CliBackendConfig): string[] {
   const liveProcessFlags = new Set(
-    [backend.sessionArg, backend.systemPromptArg, "--session-id", "--resume", "-r"].filter(
+    [backend.sessionArg, backend.systemPromptArg, "--session-id"].filter(
       (entry): entry is string => typeof entry === "string" && entry.length > 0,
     ),
   );
@@ -192,12 +192,11 @@ function buildClaudeLiveFingerprint(params: {
       )
     : undefined;
   const normalizePluginDir = Boolean(skillsFingerprint);
+  const omittedValueFlags = new Set(["--resume", "-r"]);
   const unstableValueFlags = new Set(
     [
       params.context.preparedBackend.backend.sessionArg,
       "--session-id",
-      "--resume",
-      "-r",
       normalizeMcpConfigPath ? "--mcp-config" : undefined,
       normalizePluginDir ? "--plugin-dir" : undefined,
     ].filter((entry): entry is string => typeof entry === "string" && entry.length > 0),
@@ -205,6 +204,13 @@ function buildClaudeLiveFingerprint(params: {
   const stableArgv: string[] = [];
   for (let i = 0; i < params.argv.length; i += 1) {
     const entry = params.argv[i] ?? "";
+    if (omittedValueFlags.has(entry)) {
+      i += 1;
+      continue;
+    }
+    if ([...omittedValueFlags].some((flag) => entry.startsWith(`${flag}=`))) {
+      continue;
+    }
     if (unstableValueFlags.has(entry)) {
       stableArgv.push("<unstable>");
       i += 1;
@@ -281,8 +287,9 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
   if (!turn) {
     return;
   }
+  const errorKind = error instanceof Error ? error.name : typeof error;
   cliBackendLog.warn(
-    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${String(error)}`,
+    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind}`,
   );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
@@ -773,12 +780,25 @@ export async function runClaudeLiveSessionTurn(params: {
     argv,
     env: params.env,
   });
+  let cleanupDone = false;
+  const cleanup = async () => {
+    if (cleanupDone) {
+      return;
+    }
+    cleanupDone = true;
+    await params.cleanup();
+  };
   let session = liveSessions.get(key) ?? null;
   if (session && session.fingerprint !== fingerprint) {
     closeLiveSession(session, "restart");
     session = null;
   }
-  ensureLiveSessionCapacity(key, params.context);
+  try {
+    ensureLiveSessionCapacity(key, params.context);
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
   if (!session) {
     try {
       session = await createClaudeLiveSession({
@@ -789,14 +809,14 @@ export async function runClaudeLiveSessionTurn(params: {
         key,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         supervisor: params.getProcessSupervisor(),
-        cleanup: params.cleanup,
+        cleanup,
       });
     } catch (error) {
-      await params.cleanup();
+      await cleanup();
       throw error;
     }
   } else {
-    await params.cleanup();
+    await cleanup();
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
       session.idleTimer = null;

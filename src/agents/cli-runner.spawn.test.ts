@@ -14,7 +14,10 @@ import {
   restoreCliRunnerPrepareTestDeps,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
-import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.js";
+import {
+  buildClaudeLiveArgs,
+  resetClaudeLiveSessionsForTest,
+} from "./cli-runner/claude-live-session.js";
 import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
@@ -800,6 +803,41 @@ describe("runCliAgent spawn path", () => {
     expect(first.text).toBe("one");
     expect(second.text).toBe("two");
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves Claude resume args when building live session argv", () => {
+    const backend: PreparedCliRunContext["preparedBackend"]["backend"] = {
+      command: "claude",
+      args: ["-p", "--output-format", "stream-json"],
+      output: "jsonl",
+      input: "stdin",
+      sessionArg: "--session-id",
+      systemPromptArg: "--append-system-prompt",
+    };
+
+    const args = buildClaudeLiveArgs({
+      args: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--resume",
+        "claude-session",
+        "--session-id",
+        "openclaw-session",
+        "--append-system-prompt",
+        "old prompt",
+      ],
+      backend,
+      systemPrompt: "current prompt",
+    });
+
+    expect(args).toContain("--resume");
+    expect(args).toContain("claude-session");
+    expect(args).not.toContain("--session-id");
+    expect(args).not.toContain("openclaw-session");
+    expect(args).not.toContain("old prompt");
+    expect(args).toContain("--append-system-prompt");
+    expect(args).toContain("current prompt");
   });
 
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
