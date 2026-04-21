@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
 
-const { mockFetchGuard, mockRelease } = vi.hoisted(() => ({
+const { mockFetchGuard, mockRelease, mockGetSignedUrl } = vi.hoisted(() => ({
   mockFetchGuard: vi.fn(),
   mockRelease: vi.fn(async () => {}),
+  mockGetSignedUrl: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
@@ -17,6 +18,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
     fetchWithSsrFGuard: mockFetchGuard,
   };
 });
+
+vi.mock("@aws-sdk/s3-request-presigner", () => ({
+  getSignedUrl: mockGetSignedUrl,
+}));
 
 vi.mock("./urbit/auth.js", () => ({
   authenticate: vi.fn(),
@@ -243,5 +248,93 @@ describe("uploadFile memex upload hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mockGuardedFetch).not.toHaveBeenCalled();
     expect(mockRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe("uploadFile custom S3 upload hardening", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("fetch", vi.fn());
+    mockAuthenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
+    configureClient({
+      shipUrl: "https://ship.example.com",
+      shipName: "~zod",
+      verbose: false,
+      getCode: async () => "123456",
+    });
+    mockScryUrbitPath.mockImplementation(async (_deps, params) => {
+      if (params.path === "/storage/configuration.json") {
+        return {
+          currentBucket: "uploads",
+          buckets: ["uploads"],
+          publicUrlBase: "https://files.example.com/",
+          presignedUrl: "",
+          region: "us-east-1",
+          service: "custom",
+        };
+      }
+      if (params.path === "/storage/credentials.json") {
+        return {
+          "storage-update": {
+            credentials: {
+              endpoint: "https://s3.example.com",
+              accessKeyId: "AKIAFAKE",
+              secretAccessKey: "fake-secret",
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected scry path: ${params.path}`);
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("routes the custom S3 signed URL through the SSRF guard", async () => {
+    mockGetSignedUrl.mockResolvedValueOnce("https://s3.example.com/uploads/file?sig=abc");
+    mockGuardedFetch.mockResolvedValueOnce({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://s3.example.com/uploads/file?sig=abc",
+      release: mockRelease,
+    });
+
+    const result = await uploadFile({
+      blob: new Blob(["image-bytes"], { type: "image/png" }),
+      fileName: "avatar.png",
+      contentType: "image/png",
+    });
+
+    expect(result.url.startsWith("https://files.example.com/")).toBe(true);
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
+    expect(mockGuardedFetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://s3.example.com/uploads/file?sig=abc",
+        auditContext: "tlon-custom-s3-upload",
+        capture: false,
+        maxRedirects: 0,
+      }),
+    );
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
+  });
+
+  it("surfaces guarded upload failures for custom S3 targets without calling release", async () => {
+    mockGetSignedUrl.mockResolvedValueOnce("https://169.254.169.254/uploads/file?sig=abc");
+    mockGuardedFetch.mockRejectedValueOnce(new Error("Blocked private network target"));
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Blocked private network target");
+
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
+    expect(mockRelease).not.toHaveBeenCalled();
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
   });
 });

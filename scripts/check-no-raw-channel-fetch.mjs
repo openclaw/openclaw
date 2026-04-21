@@ -63,7 +63,6 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("slack", "src/monitor/media.ts", 118),
   bundledPluginCallsite("slack", "src/monitor/media.ts", 123),
   bundledPluginCallsite("tlon", "src/tlon-api.ts", 220),
-  bundledPluginCallsite("tlon", "src/tlon-api.ts", 337),
   bundledPluginCallsite("venice", "models.ts", 552),
   bundledPluginCallsite("vercel-ai-gateway", "models.ts", 181),
   bundledPluginCallsite("voice-call", "src/providers/twilio/api.ts", 23),

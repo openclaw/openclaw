@@ -334,14 +334,25 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     signableHeaders: new Set(Object.keys(headers)),
   });
 
-  const response = await fetch(signedUrl, {
-    method: "PUT",
-    body: params.blob,
-    headers: signedUrl.includes("digitaloceanspaces.com") ? headers : undefined,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Upload failed: ${response.status}`);
+  let release: (() => Promise<void>) | undefined;
+  try {
+    const guarded = await fetchWithSsrFGuard({
+      url: signedUrl,
+      init: {
+        method: "PUT",
+        body: params.blob,
+        headers: signedUrl.includes("digitaloceanspaces.com") ? headers : undefined,
+      },
+      auditContext: "tlon-custom-s3-upload",
+      capture: false,
+      maxRedirects: 0,
+    });
+    release = guarded.release;
+    if (!guarded.response.ok) {
+      throw new Error(`Upload failed: ${guarded.response.status}`);
+    }
+  } finally {
+    await release?.();
   }
 
   const publicUrl = storageConfig.publicUrlBase
