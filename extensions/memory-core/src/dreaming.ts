@@ -538,16 +538,13 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   }
 
   // Reconcile leaves the last-known-good cron entry in place when config is
-  // invalid, but the runtime execution path reads `params.config.timezone`
-  // fresh on every fire. If the configured timezone has since gone bad,
-  // `formatMemoryDreamingDay` silently falls back to host-local time, so
-  // reports end up day-stamped under one timezone while the preserved cron is
-  // still firing under another. Mirror the reconcile gate here so we skip
-  // execution (not just scheduling) until the user fixes the config.
+  // invalid. Keep letting that preserved schedule execute for frequency parse
+  // mistakes, but block an invalid configured timezone because the runtime path
+  // reads it fresh and would silently fall back to host-local day stamps.
   const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
-  if (!validation.valid) {
+  if (!validation.valid && validation.reason === "timezone") {
     params.logger.warn(
-      `memory-core: dreaming promotion skipped because dreaming config is invalid (${validation.reason}).`,
+      "memory-core: dreaming promotion skipped because dreaming.timezone is invalid.",
     );
     return { handled: true, reason: "memory-core: short-term dreaming invalid config" };
   }
