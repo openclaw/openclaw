@@ -1738,7 +1738,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         try {
           const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot);
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
-          const installedSpecs = ensureBundledPluginRuntimeDeps({
+          const depsInstallResult = ensureBundledPluginRuntimeDeps({
             pluginId: record.id,
             pluginRoot,
             env,
@@ -1746,15 +1746,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             retainSpecs,
             installDeps: options.bundledRuntimeDepsInstaller,
           });
-          if (installedSpecs.length > 0) {
+          if (depsInstallResult.installedSpecs.length > 0) {
             bundledRuntimeDepsRetainSpecsByInstallRoot.set(
               installRoot,
-              [...new Set([...retainSpecs, ...installedSpecs])].toSorted((left, right) =>
-                left.localeCompare(right),
+              [...new Set([...retainSpecs, ...depsInstallResult.retainSpecs])].toSorted(
+                (left, right) => left.localeCompare(right),
               ),
             );
             logger.info(
-              `[plugins] ${record.id} installed bundled runtime deps: ${installedSpecs.join(", ")}`,
+              `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
             );
           }
         } catch (error) {

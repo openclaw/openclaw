@@ -479,6 +479,7 @@ export async function startGatewayServer(
     httpServer,
     httpServers,
     httpBindHosts,
+    startListening,
     wss,
     preauthConnectionBudget,
     clients,
@@ -526,7 +527,6 @@ export async function startGatewayServer(
       getReadiness,
     }),
   );
-  startupTrace.mark("http.bound");
   const {
     nodeRegistry,
     nodePresenceTimers,
@@ -796,6 +796,8 @@ export async function startGatewayServer(
       broadcast,
       context: gatewayRequestContext,
     });
+    await startListening();
+    startupTrace.mark("http.bound");
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,

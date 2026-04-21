@@ -190,6 +190,51 @@ function makeRecordingSocket(): RecordingSocket {
   };
 }
 
+function makeGatewayWsClient(
+  connId: string,
+  socket: TestSocket,
+  connect: GatewayWsClient["connect"],
+): GatewayWsClient {
+  return {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connect,
+    connId,
+    usesSharedGatewayAuth: false,
+  };
+}
+
+function makeScopedBroadcastClients() {
+  const pairingSocket = makeRecordingSocket();
+  const nodeSocket = makeRecordingSocket();
+  const readSocket = makeRecordingSocket();
+  const writeSocket = makeRecordingSocket();
+  const adminSocket = makeRecordingSocket();
+  const clients = new Set<GatewayWsClient>([
+    makeGatewayWsClient("c-pairing", pairingSocket, {
+      role: "operator",
+      scopes: ["operator.pairing"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-node", nodeSocket, {
+      role: "node",
+      scopes: ["operator.read"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-read", readSocket, {
+      role: "operator",
+      scopes: ["operator.read"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-write", writeSocket, {
+      role: "operator",
+      scopes: ["operator.write"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-admin", adminSocket, {
+      role: "operator",
+      scopes: ["operator.admin"],
+    } as GatewayWsClient["connect"]),
+  ]);
+
+  return { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients };
+}
+
 describe("gateway broadcaster", () => {
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
@@ -209,24 +254,18 @@ describe("gateway broadcaster", () => {
     };
 
     const clients = new Set<GatewayWsClient>([
-      {
-        socket: approvalsSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.approvals"] } as GatewayWsClient["connect"],
-        connId: "c-approvals",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-        usesSharedGatewayAuth: false,
-      },
+      makeGatewayWsClient("c-approvals", approvalsSocket, {
+        role: "operator",
+        scopes: ["operator.approvals"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-pairing", pairingSocket, {
+        role: "operator",
+        scopes: ["operator.pairing"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
@@ -245,44 +284,8 @@ describe("gateway broadcaster", () => {
   });
 
   it("requires operator.read for chat-class broadcast events", () => {
-    const pairingSocket = makeRecordingSocket();
-    const nodeSocket = makeRecordingSocket();
-    const readSocket = makeRecordingSocket();
-    const writeSocket = makeRecordingSocket();
-    const adminSocket = makeRecordingSocket();
-
-    const clients = new Set<GatewayWsClient>([
-      {
-        socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: nodeSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "node", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-node",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: writeSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.write"] } as GatewayWsClient["connect"],
-        connId: "c-write",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: adminSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
-        connId: "c-admin",
-        usesSharedGatewayAuth: false,
-      },
-    ]);
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
 
     const { broadcast } = createGatewayBroadcaster({ clients });
 
@@ -313,44 +316,8 @@ describe("gateway broadcaster", () => {
   });
 
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
-    const pairingSocket = makeRecordingSocket();
-    const nodeSocket = makeRecordingSocket();
-    const readSocket = makeRecordingSocket();
-    const writeSocket = makeRecordingSocket();
-    const adminSocket = makeRecordingSocket();
-
-    const clients = new Set<GatewayWsClient>([
-      {
-        socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: nodeSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "node", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-node",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: writeSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.write"] } as GatewayWsClient["connect"],
-        connId: "c-write",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: adminSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
-        connId: "c-admin",
-        usesSharedGatewayAuth: false,
-      },
-    ]);
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
 
     const { broadcast } = createGatewayBroadcaster({ clients });
 
@@ -373,44 +340,8 @@ describe("gateway broadcaster", () => {
   });
 
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
-    const pairingSocket = makeRecordingSocket();
-    const nodeSocket = makeRecordingSocket();
-    const readSocket = makeRecordingSocket();
-    const writeSocket = makeRecordingSocket();
-    const adminSocket = makeRecordingSocket();
-
-    const clients = new Set<GatewayWsClient>([
-      {
-        socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: nodeSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "node", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-node",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: writeSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.write"] } as GatewayWsClient["connect"],
-        connId: "c-write",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: adminSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
-        connId: "c-admin",
-        usesSharedGatewayAuth: false,
-      },
-    ]);
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
 
     const { broadcast } = createGatewayBroadcaster({ clients });
 
@@ -481,18 +412,14 @@ describe("gateway broadcaster", () => {
     const readSocket = makeRecordingSocket();
 
     const clients = new Set<GatewayWsClient>([
-      {
-        socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-        usesSharedGatewayAuth: false,
-      },
+      makeGatewayWsClient("c-pairing", pairingSocket, {
+        role: "operator",
+        scopes: ["operator.pairing"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
     ]);
 
     const { broadcast } = createGatewayBroadcaster({ clients });
@@ -520,18 +447,14 @@ describe("gateway broadcaster", () => {
     const readSocket = makeRecordingSocket();
 
     const clients = new Set<GatewayWsClient>([
-      {
-        socket: slowReadSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-slow-read",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-        usesSharedGatewayAuth: false,
-      },
+      makeGatewayWsClient("c-slow-read", slowReadSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
     ]);
 
     const { broadcast } = createGatewayBroadcaster({ clients });

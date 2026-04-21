@@ -489,7 +489,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -589,7 +589,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -677,7 +677,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -721,19 +721,6 @@ jobs:
           }
           writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(includePatterns), "utf8");
           EOF
-          channel_contract_heartbeat() {
-            while true; do
-              sleep 30
-              printf '[ci] channel contract shard still running at %s\n' "$(date -u +%H:%M:%S)"
-            done
-          }
-          channel_contract_heartbeat &
-          heartbeat_pid="$!"
-          cleanup_channel_contract_heartbeat() {
-            kill "$heartbeat_pid" >/dev/null 2>&1 || true
-            wait "$heartbeat_pid" >/dev/null 2>&1 || true
-          }
-          trap cleanup_channel_contract_heartbeat EXIT
           OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:channels
 
   checks-fast-channel-contracts:
@@ -793,7 +780,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -861,7 +848,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -954,7 +941,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1078,7 +1065,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1202,7 +1189,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1371,7 +1358,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1455,7 +1442,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1590,7 +1577,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1752,7 +1739,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1848,7 +1835,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \

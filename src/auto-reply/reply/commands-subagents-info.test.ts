@@ -38,7 +38,7 @@ describe("subagents info", () => {
   it("returns usage for missing targets", () => {
     const cfg = {
       commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
+      channels: { quietchat: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const result = handleSubagentsInfoAction(buildInfoContext({ cfg, runs: [], restTokens: [] }));
     expect(result.shouldContinue).toBe(false);
@@ -175,7 +175,7 @@ describe("subagents info", () => {
     });
     const cfg = {
       commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
+      channels: { quietchat: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
     } as OpenClawConfig;
     const result = handleSubagentsInfoAction({

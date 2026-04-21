@@ -1537,6 +1537,14 @@ async function processMessageAfterDedupe(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
+    // Exact group match wins over the "*" wildcard fallback, matching the
+    // pattern used by resolveChannelGroupRequireMention/toolsPolicy.
+    GroupSystemPrompt: isGroup
+      ? normalizeOptionalString(
+          account.config.groups?.[peerId]?.systemPrompt ??
+            account.config.groups?.["*"]?.systemPrompt,
+        )
+      : undefined,
   });
 
   let sentMessage = false;

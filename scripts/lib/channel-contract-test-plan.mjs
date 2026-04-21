@@ -14,17 +14,26 @@ function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
 
 const CONTRACT_FILE_WEIGHTS = new Map([
   ["channel-import-guardrails.test.ts", 18],
-  ["directory.registry-backed.contract.test.ts", 12],
   ["outbound-payload.contract.test.ts", 18],
-  ["plugin.registry-backed.contract.test.ts", 34],
   ["plugins-core.catalog.paths.contract.test.ts", 28],
   ["plugins-core.catalog.entries.contract.test.ts", 16],
   ["session-binding.registry-backed.contract.test.ts", 16],
-  ["surfaces-only.registry-backed.contract.test.ts", 36],
 ]);
 
 function resolveContractFileWeight(file) {
   const name = file.replaceAll("\\", "/").split("/").pop();
+  if (name.startsWith("plugin.registry-backed-shard-")) {
+    return 5;
+  }
+  if (name.startsWith("surfaces-only.registry-backed-shard-")) {
+    return 5;
+  }
+  if (name.startsWith("directory.registry-backed-shard-")) {
+    return 4;
+  }
+  if (name.startsWith("threading.registry-backed-shard-")) {
+    return 4;
+  }
   return CONTRACT_FILE_WEIGHTS.get(name) ?? 8;
 }
 
