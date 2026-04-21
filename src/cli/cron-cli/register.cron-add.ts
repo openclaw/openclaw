@@ -16,6 +16,7 @@ import {
   parseCronToolsAllow,
   printCronJson,
   printCronList,
+  resolveCronDeliveryPreviews,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 
@@ -53,7 +54,8 @@ export function registerCronListCommand(cron: Command) {
             return;
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
-          printCronList(jobs, defaultRuntime);
+          const deliveryPreviews = await resolveCronDeliveryPreviews(jobs);
+          printCronList(jobs, defaultRuntime, { deliveryPreviews });
         } catch (err) {
           handleCronCliError(err);
         }

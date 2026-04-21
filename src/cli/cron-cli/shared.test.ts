@@ -122,6 +122,31 @@ describe("printCronList", () => {
     expect(dataLine).toContain("sonnet");
   });
 
+  it("shows delivery preview when provided", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "delivery-job",
+      name: "Delivery",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    printCronList([job], runtime, {
+      deliveryPreviews: new Map([
+        [
+          "delivery-job",
+          {
+            label: "announce -> telegram:-100",
+            detail: "resolved from last, main session",
+          },
+        ],
+      ]),
+    });
+
+    expect(logs[0]).toContain("Delivery");
+    expect(logs[1]).toContain("announce -> telegram:-100");
+  });
+
   it("shows dash in Model column for systemEvent jobs", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
