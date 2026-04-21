@@ -1,5 +1,7 @@
-// Inlined to avoid custom source-loader resolution issues
-const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+
+type OllamaProviderConfigDraft = Partial<ModelProviderConfig>;
 
 /**
  * Provider policy surface for Ollama: normalize provider configs used by
@@ -11,27 +13,25 @@ export function normalizeConfig({
   providerConfig,
 }: {
   provider: string;
-  providerConfig: unknown;
-}): unknown {
+  providerConfig: OllamaProviderConfigDraft;
+}): OllamaProviderConfigDraft {
   if (!providerConfig || typeof providerConfig !== "object") {
     return providerConfig;
   }
 
-  // provider is already a string, no need for String() cast
   const normalizedProviderId = (provider ?? "").trim().toLowerCase();
   if (normalizedProviderId !== "ollama") {
     return providerConfig;
   }
 
-  // Safely cast to Record to allow mutations without 'any'
-  const next: Record<string, unknown> = { ...(providerConfig as Record<string, unknown>) };
+  const next: OllamaProviderConfigDraft = { ...providerConfig };
 
   // If baseUrl is missing, empty, or whitespace-only, default to local Ollama host.
   if (typeof next.baseUrl !== "string" || !next.baseUrl.trim()) {
     next.baseUrl = OLLAMA_DEFAULT_BASE_URL;
   }
 
-  // If models is missing/not an array, default to empty array to signal discovery
+  // If models is missing/not an array, default to empty array to signal discovery.
   if (!Array.isArray(next.models)) {
     next.models = [];
   }
