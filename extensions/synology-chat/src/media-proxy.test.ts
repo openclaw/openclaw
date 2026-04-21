@@ -85,6 +85,16 @@ describe("resolveSynologyWebhookFileUrl", () => {
     expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
   });
 
+  it("blocks direct public ip literal urls when the hosted-media transport is unavailable", async () => {
+    const resolved = await resolveSynologyWebhookFileUrl({
+      account: testAccount,
+      sourceUrl: "https://198.51.100.10/file.png",
+    });
+
+    expect(resolved).toBeNull();
+    expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
+  });
+
   it("uses OPENCLAW_GATEWAY_URL to bootstrap hostname-backed media before the first inbound webhook", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.com/ws");
     registerSynologyHostedMediaTransport(testAccount);

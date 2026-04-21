@@ -7,6 +7,7 @@ import {
   resolveAgentRouteMock,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
+import type { ResolvedSynologyChatAccount } from "./types.js";
 
 type _RegisteredRoute = {
   path: string;
@@ -16,6 +17,8 @@ type _RegisteredRoute = {
 };
 
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
+let clearSynologyHostedMediaStateForTest: typeof import("./media-proxy.js").clearSynologyHostedMediaStateForTest;
+let resolveSynologyWebhookFileUrl: typeof import("./media-proxy.js").resolveSynologyWebhookFileUrl;
 
 function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal) {
   return {
@@ -29,9 +32,12 @@ function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal
 describe("Synology channel wiring integration", () => {
   beforeAll(async () => {
     ({ createSynologyChatPlugin } = await import("./channel.js"));
+    ({ clearSynologyHostedMediaStateForTest, resolveSynologyWebhookFileUrl } =
+      await import("./media-proxy.js"));
   });
 
   beforeEach(() => {
+    clearSynologyHostedMediaStateForTest();
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     finalizeInboundContextMock.mockClear();
@@ -190,5 +196,72 @@ describe("Synology channel wiring integration", () => {
     betaAbortController.abort();
     await alphaStarted;
     await betaStarted;
+  });
+
+  it("does not activate hosted media when the media route registration conflicts", async () => {
+    type LoggedRegisteredRoute = _RegisteredRoute & {
+      log?: (message: string) => void;
+    };
+
+    registerPluginHttpRouteMock.mockImplementation((params: LoggedRegisteredRoute) => {
+      if (params.match === "prefix") {
+        params.log?.(
+          `plugin: route conflict at ${params.path} (prefix) for account "${params.accountId}"`,
+        );
+        return vi.fn();
+      }
+      return vi.fn();
+    });
+
+    const plugin = createSynologyChatPlugin();
+    const abortController = new AbortController();
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          accounts: {
+            alerts: {
+              enabled: true,
+              token: "valid-token",
+              incomingUrl: "https://nas.example.com/incoming",
+              publicOrigin: "https://gateway-config.example.com",
+              webhookPath: "/webhook/synology-alerts",
+              dmPolicy: "allowlist",
+              allowedUserIds: ["456"],
+            },
+          },
+        },
+      },
+    };
+
+    const started = plugin.gateway.startAccount(
+      makeStartContext(cfg, "alerts", abortController.signal),
+    );
+    const account: ResolvedSynologyChatAccount = {
+      accountId: "alerts",
+      enabled: true,
+      token: "valid-token",
+      incomingUrl: "https://nas.example.com/incoming",
+      nasHost: "localhost",
+      publicOrigin: "https://gateway-config.example.com",
+      webhookPath: "/webhook/synology-alerts",
+      webhookPathSource: "account",
+      dangerouslyAllowNameMatching: false,
+      dangerouslyAllowInheritedWebhookPath: false,
+      dmPolicy: "allowlist",
+      allowedUserIds: ["456"],
+      rateLimitPerMinute: 30,
+      botName: "OpenClaw",
+      allowInsecureSsl: false,
+    };
+
+    const resolved = await resolveSynologyWebhookFileUrl({
+      account,
+      sourceUrl: "https://example.com/file.png",
+    });
+
+    expect(resolved).toBeNull();
+    abortController.abort();
+    await started;
   });
 });

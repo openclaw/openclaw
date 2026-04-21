@@ -63,10 +63,6 @@ function isBlockedSpecialIpLiteral(hostname: string): boolean {
   return parsed.range() === "unspecified";
 }
 
-function isIpLiteral(hostname: string): boolean {
-  return ipaddr.isValid(normalizeHostname(hostname));
-}
-
 function parseHttpUrl(sourceUrl: string): URL | null {
   try {
     const parsed = new URL(sourceUrl);
@@ -114,15 +110,6 @@ export function normalizeSynologyPublicOrigin(candidate: string | undefined): st
   parsed.search = "";
   parsed.hash = "";
   return parsed.origin;
-}
-
-function isDirectPublicIpLiteralUrl(parsed: URL): boolean {
-  return (
-    !!parsed.hostname &&
-    isIpLiteral(parsed.hostname) &&
-    !isBlockedSpecialIpLiteral(parsed.hostname) &&
-    !isPrivateOrLoopbackHost(parsed.hostname)
-  );
 }
 
 function cleanupExpiredHostedMedia(nowMs = Date.now()): void {
@@ -280,7 +267,7 @@ export async function resolveSynologyWebhookFileUrl(params: {
     });
   }
 
-  return isDirectPublicIpLiteralUrl(parsed) ? params.sourceUrl : null;
+  return null;
 }
 
 export function createSynologyHostedMediaHandler(account: ResolvedSynologyChatAccount) {

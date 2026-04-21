@@ -184,8 +184,6 @@ export function registerSynologyWebhookRoute(params: {
     activeRouteUnregisters.delete(routeKey);
   }
 
-  registerSynologyHostedMediaTransport(account);
-
   const handler = createWebhookHandler({
     account,
     deliver: async (msg) =>
@@ -197,23 +195,48 @@ export function registerSynologyWebhookRoute(params: {
     log: createUnknownArgsLogAdapter(log),
     observePublicOrigin: (origin) => rememberSynologyHostedMediaOrigin(account, origin),
   });
-  const unregisterWebhookRoute = registerPluginHttpRoute({
+
+  let routeRegistrationFailed = false;
+  const registerRoute = (params: Parameters<typeof registerPluginHttpRoute>[0]) =>
+    registerPluginHttpRoute({
+      ...params,
+      log: (msg: string) => {
+        log?.info?.(msg);
+        if (
+          msg.includes("webhook path missing") ||
+          msg.includes("route overlap denied") ||
+          msg.includes("route conflict") ||
+          msg.includes("route replacement denied")
+        ) {
+          routeRegistrationFailed = true;
+        }
+      },
+    });
+
+  const unregisterWebhookRoute = registerRoute({
     path: account.webhookPath,
     auth: "plugin",
     pluginId: CHANNEL_ID,
     accountId: account.accountId,
-    log: (msg: string) => log?.info?.(msg),
     handler,
   });
-  const unregisterMediaRoute = registerPluginHttpRoute({
+  const unregisterMediaRoute = registerRoute({
     path: getSynologyHostedMediaPathPrefix(account),
     auth: "plugin",
     match: "prefix",
     pluginId: CHANNEL_ID,
     accountId: account.accountId,
-    log: (msg: string) => log?.info?.(msg),
     handler: createSynologyHostedMediaHandler(account),
   });
+
+  if (routeRegistrationFailed) {
+    unregisterWebhookRoute();
+    unregisterMediaRoute();
+    return () => {};
+  }
+
+  registerSynologyHostedMediaTransport(account);
+
   const unregister = () => {
     unregisterWebhookRoute();
     unregisterMediaRoute();
