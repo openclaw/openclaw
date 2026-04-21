@@ -189,4 +189,78 @@ describe("brave web search provider", () => {
     const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
     expect(requestUrl.searchParams.get("country")).toBe("ALL");
   });
+
+  it("sends API key as X-Subscription-Token header, not as a URL query param (web mode)", async () => {
+    const apiKey = "BSA-test-key-abc123";
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey,
+        brave: { apiKey },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "brave auth regression" });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [callUrl, callInit] = mockFetch.mock.calls[0] as [unknown, RequestInit | undefined];
+    const requestUrl = new URL(String(callUrl));
+    const headers = callInit?.headers as Record<string, string> | undefined;
+
+    // API key must be sent as a request header
+    expect(headers?.["X-Subscription-Token"]).toBe(apiKey);
+    // API key must NOT appear as a URL query parameter
+    expect(requestUrl.searchParams.has("apikey")).toBe(false);
+    expect(requestUrl.searchParams.has("key")).toBe(false);
+  });
+
+  it("sends API key as X-Subscription-Token header, not as a URL query param (llm-context mode)", async () => {
+    const apiKey = "BSA-test-key-xyz456";
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => ({ grounding: { generic: [] } }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey,
+        brave: { apiKey, mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "brave auth regression llm-context" });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [callUrl, callInit] = mockFetch.mock.calls[0] as [unknown, RequestInit | undefined];
+    const requestUrl = new URL(String(callUrl));
+    const headers = callInit?.headers as Record<string, string> | undefined;
+
+    // API key must be sent as a request header
+    expect(headers?.["X-Subscription-Token"]).toBe(apiKey);
+    // API key must NOT appear as a URL query parameter
+    expect(requestUrl.searchParams.has("apikey")).toBe(false);
+    expect(requestUrl.searchParams.has("key")).toBe(false);
+  });
 });
