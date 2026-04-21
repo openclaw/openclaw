@@ -15,14 +15,14 @@ function isLoopbackIpv4Literal(host: string): boolean {
   return Number(octets[0]) === 127;
 }
 
-function isLoopbackHost(host: string): boolean {
-  return (
-    host === "localhost" ||
-    host === "::1" ||
-    host === "[::1]" ||
-    host === "127.0.0.1" ||
-    isLoopbackIpv4Literal(host)
-  );
+function canonicalTrustedLoopbackHost(host: string): string | null {
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
+    return "loopback-default";
+  }
+  if (isLoopbackIpv4Literal(host)) {
+    return `ipv4:${host}`;
+  }
+  return null;
 }
 
 export function resolveLoopbackGatewayBootstrapToken(params: {
@@ -44,7 +44,9 @@ export function resolveLoopbackGatewayBootstrapToken(params: {
     const gateway = new URL(params.gatewayUrl, page);
     const pageHost = page.hostname.trim().toLowerCase();
     const gatewayHost = gateway.hostname.trim().toLowerCase();
-    if (!isLoopbackHost(pageHost) || !isLoopbackHost(gatewayHost)) {
+    const pageLoopbackHost = canonicalTrustedLoopbackHost(pageHost);
+    const gatewayLoopbackHost = canonicalTrustedLoopbackHost(gatewayHost);
+    if (!pageLoopbackHost || !gatewayLoopbackHost || pageLoopbackHost !== gatewayLoopbackHost) {
       return undefined;
     }
     const pagePort =

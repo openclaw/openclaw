@@ -17,11 +17,31 @@ describe("resolveLoopbackGatewayBootstrapToken", () => {
     ).toBe("bootstrap-token");
   });
 
+  it("allows localhost and 127.0.0.1 as the same trusted loopback host", () => {
+    expect(
+      resolveLoopbackGatewayBootstrapToken({
+        pageUrl: "http://localhost:18789/",
+        gatewayUrl: "ws://127.0.0.1:18789",
+        bootstrapGatewayToken: "bootstrap-token",
+      }),
+    ).toBe("bootstrap-token");
+  });
+
   it("does not return the bootstrap token for a different loopback gateway port", () => {
     expect(
       resolveLoopbackGatewayBootstrapToken({
         pageUrl: "http://127.0.0.1:18789/",
         gatewayUrl: "ws://127.0.0.1:28789",
+        bootstrapGatewayToken: "bootstrap-token",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not return the bootstrap token for a different loopback host on the same port", () => {
+    expect(
+      resolveLoopbackGatewayBootstrapToken({
+        pageUrl: "http://127.0.0.1:18789/",
+        gatewayUrl: "ws://127.0.0.2:18789",
         bootstrapGatewayToken: "bootstrap-token",
       }),
     ).toBeUndefined();
