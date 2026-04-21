@@ -31,7 +31,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     result,
     error: null,
     activeMinutes: "",
-    limit: "120",
+    limit: 120,
     includeGlobal: false,
     includeUnknown: false,
     basePath: "",

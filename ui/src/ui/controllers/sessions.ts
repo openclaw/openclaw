@@ -19,7 +19,7 @@ export type SessionsState = {
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
   sessionsFilterActive: string;
-  sessionsFilterLimit: string;
+  sessionsFilterLimit: number;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsExpandedCheckpointKey: string | null;
@@ -156,7 +156,7 @@ export async function loadSessions(
     const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
     const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
-    const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const limit = overrides?.limit ?? state.sessionsFilterLimit;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
