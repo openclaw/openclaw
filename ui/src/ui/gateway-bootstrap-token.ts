@@ -1,3 +1,30 @@
+function isLoopbackIpv4Literal(host: string): boolean {
+  const octets = host.split(".");
+  if (octets.length !== 4) {
+    return false;
+  }
+  for (const octet of octets) {
+    if (!/^\d+$/.test(octet)) {
+      return false;
+    }
+    const value = Number(octet);
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      return false;
+    }
+  }
+  return Number(octets[0]) === 127;
+}
+
+function isLoopbackHost(host: string): boolean {
+  return (
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host === "127.0.0.1" ||
+    isLoopbackIpv4Literal(host)
+  );
+}
+
 export function resolveLoopbackGatewayBootstrapToken(params: {
   gatewayUrl: string;
   bootstrapGatewayToken: string | null;
@@ -17,12 +44,6 @@ export function resolveLoopbackGatewayBootstrapToken(params: {
     const gateway = new URL(params.gatewayUrl, page);
     const pageHost = page.hostname.trim().toLowerCase();
     const gatewayHost = gateway.hostname.trim().toLowerCase();
-    const isLoopbackHost = (host: string) =>
-      host === "localhost" ||
-      host === "::1" ||
-      host === "[::1]" ||
-      host === "127.0.0.1" ||
-      host.startsWith("127.");
     if (!isLoopbackHost(pageHost) || !isLoopbackHost(gatewayHost)) {
       return undefined;
     }
