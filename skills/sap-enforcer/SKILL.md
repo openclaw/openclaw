@@ -23,6 +23,8 @@ metadata:
 
 # SAP Enforcer
 
+> **Community skill.** `openclaw-sap-gate` is authored by [@rudi193-cmd](https://github.com/rudi193-cmd) and is not an official OpenClaw package. Review the source at [rudi193-cmd/openclaw-sap-gate](https://github.com/rudi193-cmd/openclaw-sap-gate) before installing.
+
 Enforce [SAP/1.0](https://github.com/rudi193-cmd/sap-rfc) authorization on every MCP tool call. No signed SAFE manifest = no execution.
 
 ## Install
@@ -31,14 +33,26 @@ Enforce [SAP/1.0](https://github.com/rudi193-cmd/sap-rfc) authorization on every
 pip install openclaw-sap-gate
 ```
 
+## Required Setup — Pin Your GPG Key
+
+**You must set `SAP_PGP_FINGERPRINT` before the gate provides meaningful security.** Without it, any valid GPG signature passes regardless of who signed it.
+
+```bash
+# Get your primary key fingerprint
+gpg --list-keys --fingerprint | grep -A1 pub | grep -v pub | tr -d " "
+
+# Add to your shell profile
+export SAP_PGP_FINGERPRINT=<your-40-char-fingerprint>
+```
+
+The gate rejects signatures from any key that does not match this fingerprint. Without it the SAFE folder still blocks unsigned calls, but does not verify key ownership.
+
 ## How It Works
 
-Before dispatching any MCP tool call, the gate checks four conditions:
-
 1. `~/.sap/Applications/<app_id>/` folder exists
-2. `safe-app-manifest.json` is present and readable
-3. `safe-app-manifest.json.sig` is present
-4. `gpg --verify` confirms the signature matches the pinned key
+2. `safe-app-manifest.json` present and readable
+3. `safe-app-manifest.json.sig` present
+4. `gpg --verify` confirms signature matches `SAP_PGP_FINGERPRINT`
 
 Any failure → deny + log to `~/.sap/log/gaps.jsonl`. Revocation = delete the folder or the sig file.
 
@@ -47,62 +61,48 @@ Any failure → deny + log to `~/.sap/log/gaps.jsonl`. Revocation = delete the f
 ```python
 from openclaw_sap_gate import authorized, require_authorized
 
-# Check (returns bool)
 if not authorized("my-app"):
     return "denied"
 
-# Assert (raises PermissionError on failure)
-require_authorized("my-app")
+require_authorized("my-app")  # raises PermissionError on failure
 ```
 
 ## Workflow
 
-### On Authorization Pass
+### On Pass
+Proceed normally. Grant logged to `~/.sap/log/grants.jsonl`.
 
-Proceed with the tool call normally. The grant is logged to `~/.sap/log/grants.jsonl`.
-
-### On Authorization Denial
-
+### On Denial
 1. Do NOT execute the tool call
-2. Surface the failure:
-   > "Tool call denied: `<app_id>` is not authorized. Check that its SAFE folder exists and manifest is signed."
-3. The denial is logged to `~/.sap/log/gaps.jsonl`
+2. Surface: > "Tool call denied: `<app_id>` not authorized."
+3. Logged to `~/.sap/log/gaps.jsonl`
 4. Do not retry without explicit user instruction
 
 ## Registering a New App
 
 ```bash
-# 1. Scaffold SAFE folder + manifest template
 sap-gate init <app_id>
-
-# 2. Edit the manifest
 $EDITOR ~/.sap/Applications/<app_id>/safe-app-manifest.json
-
-# 3. Sign with your GPG key
 gpg --detach-sign ~/.sap/Applications/<app_id>/safe-app-manifest.json
-mv ~/.sap/Applications/<app_id>/safe-app-manifest.json.gpg    ~/.sap/Applications/<app_id>/safe-app-manifest.json.sig
-
-# 4. Verify
+mv ~/.sap/Applications/<app_id>/safe-app-manifest.json.gpg \
+   ~/.sap/Applications/<app_id>/safe-app-manifest.json.sig
 sap-gate verify <app_id>
 ```
 
-## Revoking Authorization
+## Revoking
 
 ```bash
-# Remove signature only (preserves manifest for re-authorization)
-rm ~/.sap/Applications/<app_id>/safe-app-manifest.json.sig
-
-# Revoke completely
-rm -rf ~/.sap/Applications/<app_id>/
+rm ~/.sap/Applications/<app_id>/safe-app-manifest.json.sig  # sig only
+rm -rf ~/.sap/Applications/<app_id>/                        # full revoke
 ```
 
 ## Configuration
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `SAP_SAFE_ROOT` | `~/.sap/Applications` | Root directory for SAFE folders |
-| `SAP_PGP_FINGERPRINT` | *(empty — any valid sig passes)* | Pin a specific GPG key fingerprint |
-| `SAP_LOG_DIR` | `~/.sap/log` | Directory for gaps.jsonl and grants.jsonl |
+| `SAP_SAFE_ROOT` | `~/.sap/Applications` | Root for SAFE folders |
+| `SAP_PGP_FINGERPRINT` | **required — set this** | Your GPG primary key fingerprint |
+| `SAP_LOG_DIR` | `~/.sap/log` | Log directory |
 
 ## Protocol Spec
 
