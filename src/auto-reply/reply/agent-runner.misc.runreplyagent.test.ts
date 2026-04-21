@@ -403,7 +403,7 @@ describe("runReplyAgent auto-fallback recovery", () => {
       sessionKey,
       storePath,
       defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.4",
+      defaultModel: "gpt-5.4",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -556,7 +556,7 @@ describe("runReplyAgent auto-fallback recovery", () => {
       sessionKey,
       storePath,
       defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.4",
+      defaultModel: "gpt-5.4",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -572,6 +572,84 @@ describe("runReplyAgent auto-fallback recovery", () => {
     expect(stored[sessionKey].modelOverrideSource).toBeUndefined();
     expect(stored[sessionKey].modelProvider).toBe("openai");
     expect(stored[sessionKey].model).toBe("gpt-5.4");
+  });
+
+  it("clears auto fallback overrides when the default model id contains slashes (router-style)", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-recover-router-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const routerModel = "mistralai/mistral-7b-instruct";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "auto",
+      fallbackNoticeSelectedModel: `openrouter/${routerModel}`,
+      fallbackNoticeActiveModel: "anthropic/claude-opus-4-6",
+      fallbackNoticeReason: "rate_limit",
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "openrouter",
+          model: routerModel,
+          usage: { input: 100, output: 20, total: 120 },
+        },
+      },
+    });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: `openrouter/${routerModel}` },
+        },
+      },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultProvider: "openrouter",
+      defaultModel: routerModel,
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].providerOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverride).toBeUndefined();
+    expect(stored[sessionKey].modelOverrideSource).toBeUndefined();
+    expect(stored[sessionKey].modelProvider).toBe("openrouter");
+    expect(stored[sessionKey].model).toBe(routerModel);
+    expect(stored[sessionKey].fallbackNoticeSelectedModel).toBeUndefined();
+    expect(stored[sessionKey].fallbackNoticeActiveModel).toBeUndefined();
+    expect(stored[sessionKey].fallbackNoticeReason).toBeUndefined();
   });
 });
 

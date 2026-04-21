@@ -3,11 +3,7 @@ import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
-import {
-  isCliProvider,
-  parseModelRef,
-  resolveDefaultModelForAgent,
-} from "../../agents/model-selection.js";
+import { isCliProvider, resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import {
@@ -1323,12 +1319,13 @@ export async function runReplyAgent(params: {
       agentId: followupRun.run.agentId,
     });
     const effectiveDefaultProvider = defaultProvider ?? configuredDefaultModel.provider;
-    const recoveredDefaultModel = defaultModel.includes("/")
-      ? (parseModelRef(defaultModel, effectiveDefaultProvider) ?? configuredDefaultModel)
-      : {
-          provider: effectiveDefaultProvider,
-          model: defaultModel,
-        };
+    // `defaultModel` is the unqualified `ModelRef.model` resolved by the caller (`resolveDefaultModel`).
+    // It can legitimately contain slashes for router-style ids (e.g. OpenRouter's `mistralai/mistral-7b`,
+    // Fireworks' `accounts/fireworks/models/...`), so we must not re-split on `/` to infer a provider.
+    const recoveredDefaultModel = {
+      provider: effectiveDefaultProvider,
+      model: defaultModel,
+    };
     const recoverySessionEntry =
       activeSessionEntry ??
       (sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined);
