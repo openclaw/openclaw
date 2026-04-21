@@ -2,15 +2,6 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Changes
-
-### Fixes
-
-- Agents/Anthropic: honor explicit `cacheRetention: "long"` for custom `anthropic-messages` endpoints by applying the 1-hour ephemeral cache TTL independently of the Anthropic/Vertex hostname allowlist. Implicit and env-driven long retention still require an allowlisted host. (#67800) Thanks @MonkeyLeeT.
-- fix(agents): honor explicit long Anthropic cache TTL on custom hosts (#67800). Thanks @MonkeyLeeT
-
 ## 2026.4.20
 
 ### Changes
@@ -115,6 +106,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/device pairing: explain scope and role approval upgrades during reconnects, and show requested versus approved access in the Control UI and `openclaw devices` so broader reconnects no longer look like lost pairings. (#69221) Thanks @obviyus.
 - Gateway/Control UI: surface pending scope, role, and device-metadata pairing approvals in auth errors and Control UI hints so broader reconnects no longer look like random auth breakage. (#69226) Thanks @obviyus.
 - Telegram/media: parse lowercase media directives in block replies and preserve outbound attachment filenames, so generated files send once with their original names. (#69641) Thanks @obviyus.
+- Agents/Anthropic: honor explicit `cacheRetention: "long"` for custom `anthropic-messages` endpoints by applying the 1-hour ephemeral cache TTL independently of the Anthropic/Vertex hostname allowlist. Implicit and env-driven long retention still require an allowlisted host. (#67800) Thanks @MonkeyLeeT.
 
 ## 2026.4.19-beta.2
 
