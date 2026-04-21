@@ -215,6 +215,221 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
   });
 
+  it("preserves live approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const host = createHost();
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    const chatHost = host as typeof host & {
+      chatRunId: string | null;
+      chatQueue: Array<{
+        id: string;
+        text: string;
+        createdAt: number;
+        pendingRunId?: string;
+      }>;
+    };
+    chatHost.chatRunId = "run-1";
+    chatHost.chatQueue = [
+      {
+        id: "pending",
+        text: "/steer tighten the plan",
+        createdAt: 1,
+        pendingRunId: "run-1",
+      },
+      {
+        id: "queued",
+        text: "follow up",
+        createdAt: 2,
+      },
+    ];
+    host.execApprovalQueue = [
+      {
+        id: "approval-1",
+        kind: "exec",
+        request: { command: "rm -rf /tmp/demo" },
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+      },
+    ];
+
+    client.emitGap(20, 24);
+
+    expect(gatewayClientInstances).toHaveLength(2);
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
+    expect(chatHost.chatQueue).toHaveLength(1);
+    expect(chatHost.chatQueue[0]?.text).toBe("follow up");
+
+    const reconnectClient = gatewayClientInstances[1];
+    expect(reconnectClient).toBeDefined();
+
+    reconnectClient.emitHello();
+
+    expect(reconnectClient.request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "follow up",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(chatHost.chatQueue).toHaveLength(0);
+  });
+
+  it("clears stale run-scoped queue items and resumes queued work after a normal reconnect hello", async () => {
+    const host = createHost();
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    const chatHost = host as typeof host & {
+      chatRunId: string | null;
+      chatQueue: Array<{
+        id: string;
+        text: string;
+        createdAt: number;
+        pendingRunId?: string;
+      }>;
+    };
+    chatHost.chatRunId = "run-1";
+    chatHost.chatQueue = [
+      {
+        id: "pending",
+        text: "/steer tighten the plan",
+        createdAt: 1,
+        pendingRunId: "run-1",
+      },
+      {
+        id: "queued",
+        text: "follow up",
+        createdAt: 2,
+      },
+    ];
+
+    client.emitClose({ code: 1006 });
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "follow up",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+        attachments: undefined,
+      });
+      expect(chatHost.chatQueue).toHaveLength(0);
+      expect(chatHost.chatRunId).toBeNull();
+    });
+  });
+
+  it("rehydrates pending plugin approvals after a normal reconnect hello", async () => {
+    const host = createHost();
+    host.execApprovalQueue = [
+      {
+        id: "plugin:approval-stale-local",
+        kind: "plugin",
+        request: { command: "echo stale" },
+        createdAtMs: 1,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    ];
+
+    connectGateway(host);
+    const firstClient = gatewayClientInstances[0];
+    expect(firstClient).toBeDefined();
+
+    connectGateway(host);
+    const reconnectClient = gatewayClientInstances[1];
+    expect(reconnectClient).toBeDefined();
+    expect(host.execApprovalQueue).toEqual([]);
+
+    reconnectClient.request.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [];
+      }
+      if (method === "plugin.approval.list") {
+        return [
+          {
+            id: "plugin:approval-old",
+            request: { title: "Old", description: "Desc old" },
+            createdAtMs: 10,
+            expiresAtMs: Date.now() + 90_000,
+          },
+          {
+            id: "plugin:approval-new",
+            request: { title: "New", description: "Desc new" },
+            createdAtMs: 20,
+            expiresAtMs: Date.now() + 120_000,
+          },
+        ];
+      }
+      return {};
+    });
+
+    reconnectClient.emitHello();
+
+    await vi.waitFor(() => {
+      expect(reconnectClient.request).toHaveBeenCalledWith("plugin.approval.list", {});
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual([
+        "plugin:approval-new",
+        "plugin:approval-old",
+      ]);
+    });
+  });
+
+  it("rehydrates pending exec approvals after a normal reconnect hello", async () => {
+    const host = createHost();
+    host.execApprovalQueue = [
+      {
+        id: "approval-stale-local",
+        kind: "exec",
+        request: { command: "echo stale" },
+        createdAtMs: 1,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    ];
+
+    connectGateway(host);
+    const firstClient = gatewayClientInstances[0];
+    expect(firstClient).toBeDefined();
+
+    connectGateway(host);
+    const reconnectClient = gatewayClientInstances[1];
+    expect(reconnectClient).toBeDefined();
+    expect(host.execApprovalQueue).toEqual([]);
+
+    reconnectClient.request.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [
+          {
+            id: "approval-old",
+            request: { command: "echo old" },
+            createdAtMs: 10,
+            expiresAtMs: Date.now() + 90_000,
+          },
+          {
+            id: "approval-new",
+            request: { command: "echo new" },
+            createdAtMs: 20,
+            expiresAtMs: Date.now() + 120_000,
+          },
+        ];
+      }
+      return [];
+    });
+
+    reconnectClient.emitHello();
+
+    await vi.waitFor(() => {
+      expect(reconnectClient.request).toHaveBeenCalledWith("exec.approval.list", {});
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual([
+        "approval-new",
+        "approval-old",
+      ]);
+    });
+  });
   it("ignores stale client onEvent callbacks after reconnect", () => {
     const host = createHost();
 

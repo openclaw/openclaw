@@ -286,6 +286,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (host.client !== client) {
         return;
       }
+      const interruptedRunId = host.chatRunId;
       shutdownHost.pendingShutdownMessage = null;
       host.connected = true;
       host.lastError = null;
@@ -299,9 +300,16 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-      if (shutdownHost.resumeChatQueueAfterReconnect) {
+      if (interruptedRunId) {
+        clearPendingQueueItemsForRun(
+          host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
+          interruptedRunId,
+        );
+      }
+      if (shutdownHost.resumeChatQueueAfterReconnect || interruptedRunId) {
         // The interrupted run will never emit its terminal event now that the
-        // old client is gone, so resume any deferred commands after hello.
+        // old client is gone, so resume any deferred commands after hello for
+        // both seq-gap reconnects and ordinary socket reconnects.
         shutdownHost.resumeChatQueueAfterReconnect = false;
         void flushChatQueueForEvent(
           host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
