@@ -20,6 +20,7 @@ import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-r
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   runTurn: vi.fn(),
+  initializeSession: vi.fn(),
   getObservabilitySnapshot: vi.fn(() => ({
     turns: { queueDepth: 0 },
     runtimeCache: { activeSessions: 0 },
@@ -91,6 +92,10 @@ const transcriptMocks = vi.hoisted(() => ({
 const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
+}));
+
+const agentConfigMocks = vi.hoisted(() => ({
+  resolveAgentConfig: vi.fn<(cfg: OpenClawConfig, agentId: string) => unknown>(() => undefined),
 }));
 
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
@@ -179,6 +184,11 @@ vi.mock("../../logging/diagnostic.js", () => ({
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
+}));
+
+vi.mock("../../agents/agent-scope-config.js", () => ({
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
+    agentConfigMocks.resolveAgentConfig(cfg, agentId),
 }));
 
 const sessionKey = "agent:codex-acp:session-1";
@@ -358,6 +368,7 @@ describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
+    managerMocks.initializeSession.mockReset();
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
         await onEvent?.({ type: "done" });
@@ -390,6 +401,8 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
+    agentConfigMocks.resolveAgentConfig.mockReset();
+    agentConfigMocks.resolveAgentConfig.mockReturnValue(undefined);
     globalThis.fetch = originalFetch;
   });
 
@@ -1512,5 +1525,164 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).not.toHaveBeenCalled();
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+  });
+
+  describe("lazy ACP session initialization", () => {
+    it("initializes ACP session when kind is 'none' and agent has runtime.type: 'acp'", async () => {
+      // Setup: acpResolution.kind === "none"
+      managerMocks.resolveSession.mockReturnValueOnce({ kind: "none" });
+
+      // Setup: agent config has runtime.type: "acp"
+      agentConfigMocks.resolveAgentConfig.mockReturnValueOnce({
+        runtime: {
+          type: "acp",
+          acp: {
+            mode: "persistent",
+          },
+        },
+      });
+
+      // Setup: policies allow
+      policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(null);
+      policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
+
+      // Setup: init succeeds, re-resolve returns ready
+      managerMocks.initializeSession.mockResolvedValueOnce(undefined);
+      managerMocks.resolveSession.mockReturnValueOnce({
+        kind: "ready",
+        sessionKey,
+        meta: createAcpSessionMeta(),
+      });
+
+      // Mock turn execution with visible text
+      mockVisibleTextTurn("initialized");
+
+      const result = await runDispatch({ bodyForAgent: "test" });
+
+      // Verify init was called
+      expect(managerMocks.initializeSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: expect.stringContaining("session"),
+        }),
+      );
+
+      // Verify turn was executed (not skipped)
+      expect(managerMocks.runTurn).toHaveBeenCalled();
+      expect(result).not.toBeNull();
+    });
+
+    it("skips ACP when kind is 'none' and agent doesn't have runtime.type: 'acp'", async () => {
+      // When resolveSession returns "none" but agent is not ACP-configured,
+      // the function should return null (fallback to embedded)
+      managerMocks.resolveSession.mockReturnValueOnce({ kind: "none" });
+
+      const result = await runDispatch({ bodyForAgent: "test" });
+
+      // Should not attempt init or turn
+      expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+      expect(result).toBeNull();
+    });
+
+    it("respects dispatch policy during lazy ACP init", async () => {
+      managerMocks.resolveSession.mockReturnValueOnce({ kind: "none" });
+
+      // Setup: agent config has runtime.type: "acp"
+      agentConfigMocks.resolveAgentConfig.mockReturnValueOnce({
+        runtime: {
+          type: "acp",
+          acp: { mode: "persistent" },
+        },
+      });
+
+      // Dispatch policy denies
+      policyMocks.resolveAcpDispatchPolicyError.mockReturnValueOnce(
+        new AcpRuntimeError("ACP_DISPATCH_DISABLED", "Dispatch policy blocks ACP"),
+      );
+
+      const result = await runDispatch({ bodyForAgent: "test" });
+
+      expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+      expect(result).toBeNull();
+    });
+
+    it("respects agent policy during lazy ACP init", async () => {
+      managerMocks.resolveSession.mockReturnValueOnce({ kind: "none" });
+
+      // Setup: agent config has runtime.type: "acp"
+      agentConfigMocks.resolveAgentConfig.mockReturnValueOnce({
+        runtime: {
+          type: "acp",
+          acp: { mode: "persistent" },
+        },
+      });
+
+      // First policy check passes
+      policyMocks.resolveAcpDispatchPolicyError.mockReturnValueOnce(null);
+      // Second policy check fails
+      policyMocks.resolveAcpAgentPolicyError.mockReturnValueOnce(
+        new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Agent policy blocks access"),
+      );
+
+      const result = await runDispatch({ bodyForAgent: "test" });
+
+      expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+      expect(result).toBeNull();
+    });
+
+    it("falls back to non-ACP path when lazy ACP init fails", async () => {
+      managerMocks.resolveSession.mockReturnValueOnce({ kind: "none" });
+
+      // Setup: agent config has runtime.type: "acp"
+      agentConfigMocks.resolveAgentConfig.mockReturnValueOnce({
+        runtime: {
+          type: "acp",
+          acp: { mode: "persistent" },
+        },
+      });
+
+      // Policies allow
+      policyMocks.resolveAcpDispatchPolicyError.mockReturnValueOnce(null);
+      policyMocks.resolveAcpAgentPolicyError.mockReturnValueOnce(null);
+
+      // Init fails
+      managerMocks.initializeSession.mockRejectedValueOnce(new Error("ACP backend unavailable"));
+
+      const result = await runDispatch({ bodyForAgent: "test" });
+
+      expect(result).toBeNull();
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    });
+
+    it("re-resolves ACP session after successful lazy init", async () => {
+      // First call: kind === "none"
+      managerMocks.resolveSession
+        .mockReturnValueOnce({ kind: "none" })
+        // Second call (after init): kind === "ready"
+        .mockReturnValueOnce({
+          kind: "ready",
+          sessionKey,
+          meta: createAcpSessionMeta(),
+        });
+
+      // Setup: agent config has runtime.type: "acp"
+      agentConfigMocks.resolveAgentConfig.mockReturnValueOnce({
+        runtime: {
+          type: "acp",
+          acp: { mode: "persistent" },
+        },
+      });
+
+      policyMocks.resolveAcpDispatchPolicyError.mockReturnValueOnce(null);
+      policyMocks.resolveAcpAgentPolicyError.mockReturnValueOnce(null);
+
+      managerMocks.initializeSession.mockResolvedValueOnce(undefined);
+      mockVisibleTextTurn();
+
+      await runDispatch({ bodyForAgent: "test" });
+
+      // Verify resolveSession called twice: once for check, once for re-resolve
+      expect(managerMocks.resolveSession).toHaveBeenCalledTimes(2);
+    });
   });
 });

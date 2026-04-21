@@ -1,3 +1,4 @@
+import type { AcpSessionResolution } from "../acp/control-plane/manager.types.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -17,8 +18,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -32,6 +32,7 @@ import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
+  resolveAgentConfig,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
@@ -306,7 +307,34 @@ async function prepareAgentCommandExecution(
       );
     }
   }
-  const agentCfg = cfg.agents?.defaults;
+  // Resolve sessionAgentId and sessionResolution early for agent config selection
+  const sessionResolution = resolveSession({
+    cfg,
+    to: opts.to,
+    sessionId: opts.sessionId,
+    sessionKey: opts.sessionKey,
+    agentId: agentIdOverride,
+  });
+
+  const {
+    sessionId,
+    sessionKey,
+    sessionEntry: sessionEntryRaw,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+  } = sessionResolution;
+  const sessionAgentId =
+    agentIdOverride ??
+    resolveSessionAgentId({
+      sessionKey: sessionKey ?? opts.sessionKey?.trim(),
+      config: cfg,
+    });
+
+  const resolvedAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const agentCfg = resolvedAgentCfg ?? cfg.agents?.defaults;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -350,30 +378,6 @@ async function prepareAgentCommandExecution(
     overrideSeconds: timeoutSecondsRaw,
   });
 
-  const sessionResolution = resolveSession({
-    cfg,
-    to: opts.to,
-    sessionId: opts.sessionId,
-    sessionKey: opts.sessionKey,
-    agentId: agentIdOverride,
-  });
-
-  const {
-    sessionId,
-    sessionKey,
-    sessionEntry: sessionEntryRaw,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-  } = sessionResolution;
-  const sessionAgentId =
-    agentIdOverride ??
-    resolveSessionAgentId({
-      sessionKey: sessionKey ?? opts.sessionKey?.trim(),
-      config: cfg,
-    });
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId: sessionAgentId,
@@ -392,11 +396,11 @@ async function prepareAgentCommandExecution(
   const runId = opts.runId?.trim() || sessionId;
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
-    ? acpManager.resolveSession({
-        cfg,
-        sessionKey,
-      })
+  // Resolve existing ACP session metadata only; lazy initialization is deferred
+  // to agentCommandInternal so it runs after send-policy checks, ensuring that
+  // a policy denial never triggers ACP metadata writes or external runtime startup.
+  const acpResolution: AcpSessionResolution | null = sessionKey
+    ? acpManager.resolveSession({ cfg, sessionKey })
     : null;
   const body =
     !isRawModelRun && acpResolution?.kind === "ready"
@@ -431,6 +435,7 @@ async function prepareAgentCommandExecution(
     runId,
     acpManager,
     acpResolution,
+    resolvedAgentCfg,
   };
 }
 
@@ -466,8 +471,9 @@ async function agentCommandInternal(
     agentDir,
     runId,
     acpManager,
-    acpResolution,
+    resolvedAgentCfg,
   } = prepared;
+  let acpResolution = prepared.acpResolution;
   let sessionEntry = prepared.sessionEntry;
 
   try {
@@ -481,6 +487,42 @@ async function agentCommandInternal(
       });
       if (sendPolicy === "deny") {
         throw new Error("send blocked by session policy");
+      }
+    }
+
+    // Lazily initialize ACP session after send-policy passes, so a policy
+    // denial never triggers ACP metadata writes or external runtime startup.
+    if (acpResolution?.kind === "none" && resolvedAgentCfg?.runtime?.type === "acp" && sessionKey) {
+      const acpConfig = resolvedAgentCfg.runtime.acp;
+      const acpAgent = normalizeAgentId(
+        normalizeOptionalString(acpConfig?.agent) ?? sessionAgentId,
+      );
+      // Check dispatch and agent policy before writing any ACP metadata or starting a runtime.
+      const { resolveAcpDispatchPolicyError, resolveAcpAgentPolicyError } =
+        await loadAcpPolicyRuntime();
+      const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
+      const agentPolicyError = !dispatchPolicyError
+        ? resolveAcpAgentPolicyError(cfg, acpAgent)
+        : null;
+      if (!dispatchPolicyError && !agentPolicyError) {
+        try {
+          await acpManager.initializeSession({
+            cfg,
+            sessionKey,
+            agent: acpAgent,
+            // Default to "persistent" so TUI sessions carry context across turns.
+            mode: acpConfig?.mode ?? "persistent",
+            cwd: normalizeOptionalString(acpConfig?.cwd),
+            backendId:
+              normalizeOptionalString(acpConfig?.backend) ??
+              normalizeOptionalString(cfg.acp?.backend),
+          });
+          // Re-resolve after initialization so the ready meta is available for runTurn.
+          acpResolution = acpManager.resolveSession({ cfg, sessionKey });
+        } catch (error) {
+          // Fall back to embedded if ACP initialization fails.
+          log.warn(`ACP initialization failed for ${sessionKey}: ${String(error)}`);
+        }
       }
     }
 

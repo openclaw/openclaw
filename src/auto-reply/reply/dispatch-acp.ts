@@ -7,6 +7,12 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveAgentIdFromSessionKey,
+  resolveMainSessionKey,
+} from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -16,7 +22,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -76,6 +81,44 @@ type DispatchProcessedRecorder = (
     error?: string;
   },
 ) => void;
+
+function resolveConfigAwareAgentIdFromSessionKey(cfg: OpenClawConfig, sessionKey: string): string {
+  const configuredDefaultMainSessionKey = resolveMainSessionKey(cfg);
+  const configuredDefaultAgentId = resolveAgentIdFromSessionKey(configuredDefaultMainSessionKey);
+
+  const canonicalKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: configuredDefaultAgentId,
+    sessionKey,
+  });
+
+  return resolveAgentIdFromSessionKey(canonicalKey);
+}
+
+function resolveAgentAcpInitInput(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+): {
+  agentId: string;
+  acpAgentId?: string;
+  mode: "persistent" | "oneshot";
+  cwd?: string;
+  backendId?: string;
+} | null {
+  const agentId = resolveConfigAwareAgentIdFromSessionKey(cfg, sessionKey);
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  if (!agentConfig || agentConfig.runtime?.type !== "acp") {
+    return null;
+  }
+  const acpConfig = agentConfig.runtime.acp;
+  return {
+    agentId,
+    acpAgentId: normalizeOptionalString(acpConfig?.agent) ?? undefined,
+    mode: acpConfig?.mode ?? "persistent",
+    cwd: normalizeOptionalString(acpConfig?.cwd) ?? undefined,
+    backendId: normalizeOptionalString(acpConfig?.backend) ?? undefined,
+  };
+}
 
 function resolveFirstContextText(
   ctx: FinalizedMsgContext,
@@ -333,12 +376,56 @@ export async function tryDispatchAcpReply(params: {
 
   const { getAcpSessionManager } = await loadDispatchAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
-  const acpResolution = acpManager.resolveSession({
+  let acpResolution = acpManager.resolveSession({
     cfg: params.cfg,
     sessionKey,
   });
   if (acpResolution.kind === "none") {
-    return null;
+    // For agents with `runtime.type: "acp"` (e.g. TUI sessions), ACP metadata has not yet
+    // been written. Lazily initialize the ACP session now so the turn flows through the ACP
+    // execution path rather than falling back to the embedded reply path.
+    //
+    // Guard: skip init entirely for turns that would be short-circuited as empty below.
+    // Without this, first-time sessions are initialized (metadata written, runtime started)
+    // for mention-only / empty inbound events that produce no ACP work.
+    if (!resolveAcpPromptText(params.ctx) && !hasInboundMedia(params.ctx)) {
+      return null;
+    }
+    const acpInit = resolveAgentAcpInitInput(params.cfg, sessionKey);
+    if (!acpInit) {
+      return null;
+    }
+    // Check dispatch and agent policy before writing any ACP metadata or starting a runtime.
+    if (resolveAcpDispatchPolicyError(params.cfg)) {
+      return null;
+    }
+    const candidateAgent = acpInit.acpAgentId ?? acpInit.agentId;
+    if (resolveAcpAgentPolicyError(params.cfg, candidateAgent)) {
+      return null;
+    }
+    try {
+      await acpManager.initializeSession({
+        cfg: params.cfg,
+        sessionKey,
+        agent: candidateAgent,
+        mode: acpInit.mode,
+        cwd: acpInit.cwd,
+        backendId: acpInit.backendId,
+      });
+    } catch (initErr) {
+      logVerbose(
+        `dispatch-acp: lazy ACP init failed for ${sessionKey}: ${formatErrorMessage(initErr)}`,
+      );
+      return null;
+    }
+    // Re-resolve after initialization.
+    acpResolution = acpManager.resolveSession({
+      cfg: params.cfg,
+      sessionKey,
+    });
+    if (acpResolution.kind === "none") {
+      return null;
+    }
   }
   const canonicalSessionKey = acpResolution.sessionKey;
   const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
