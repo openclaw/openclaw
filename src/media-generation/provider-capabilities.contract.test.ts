@@ -7,6 +7,7 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
   "comfy",
   "fal",
   "google",
+  "heygen",
   "minimax",
   "openai",
   "qwen",

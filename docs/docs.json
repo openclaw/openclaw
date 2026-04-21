@@ -1272,6 +1272,7 @@
                   "providers/glm",
                   "providers/google",
                   "providers/groq",
+                  "providers/heygen",
                   "providers/huggingface",
                   "providers/inferrs",
                   "providers/kilocode",

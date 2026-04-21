@@ -15,6 +15,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
   fal: "fal/fal-ai/minimax/video-01-live",
   google: "google/veo-3.1-fast-generate-preview",
+  heygen: "heygen/video_agent_v3",
   minimax: "minimax/MiniMax-Hailuo-2.3",
   openai: "openai/sora-2",
   qwen: "qwen/wan2.6-t2v",

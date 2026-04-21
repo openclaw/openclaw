@@ -3,6 +3,7 @@ export const mediaExtensionTestRoots = [
   "extensions/deepgram",
   "extensions/elevenlabs",
   "extensions/fal",
+  "extensions/heygen",
   "extensions/image-generation-core",
   "extensions/runway",
   "extensions/talk-voice",

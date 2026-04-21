@@ -1,0 +1,43 @@
+{
+  "id": "heygen",
+  "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "heygen": ["HEYGEN_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "heygen",
+      "method": "api-key",
+      "choiceId": "heygen-api-key",
+      "choiceLabel": "HeyGen API key",
+      "groupId": "heygen",
+      "groupLabel": "HeyGen",
+      "groupHint": "API key",
+      "optionKey": "heygenApiKey",
+      "cliFlag": "--heygen-api-key",
+      "cliOption": "--heygen-api-key <key>",
+      "cliDescription": "HeyGen API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["heygen"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "defaultAvatarId": {
+        "type": "string",
+        "description": "Default HeyGen avatar id to use when a request omits avatar_id."
+      },
+      "defaultVoiceId": {
+        "type": "string",
+        "description": "Default HeyGen voice id to use when a request omits voice_id."
+      },
+      "defaultStyleId": {
+        "type": "string",
+        "description": "Default HeyGen style id to use when a request omits style_id."
+      }
+    }
+  }
+}

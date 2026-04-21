@@ -43,6 +43,7 @@ import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
+import heygenPlugin from "./heygen/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openaiPlugin from "./openai/index.js";
 import qwenPlugin from "./qwen/index.js";
@@ -74,11 +75,20 @@ const LIVE_VIDEO_TEST_TIMEOUT_MS =
 const LIVE_VIDEO_SMOKE_PROMPT =
   "A one-second low-motion video of a lobster walking across wet sand, no text.";
 
+type LiveRequestExtras = Pick<VideoGenerationRequest, "providerOptions">;
+
 type LiveProviderCase = {
   plugin: Parameters<typeof registerProviderPlugin>[0]["plugin"];
   pluginId: string;
   pluginName: string;
   providerId: string;
+  /**
+   * Optional hook for providers that need presenter/style inputs the generic
+   * live request shape does not supply. Return `"skip"` when the environment
+   * lacks the required defaults so the case skips cleanly instead of hitting
+   * a 4xx "insufficient parameters" hard failure.
+   */
+  resolveLiveRequestExtras?: () => LiveRequestExtras | "skip";
 };
 
 type BufferedGeneratedVideo = Required<Pick<GeneratedVideoAsset, "buffer" | "mimeType">> &
@@ -104,6 +114,25 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   { plugin: googlePlugin, pluginId: "google", pluginName: "Google Provider", providerId: "google" },
+  {
+    plugin: heygenPlugin,
+    pluginId: "heygen",
+    pluginName: "HeyGen Provider",
+    providerId: "heygen",
+    resolveLiveRequestExtras: () => {
+      const avatarId = process.env.HEYGEN_DEFAULT_AVATAR_ID?.trim();
+      const voiceId = process.env.HEYGEN_DEFAULT_VOICE_ID?.trim();
+      if (!avatarId || !voiceId) {
+        return "skip";
+      }
+      return {
+        providerOptions: {
+          avatar_id: avatarId,
+          voice_id: voiceId,
+        },
+      };
+    },
+  },
   {
     plugin: minimaxPlugin,
     pluginId: "minimax",
@@ -388,6 +417,14 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
   const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
   let generatedVideo: BufferedGeneratedVideo | null = null;
 
+  const resolvedRequestExtras = testCase.resolveLiveRequestExtras?.();
+  if (resolvedRequestExtras === "skip") {
+    skipped.push(`${testCase.providerId}: missing required live-lane env defaults`);
+    expectLiveVideoCasePassed(summaryParams);
+    return;
+  }
+  const requestExtras: LiveRequestExtras = resolvedRequestExtras ?? {};
+
   const generateAttempt = await runLiveVideoAttempt({
     authLabel,
     attempted,
@@ -407,6 +444,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
       timeoutMs: LIVE_VIDEO_OPERATION_TIMEOUT_MS,
       durationSeconds,
       ...buildLiveCapabilityOverrides({ caps: generateCaps, liveResolution, liveSize }),
+      ...requestExtras,
     },
     skipped,
   });
@@ -474,6 +512,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
         liveResolution,
         liveSize,
       }),
+      ...requestExtras,
     },
     skipped,
   });
@@ -530,6 +569,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
         liveResolution,
         liveSize: undefined,
       }),
+      ...requestExtras,
     },
     skipped,
   });

@@ -13,6 +13,7 @@ const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   postJsonRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   pollProviderOperationJsonMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
@@ -22,6 +23,22 @@ const providerHttpMocks = vi.hoisted(() => ({
     dispatcherPolicy: undefined,
   })),
 }));
+
+providerHttpMocks.fetchWithTimeoutGuardedMock.mockImplementation(
+  async (
+    url: string,
+    init: RequestInit | undefined,
+    timeoutMs: number | undefined,
+    fetchFn: typeof fetch,
+  ) => {
+    const response = await providerHttpMocks.fetchWithTimeoutMock(url, init, timeoutMs, fetchFn);
+    return {
+      response,
+      finalUrl: url,
+      release: async () => {},
+    };
+  },
+);
 
 providerHttpMocks.pollProviderOperationJsonMock.mockImplementation(
   async (params: PollProviderOperationJsonParams) => {
@@ -66,6 +83,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
     timeoutMs,
   }),
   fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
+  fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
   pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
@@ -83,6 +101,7 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.resolveApiKeyForProviderMock.mockClear();
     providerHttpMocks.postJsonRequestMock.mockReset();
     providerHttpMocks.fetchWithTimeoutMock.mockReset();
+    providerHttpMocks.fetchWithTimeoutGuardedMock.mockClear();
     providerHttpMocks.pollProviderOperationJsonMock.mockClear();
     providerHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
