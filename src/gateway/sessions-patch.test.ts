@@ -586,9 +586,14 @@ describe("PR-10 plan auto-mode patch routing", () => {
         },
       }),
     );
-    // Approve transitions mode → normal; the autoApprove flag must survive
-    // so the NEXT enter_plan_mode in the same session also auto-approves.
-    expect(entry.planMode?.mode).toBe("normal");
+    // PR #68939 follow-up (P2.4) — approve transitions mode →
+    // "executing" (was: "normal"). The autoApprove flag survives on
+    // the executing planMode object so the NEXT enter_plan_mode in
+    // the same session also auto-approves. Close-on-complete in
+    // plan-snapshot-persister fires sessions.patch { planMode:
+    // "normal" } which goes through the mode-toggle handler that
+    // preserves autoApprove via the carry-forward block.
+    expect(entry.planMode?.mode).toBe("executing");
     expect(entry.planMode?.autoApprove).toBe(true);
   });
 
@@ -622,12 +627,17 @@ describe("PR-10 plan auto-mode patch routing", () => {
         },
       }),
     );
-    expect(entry.planMode?.mode).toBe("normal");
+    // PR #68939 follow-up (P2.4) — same executing-not-normal contract
+    // as the prior test. Critical assertion preserved: nudgeJobIds is
+    // dropped from the executing entry (the design-phase nudge crons
+    // were cancelled by the cleanup block in sessions-patch.ts; the
+    // entry stripping prevents double-cancel on a later close path).
+    expect(entry.planMode?.mode).toBe("executing");
     expect(entry.planMode?.autoApprove).toBe(true);
     expect(entry.planMode?.nudgeJobIds).toBeUndefined();
   });
 
-  test("clears planMode entry on approve when autoApprove is unset", async () => {
+  test("approve without autoApprove keeps planMode as executing (was: deleted entry, P2.4)", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: {
         planMode: {
@@ -649,9 +659,15 @@ describe("PR-10 plan auto-mode patch routing", () => {
         },
       }),
     );
-    // No autoApprove flag → planMode is cleared entirely (matches the
-    // pre-PR-10 behavior).
-    expect(entry.planMode).toBeUndefined();
+    // PR #68939 follow-up (P2.4) — approve no longer deletes the
+    // planMode entry; it transitions to mode: "executing" preserving
+    // the cycle's title + lastPlanSteps + cycleId. Close-on-complete
+    // (when all steps mark completed/cancelled) is what eventually
+    // deletes the entry. Pre-P2.4 contract was "approve deletes entry"
+    // which conflated approval-resolution with execution-completion.
+    expect(entry.planMode?.mode).toBe("executing");
+    expect(entry.planMode?.approval).toBe("approved");
+    expect(entry.planMode?.approvalId).toBe("abc");
   });
 
   test("rejects answer action without an answer string", async () => {
@@ -959,13 +975,20 @@ describe("PR-10 plan auto-mode patch routing", () => {
         },
       });
       const webEntry = expectPatchOk(webResult);
-      // Approve transitions planMode → normal, clears the pending
-      // approvalId. Without autoApprove the entry is gone entirely.
-      expect(webEntry.planMode).toBeUndefined();
+      // PR #68939 follow-up (P2.4) — approve transitions planMode →
+      // "executing" (was: deleted). The approval is resolved
+      // (approval: "approved") but the planMode object lives on
+      // through execution. Pre-P2.4 expected `planMode === undefined`.
+      expect(webEntry.planMode?.mode).toBe("executing");
+      expect(webEntry.planMode?.approval).toBe("approved");
 
       // Now simulate Telegram's /plan accept arriving a few ms
-      // later against the mutated store. No planMode state → must
-      // error with PLAN_APPROVAL_EXPIRED (Bug B code).
+      // later against the mutated store. The planMode now exists with
+      // approval !== "pending", so the second approve trips the
+      // "requires a pending approval" guard at sessions-patch.ts:823
+      // → INVALID_REQUEST (was: PLAN_APPROVAL_EXPIRED when planMode
+      // was deleted). Either error code is "second approve correctly
+      // rejected" — the change is which guard catches it.
       const telegramResult = await runPatch({
         cfg: planModeEnabledCfg(),
         store,
@@ -978,7 +1001,7 @@ describe("PR-10 plan auto-mode patch routing", () => {
       if (telegramResult.ok) {
         throw new Error("expected failure on second approve");
       }
-      expect(telegramResult.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+      expect(telegramResult.error.code).toBe(ErrorCodes.INVALID_REQUEST);
     });
 
     test("approve (web) then reject (telegram) on same approvalId: reject also rejected (not double-applied)", async () => {
@@ -1005,7 +1028,12 @@ describe("PR-10 plan auto-mode patch routing", () => {
       if (secondResult.ok) {
         throw new Error("expected failure on reject-after-approve");
       }
-      expect(secondResult.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+      // PR #68939 follow-up (P2.4) — same INVALID_REQUEST code as the
+      // sibling test above; planMode now lives on as "executing"
+      // post-approve so the "requires a pending approval" guard catches
+      // the late reject (vs the pre-P2.4 PLAN_APPROVAL_EXPIRED that
+      // fired when planMode was deleted entirely).
+      expect(secondResult.error.code).toBe(ErrorCodes.INVALID_REQUEST);
     });
 
     test("two writes with different approvalIds against same pending approval: first matches, second stale-id rejected", async () => {

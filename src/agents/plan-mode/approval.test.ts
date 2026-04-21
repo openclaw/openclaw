@@ -12,17 +12,27 @@ const BASE_STATE: PlanModeSessionState = {
 };
 
 describe("resolvePlanApproval", () => {
-  it("approve transitions to normal mode with approved state", () => {
+  it("approve transitions to executing mode with approved state (P2.4)", () => {
+    // PR #68939 follow-up — approve no longer flips mode → "normal"
+    // (which conflated "no plan activity" with "plan approved + agent
+    // executing"). New 3-state union: approve → "executing" so the
+    // session retains plan context (title, steps, autoApprove) through
+    // the execution phase. Close-on-complete in plan-snapshot-persister
+    // is what eventually transitions executing → normal + deletes
+    // planMode.
     const result = resolvePlanApproval(BASE_STATE, "approve");
-    expect(result.mode).toBe("normal");
+    expect(result.mode).toBe("executing");
     expect(result.approval).toBe("approved");
     expect(result.confirmedAt).toBeGreaterThan(0);
     expect(result.feedback).toBeUndefined();
   });
 
-  it("edit transitions to normal mode (user edits count as approval)", () => {
+  it("edit transitions to executing mode (user edits count as approval, P2.4)", () => {
+    // Same mode: "executing" rationale as the approve case above; only
+    // the approval field differs ("edited" vs "approved") to drive the
+    // postApprovalPermissions.acceptEdits grant downstream.
     const result = resolvePlanApproval(BASE_STATE, "edit");
-    expect(result.mode).toBe("normal");
+    expect(result.mode).toBe("executing");
     expect(result.approval).toBe("edited");
     expect(result.confirmedAt).toBeGreaterThan(0);
   });

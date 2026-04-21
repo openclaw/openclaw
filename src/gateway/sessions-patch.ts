@@ -1037,17 +1037,32 @@ export async function applySessionsPatchToStore(params: {
         });
         clearResolvedPlanInteraction(next, rejectApprovalId);
       }
-      // Approve / edit transition the mode to "normal" — the approval
-      // resolution unlocks mutations. Clear the per-session planMode entry
-      // so subsequent reads see no active plan state (matches the
-      // sessions.patch { planMode: "normal" } semantics).
-      if (next.planMode.mode === "normal") {
+      // PR #68939 follow-up (P2.4) — approve/edit now transition to
+      // `mode: "executing"` (was: "normal"). Two distinct cleanup
+      // responsibilities, split into sequential blocks so each path
+      // handles only what it owns:
+      //   (1) Design-phase nudge cleanup fires on EITHER transition
+      //       (approve → executing, OR raw "normal" via /plan off /
+      //       close-on-complete). Design-phase nudges are scheduled
+      //       at enter_plan_mode and should NOT fire post-approval
+      //       under any path.
+      //   (2) planMode-object deletion (with autoApprove preservation)
+      //       fires ONLY on the genuine "close" path (`mode === "normal"`),
+      //       not on the approve transition. Approve keeps planMode
+      //       alive as `mode: "executing"` so UI chip + execution-phase
+      //       nudges + plan_mode_status introspection have accurate
+      //       state. Close-on-complete + /plan off + reject + timeout
+      //       continue to use the deletion path unchanged.
+      if (next.planMode.mode === "executing" || next.planMode.mode === "normal") {
+        // (1) Design-phase nudge cleanup — fires on BOTH transitions.
         // PR-12 Bug A1: clean up scheduled nudge crons on EVERY
-        // plan-mode close path (was previously only fired in the
-        // `raw === "normal"` branch above). Without this, every
-        // approve/reject/edit cycle leaks 3 wake-up crons that fire
-        // hours later as orphaned nudges interrupting unrelated work.
-        // Capture the ids BEFORE we rewrite/delete the entry.
+        // plan-mode resolution path (was previously only fired in the
+        // `raw === "normal"` branch above + the post-approve "normal"
+        // branch). Now widened to cover the new "executing" branch
+        // too — the design-phase nudges are obsolete the moment the
+        // plan is approved, regardless of whether mode is normal or
+        // executing post-transition. Capture the ids BEFORE we
+        // rewrite/delete the entry.
         const previousNudgeIds = next.planMode.nudgeJobIds;
         if (previousNudgeIds && previousNudgeIds.length > 0) {
           const ids = [...previousNudgeIds];
@@ -1059,7 +1074,17 @@ export async function applySessionsPatchToStore(params: {
               /* best-effort */
             }
           })();
+          // Also strip nudgeJobIds from the entry since the crons are
+          // now scheduled for cleanup (avoid double-cancel on a
+          // subsequent close path).
+          next.planMode = { ...next.planMode, nudgeJobIds: undefined };
         }
+      }
+      // (2) planMode-object delete / rebuild — fires ONLY on the
+      // genuine "close" path. The approve transition (mode →
+      // "executing") keeps planMode alive so it carries title +
+      // lastPlanSteps + cycleId + autoApprove through execution.
+      if (next.planMode.mode === "normal") {
         // PR-10 auto-mode: preserve `autoApprove` flag across the close
         // so the next enter_plan_mode keeps the toggle. Without this
         // the user would have to re-toggle every plan cycle.

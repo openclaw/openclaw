@@ -84,9 +84,27 @@ export function resolvePlanApproval(
     case "approve":
       // Approve clears feedback AND resets rejectionCount — the user is
       // moving forward, so cycle history is no longer relevant.
+      //
+      // PR #68939 follow-up (P2.4) — transitions to `mode: "executing"`
+      // (was: `mode: "normal"`). The plan was approved and the agent
+      // is now executing the steps; the session is no longer in plan
+      // design but it's also not "no plan activity at all". This
+      // unlocks:
+      //   - UI chip rendering accurately reflects "plan is active"
+      //   - execution-phase nudge crons (P2.9) can fire during stalls
+      //   - plan_mode_status introspection reports the precise state
+      //
+      // The close-on-complete detector in plan-snapshot-persister.ts
+      // continues to fire `sessions.patch { planMode: "normal" }` when
+      // all steps are completed/cancelled — that goes through the
+      // mode-toggle handler in sessions-patch.ts:1058+ which DOES
+      // delete planMode (preserving autoApprove for next cycle if
+      // set). Lifecycle: plan → executing → (close-on-complete) →
+      // normal + delete planMode. Mutation gate is unaffected
+      // (executing passes through like normal).
       return {
         ...current,
-        mode: "normal",
+        mode: "executing",
         approval: "approved",
         confirmedAt: now,
         updatedAt: now,
@@ -96,9 +114,13 @@ export function resolvePlanApproval(
 
     case "edit":
       // Edit counts as approval — same reset behavior as approve.
+      // Same mode: "executing" transition rationale as the approve
+      // case above. Distinguished only by `approval: "edited"` (vs
+      // "approved") for downstream signals like
+      // postApprovalPermissions.acceptEdits.
       return {
         ...current,
-        mode: "normal",
+        mode: "executing",
         approval: "edited",
         confirmedAt: now,
         updatedAt: now,
