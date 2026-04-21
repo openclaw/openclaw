@@ -1,3 +1,4 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
@@ -8,7 +9,6 @@ import {
   type SlackMediaResult,
   type SlackThreadStarter,
 } from "../media.js";
-import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
 export type SlackResolvedMessageContent = {
   rawBody: string;
