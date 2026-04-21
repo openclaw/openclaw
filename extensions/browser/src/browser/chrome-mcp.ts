@@ -44,7 +44,6 @@ const DEFAULT_CHROME_MCP_ARGS = [
 ];
 const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
 const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
-const CHROME_MCP_NAVIGATE_CALL_SAFETY_TIMEOUT_MS = 25_000;
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
@@ -350,11 +349,12 @@ async function callTool(
   } catch (err) {
     // Transport/connection error or safety-net timeout — tear down session so it reconnects.
     // Transport-identity check prevents clobbering a replacement session created concurrently.
+    // Only close the client here if the timeout callback hasn't already done so.
     const cur = sessions.get(cacheKey);
     if (cur?.transport === session.transport) {
       sessions.delete(cacheKey);
+      await session.client.close().catch(() => {});
     }
-    await session.client.close().catch(() => {});
     throw err;
   } finally {
     if (timeoutHandle !== undefined) {
@@ -507,7 +507,7 @@ export async function navigateChromeMcpPage(params: {
       url: params.url,
       timeout: resolvedTimeoutMs,
     },
-    CHROME_MCP_NAVIGATE_CALL_SAFETY_TIMEOUT_MS,
+    resolvedTimeoutMs + 5_000,
   );
   const page = await findPageById(
     params.profileName,
