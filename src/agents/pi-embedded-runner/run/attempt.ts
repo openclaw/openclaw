@@ -403,6 +403,17 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
+  tools: T[],
+  toolsAllow?: string[],
+): T[] {
+  if (!toolsAllow || toolsAllow.length === 0) {
+    return tools;
+  }
+  const allowSet = new Set(toolsAllow);
+  return tools.filter((tool) => allowSet.has(tool.name));
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -536,14 +547,7 @@ export async function runEmbeddedAttempt(
               abortSessionForYield?.();
             },
           });
-          if (params.toolsAllow && params.toolsAllow.length > 0) {
-            const allowSet = new Set(params.toolsAllow);
-            if (params.forceMessageTool) {
-              allowSet.add("message");
-            }
-            return allTools.filter((tool) => allowSet.has(tool.name));
-          }
-          return allTools;
+          return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
         })();
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
