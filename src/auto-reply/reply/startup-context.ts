@@ -105,7 +105,9 @@ function buildStartupMemoryDateStamps(params: {
     return localWindow;
   }
 
-  return [utcTodayStamp, ...localWindow];
+  return utcTodayStamp > localTodayStamp
+    ? [utcTodayStamp, ...localWindow]
+    : [...localWindow, utcTodayStamp];
 }
 
 function trimStartupMemoryContent(content: string, maxChars: number): string {
