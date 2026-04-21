@@ -178,4 +178,37 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe("existing-fast-reset-newline-soft");
   });
+
+  it("keeps the existing session for /reset: soft during fast bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-colon-soft-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "existing-fast-reset-colon-soft",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf8",
+    );
+
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "/reset: soft",
+        RawBody: "/reset: soft",
+        CommandBody: "/reset: soft",
+        SessionKey: sessionKey,
+      }),
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: home,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe("existing-fast-reset-colon-soft");
+  });
 });
