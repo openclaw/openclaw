@@ -48,15 +48,21 @@ type JsonLikeRecord = Record<string, unknown>;
 export type SanitizedLogRecord = Record<string, unknown>;
 
 /**
- * Enum constants for the masking-strength decision in sanitizeFieldValueForSink.
- * Using named reasons instead of a plain boolean makes the three-way distinction
- * (credential key, inherited from parent, message/arg key) explicit at call sites.
+ * Encodes how strongly a field's value should be masked and how that strength
+ * propagates to descendant fields during recursive sanitization.
+ *
+ *   None  — no inherited context; masking decisions are made per-field.
+ *   Soft  — inherited from a message/arg ancestor; charset gate applies (soft mask).
+ *   Force — inherited from a credential-key ancestor; unconditional force-mask.
+ *
+ * Using a three-value enum instead of `{ allowDirectMask, forceDoubleFallback }`
+ * boolean pairs prevents the two inheritance paths (message vs credential) from
+ * collapsing into the same state, which was the root cause of CR4.
  */
-const enum ForceDirectMaskReason {
+const enum MaskStrength {
   None = 0,
-  CredentialKey = 1,
-  InheritedFromParent = 2,
-  MessageOrArgKey = 3,
+  Soft = 1,
+  Force = 2,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -139,6 +145,9 @@ function shouldMaskDirectString(value: string): boolean {
  * @param resolved Pre-resolved redaction options (required — no default).
  * @param options  Optional context; set `allowDirectMask` when the string is
  *                 under a credential-named parent key.
+ *
+ * @returns The sanitized string, or a masked placeholder if the input looks like
+ *          a secret token and `allowDirectMask` is set.
  */
 export function sanitizeStringForSink(
   text: string,
@@ -159,23 +168,31 @@ export function sanitizeStringForSink(
   }
 }
 
-function resolveForceDirectMaskReason(
-  key: string,
-  inherited?: { allowDirectMask?: boolean },
-): ForceDirectMaskReason {
-  if (inherited?.allowDirectMask === true) {
-    return ForceDirectMaskReason.InheritedFromParent;
+/**
+ * Resolves the MaskStrength that applies to a field, taking into account both
+ * the field's own key name and any strength inherited from an ancestor.
+ *
+ * Priority order (highest to lowest):
+ *   1. inherited === Force  → Force (credential context propagates unconditionally)
+ *   2. isCredentialFieldName(key) → Force (credential key always escalates)
+ *   3. inherited === Soft   → Soft  (message context propagates, but never escalates)
+ *   4. shouldAllowDirectStringFallback(key) → Soft (message/arg key originates Soft)
+ *   5. default → None
+ */
+function resolveMaskStrength(key: string, inherited: MaskStrength): MaskStrength {
+  if (inherited === MaskStrength.Force) {
+    return MaskStrength.Force;
   }
   if (isCredentialFieldName(key)) {
-    return ForceDirectMaskReason.CredentialKey;
+    return MaskStrength.Force;
   }
-  // message/msg/"0" keys get allowDirectMask promotion so that
-  // toJSON objects under these keys propagate context into recursive calls.
-  // Unlike credential keys, this uses a soft charset gate — no forced masking.
+  if (inherited === MaskStrength.Soft) {
+    return MaskStrength.Soft;
+  }
   if (shouldAllowDirectStringFallback(key)) {
-    return ForceDirectMaskReason.MessageOrArgKey;
+    return MaskStrength.Soft;
   }
-  return ForceDirectMaskReason.None;
+  return MaskStrength.None;
 }
 
 function sanitizeFieldValueForSink(
@@ -184,12 +201,10 @@ function sanitizeFieldValueForSink(
   resolved: ResolvedRedactOptions,
   seen: WeakSet<object>,
   depth: number,
-  inherited?: { allowDirectMask?: boolean; forceDoubleFallback?: boolean },
+  inherited: MaskStrength = MaskStrength.None,
 ): unknown {
-  const reason = resolveForceDirectMaskReason(key, inherited);
-  const isCredentialContext =
-    reason === ForceDirectMaskReason.CredentialKey ||
-    reason === ForceDirectMaskReason.InheritedFromParent;
+  const strength = resolveMaskStrength(key, inherited);
+  const isCredentialContext = strength === MaskStrength.Force;
 
   if (typeof value === "string") {
     if (isCredentialContext) {
@@ -209,27 +224,16 @@ function sanitizeFieldValueForSink(
     }
     // For message/msg/arg-key and non-credential keys: use sanitizeStringForSink
     // which applies the shouldMaskDirectString charset gate as a soft fallback.
-    // `reason === MessageOrArgKey` is already true iff shouldAllowDirectStringFallback
-    // returned true, so no redundant call needed.
     return sanitizeStringForSink(value, resolved, {
-      allowDirectMask: reason === ForceDirectMaskReason.MessageOrArgKey,
+      allowDirectMask: strength === MaskStrength.Soft,
     });
   }
 
-  // For non-string values: propagate credential context with forceDoubleFallback so
-  // that deeply nested strings (e.g. toJSON results, array entries) also get the
-  // unconditional force-mask. Message/arg keys only propagate allowDirectMask
-  // without the force-mask, so the charset gate still applies at the leaf level.
-  if (isCredentialContext) {
-    return sanitizeValueForSink(value, resolved, seen, depth + 1, {
-      allowDirectMask: true,
-      forceDoubleFallback: true,
-    });
-  }
-  if (reason === ForceDirectMaskReason.MessageOrArgKey) {
-    return sanitizeValueForSink(value, resolved, seen, depth + 1, { allowDirectMask: true });
-  }
-  return sanitizeValueForSink(value, resolved, seen, depth + 1);
+  // For non-string values: propagate the resolved strength downward so that
+  // deeply nested strings (e.g. toJSON results, array entries) inherit the
+  // correct context. Force propagates unconditionally; Soft applies charset
+  // gate only; None passes no inherited context.
+  return sanitizeValueForSink(value, resolved, seen, depth + 1, strength);
 }
 
 function sanitizeErrorForSink(
@@ -237,6 +241,7 @@ function sanitizeErrorForSink(
   resolved: ResolvedRedactOptions,
   seen: WeakSet<object>,
   depth: number,
+  inherited: MaskStrength = MaskStrength.None,
 ): JsonLikeRecord | string {
   if (seen.has(error)) {
     return CIRCULAR_SENTINEL;
@@ -245,22 +250,30 @@ function sanitizeErrorForSink(
   try {
     const out: JsonLikeRecord = Object.create(null) as JsonLikeRecord;
     out.name = sanitizeStringForSink(error.name, resolved);
-    out.message = sanitizeStringForSink(error.message, resolved, { allowDirectMask: true });
+    out.message = sanitizeStringForSink(error.message, resolved, {
+      allowDirectMask: inherited !== MaskStrength.None,
+    });
     if (typeof error.stack === "string") {
       out.stack = sanitizeStringForSink(error.stack, resolved);
     }
     const errorWithCause = error as Error & { cause?: unknown };
     if ("cause" in errorWithCause && errorWithCause.cause !== undefined) {
-      // cause is handled without carrying down allowDirectMask: credential fields
-      // inside cause will be recaptured by isCredentialFieldName on the inner key.
+      // Intentionally do NOT propagate credential context into the Error.cause path.
+      // Credential fields inside cause will be recaptured by isCredentialFieldName
+      // on the inner key, so we avoid over-redacting useful debugging data (e.g.
+      // error codes, timestamps) that may live alongside secrets in nested Error objects.
       out.cause = sanitizeValueForSink(errorWithCause.cause, resolved, seen, depth + 1);
     }
+    // Custom Error properties are sanitized via sanitizeFieldValueForSink which
+    // re-checks isCredentialFieldName on each key. The inherited strength is
+    // forwarded so that Force context (e.g. { token: new Error(...) }) propagates
+    // through Error boundaries into custom Error properties.
     for (const [key, value] of Object.entries(error as unknown as JsonLikeRecord)) {
       if (DANGEROUS_KEYS.has(key)) {
         continue; // filter prototype-pollution keys
       }
       try {
-        out[key] = sanitizeFieldValueForSink(key, value, resolved, seen, depth);
+        out[key] = sanitizeFieldValueForSink(key, value, resolved, seen, depth, inherited);
       } catch {
         out[key] = EXOTIC_SENTINEL; // fail-closed on per-field access errors
       }
@@ -276,7 +289,7 @@ function sanitizeRecordForSink(
   resolved: ResolvedRedactOptions,
   seen: WeakSet<object>,
   depth: number,
-  inherited?: { allowDirectMask?: boolean; forceDoubleFallback?: boolean },
+  inherited: MaskStrength = MaskStrength.None,
 ): SanitizedLogRecord | string {
   if (seen.has(record)) {
     return CIRCULAR_SENTINEL;
@@ -314,16 +327,16 @@ function sanitizeValueForSink(
   resolved: ResolvedRedactOptions,
   seen: WeakSet<object>,
   depth: number,
-  options?: { allowDirectMask?: boolean; forceDoubleFallback?: boolean },
+  inherited: MaskStrength = MaskStrength.None,
 ): unknown {
   if (typeof value === "string") {
-    if (options?.allowDirectMask) {
+    if (inherited !== MaskStrength.None) {
       const textSanitized = sanitizeStringForSink(value, resolved, { allowDirectMask: true });
-      // forceDoubleFallback is only set for credential contexts. When true, force-mask
-      // strings that pattern-redaction did not alter (e.g. tokens with `/` in them
-      // that pass the charset gate).
-      // Exception: ISO-8601 timestamps are never force-masked even in credential context.
-      if (options.forceDoubleFallback && textSanitized === value) {
+      // Force context: if pattern redaction did not alter the string, apply the
+      // double-fallback unconditionally (handles tokens with `/` or other chars
+      // that the charset gate misses).
+      // Exception: ISO-8601 timestamps are never force-masked.
+      if (inherited === MaskStrength.Force && textSanitized === value) {
         if (/^\d{4}-\d{2}-\d{2}T/u.test(value)) {
           return value;
         }
@@ -350,10 +363,10 @@ function sanitizeValueForSink(
     return new Date(value.getTime());
   }
   if (value instanceof Error) {
-    return sanitizeErrorForSink(value, resolved, seen, depth);
+    return sanitizeErrorForSink(value, resolved, seen, depth, inherited);
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeValueForSink(entry, resolved, seen, depth + 1, options));
+    return value.map((entry) => sanitizeValueForSink(entry, resolved, seen, depth + 1, inherited));
   }
   if (typeof value === "object") {
     // Wrap toJSON access in a try-catch so that Proxy traps or throwing
@@ -370,7 +383,7 @@ function sanitizeValueForSink(
       seen.add(value);
       try {
         const serialized = maybeToJson.call(value);
-        return sanitizeValueForSink(serialized, resolved, seen, depth + 1, options);
+        return sanitizeValueForSink(serialized, resolved, seen, depth + 1, inherited);
       } catch {
         // toJSON threw — fall through to record-level sanitization.
         // The object's enumerable keys will be traversed as a safe fallback.
@@ -382,7 +395,7 @@ function sanitizeValueForSink(
     // Wrap record sanitization so that exotic objects (e.g. Proxy with a
     // throwing get-trap) return a safe placeholder instead of propagating.
     try {
-      return sanitizeRecordForSink(value as JsonLikeRecord, resolved, seen, depth, options);
+      return sanitizeRecordForSink(value as JsonLikeRecord, resolved, seen, depth, inherited);
     } catch {
       return EXOTIC_SENTINEL;
     }

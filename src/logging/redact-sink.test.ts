@@ -334,17 +334,32 @@ describe("sanitizeLogRecordForSink — Error payloads", () => {
     expect(() => JSON.stringify(sanitized)).not.toThrow();
   });
 
-  it("handles Error with circular cause chain", () => {
-    const error = Object.assign(new Error("outer"), { apiKey: SECRET });
-    const record: Record<string, unknown> = { error, nested: null };
-    record.nested = record;
+  it("force-masks non-credential-named custom properties on an Error under a credential key", () => {
+    // CR2 scenario: { token: err } where err.rawValue holds a secret but its
+    // key name is not credential-named. The inherited Force context from 'token'
+    // must propagate through the Error boundary and mask rawValue.
+    const error = Object.assign(new Error("fetch failed"), { rawValue: SECRET });
+    const record = { token: error };
 
-    const sanitized = sanitizeLogRecordForSink(record, resolved);
-    const serialized = JSON.stringify(sanitized);
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      token: { message: string; rawValue: string };
+    };
 
-    expect(serialized).toContain(MASKED);
-    expect(serialized).not.toContain(SECRET);
-    expect(serialized).toContain("[Circular]");
+    expect(sanitized.token.rawValue).toBe(MASKED);
+    expect(sanitized.token.message).toBe("fetch failed"); // non-secret message unchanged
+  });
+
+  it("does not direct-mask error message when error has no ancestor context", () => {
+    // Without an ancestor credential key, error.message gets no direct-mask treatment.
+    // A token-like message would only be masked if a pattern matches it.
+    const record = { error: new Error(SECRET) };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      error: { message: string };
+    };
+
+    // No pattern match for a bare alnum string; no ancestor context → message passes through.
+    expect(sanitized.error.message).toBe(SECRET);
   });
 });
 
@@ -411,6 +426,75 @@ describe("sanitizeLogRecordForSink — X3: DoS guards", () => {
     // Exactly 1024 entries should be kept.
     const keepCount = (serialized.match(/"value\d+"/gu) ?? []).length;
     expect(keepCount).toBe(1024);
+  });
+});
+
+// ── message key: nested plain strings must not be force-masked ─────────────
+// message/msg/"0" keys propagate a soft charset gate, not a credential context.
+// Nested objects and their fields should pass through unless they are themselves
+// credential-named or contain pattern-matched secrets.
+
+describe("sanitizeLogRecordForSink — message key nested object sanitization", () => {
+  it("preserves plain strings nested inside a message object (regression)", () => {
+    // Previously wrote { message: { note: "***" } } — plain strings must not be force-masked.
+    const record = { message: { note: "hello" } };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      message: { note: string };
+    };
+    expect(sanitized.message.note).toBe("hello");
+  });
+
+  it("preserves plain strings three levels deep inside a message object", () => {
+    const record = { message: { data: { label: "safe" } } };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      message: { data: { label: string } };
+    };
+    expect(sanitized.message.data.label).toBe("safe");
+  });
+
+  it("preserves plain strings nested inside a msg object", () => {
+    const record = { msg: { status: "ok" } };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      msg: { status: string };
+    };
+    expect(sanitized.msg.status).toBe("ok");
+  });
+
+  it("masks token-like strings nested inside a message object (charset gate applies)", () => {
+    // 20-char alnum string under message — shouldMaskDirectString returns true
+    const record = { message: { id: SECRET } };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      message: { id: string };
+    };
+    expect(sanitized.message.id).toBe(MASKED);
+  });
+
+  it("force-masks a credential-named field found inside a message object", () => {
+    // A credential key inside message escalates to force-mask regardless of parent context.
+    const record = { message: { password: "secret" } };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      message: { password: string };
+    };
+    expect(sanitized.message.password).toBe("***");
+  });
+
+  it("force-masks children of a credential key nested inside a message object", () => {
+    // message → token → id: once a credential key is encountered, its children are also force-masked.
+    const record = { message: { token: { id: "abc" } } };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      message: { token: { id: string } };
+    };
+    expect(sanitized.message.token.id).toBe("***");
+  });
+
+  it("preserves slash-charset strings nested inside a message object (no double-fallback)", () => {
+    // Slash blocks the charset gate; message context must not apply the credential double-fallback.
+    const slashStr = "abcdef/1234567890ghij";
+    const record = { message: { path: slashStr } };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      message: { path: string };
+    };
+    expect(sanitized.message.path).toBe(slashStr);
   });
 });
 
