@@ -1543,7 +1543,10 @@ function updateTaskStateByRunId(params: {
       patch.status = normalizeTaskStatus(params.status);
     }
     if (params.startedAt != null) {
-      patch.startedAt = params.startedAt;
+      // Clamp: startedAt cannot predate createdAt (would cause false positive
+      // inconsistent_timestamps audit warnings due to queue/clock skew between
+      // pi-embedded-runner event emission and registry processing).
+      patch.startedAt = Math.max(params.startedAt, current.createdAt);
     }
     if (params.endedAt != null) {
       patch.endedAt = params.endedAt;
@@ -1814,7 +1817,7 @@ export async function cancelTaskById(params: {
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
   return [...tasks.values()]
-    .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
+    .map((task, insertionIndex) => ({ ...cloneTaskRecord(task), insertionIndex }))
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _, ...task }) => task);
 }
@@ -1851,7 +1854,7 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
   return [...ids]
     .map((taskId, insertionIndex) => {
       const task = tasks.get(taskId);
-      return task ? Object.assign({}, cloneTaskRecord(task), { insertionIndex }) : null;
+      return task ? { ...cloneTaskRecord(task), insertionIndex } : null;
     })
     .filter(
       (
