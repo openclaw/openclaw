@@ -271,9 +271,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         pushAssistantText(text);
       }
       state.suppressBlockChunks = true;
-    } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
-      // Non-streaming models (no text_delta): ensure assistantTexts gets the final
-      // text when the chunker has nothing buffered to drain.
+    }
+    // Non-streaming models (no text_delta) or custom providers that send text only
+    // via message_end: ensure assistantTexts gets the final text when the chunker
+    // has nothing buffered to drain and nothing was added during streaming.
+    if (!addedDuringMessage && !chunkerHasBuffered && text) {
       pushAssistantText(text);
     }
 
