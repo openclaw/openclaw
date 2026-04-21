@@ -359,6 +359,16 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_mismatch");
   });
 
+  it("accepts password over wrong token when both are supplied in password mode", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "secret", token: "wrong" },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("password");
+  });
+
   it("reports missing password config reason", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "password", allowTailscale: false },
