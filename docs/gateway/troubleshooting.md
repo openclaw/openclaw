@@ -262,6 +262,63 @@ Related:
 - [/gateway/configuration](/gateway/configuration)
 - [/gateway/doctor](/gateway/doctor)
 
+## Gateway restored last-known-good config
+
+Use this when the Gateway starts, but logs say it restored `openclaw.json`.
+
+```bash
+openclaw logs --follow
+openclaw config file
+openclaw config validate
+openclaw doctor
+```
+
+Look for:
+
+- `Config auto-restored from last-known-good`
+- `gateway: invalid config was restored from last-known-good backup`
+- `config reload restored last-known-good config after invalid-config`
+- A timestamped `openclaw.json.clobbered.*` file beside the active config
+- A main-agent system event that starts with `Config recovery warning`
+
+What happened:
+
+- The rejected config did not validate during startup or hot reload.
+- OpenClaw preserved the rejected payload as `.clobbered.*`.
+- The active config was restored from the last validated last-known-good copy.
+- The next main-agent turn is warned not to blindly rewrite the rejected config.
+
+Inspect and repair:
+
+```bash
+CONFIG="$(openclaw config file)"
+ls -lt "$CONFIG".clobbered.* "$CONFIG".rejected.* 2>/dev/null | head
+diff -u "$CONFIG" "$(ls -t "$CONFIG".clobbered.* 2>/dev/null | head -n 1)"
+openclaw config validate
+openclaw doctor
+```
+
+Common signatures:
+
+- `.clobbered.*` exists → an external direct edit or startup read was restored.
+- `.rejected.*` exists → an OpenClaw-owned config write failed schema or clobber checks before commit.
+- `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
+- `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
+
+Fix options:
+
+1. Keep the restored active config if it is correct.
+2. Copy only the intended keys from `.clobbered.*` or `.rejected.*`, then apply them with `openclaw config set` or `config.patch`.
+3. Run `openclaw config validate` before restarting.
+4. If you edit by hand, keep the full JSON5 config, not just the partial object you wanted to change.
+
+Related:
+
+- [/gateway/configuration#strict-validation](/gateway/configuration#strict-validation)
+- [/gateway/configuration#config-hot-reload](/gateway/configuration#config-hot-reload)
+- [/cli/config](/cli/config)
+- [/gateway/doctor](/gateway/doctor)
+
 ## Gateway probe warnings
 
 Use this when `openclaw gateway probe` reaches something, but still prints a warning block.
@@ -414,6 +471,7 @@ Common signatures:
 - `browser.executablePath not found` → configured path is invalid.
 - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
 - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
+- `Could not find DevToolsActivePort for chrome` → Chrome MCP existing-session could not attach to the selected browser data dir yet. Open the browser inspect page, enable remote debugging, keep the browser open, approve the first attach prompt, then retry. If signed-in state is not required, prefer the managed `openclaw` profile.
 - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
 - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from the gateway host.
 - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no reachable target, or the HTTP endpoint answered but the CDP WebSocket still could not be opened.
