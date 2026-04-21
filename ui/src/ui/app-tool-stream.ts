@@ -21,6 +21,7 @@ export type ToolStreamEntry = {
   name: string;
   args?: unknown;
   output?: string;
+  active?: boolean;
   startedAt: number;
   updatedAt: number;
   message: Record<string, unknown>;
@@ -36,6 +37,10 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
+  chatActiveToolCallCount: number;
+  chatLastActivityAt: number | null;
+  chatLastToolActivityAt: number | null;
+  chatReconnectPendingAt?: number | null;
 };
 
 function toTrimmedString(value: unknown): string | null {
@@ -246,6 +251,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.chatActiveToolCallCount = 0;
 }
 
 export type CompactionStatus = {
@@ -530,7 +536,17 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     entry.updatedAt = now;
   }
 
+  if (phase === "start" || phase === "update") {
+    entry.active = true;
+  } else if (phase === "result") {
+    entry.active = false;
+  }
+
   entry.message = buildToolStreamMessage(entry);
+  host.chatActiveToolCallCount = [...host.toolStreamById.values()].filter((item) => item.active).length;
+  host.chatLastActivityAt = now;
+  host.chatLastToolActivityAt = now;
+  host.chatReconnectPendingAt = null;
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
 }

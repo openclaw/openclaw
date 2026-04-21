@@ -34,6 +34,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantName: string;
       assistantAvatar: string;
       assistantAgentId: string;
+      gatewayToken?: string;
       localMediaPreviewRoots?: string[];
     };
   }
@@ -52,14 +53,21 @@ describe("handleControlUiHttpRequest", () => {
     url: string;
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
+    auth?: ResolvedGatewayAuth;
     basePath?: string;
+    remoteAddress?: string;
     rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method,
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
+      } as IncomingMessage,
       res,
       {
+        ...(params.auth ? { auth: params.auth } : {}),
         ...(params.basePath ? { basePath: params.basePath } : {}),
         root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
@@ -110,58 +118,6 @@ describe("handleControlUiHttpRequest", () => {
       },
     );
     return { res, end, handled };
-  }
-
-  function createTrustedProxyAuth(): ResolvedGatewayAuth {
-    return {
-      mode: "trusted-proxy",
-      allowTailscale: false,
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-      },
-    };
-  }
-
-  function createTrustedProxyHeaders(
-    extraHeaders: IncomingMessage["headers"] = {},
-  ): IncomingMessage["headers"] {
-    return {
-      host: "gateway.example.com",
-      "x-forwarded-user": "nick@example.com",
-      "x-forwarded-proto": "https",
-      ...extraHeaders,
-    };
-  }
-
-  async function runTrustedProxyAssistantMediaRequest(params: {
-    filePath: string;
-    meta?: boolean;
-    headers?: IncomingMessage["headers"];
-  }) {
-    return await runAssistantMediaRequest({
-      url: `/__openclaw__/assistant-media?${params.meta ? "meta=1&" : ""}source=${encodeURIComponent(params.filePath)}`,
-      method: "GET",
-      auth: createTrustedProxyAuth(),
-      trustedProxies: ["10.0.0.1"],
-      remoteAddress: "10.0.0.1",
-      headers: createTrustedProxyHeaders(params.headers),
-    });
-  }
-
-  function expectMissingOperatorReadResponse(params: {
-    handled: boolean;
-    res: ReturnType<typeof makeMockHttpResponse>["res"];
-    end: ReturnType<typeof makeMockHttpResponse>["end"];
-  }) {
-    expect(params.handled).toBe(true);
-    expect(params.res.statusCode).toBe(403);
-    expect(JSON.parse(String(params.end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.read",
-      },
-    });
   }
 
   async function writeAssetFile(rootPath: string, filename: string, contents: string) {
@@ -320,10 +276,23 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-        const { res, handled, end } = await runTrustedProxyAssistantMediaRequest({
-          filePath,
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["10.0.0.1"],
+          remoteAddress: "10.0.0.1",
           headers: {
+            host: "gateway.example.com",
             origin: "https://evil.example",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
           },
         });
         expect(handled).toBe(true);
@@ -339,13 +308,34 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-        const { res, handled, end } = await runTrustedProxyAssistantMediaRequest({
-          filePath,
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["10.0.0.1"],
+          remoteAddress: "10.0.0.1",
           headers: {
+            host: "gateway.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
             "x-openclaw-scopes": "operator.approvals",
           },
         });
-        expectMissingOperatorReadResponse({ handled, res, end });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
+          ok: false,
+          error: {
+            type: "forbidden",
+            message: "missing scope: operator.read",
+          },
+        });
       },
     });
   });
@@ -356,14 +346,34 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-        const { res, handled, end } = await runTrustedProxyAssistantMediaRequest({
-          filePath,
-          meta: true,
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["10.0.0.1"],
+          remoteAddress: "10.0.0.1",
           headers: {
+            host: "gateway.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
             "x-openclaw-scopes": "",
           },
         });
-        expectMissingOperatorReadResponse({ handled, res, end });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
+          ok: false,
+          error: {
+            type: "forbidden",
+            message: "missing scope: operator.read",
+          },
+        });
       },
     });
   });
@@ -434,6 +444,39 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("includes the gateway token in bootstrap config for direct loopback requests", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { end, handled } = runControlUiRequest({
+          url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+          method: "GET",
+          rootPath: tmp,
+          auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.gatewayToken).toBe("loopback-token");
+      },
+    });
+  });
+
+  it("does not include the gateway token in bootstrap config for non-loopback requests", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { end, handled } = runControlUiRequest({
+          url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+          method: "GET",
+          rootPath: tmp,
+          auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+          remoteAddress: "203.0.113.10",
+        });
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.gatewayToken).toBeUndefined();
       },
     });
   });

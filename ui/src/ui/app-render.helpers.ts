@@ -16,6 +16,7 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { resolvePreferredGatewayAccessToken } from "./gateway-bootstrap-token.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
@@ -44,10 +45,18 @@ type ChatRefreshHost = AppViewState & {
 };
 
 export function resolveAssistantAttachmentAuthToken(
-  state: Pick<AppViewState, "settings" | "password">,
+  state: Pick<AppViewState, "settings" | "password" | "bootstrapGatewayToken">,
+  options?: { pageUrl?: string },
 ) {
   return (
-    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
+    resolvePreferredGatewayAccessToken({
+      gatewayUrl: state.settings.gatewayUrl,
+      bootstrapGatewayToken: state.bootstrapGatewayToken,
+      storedToken: state.settings.token,
+      pageUrl: options?.pageUrl,
+    }) ??
+    normalizeOptionalString(state.password) ??
+    null
   );
 }
 
@@ -76,6 +85,12 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.chatActiveToolCallCount = 0;
+  state.chatLastActivityAt = null;
+  state.chatLastToolActivityAt = null;
+  state.chatLastTerminalAt = null;
+  state.chatLastTerminalKind = null;
+  state.chatReconnectPendingAt = null;
   state.chatSideResult = null;
   state.lastError = null;
   state.compactionStatus = null;

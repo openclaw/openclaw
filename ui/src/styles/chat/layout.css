@@ -527,9 +527,49 @@
 .agent-chat__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   padding: 6px 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.chat-activity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+}
+
+.chat-activity__label {
+  font-weight: 600;
+}
+
+.chat-activity__detail {
+  color: var(--muted);
+}
+
+.chat-activity--running_tool,
+.chat-activity--silent_processing,
+.chat-activity--streaming,
+.chat-activity--submitting {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.chat-activity--unknown,
+.chat-activity--reconnecting,
+.chat-activity--awaiting_approval {
+  border-color: color-mix(in srgb, var(--warning, #f59e0b) 35%, transparent);
+}
+
+.chat-activity--error {
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 35%, transparent);
+}
+
+.chat-activity--completed {
+  border-color: color-mix(in srgb, var(--success, #10b981) 35%, transparent);
 }
 
 .agent-chat__toolbar-left,
@@ -537,6 +577,34 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+}
+
+.agent-chat__toolbar-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.chat-activity--compact {
+  width: 100%;
+  min-width: 0;
+  margin-top: 0;
+  padding: 0 2px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.chat-activity--compact .chat-activity__label,
+.chat-activity--compact .chat-activity__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-chat__input-btn,
@@ -1001,6 +1069,19 @@
 
   .chat-controls__model {
     min-width: 150px;
+  }
+
+  .agent-chat__toolbar {
+    flex-wrap: wrap;
+  }
+
+  .agent-chat__toolbar-status {
+    order: 3;
+    flex: 1 0 100%;
+  }
+
+  .chat-activity--compact {
+    padding-top: 4px;
   }
 }
 

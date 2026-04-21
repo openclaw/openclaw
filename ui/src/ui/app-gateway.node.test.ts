@@ -9,7 +9,7 @@ const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  options: { clientVersion?: string };
+  options: { clientVersion?: string; token?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
     code: number;
@@ -43,6 +43,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
     constructor(
       private opts: {
         clientVersion?: string;
+        token?: string;
         onHello?: (hello: GatewayHelloOk) => void;
         onClose?: (info: {
           code: number;
@@ -56,7 +57,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
-        options: { clientVersion: this.opts.clientVersion },
+        options: { clientVersion: this.opts.clientVersion, token: this.opts.token },
         emitHello: (hello) => {
           this.opts.onHello?.(
             hello ?? {
@@ -119,6 +120,7 @@ function createHost(): TestGatewayHost {
       borderRadius: 50,
     },
     password: "",
+    bootstrapGatewayToken: null,
     clientInstanceId: "instance-test",
     client: null,
     connected: false,
@@ -148,6 +150,12 @@ function createHost(): TestGatewayHost {
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatActiveToolCallCount: 0,
+    chatLastActivityAt: null,
+    chatLastToolActivityAt: null,
+    chatLastTerminalAt: null,
+    chatLastTerminalKind: null,
+    chatReconnectPendingAt: null,
     chatSideResult: null,
     chatSending: false,
     toolStreamById: new Map(),
@@ -192,6 +200,9 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    vi.stubGlobal("window", {
+      location: { href: "http://127.0.0.1:18789/" },
+    });
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -212,6 +223,53 @@ describe("connectGateway", () => {
     expect(gatewayClientInstances).toHaveLength(3);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
     expect(host.lastError).toBeNull();
+  });
+
+  it("uses the bootstrap gateway token for loopback control-ui sessions when settings token is blank", () => {
+    const host = createHost();
+    host.bootstrapGatewayToken = "bootstrap-token";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+
+    expect(client).toBeDefined();
+    expect(client.options).toMatchObject({ token: "bootstrap-token" });
+  });
+
+  it("marks reconnect reconciliation pending when the gateway closes during an active run", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "run-1";
+    host.chatStream = "Working...";
+
+    client.emitClose({ code: 1006, reason: "socket dropped" });
+
+    expect((host as TestGatewayHost & { chatReconnectPendingAt?: number | null }).chatReconnectPendingAt).toBeTypeOf(
+      "number",
+    );
+  });
+
+  it("prefers the bootstrap gateway token over a stale stored loopback token", () => {
+    const host = createHost();
+    host.settings.token = "stale-token";
+    host.bootstrapGatewayToken = "bootstrap-token";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+
+    expect(client).toBeDefined();
+    expect(client.options).toMatchObject({ token: "bootstrap-token" });
+  });
+
+  it("does not use the bootstrap gateway token for non-loopback gateway urls", () => {
+    const host = createHost();
+    host.settings.gatewayUrl = "wss://gateway.example/openclaw";
+    host.bootstrapGatewayToken = "bootstrap-token";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+
+    expect(client).toBeDefined();
+    expect(client.options).not.toMatchObject({ token: "bootstrap-token" });
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {

@@ -27,6 +27,7 @@ type LifecycleHost = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  bootstrapGatewayToken: string | null;
   serverVersion: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: "strict" | "scripts" | "trusted";

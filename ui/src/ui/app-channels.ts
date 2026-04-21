@@ -6,6 +6,7 @@ import {
   type ChannelsState,
 } from "./controllers/channels.ts";
 import { loadConfig, saveConfig, type ConfigState } from "./controllers/config.ts";
+import { resolvePreferredGatewayAccessToken } from "./gateway-bootstrap-token.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -16,7 +17,8 @@ type ChannelsActionHost = ChannelsState &
   ConfigState & {
     hello?: { auth?: { deviceToken?: string | null } | null } | null;
     password?: string;
-    settings: { token?: string };
+    bootstrapGatewayToken?: string | null;
+    settings: { token?: string; gatewayUrl?: string };
     nostrProfileFormState: NostrProfileFormState;
     nostrProfileAccountId: string | null;
   };
@@ -83,7 +85,11 @@ function resolveGatewayHttpAuthHeader(host: ChannelsActionHost): string | null {
   if (deviceToken) {
     return `Bearer ${deviceToken}`;
   }
-  const token = normalizeOptionalString(host.settings.token);
+  const token = resolvePreferredGatewayAccessToken({
+    gatewayUrl: host.settings.gatewayUrl ?? null,
+    bootstrapGatewayToken: host.bootstrapGatewayToken ?? null,
+    storedToken: host.settings.token,
+  });
   if (token) {
     return `Bearer ${token}`;
   }
