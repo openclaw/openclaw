@@ -5,7 +5,7 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
-import net from "node:net";
+import ipaddr from "ipaddr.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
@@ -44,10 +44,16 @@ type ChatWebhookPayload = {
 function isBlockedSpecialIpLiteral(hostname: string): boolean {
   const normalizedHostname =
     hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-  return (
-    net.isIP(normalizedHostname) !== 0 &&
-    (normalizedHostname === "0.0.0.0" || normalizedHostname === "::")
-  );
+  if (!ipaddr.isValid(normalizedHostname)) {
+    return false;
+  }
+
+  const parsed = ipaddr.parse(normalizedHostname);
+  if (parsed.kind() === "ipv6" && parsed.isIPv4MappedAddress()) {
+    return parsed.toIPv4Address().range() === "unspecified";
+  }
+
+  return parsed.range() === "unspecified";
 }
 
 function isSafeWebhookFileUrl(fileUrl: string): boolean {

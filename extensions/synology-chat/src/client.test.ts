@@ -197,6 +197,22 @@ describe("sendFileUrl", () => {
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
+  it("blocks IPv6 loopback file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "http://[::1]/api/internal"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks IPv4-mapped unspecified address file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "http://[::ffff:0.0.0.0]/api/internal"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
   it("blocks non-http file URLs before reaching the NAS webhook", async () => {
     const result = await settleTimers(
       sendFileUrl("https://nas.example.com/incoming", "file:///etc/passwd"),
