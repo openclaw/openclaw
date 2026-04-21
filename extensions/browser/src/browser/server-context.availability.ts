@@ -7,12 +7,15 @@ import {
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   closeChromeMcpSession,
   ensureChromeMcpAvailable,
   listChromeMcpTabs,
 } from "./chrome-mcp.js";
 import {
+  diagnoseChromeCdp,
+  formatChromeCdpDiagnostic,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -59,6 +62,7 @@ export function createProfileAvailability({
   getProfileState,
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
+  const redactedProfileCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
   const capabilities = getBrowserProfileCapabilities(profile);
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
@@ -94,6 +98,17 @@ export function createProfileAvailability({
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
   };
 
+  const describeCdpFailure = async (timeoutMs?: number): Promise<string> => {
+    const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
+    const diagnostic = await diagnoseChromeCdp(
+      profile.cdpUrl,
+      httpTimeoutMs,
+      wsTimeoutMs,
+      getCdpReachabilityPolicy(),
+    );
+    return formatChromeCdpDiagnostic(diagnostic);
+  };
+
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
     setProfileRunning(running);
     running.proc.on("exit", () => {
@@ -106,6 +121,23 @@ export function createProfileAvailability({
         setProfileRunning(null);
       }
     });
+  };
+
+  const formatChromeMcpAttachFailure = (lastError: unknown): string => {
+    const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
+    const message = lastError instanceof Error ? lastError.message : "";
+    if (message.includes("DevToolsActivePort") || message.includes("Could not connect to Chrome")) {
+      return (
+        `Chrome MCP existing-session attach for profile "${profile.name}" could not connect to Chrome. ` +
+        "Enable remote debugging in the browser inspect page, keep the browser open, approve the attach prompt, and retry. " +
+        'If you do not need your signed-in browser session, use the managed "openclaw" profile instead.' +
+        detail
+      );
+    }
+    return (
+      `Chrome MCP existing-session attach for profile "${profile.name}" timed out waiting for tabs to become available.` +
+      ` Approve the browser attach prompt, keep the browser open, and retry.${detail}`
+    );
   };
 
   const reconcileProfileRuntime = async (): Promise<void> => {
@@ -148,7 +180,9 @@ export function createProfileAvailability({
       await new Promise((r) => setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS));
     }
     throw new Error(
-      `Chrome CDP websocket for profile "${profile.name}" is not reachable after start.`,
+      `Chrome CDP websocket for profile "${profile.name}" is not reachable after start. ${await describeCdpFailure(
+        CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
+      )}`,
     );
   };
 
@@ -164,11 +198,7 @@ export function createProfileAvailability({
       }
       await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
     }
-    const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
-    throw new BrowserProfileUnavailableError(
-      `Chrome MCP existing-session attach for profile "${profile.name}" timed out waiting for tabs to become available.` +
-        ` Approve the browser attach prompt, keep the browser open, and retry.${detail}`,
-    );
+    throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };
 
   const ensureBrowserAvailable = async (): Promise<void> => {
@@ -210,7 +240,7 @@ export function createProfileAvailability({
       if (attachOnly || remoteCdp) {
         throw new BrowserProfileUnavailableError(
           remoteCdp
-            ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
+            ? `Remote CDP for profile "${profile.name}" is not reachable at ${redactedProfileCdpUrl}.`
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
@@ -243,18 +273,20 @@ export function createProfileAvailability({
       if (remoteCdp && (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
         return;
       }
+      const detail = await describeCdpFailure(PROFILE_ATTACH_RETRY_TIMEOUT_MS);
       throw new BrowserProfileUnavailableError(
         remoteCdp
-          ? `Remote CDP websocket for profile "${profile.name}" is not reachable.`
-          : `Browser attachOnly is enabled and CDP websocket for profile "${profile.name}" is not reachable.`,
+          ? `Remote CDP websocket for profile "${profile.name}" is not reachable. ${detail}`
+          : `Browser attachOnly is enabled and CDP websocket for profile "${profile.name}" is not reachable. ${detail}`,
       );
     }
 
     // HTTP responds but WebSocket fails - port in use by something else.
     if (!profileState.running) {
+      const detail = await describeCdpFailure(PROFILE_ATTACH_RETRY_TIMEOUT_MS);
       throw new BrowserProfileUnavailableError(
         `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
-          `Run action=reset-profile profile=${profile.name} to kill the process.`,
+          `Run action=reset-profile profile=${profile.name} to kill the process. ${detail}`,
       );
     }
 
@@ -266,7 +298,9 @@ export function createProfileAvailability({
 
     if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
       throw new Error(
-        `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart.`,
+        `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart. ${await describeCdpFailure(
+          PROFILE_POST_RESTART_WS_TIMEOUT_MS,
+        )}`,
       );
     }
   };

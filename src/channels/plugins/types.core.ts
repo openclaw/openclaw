@@ -180,6 +180,7 @@ export type ChannelAccountSnapshot = {
   name?: string;
   enabled?: boolean;
   configured?: boolean;
+  statusState?: string;
   linked?: boolean;
   running?: boolean;
   connected?: boolean;
@@ -454,6 +455,10 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
+  /**
+   * Bundled plugins that need inbound conversation resolution before runtime
+   * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.
+   */
   resolveInboundConversation?: (params: {
     from?: string;
     to?: string;
@@ -510,6 +515,11 @@ export type ChannelMessagingAdapter = {
    * steer peer-vs-group resolution without reimplementing host search flow.
    */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
+  /**
+   * Preserve the session thread/topic id for heartbeat replies when that thread
+   * is part of the destination identity, not a transient reply thread.
+   */
+  preserveHeartbeatThreadIdForGroupRoute?: boolean;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
   transformReplyPayload?: (params: {
     payload: ReplyPayload;

@@ -33,6 +33,20 @@ type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtim
 let cronEmbeddedRuntimePromise: Promise<CronEmbeddedRuntime> | undefined;
 let cronSubagentRegistryRuntimePromise: Promise<CronSubagentRegistryRuntime> | undefined;
 
+function resolveCurrentChannelTarget(params: {
+  channel?: string;
+  to?: string;
+  threadId?: string | number;
+}): string | undefined {
+  if (!params.to) {
+    return undefined;
+  }
+  if (params.channel !== "telegram" || params.threadId == null) {
+    return params.to;
+  }
+  return params.to.includes(":topic:") ? params.to : `${params.to}:topic:${params.threadId}`;
+}
+
 async function loadCronEmbeddedRuntime() {
   cronEmbeddedRuntimePromise ??= import("./run-embedded.runtime.js");
   return await cronEmbeddedRuntimePromise;
@@ -65,10 +79,15 @@ export function createCronPromptExecutor(params: {
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   messageChannel: string | undefined;
-  resolvedDelivery: { accountId?: string };
+  resolvedDelivery: {
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
+    forceMessageTool: boolean;
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
@@ -150,6 +169,13 @@ export function createCronPromptExecutor(params: {
           senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
+          messageTo: params.resolvedDelivery.to,
+          messageThreadId: params.resolvedDelivery.threadId,
+          currentChannelId: resolveCurrentChannelTarget({
+            channel: params.messageChannel,
+            to: params.resolvedDelivery.to,
+            threadId: params.resolvedDelivery.threadId,
+          }),
           sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
@@ -179,6 +205,7 @@ export function createCronPromptExecutor(params: {
           runId: params.cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,
+          forceMessageTool: params.toolPolicy.forceMessageTool,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           bootstrapPromptWarningSignaturesSeen,
@@ -222,10 +249,13 @@ export async function executeCronRun(params: {
   resolvedDelivery: {
     channel?: string;
     accountId?: string;
+    to?: string;
+    threadId?: string | number;
   };
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
+    forceMessageTool: boolean;
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;

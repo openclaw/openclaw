@@ -32,11 +32,11 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=180
 TIMEOUT_BOOTSTRAP_S=600
-TIMEOUT_INSTALL_S=300
+TIMEOUT_INSTALL_S=420
 TIMEOUT_VERIFY_S=90
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_AGENT_S=180
-TIMEOUT_GATEWAY_S=90
+TIMEOUT_GATEWAY_S=240
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -230,6 +230,7 @@ import json
 import os
 import re
 import sys
+from typing import Optional
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
@@ -237,7 +238,7 @@ requested_lower = requested.lower()
 explicit = os.environ["VM_NAME_EXPLICIT"] == "1"
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
 
-def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+def parse_ubuntu_version(name: str) -> Optional[tuple[int, ...]]:
     match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
     if not match:
         return None
@@ -473,6 +474,10 @@ else:
 PY
 }
 
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
+}
+
 acquire_build_lock() {
   local owner_pid=""
   while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
@@ -500,7 +505,7 @@ ensure_current_build() {
   acquire_build_lock
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
-  if [[ "$build_commit" == "$head" ]]; then
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
     release_build_lock
     return
   fi
@@ -509,6 +514,11 @@ ensure_current_build() {
   build_commit="$(current_build_commit)"
   release_build_lock
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
+}
+
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
 }
 
 extract_package_version_from_tgz() {
@@ -531,6 +541,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  write_package_dist_inventory
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
@@ -584,12 +595,12 @@ start_server() {
 }
 
 install_latest_release() {
-  local version_args=()
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    version_args=(--version "$INSTALL_VERSION")
-  fi
   guest_exec curl -fsSL "$INSTALL_URL" -o /tmp/openclaw-install.sh
-  guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh "${version_args[@]}" --no-onboard
+  if [[ -n "$INSTALL_VERSION" ]]; then
+    guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh --version "$INSTALL_VERSION" --no-onboard
+  else
+    guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh --no-onboard
+  fi
   guest_exec openclaw --version
 }
 
@@ -860,8 +871,8 @@ run_fresh_main_lane() {
   phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
-  phase_run "fresh.inject-bad-plugin" "$TIMEOUT_VERIFY_S" inject_bad_plugin_fixture
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
+  phase_run "fresh.inject-bad-plugin" "$TIMEOUT_VERIFY_S" inject_bad_plugin_fixture
   phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
   phase_run "fresh.bad-plugin-diagnostic" "$TIMEOUT_VERIFY_S" verify_bad_plugin_diagnostic
   phase_run "fresh.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat

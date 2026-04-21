@@ -14,6 +14,7 @@ import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
@@ -35,6 +36,7 @@ const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
 );
+const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -192,6 +194,10 @@ function isRefreshTokenReused(raw: string): boolean {
   return /refresh_token_reused/i.test(raw);
 }
 
+function isAccountIdExtractionError(raw: string): boolean {
+  return /failed to extract accountid from token/i.test(raw);
+}
+
 function isInstructionsRequiredError(raw: string): boolean {
   return /instructions are required/i.test(raw);
 }
@@ -264,6 +270,23 @@ function toInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+
+function resolveLiveModelsJsonTimeoutMs(
+  modelsJsonTimeoutRaw = process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+  setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): number {
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+}
+
+describe("resolveLiveModelsJsonTimeoutMs", () => {
+  it("defaults models.json preparation to a longer setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+  });
+
+  it("never goes below the shared live setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs("30000", 45_000)).toBe(45_000);
+  });
+});
 
 function resolveTestReasoning(
   model: Model<Api>,
@@ -422,6 +445,7 @@ describeLive("live models (profile keys)", () => {
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(cfg),
         "[live-models] prepare models.json",
+        LIVE_MODELS_JSON_TIMEOUT_MS,
       );
       if (!DIRECT_ENABLED) {
         logProgress(
@@ -480,6 +504,17 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
+          if (
+            shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+              provider: model.provider,
+              useExplicitModels: useExplicit,
+              providerFilter: providers,
+              config: cfg,
+              env: process.env,
+            })
+          ) {
+            continue;
+          }
           if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
@@ -702,7 +737,9 @@ describeLive("live models (profile keys)", () => {
             if (
               ok.text.length === 0 &&
               allowNotFoundSkip &&
-              (model.provider === "minimax" || model.provider === "zai")
+              (model.provider === "fireworks" ||
+                model.provider === "minimax" ||
+                model.provider === "zai")
             ) {
               skipped.push({
                 model: id,
@@ -792,6 +829,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (codex refresh token reused)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isAccountIdExtractionError(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex account id extraction)`);
               break;
             }
             if (

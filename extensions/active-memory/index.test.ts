@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import plugin from "./index.js";
+import plugin, { __testing } from "./index.js";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -119,10 +119,12 @@ describe("active-memory plugin", () => {
     runEmbeddedPiAgent.mockResolvedValue({
       payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
     });
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    __testing.resetActiveRecallCacheForTests();
+    plugin.register(api as unknown as OpenClawPluginApi);
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     if (stateDir) {
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -425,7 +427,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       allowedChatTypes: ["direct", "group"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should we order?", messages: [] },
@@ -513,7 +515,7 @@ describe("active-memory plugin", () => {
         searchMode: "inherit",
       },
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -602,7 +604,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       queryMode: "message",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -630,7 +632,7 @@ describe("active-memory plugin", () => {
       queryMode: "message",
       promptStyle: "preference-only",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -675,7 +677,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       thinking: "medium",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -701,7 +703,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       promptAppend: "Prefer stable long-term preferences over one-off events.",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -730,7 +732,7 @@ describe("active-memory plugin", () => {
       promptOverride: "Custom memory prompt. Return NONE or one user fact.",
       promptAppend: "Extra custom instruction.",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -802,7 +804,7 @@ describe("active-memory plugin", () => {
     api.pluginConfig = {
       agents: ["main"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? temp transcript", messages: [] },
@@ -828,7 +830,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       modelFallbackPolicy: "resolved-only",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order? no fallback", messages: [] },
@@ -851,7 +853,7 @@ describe("active-memory plugin", () => {
       modelFallback: "google/gemini-3-flash",
       modelFallbackPolicy: "default-remote",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? custom fallback", messages: [] },
@@ -878,7 +880,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       modelFallbackPolicy: "default-remote",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order? built-in fallback", messages: [] },
@@ -1022,22 +1024,26 @@ describe("active-memory plugin", () => {
   });
 
   it("does not cache timeout results", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 1,
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
     let lastAbortSignal: AbortSignal | undefined;
     runEmbeddedPiAgent.mockImplementation(async (params: { abortSignal?: AbortSignal }) => {
       lastAbortSignal = params.abortSignal;
       return await new Promise((resolve, reject) => {
-        const abortHandler = () => reject(new Error("aborted"));
-        params.abortSignal?.addEventListener("abort", abortHandler, { once: true });
-        setTimeout(() => {
+        const timer = setTimeout(() => {
           params.abortSignal?.removeEventListener("abort", abortHandler);
           resolve({ payloads: [] });
         }, 2_000);
+        const abortHandler = () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        };
+        params.abortSignal?.addEventListener("abort", abortHandler, { once: true });
       });
     });
 
@@ -1073,7 +1079,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? session id cache", messages: [] },
@@ -1102,14 +1108,15 @@ describe("active-memory plugin", () => {
   });
 
   it("ignores late subagent payloads once the active-memory timeout signal has fired", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 1,
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedPiAgent.mockImplementationOnce(async (params: { timeoutMs?: number }) => {
-      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 25));
+      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 1));
       return {
         payloads: [{ text: "late timeout payload that should never become memory context" }],
         meta: { aborted: true },
@@ -1140,12 +1147,74 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
+  it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what should i eat? escape test", messages: undefined as never },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:escape-test",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    const warnLines = vi
+      .mocked(api.logger.warn)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnLines.some((line: string) => line.includes("before_prompt_build"))).toBe(true);
+  });
+
+  it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 90_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? high timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:high-timeout",
+        messageProvider: "webchat",
+      },
+    );
+
+    const passedTimeoutMs = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs;
+    expect(passedTimeoutMs).toBe(90_000);
+  });
+
+  it("clamps timeoutMs above the 120 000 ms ceiling to the ceiling", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 200_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? capped timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:capped-timeout",
+        messageProvider: "webchat",
+      },
+    );
+
+    const passedTimeoutMs = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs;
+    expect(passedTimeoutMs).toBe(120_000);
+  });
+
   it("sanitizes active-memory log fields onto a single line", async () => {
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? log sanitization", messages: [] },
@@ -1179,7 +1248,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
     const hugeSession = `agent:main:${"x".repeat(500)}`;
 
     await hooks.before_prompt_build(
@@ -1423,7 +1492,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       queryMode: "message",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -1451,7 +1520,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       queryMode: "full",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -1482,7 +1551,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       queryMode: "recent",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -1536,7 +1605,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       queryMode: "recent",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -1578,7 +1647,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       queryMode: "recent",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -1611,7 +1680,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       queryMode: "recent",
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       {
@@ -1619,8 +1688,7 @@ describe("active-memory plugin", () => {
         messages: [
           {
             role: "user",
-            content:
-              "Active Memory: I really do want you to remember that I prefer aisle seats.",
+            content: "Active Memory: I really do want you to remember that I prefer aisle seats.",
           },
           {
             role: "user",
@@ -1674,7 +1742,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       maxSummaryChars: 40,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedPiAgent.mockResolvedValueOnce({
       payloads: [
         {
@@ -1708,7 +1776,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       maxSummaryChars: 90,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? prompt-count-check", messages: [] },
@@ -1758,7 +1826,7 @@ describe("active-memory plugin", () => {
       transcriptDir: "active-memory-subagents",
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
     const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
     const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
@@ -1802,7 +1870,7 @@ describe("active-memory plugin", () => {
       transcriptDir: "C:/temp/escape",
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
     const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
 
     await hooks.before_prompt_build(
@@ -1839,7 +1907,7 @@ describe("active-memory plugin", () => {
       transcriptDir: "active-memory-subagents",
       logging: true,
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
     const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
 
     await hooks.before_prompt_build(
@@ -1901,45 +1969,42 @@ describe("active-memory plugin", () => {
     expect(lines.some((line) => line.includes("\r"))).toBe(false);
   });
 
-  it("caps the active-memory cache size and evicts the oldest entries", async () => {
-    api.pluginConfig = {
-      agents: ["main"],
-      logging: true,
-    };
-    await plugin.register(api as unknown as OpenClawPluginApi);
-
+  it("caps the active-memory cache size and evicts the oldest entries", () => {
+    const sessionKey = "agent:main:cache-cap";
     for (let index = 0; index <= 1000; index += 1) {
-      await hooks.before_prompt_build(
-        { prompt: `cache pressure prompt ${index}`, messages: [] },
-        {
+      __testing.setCachedResult(
+        __testing.buildCacheKey({
           agentId: "main",
-          trigger: "user",
-          sessionKey: "agent:main:cache-cap",
-          messageProvider: "webchat",
+          sessionKey,
+          query: `cache pressure prompt ${index}`,
+        }),
+        {
+          status: "ok",
+          elapsedMs: 1,
+          rawReply: `memory ${index}`,
+          summary: `memory ${index}`,
         },
+        15_000,
       );
     }
 
-    const callsBeforeReplay = runEmbeddedPiAgent.mock.calls.length;
-
-    await hooks.before_prompt_build(
-      { prompt: "cache pressure prompt 0", messages: [] },
-      {
-        agentId: "main",
-        trigger: "user",
-        sessionKey: "agent:main:cache-cap",
-        messageProvider: "webchat",
-      },
-    );
-
-    expect(runEmbeddedPiAgent.mock.calls.length).toBe(callsBeforeReplay + 1);
-    const infoLines = vi
-      .mocked(api.logger.info)
-      .mock.calls.map((call: unknown[]) => String(call[0]));
     expect(
-      infoLines.some(
-        (line: string) => line.includes("cached status=ok") && line.includes("prompt 0"),
+      __testing.getCachedResult(
+        __testing.buildCacheKey({
+          agentId: "main",
+          sessionKey,
+          query: "cache pressure prompt 0",
+        }),
       ),
-    ).toBe(false);
+    ).toBeUndefined();
+    expect(
+      __testing.getCachedResult(
+        __testing.buildCacheKey({
+          agentId: "main",
+          sessionKey,
+          query: "cache pressure prompt 1",
+        }),
+      ),
+    ).toMatchObject({ status: "ok", summary: "memory 1" });
   });
 });
