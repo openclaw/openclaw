@@ -318,6 +318,10 @@ function isMeaningful(text: string): boolean {
   return true;
 }
 
+function hasEventLoopPromptKeywords(text: string): boolean {
+  return /\bmicro\s*-?\s*tasks?\b/i.test(text) && /\bmacro\s*-?\s*tasks?\b/i.test(text);
+}
+
 function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean {
   if (!modelKey) {
     return false;
@@ -706,6 +710,19 @@ describe("isPromptProbeMiss", () => {
     { error: "tool probe missing nonce: nonce-a", expected: false },
   ])("returns $expected for $error", ({ error, expected }) => {
     expect(isPromptProbeMiss(error)).toBe(expected);
+  });
+});
+
+describe("hasEventLoopPromptKeywords", () => {
+  it.each([
+    {
+      text: "The event loop drains the microtask queue before running the next macrotask.",
+      expected: true,
+    },
+    { text: "Micro-tasks run before macro-tasks.", expected: true },
+    { text: "Promise callbacks run before timer callbacks.", expected: false },
+  ])("returns $expected for $text", ({ text, expected }) => {
+    expect(hasEventLoopPromptKeywords(text)).toBe(expected);
   });
 });
 function isMissingProfileError(error: string): boolean {
@@ -1531,6 +1548,28 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 phase: "prompt",
                 label: params.label,
               });
+              if (!isMeaningful(text) || !hasEventLoopPromptKeywords(text)) {
+                logProgress(`${progressLabel}: prompt retry (weak answer)`);
+                const retryText = await requestGatewayAgentText({
+                  client,
+                  sessionKey,
+                  idempotencyKey: `idem-${randomUUID()}-keyword-retry`,
+                  modelKey,
+                  message:
+                    "Answer in exactly two short sentences. Include the exact lowercase words microtask and macrotask. No bullets.",
+                  thinkingLevel: params.thinkingLevel,
+                  context: `${progressLabel}: prompt-keyword-retry`,
+                });
+                if (retryText) {
+                  text = retryText;
+                  assertNoReasoningTags({
+                    text,
+                    model: modelKey,
+                    phase: "prompt-retry",
+                    label: params.label,
+                  });
+                }
+              }
               if (!isMeaningful(text)) {
                 if (isGoogleishProvider(model.provider) && /gemini/i.test(model.id)) {
                   logProgress(`${progressLabel}: skip (google not meaningful)`);
@@ -1538,10 +1577,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 }
                 throw new Error(`not meaningful: ${text}`);
               }
-              if (
-                !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
-                !/\bmacro\s*-?\s*tasks?\b/i.test(text)
-              ) {
+              if (!hasEventLoopPromptKeywords(text)) {
                 throw new Error(`missing required keywords: ${text}`);
               }
 
