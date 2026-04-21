@@ -165,6 +165,14 @@ describe("sendFileUrl", () => {
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
+  it("blocks localhost file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "http://localhost/api/internal"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
   it("blocks private-network file URLs before reaching the NAS webhook", async () => {
     const result = await settleTimers(
       sendFileUrl("https://nas.example.com/incoming", "http://192.168.1.10/admin/config.json"),
@@ -173,9 +181,25 @@ describe("sendFileUrl", () => {
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
+  it("blocks unspecified-address file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "http://0.0.0.0/api/internal"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
   it("blocks non-http file URLs before reaching the NAS webhook", async () => {
     const result = await settleTimers(
       sendFileUrl("https://nas.example.com/incoming", "file:///etc/passwd"),
+    );
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks malformed file URLs before reaching the NAS webhook", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "not a url at all"),
     );
     expect(result).toBe(false);
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import net from "node:net";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
@@ -40,8 +41,8 @@ type ChatWebhookPayload = {
   user_ids?: number[];
 };
 
-function isAllowedWebhookFileUrlProtocol(protocol: string): boolean {
-  return protocol === "http:" || protocol === "https:";
+function isBlockedSpecialIpLiteral(hostname: string): boolean {
+  return net.isIP(hostname) !== 0 && (hostname === "0.0.0.0" || hostname === "::");
 }
 
 function isSafeWebhookFileUrl(fileUrl: string): boolean {
@@ -52,11 +53,15 @@ function isSafeWebhookFileUrl(fileUrl: string): boolean {
     return false;
   }
 
-  if (!isAllowedWebhookFileUrlProtocol(parsed.protocol)) {
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return false;
   }
 
-  if (!parsed.hostname || isPrivateOrLoopbackHost(parsed.hostname)) {
+  if (
+    !parsed.hostname ||
+    isBlockedSpecialIpLiteral(parsed.hostname) ||
+    isPrivateOrLoopbackHost(parsed.hostname)
+  ) {
     return false;
   }
 
