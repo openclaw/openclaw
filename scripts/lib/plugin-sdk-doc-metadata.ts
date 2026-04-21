@@ -68,6 +68,9 @@ export const pluginSdkDocMetadata = {
   "command-status-runtime": {
     category: "runtime",
   },
+  "memory-core-host-status": {
+    category: "runtime",
+  },
   "secret-input": {
     category: "channel",
   },
