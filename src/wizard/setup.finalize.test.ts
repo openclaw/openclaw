@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-const runTui = vi.hoisted(() => vi.fn(async () => {}));
+const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
@@ -138,8 +138,8 @@ vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: vi.fn(),
 }));
 
-vi.mock("../tui/tui.js", () => ({
-  runTui,
+vi.mock("../tui/tui-launch.js", () => ({
+  launchTuiCli,
 }));
 
 vi.mock("./setup.secret-input.js", () => ({
@@ -237,7 +237,7 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
-    runTui.mockClear();
+    launchTuiCli.mockClear();
     probeGatewayReachable.mockClear();
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
@@ -339,12 +339,16 @@ describe("finalizeSetupWizard", () => {
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
-    expect(runTui).toHaveBeenCalledWith(
+    expect(launchTuiCli).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
+    expect(setupWizardShellCompletion).toHaveBeenCalledWith({
+      flow: "quickstart",
+      prompter,
+    });
   });
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {
