@@ -210,6 +210,7 @@ export function createSubagentRunManager(params: {
     fallback?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     preserveFrozenResultFallback?: boolean;
+    task?: string;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -252,9 +253,21 @@ export function createSubagentRunManager(params: {
         typeof source.endedAt === "number" ? source.endedAt : now,
       ) ?? 0;
 
+    // Prefer the caller-supplied task (the text actually dispatched to the
+    // child session during steer/wake/orphan-resume) over the previous run's
+    // stale `task`.  Falling back to the prior task preserves behavior for any
+    // caller that does not pass a replacement message.  This is what
+    // redispatchSubagentRunAfterRestart rewraps after a gateway crash — using
+    // stale text would silently re-run the original instruction and lose the
+    // user's steer update.
+    const nextTask =
+      typeof replaceParams.task === "string" && replaceParams.task.length > 0
+        ? replaceParams.task
+        : source.task;
     const next: SubagentRunRecord = {
       ...source,
       runId: nextRunId,
+      task: nextTask,
       createdAt: now,
       startedAt: now,
       sessionStartedAt,

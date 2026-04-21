@@ -215,6 +215,9 @@ async function wakeSubagentRunAfterDescendants(params: {
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     preserveFrozenResultFallback: true,
+    // Persist the wake message as the replacement run's task so that any
+    // post-restart redispatch reconstructs the correct prompt.
+    task: wakeMessage,
   });
 }
 

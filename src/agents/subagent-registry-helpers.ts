@@ -215,6 +215,11 @@ export function reconcileOrphanedRun(params: {
 }) {
   const now = Date.now();
   let changed = false;
+  // NOTE: The only orphan reasons reaching this function are
+  // `missing-session-entry` and `missing-session-id` — both imply no sessionId
+  // is available for transcript lookup. Any future transcript-based recovery
+  // must add a new orphan reason emitted from a path where sessionId is still
+  // known, and then apply a targeted recovery step here.
   if (typeof params.entry.endedAt !== "number") {
     params.entry.endedAt = now;
     changed = true;

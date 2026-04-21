@@ -117,6 +117,9 @@ async function resumeOrphanedSession(params: {
       previousRunId: params.originalRunId,
       nextRunId: result.runId,
       fallback: params.originalRun,
+      // Persist the resume message as the replacement run's task so that any
+      // post-restart redispatch reconstructs the correct prompt.
+      task: resumeMessage,
     });
     if (!remapped) {
       log.warn(

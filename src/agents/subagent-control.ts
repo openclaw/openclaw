@@ -606,6 +606,9 @@ export async function steerControlledSubagentRun(params: {
     nextRunId: runId,
     fallback: params.entry,
     runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
+    // Preserve the steered instruction so that restart redispatch rewraps the
+    // new message, not the stale pre-steer task (P1 correctness fix).
+    task: params.message,
   });
   if (!replaced) {
     clearSubagentRunSteerRestart(params.entry.runId);

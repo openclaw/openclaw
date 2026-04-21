@@ -2625,6 +2625,7 @@ describe("subagent announce formatting", () => {
       previousRunId: "run-parent-phase-1",
       nextRunId: "run-parent-phase-2",
       preserveFrozenResultFallback: true,
+      task: expect.stringContaining("All pending descendants for that run have now settled"),
     });
   });
 
