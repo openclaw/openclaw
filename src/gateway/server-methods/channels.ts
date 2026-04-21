@@ -80,6 +80,15 @@ function resolveChannelGatewayAccountId(params: {
   );
 }
 
+function resolveEffectiveDefaultAccountId(params: {
+  accountIds: string[];
+  defaultAccountId: string;
+}): string {
+  return params.accountIds.includes(params.defaultAccountId)
+    ? params.defaultAccountId
+    : params.accountIds[0] ?? params.defaultAccountId;
+}
+
 export async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -262,10 +271,14 @@ export const channelsHandlers: GatewayRequestHandlers = {
         };
       }
       const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId = resolveChannelDefaultAccountId({
+      const configuredDefaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,
         accountIds,
+      });
+      const defaultAccountId = resolveEffectiveDefaultAccountId({
+        accountIds,
+        defaultAccountId: configuredDefaultAccountId,
       });
       const resolvedAccounts: Record<string, unknown> = {};
       const { results } = await runTasksWithConcurrency({
@@ -289,10 +302,14 @@ export const channelsHandlers: GatewayRequestHandlers = {
 
     const buildChannelSummaryOnly = async (plugin: ChannelPlugin) => {
       const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId = resolveChannelDefaultAccountId({
+      const configuredDefaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,
         accountIds,
+      });
+      const defaultAccountId = resolveEffectiveDefaultAccountId({
+        accountIds,
+        defaultAccountId: configuredDefaultAccountId,
       });
       const account = plugin.config.resolveAccount(cfg, defaultAccountId);
       let probeResult: unknown;

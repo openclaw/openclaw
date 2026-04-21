@@ -162,4 +162,54 @@ describe("channelsHandlers channels.status", () => {
       }),
     );
   });
+
+  it("falls back to the first available account when configured default account ids are stale", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        config: {
+          listAccountIds: () => ["live"],
+          defaultAccountId: () => "stale",
+          resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId }),
+          isEnabled: () => true,
+          isConfigured: async (_account: unknown, cfg: { autoEnabled?: boolean }) =>
+            Boolean(cfg.autoEnabled),
+        },
+      },
+    ]);
+    mocks.buildChannelAccountSnapshot.mockImplementation(async ({ accountId }) => ({
+      accountId,
+      configured: accountId === "live",
+    }));
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.status"](
+      createOptions(
+        { probe: false, includeAccounts: false },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(mocks.buildChannelAccountSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "live",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        channels: {
+          whatsapp: expect.objectContaining({
+            configured: true,
+          }),
+        },
+        channelDefaultAccountId: {
+          whatsapp: "live",
+        },
+      }),
+      undefined,
+    );
+  });
 });
