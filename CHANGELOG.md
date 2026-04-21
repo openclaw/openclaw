@@ -127,6 +127,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Control UI: surface pending scope, role, and device-metadata pairing approvals in auth errors and Control UI hints so broader reconnects no longer look like random auth breakage. (#69226) Thanks @obviyus.
 - Telegram/media: parse lowercase media directives in block replies and preserve outbound attachment filenames, so generated files send once with their original names. (#69641) Thanks @obviyus.
 - Agents/Anthropic: honor explicit `cacheRetention: "long"` for custom `anthropic-messages` endpoints by applying the 1-hour ephemeral cache TTL independently of the Anthropic/Vertex hostname allowlist. Implicit and env-driven long retention still require an allowlisted host. (#67800) Thanks @MonkeyLeeT.
+- GitHub Copilot: update the default Opus model from `claude-opus-4.6` to `claude-opus-4.7` after GitHub removed Copilot support for 4.6. (#69818) Thanks @shakkernerd.
 
 ## 2026.4.19-beta.2
 
