@@ -40,6 +40,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     sortDir: "desc",
     page: 0,
     pageSize: 10,
+    previewTextByKey: {},
     selectedKeys: new Set<string>(),
     expandedCheckpointKey: null,
     checkpointItemsByKey: {},
@@ -65,6 +66,28 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
+  it("renders mailbox-style preview text under the session key", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        previewTextByKey: {
+          "agent:main:main": "Need review on the patch",
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Need review on the patch");
+  });
+
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     render(

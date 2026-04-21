@@ -334,6 +334,7 @@ export class OpenClawApp extends LitElement {
   @state() sessionsSortDir: "asc" | "desc" = "desc";
   @state() sessionsPage = 0;
   @state() sessionsPageSize = 25;
+  @state() sessionsPreviewTextByKey: Record<string, string> = {};
   @state() sessionsSelectedKeys: Set<string> = new Set();
   @state() sessionsExpandedCheckpointKey: string | null = null;
   @state() sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};

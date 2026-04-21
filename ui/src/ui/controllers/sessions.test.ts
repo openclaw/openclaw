@@ -27,6 +27,12 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
+    sessionsSearchQuery: "",
+    sessionsSortColumn: "updated",
+    sessionsSortDir: "desc",
+    sessionsPage: 0,
+    sessionsPageSize: 25,
+    sessionsPreviewTextByKey: {},
     sessionsExpandedCheckpointKey: null,
     sessionsCheckpointItemsByKey: {},
     sessionsCheckpointLoadingKey: null,
@@ -132,6 +138,61 @@ describe("deleteSessionsAndRefresh", () => {
 });
 
 describe("loadSessions", () => {
+  it("loads preview text for the visible sessions page on the sessions tab", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 2,
+          defaults: {},
+          sessions: [
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: 20,
+            },
+            {
+              key: "agent:main:other",
+              kind: "direct",
+              updatedAt: 10,
+            },
+          ],
+        };
+      }
+      if (method === "sessions.preview") {
+        return {
+          ts: 2,
+          previews: [
+            {
+              key: "agent:main:main",
+              status: "ok",
+              items: [{ role: "assistant", text: "Most recent reply" }],
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      tab: "sessions",
+      sessionsPageSize: 1,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.preview", {
+      keys: ["agent:main:main"],
+      limit: 1,
+      maxChars: 120,
+    });
+    expect(state.sessionsPreviewTextByKey["agent:main:main"]).toBe("Most recent reply");
+  });
+
   it("refreshes expanded checkpoint cards when the row summary changes", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {

@@ -231,6 +231,7 @@ export type AppViewState = {
   sessionsSortDir: "asc" | "desc";
   sessionsPage: number;
   sessionsPageSize: number;
+  sessionsPreviewTextByKey: Record<string, string>;
   sessionsSelectedKeys: Set<string>;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;

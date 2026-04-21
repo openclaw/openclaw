@@ -25,6 +25,7 @@ export type SessionsProps = {
   sortDir: "asc" | "desc";
   page: number;
   pageSize: number;
+  previewTextByKey: Record<string, string>;
   selectedKeys: Set<string>;
   expandedCheckpointKey: string | null;
   checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
@@ -461,6 +462,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const showDisplayName = Boolean(
     displayName && displayName !== row.key && displayName !== trimmedLabel,
   );
+  const previewText = normalizeOptionalString(props.previewTextByKey[row.key]) ?? null;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
@@ -485,32 +487,39 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         />
       </td>
       <td class="data-table-key-col">
-        <div class="mono session-key-cell">
-          ${canLink
-            ? html`<a
-                href=${chatUrl}
-                class="session-link"
-                @click=${(e: MouseEvent) => {
-                  if (
-                    e.defaultPrevented ||
-                    e.button !== 0 ||
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    e.shiftKey ||
-                    e.altKey
-                  ) {
-                    return;
-                  }
-                  if (props.onNavigateToChat) {
-                    e.preventDefault();
-                    props.onNavigateToChat(row.key);
-                  }
-                }}
-                >${row.key}</a
-              >`
-            : row.key}
-          ${showDisplayName
-            ? html`<span class="muted session-key-display-name">${displayName}</span>`
+        <div style="display: grid; gap: 4px;">
+          <div class="mono session-key-cell">
+            ${canLink
+              ? html`<a
+                  href=${chatUrl}
+                  class="session-link"
+                  @click=${(e: MouseEvent) => {
+                    if (
+                      e.defaultPrevented ||
+                      e.button !== 0 ||
+                      e.metaKey ||
+                      e.ctrlKey ||
+                      e.shiftKey ||
+                      e.altKey
+                    ) {
+                      return;
+                    }
+                    if (props.onNavigateToChat) {
+                      e.preventDefault();
+                      props.onNavigateToChat(row.key);
+                    }
+                  }}
+                  >${row.key}</a
+                >`
+              : row.key}
+            ${showDisplayName
+              ? html`<span class="muted session-key-display-name">${displayName}</span>`
+              : nothing}
+          </div>
+          ${previewText
+            ? html`<div class="muted" style="font-size: 12px; line-height: 1.35;">
+                ${previewText}
+              </div>`
             : nothing}
         </div>
       </td>

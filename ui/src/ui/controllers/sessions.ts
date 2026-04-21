@@ -1,6 +1,8 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
+  GatewaySessionRow,
   SessionCompactionCheckpoint,
   SessionsCompactionBranchResult,
   SessionsCompactionListResult,
@@ -13,6 +15,7 @@ import {
 } from "./scope-errors.ts";
 
 export type SessionsState = {
+  tab?: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
   sessionsLoading: boolean;
@@ -22,12 +25,112 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsSearchQuery: string;
+  sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
+  sessionsSortDir: "asc" | "desc";
+  sessionsPage: number;
+  sessionsPageSize: number;
+  sessionsPreviewTextByKey: Record<string, string>;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
 };
+
+function filterSessionRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
+  const q = normalizeLowercaseStringOrEmpty(query);
+  if (!q) {
+    return rows;
+  }
+  return rows.filter((row) => {
+    const key = normalizeLowercaseStringOrEmpty(row.key);
+    const label = normalizeLowercaseStringOrEmpty(row.label);
+    const kind = normalizeLowercaseStringOrEmpty(row.kind);
+    const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
+    return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
+  });
+}
+
+function sortSessionRows(
+  rows: GatewaySessionRow[],
+  column: "key" | "kind" | "updated" | "tokens",
+  dir: "asc" | "desc",
+): GatewaySessionRow[] {
+  const cmp = dir === "asc" ? 1 : -1;
+  return [...rows].toSorted((a, b) => {
+    let diff = 0;
+    switch (column) {
+      case "key":
+        diff = (a.key ?? "").localeCompare(b.key ?? "");
+        break;
+      case "kind":
+        diff = (a.kind ?? "").localeCompare(b.kind ?? "");
+        break;
+      case "updated":
+        diff = (a.updatedAt ?? 0) - (b.updatedAt ?? 0);
+        break;
+      case "tokens":
+        diff =
+          (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
+          (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
+        break;
+    }
+    return diff * cmp;
+  });
+}
+
+function getVisibleSessionPreviewKeys(state: SessionsState): string[] {
+  const rows = state.sessionsResult?.sessions ?? [];
+  const filtered = filterSessionRows(rows, state.sessionsSearchQuery);
+  const sorted = sortSessionRows(filtered, state.sessionsSortColumn, state.sessionsSortDir);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / state.sessionsPageSize));
+  const page = Math.min(state.sessionsPage, totalPages - 1);
+  const start = page * state.sessionsPageSize;
+  return sorted
+    .slice(start, start + state.sessionsPageSize)
+    .map((row) => row.key)
+    .filter(Boolean)
+    .slice(0, 64);
+}
+
+export async function loadVisibleSessionPreviews(state: SessionsState) {
+  if (state.tab !== "sessions" || !state.client || !state.connected) {
+    return;
+  }
+  const keys = getVisibleSessionPreviewKeys(state);
+  if (keys.length === 0) {
+    return;
+  }
+  try {
+    const result = await state.client.request<{
+      previews?: Array<{
+        key?: string;
+        items?: Array<{ text?: string }>;
+      }>;
+    }>("sessions.preview", {
+      keys,
+      limit: 1,
+      maxChars: 120,
+    });
+    const next = { ...state.sessionsPreviewTextByKey };
+    for (const key of keys) {
+      delete next[key];
+    }
+    for (const preview of result?.previews ?? []) {
+      if (!preview || typeof preview.key !== "string") {
+        continue;
+      }
+      const text = preview.items?.at(-1)?.text?.trim();
+      if (text) {
+        next[preview.key] = text;
+      }
+    }
+    state.sessionsPreviewTextByKey = next;
+  } catch {
+    // Keep preview fetch failures non-fatal for the sessions table.
+  }
+}
 
 function checkpointSummarySignature(
   row:
@@ -171,6 +274,9 @@ export async function loadSessions(
     if (res) {
       state.sessionsResult = res;
       const nextKeys = new Set(res.sessions.map((row) => row.key));
+      state.sessionsPreviewTextByKey = Object.fromEntries(
+        Object.entries(state.sessionsPreviewTextByKey).filter(([key]) => nextKeys.has(key)),
+      );
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {
           invalidateCheckpointCacheForKey(state, key);
@@ -194,6 +300,7 @@ export async function loadSessions(
       ) {
         await fetchSessionCompactionCheckpoints(state, expandedKey);
       }
+      await loadVisibleSessionPreviews(state);
     }
   }).catch((err: unknown) => {
     if (!isMissingOperatorReadScopeError(err)) {
