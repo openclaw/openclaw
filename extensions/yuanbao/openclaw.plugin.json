@@ -1,0 +1,11 @@
+{
+  "id": "yuanbao",
+  "name": "YuanBao",
+  "description": "YuanBao channel plugin",
+  "channels": ["yuanbao"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
