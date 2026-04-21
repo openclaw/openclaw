@@ -62,6 +62,13 @@ sources = [
   'src/format_utils.c',
   'src/ui_model_utils.c',
   'src/config_setup_transform.c',
+  'src/shell_sections.c',
+  'src/section_dashboard.c',
+  'src/section_general.c',
+  'src/section_config.c',
+  'src/section_diagnostics.c',
+  'src/section_environment.c',
+  'src/section_debug.c',
   'src/app_window.c',
   'src/app_window_section_tag.c',
   'src/chat_controller.c',
@@ -77,6 +84,7 @@ sources = [
   'src/section_cron.c',
   'src/section_instances.c',
   'src/onboarding.c',
+  'src/onboarding_view.c',
   'src/log.c',
   'src/test_seams.c'
 ]
@@ -146,6 +154,16 @@ test_seams_exe = executable('test_seams',
   ['tests/test_seams.c', 'src/test_seams.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('seams', test_seams_exe)
+
+test_shell_sections_exe = executable('test_shell_sections',
+  ['tests/test_shell_sections.c', 'src/shell_sections.c'],
+  dependencies : [glib_dep, gtk4_dep])
+test('shell_sections', test_shell_sections_exe)
+
+test_onboarding_controller_exe = executable('test_onboarding_controller',
+  ['tests/test_onboarding_controller.c', 'src/onboarding.c', 'src/test_seams.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, gtk4_dep, adwaita_dep])
+test('onboarding_controller', test_onboarding_controller_exe)
 
 test_gateway_exe = executable('test_gateway',
   ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c',

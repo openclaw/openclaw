@@ -1,3 +1,15 @@
+/*
+ * product_coordinator.c
+ *
+ * Product policy coordinator for the OpenClaw Linux Companion App.
+ *
+ * Orchestrates startup presentation, onboarding/main-window routing, and
+ * connection-mode-driven product behavior while leaving runtime truth in
+ * `state.c` and persisted intent in `product_state.c`.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
 #include "product_coordinator.h"
 
 #include "device_pair_prompter.h"

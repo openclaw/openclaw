@@ -27,16 +27,7 @@ void state_on_gateway_refresh_requested(void) {
 static void on_activate(GtkApplication *app, gpointer user_data) {
     (void)app;
     (void)user_data;
-    
-    // Ensure we only initialize once if activate is called multiple times
-    static gboolean initialized = FALSE;
-    if (initialized) return;
-    initialized = TRUE;
 
-    // The app has 2 distinct asynchronous runtime lanes:
-    // Lane 1: Real-time systemd D-Bus event subscription (service lifecycle context)
-    // Lane 2: Native gateway client (HTTP health polling + persistent WebSocket)
- 
     product_coordinator_activate();
 }
 

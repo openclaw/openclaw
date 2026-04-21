@@ -1,3 +1,14 @@
+/*
+ * test_product_state.c
+ *
+ * Focused coverage for persisted product state in the Linux companion app.
+ *
+ * Verifies storage, migration, and reset behavior for connection mode and
+ * onboarding-seen version persistence.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
 #include "../src/product_state.h"
 
 #include <glib.h>
