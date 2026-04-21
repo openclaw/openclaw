@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Agents/ACP: skip the `sessions_send` A2A ping-pong flow when a parent sends to its own background oneshot ACP child, preventing parent/child echo loops while preserving normal A2A delivery for non-parent senders. (#69817) Thanks @scotthuang.
 - Agents/subagents: stop terminal failed subagent runs from freezing or announcing captured reply text, so failover-exhausted runs report a clean failure instead of replaying stale assistant/tool output.
 - Security/external content: strip common self-hosted LLM chat-template special-token literals, including Qwen/ChatML, Llama, Gemma, Mistral, Phi, and GPT-OSS markers, from wrapped external content and metadata, preventing tokenizer-layer role-boundary spoofing against OpenAI-compatible backends that preserve special tokens in user text.
+- npm/install: mirror the `node-domexception` alias into root `package.json` `overrides`, so npm installs stop surfacing the deprecated `google-auth-library -> gaxios -> node-fetch -> fetch-blob -> node-domexception` chain pulled through Pi/Google runtime deps. Thanks @vincentkoc.
 - Auth/commands: require owner identity (an owner-candidate match or internal `operator.admin`) for owner-enforced commands instead of treating wildcard channel `allowFrom` or empty owner-candidate lists as sufficient, so non-owner senders can no longer reach owner-only commands through a permissive fallback when `enforceOwnerForCommands=true` and `commands.ownerAllowFrom` is unset. (#69774) Thanks @drobison00.
 - Control UI/CSP: tighten `img-src` to `'self' data:` only, and make Control UI avatar helpers drop remote `http(s)` and protocol-relative URLs so the UI falls back to the built-in logo/badge instead of issuing arbitrary remote image fetches. Same-origin avatar routes (relative paths) and `data:image/...` avatars still render. (#69773)
 - CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
@@ -34,7 +35,6 @@ Docs: https://docs.openclaw.ai
 - OpenShell: pin host-side sandbox writes under the mounted root so symlink-parent rebinds cannot redirect `writeFile` outside the workspace during local mirror updates. (#69797) Thanks @drobison00.
 - Ollama/media understanding: register Ollama as an image-capable media-understanding provider so `agents.defaults.imageModel.primary` values like `ollama/qwen2.5vl:7b` route through the Ollama plugin instead of failing as unknown models. (#69816) Thanks @soloclz.
 - CLI/media understanding: make `openclaw infer image describe --model <provider/model>` execute the explicit image model instead of skipping description when that model supports native vision.
-- npm/install: mirror the `node-domexception` alias into root `package.json` `overrides`, so npm installs stop surfacing the deprecated `google-auth-library -> gaxios -> node-fetch -> fetch-blob -> node-domexception` chain pulled through Pi/Google runtime deps. Thanks @vincentkoc.
 
 ## 2026.4.20
 
