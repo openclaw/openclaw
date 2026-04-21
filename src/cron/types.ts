@@ -100,6 +100,8 @@ type CronAgentTurnPayloadFields = {
   channel?: CronMessageChannel;
   to?: string;
   bestEffortDeliver?: boolean;
+  /** Optional thread ID for threaded replies (e.g., Slack threads). */
+  threadId?: string | number;
 };
 
 type CronAgentTurnPayload = {

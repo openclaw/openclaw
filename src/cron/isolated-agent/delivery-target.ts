@@ -46,6 +46,8 @@ export async function resolveDeliveryTarget(
     /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
     accountId?: string;
     sessionKey?: string;
+    /** Thread ID for threaded replies (e.g., Slack threads). */
+    threadId?: string | number;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";

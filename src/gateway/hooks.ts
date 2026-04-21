@@ -212,6 +212,7 @@ export type HookAgentPayload = {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
+  threadId?: string | number;
 };
 
 export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
@@ -395,6 +396,10 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
       ? Math.floor(timeoutRaw)
       : undefined;
+  const threadIdRaw = payload.threadId;
+  const threadId =
+    (typeof threadIdRaw === "string" && threadIdRaw.trim() ? threadIdRaw.trim() : undefined) ||
+    (typeof threadIdRaw === "number" && threadIdRaw !== null ? threadIdRaw : undefined);
   return {
     ok: true,
     value: {
@@ -410,6 +415,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       model,
       thinking,
       timeoutSeconds,
+      threadId,
     },
   };
 }

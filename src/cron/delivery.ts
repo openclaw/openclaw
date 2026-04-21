@@ -16,6 +16,8 @@ export type CronDeliveryPlan = {
   to?: string;
   /** Explicit channel account id from the delivery config, if set. */
   accountId?: string;
+  /** Thread ID for threaded replies (e.g., Slack threads). */
+  threadId?: string | number;
   source: "delivery" | "payload";
   requested: boolean;
 };
@@ -82,6 +84,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
       channel: resolvedMode === "announce" ? channel : undefined,
       to,
       accountId: deliveryAccountId,
+      threadId: payload?.threadId,
       source: "delivery",
       requested: resolvedMode === "announce",
     };
@@ -96,6 +99,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     mode: requested ? "announce" : "none",
     channel,
     to,
+    threadId: payload?.threadId,
     source: "payload",
     requested,
   };
