@@ -380,6 +380,34 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).not.toContain("\r");
   });
 
+  it("writes NOTION_TOKEN into .env when provided", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      NOTION_TOKEN: "notion-token-123",
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("NOTION_TOKEN=notion-token-123"); // pragma: allowlist secret
+  });
+
+  it("reuses existing .env NOTION_TOKEN when the shell env is unset", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await writeFile(
+      join(activeSandbox.rootDir, ".env"),
+      "NOTION_TOKEN=notion-token-456\nOPENCLAW_GATEWAY_PORT=18789\n", // pragma: allowlist secret
+    );
+
+    const result = runDockerSetup(activeSandbox, {
+      NOTION_TOKEN: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("NOTION_TOKEN=notion-token-456"); // pragma: allowlist secret
+  });
+
   it("treats OPENCLAW_SANDBOX=0 as disabled", async () => {
     const activeSandbox = requireSandbox(sandbox);
     await resetDockerLog(activeSandbox);
@@ -545,6 +573,11 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/OPENCLAW_GATEWAY_TOKEN: \$\{OPENCLAW_GATEWAY_TOKEN:-\}/g)).toHaveLength(
       2,
     );
+  });
+
+  it("keeps docker-compose notion token env defaults aligned across services", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose.match(/NOTION_TOKEN: \$\{NOTION_TOKEN:-\}/g)).toHaveLength(2);
   });
 
   it("keeps docker-compose timezone env defaults aligned across services", async () => {

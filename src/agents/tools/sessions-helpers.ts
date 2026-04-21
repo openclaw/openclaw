@@ -52,6 +52,9 @@ export type SessionListRow = {
   key: string;
   kind: SessionKind;
   channel: string;
+  subject?: string;
+  groupChannel?: string;
+  space?: string;
   origin?: {
     provider?: string;
     accountId?: string;

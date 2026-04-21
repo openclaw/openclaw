@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { saveMediaBuffer } from "../../../media/store.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -171,6 +172,18 @@ what about these images?`,
     expect(ref?.resolved).toContain("IMG_6430.jpeg");
   });
 
+  it("prefers managed media-store refs over host paths in the same bracket", () => {
+    const ref = expectSingleImageReference(
+      "[media attached: /cache/IMG_6430.jpeg (image/jpeg) | media://inbound/IMG_6430.jpeg]",
+    );
+
+    expect(ref).toEqual({
+      raw: "media://inbound/IMG_6430.jpeg",
+      type: "media-uri",
+      resolved: "media://inbound/IMG_6430.jpeg",
+    });
+  });
+
   it("ignores remote URLs entirely (local-only)", () => {
     const refs = expectImageReferenceCount(
       `To send an image: MEDIA:https://example.com/image.jpg
@@ -240,6 +253,45 @@ describe("modelSupportsImages", () => {
 });
 
 describe("loadImageFromRef", () => {
+  it("loads managed inbound media refs through the media store", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-uri-"));
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const saved = await saveMediaBuffer(
+        Buffer.from(pngB64, "base64"),
+        "image/png",
+        "inbound",
+        1024 * 1024,
+        "photo.png",
+      );
+
+      const image = await loadImageFromRef(
+        {
+          raw: `media://inbound/${saved.id}`,
+          type: "media-uri",
+          resolved: `media://inbound/${saved.id}`,
+        },
+        "/tmp",
+      );
+
+      expect(image).not.toBeNull();
+      expect(image?.type).toBe("image");
+      expect(image?.mimeType).toBe("image/png");
+      expect(image?.data.length).toBeGreaterThan(0);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
     await fs.mkdir(homeDir, { recursive: true });

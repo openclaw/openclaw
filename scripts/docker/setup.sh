@@ -89,19 +89,25 @@ NODE
 
 read_env_gateway_token() {
   local env_path="$1"
+  read_env_value "$env_path" OPENCLAW_GATEWAY_TOKEN
+}
+
+read_env_value() {
+  local env_path="$1"
+  local key="$2"
   local line=""
-  local token=""
+  local value=""
   if [[ ! -f "$env_path" ]]; then
     return 0
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
-    if [[ "$line" == OPENCLAW_GATEWAY_TOKEN=* ]]; then
-      token="${line#OPENCLAW_GATEWAY_TOKEN=}"
+    if [[ "$line" == "$key="* ]]; then
+      value="${line#"$key="}"
     fi
   done <"$env_path"
-  if [[ -n "$token" ]]; then
-    printf '%s' "$token"
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
   fi
 }
 
@@ -315,6 +321,15 @@ PY
 fi
 export OPENCLAW_GATEWAY_TOKEN
 
+if [[ -z "${NOTION_TOKEN:-}" ]]; then
+  DOTENV_NOTION_TOKEN="$(read_env_value "$ROOT_DIR/.env" NOTION_TOKEN || true)"
+  if [[ -n "$DOTENV_NOTION_TOKEN" ]]; then
+    NOTION_TOKEN="$DOTENV_NOTION_TOKEN"
+    echo "Reusing NOTION_TOKEN from $ROOT_DIR/.env"
+  fi
+fi
+export NOTION_TOKEN="${NOTION_TOKEN:-}"
+
 COMPOSE_FILES=("$COMPOSE_FILE")
 COMPOSE_ARGS=()
 
@@ -415,6 +430,30 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
 done
 
 ENV_FILE="$ROOT_DIR/.env"
+ENV_KEYS=(
+  OPENCLAW_CONFIG_DIR
+  OPENCLAW_WORKSPACE_DIR
+  OPENCLAW_GATEWAY_PORT
+  OPENCLAW_BRIDGE_PORT
+  OPENCLAW_GATEWAY_BIND
+  OPENCLAW_GATEWAY_TOKEN
+  OPENCLAW_IMAGE
+  OPENCLAW_EXTRA_MOUNTS
+  OPENCLAW_HOME_VOLUME
+  OPENCLAW_DOCKER_APT_PACKAGES
+  OPENCLAW_EXTENSIONS
+  OPENCLAW_SANDBOX
+  OPENCLAW_DOCKER_SOCKET
+  DOCKER_GID
+  OPENCLAW_INSTALL_DOCKER_CLI
+  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
+  OPENCLAW_TZ
+)
+
+if [[ -n "${NOTION_TOKEN:-}" ]]; then
+  ENV_KEYS+=(NOTION_TOKEN)
+fi
+
 upsert_env() {
   local file="$1"
   shift
@@ -452,24 +491,7 @@ upsert_env() {
   mv "$tmp" "$file"
 }
 
-upsert_env "$ENV_FILE" \
-  OPENCLAW_CONFIG_DIR \
-  OPENCLAW_WORKSPACE_DIR \
-  OPENCLAW_GATEWAY_PORT \
-  OPENCLAW_BRIDGE_PORT \
-  OPENCLAW_GATEWAY_BIND \
-  OPENCLAW_GATEWAY_TOKEN \
-  OPENCLAW_IMAGE \
-  OPENCLAW_EXTRA_MOUNTS \
-  OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES \
-  OPENCLAW_EXTENSIONS \
-  OPENCLAW_SANDBOX \
-  OPENCLAW_DOCKER_SOCKET \
-  DOCKER_GID \
-  OPENCLAW_INSTALL_DOCKER_CLI \
-  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
-  OPENCLAW_TZ
+upsert_env "$ENV_FILE" "${ENV_KEYS[@]}"
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"

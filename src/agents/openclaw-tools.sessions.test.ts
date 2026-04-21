@@ -350,11 +350,7 @@ describe("sessions tools", () => {
       }>;
     };
     const main = details.sessions?.find((session) => session.key === "main");
-    expect(typeof main?.transcriptPath).toBe("string");
-    expect(main?.transcriptPath).not.toContain("(multiple)");
-    expect(main?.transcriptPath).toContain(
-      path.join("agents", "main", "sessions", "sess-main.jsonl"),
-    );
+    expect(main?.transcriptPath).toBeUndefined();
   });
 
   it("sessions_history filters tool messages by default", async () => {

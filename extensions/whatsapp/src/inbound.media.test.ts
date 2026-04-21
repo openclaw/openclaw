@@ -189,6 +189,7 @@ describe("web inbound media saves with extension", () => {
     const mediaPath = first.mediaPath;
     expect(mediaPath).toBeDefined();
     expect(path.extname(mediaPath as string)).toBe(".jpg");
+    expect(first.mediaUrl).toMatch(/^media:\/\/inbound\/.+\.jpg$/);
     const stat = await fs.stat(mediaPath as string);
     expect(stat.size).toBeGreaterThan(0);
 

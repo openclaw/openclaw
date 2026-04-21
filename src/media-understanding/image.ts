@@ -6,6 +6,7 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
+import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
@@ -19,15 +20,6 @@ import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
 } from "./types.js";
-
-let piModelDiscoveryRuntimePromise: Promise<
-  typeof import("../agents/pi-model-discovery-runtime.js")
-> | null = null;
-
-function loadPiModelDiscoveryRuntime() {
-  piModelDiscoveryRuntimePromise ??= import("../agents/pi-model-discovery-runtime.js");
-  return piModelDiscoveryRuntimePromise;
-}
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
   if (
@@ -104,13 +96,15 @@ async function resolveImageRuntime(params: {
   authStore?: ImageDescriptionRequest["authStore"];
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
-  const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  const { model, error, authStorage } = resolveModel(
+    resolvedRef.provider,
+    resolvedRef.model,
+    params.agentDir,
+    params.cfg,
+  );
   if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+    throw new Error(error ?? `Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);

@@ -122,7 +122,7 @@ describe("ollama setup", () => {
     });
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
-    expect(modelIds?.[0]).toBe("kimi-k2.5:cloud");
+    expect(modelIds?.[0]).toBe("gemma4:31b-cloud");
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("https://ollama.com");
     expect(result.config.models?.providers?.ollama?.apiKey).toBe("test-ollama-key");
     expect(result.credential).toBe("test-ollama-key");
@@ -162,6 +162,7 @@ describe("ollama setup", () => {
 
     expect(modelIds).toEqual([
       "gemma4",
+      "gemma4:31b-cloud",
       "kimi-k2.5:cloud",
       "minimax-m2.7:cloud",
       "glm-5.1:cloud",
@@ -326,7 +327,7 @@ describe("ollama setup", () => {
     const models = result.config.models?.providers?.ollama?.models;
     const modelIds = models?.map((m) => m.id);
 
-    expect(modelIds).toEqual(["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"]);
+    expect(modelIds).toEqual(["gemma4:31b-cloud", "kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"]);
     expect(models?.find((model) => model.id === "kimi-k2.5:cloud")?.input).toEqual([
       "text",
       "image",

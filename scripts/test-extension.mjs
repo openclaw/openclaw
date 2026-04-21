@@ -13,6 +13,18 @@ function printNoTestsMessage(plan) {
   console.log(`[test-extension] No tests found for ${plan.extensionDir}. Skipping.`);
 }
 
+function relativizeExtensionVitestTargets(config, targets) {
+  const usesExtensionScopedDir =
+    config === "test/vitest/vitest.extensions.config.ts" ||
+    config.startsWith("test/vitest/vitest.extension-");
+  if (!usesExtensionScopedDir) {
+    return targets;
+  }
+  return targets.map((target) =>
+    target.startsWith("extensions/") ? target.slice("extensions/".length) : target,
+  );
+}
+
 async function run() {
   const rawArgs = process.argv.slice(2);
   if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
@@ -46,7 +58,7 @@ async function run() {
     args: passthroughArgs,
     config: plan.config,
     env: process.env,
-    targets: plan.roots,
+    targets: relativizeExtensionVitestTargets(plan.config, plan.roots),
   });
   process.exit(exitCode);
 }

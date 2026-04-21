@@ -27,18 +27,17 @@ import {
 } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
-  buildOllamaProvider,
   buildOllamaModelDefinition,
+  checkOllamaCloudAuth,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   resolveOllamaApiBase,
+  resolveOllamaCloudModelCapabilities,
   type OllamaModelWithContext,
 } from "./provider-models.js";
 
-export { buildOllamaProvider };
-
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = ["gemma4:31b-cloud", "kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 
 type OllamaSetupOptions = {
@@ -50,6 +49,12 @@ type OllamaSetupResult = {
   config: OpenClawConfig;
   credential: SecretInput;
   credentialMode?: SecretInputMode;
+};
+
+type ProviderConfig = {
+  baseUrl: string;
+  api: "ollama";
+  models: ReturnType<typeof buildOllamaModelDefinition>[];
 };
 
 type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
@@ -113,37 +118,6 @@ function formatOllamaPullStatus(status: string): { text: string; hidePercent: bo
     return { text: "verifying digest", hidePercent: true };
   }
   return { text: trimmed, hidePercent: false };
-}
-
-export async function checkOllamaCloudAuth(
-  baseUrl: string,
-): Promise<{ signedIn: boolean; signinUrl?: string }> {
-  try {
-    const apiBase = resolveOllamaApiBase(baseUrl);
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/me`,
-      init: {
-        method: "POST",
-        signal: AbortSignal.timeout(5000),
-      },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: "ollama-setup.me",
-    });
-    try {
-      if (response.status === 401) {
-        const data = (await response.json()) as { signin_url?: string };
-        return { signedIn: false, signinUrl: data.signin_url };
-      }
-      if (!response.ok) {
-        return { signedIn: false };
-      }
-      return { signedIn: true };
-    } finally {
-      await release();
-    }
-  } catch {
-    return { signedIn: false };
-  }
 }
 
 type OllamaPullChunk = {
@@ -347,9 +321,9 @@ function buildOllamaModelsConfig(
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
     // Suggested cloud models may be injected before `/api/tags` exposes them,
-    // so keep Kimi vision-capable during setup even without discovered metadata.
+    // so use the static cloud capabilities map when discovered metadata is absent.
     const capabilities =
-      discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision"] : undefined);
+      discovered?.capabilities ?? (resolveOllamaCloudModelCapabilities(name).length > 0 ? resolveOllamaCloudModelCapabilities(name) : undefined);
     return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities);
   });
 }
@@ -466,6 +440,29 @@ async function promptAndConfigureHostBackedOllama(params: {
       baseUrl,
       mergeUniqueModelNames(suggestedModelNames, discoveredModelNames),
       discoveredModelsByName,
+    ),
+  };
+}
+
+export async function buildOllamaProvider(
+  configuredBaseUrl?: string,
+  opts?: { quiet?: boolean; apiKey?: string },
+): Promise<ProviderConfig> {
+  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
+  const { reachable, models } = await fetchOllamaModels(apiBase, opts?.apiKey);
+  if (!reachable && !opts?.quiet) {
+    console.warn(`Ollama could not be reached at ${apiBase}.`);
+  }
+  const discovered = await enrichOllamaModelsWithContext(
+    apiBase,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+    { apiKey: opts?.apiKey },
+  );
+  return {
+    baseUrl: apiBase,
+    api: "ollama",
+    models: discovered.map((model) =>
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
     ),
   };
 }

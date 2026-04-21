@@ -22,10 +22,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  checkOllamaCloudAuth,
   fetchOllamaModels,
   resolveOllamaApiBase,
 } from "./provider-models.js";
-import { checkOllamaCloudAuth } from "./setup.js";
 
 const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   {

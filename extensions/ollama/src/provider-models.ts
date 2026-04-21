@@ -1,4 +1,3 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -7,6 +6,56 @@ import {
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
 } from "./defaults.js";
+
+/**
+ * Suggested cloud model IDs to append when using ollama.com as the API base.
+ * These models are not returned by /api/tags and must be added explicitly.
+ */
+export const OLLAMA_SUGGESTED_CLOUD_MODELS = [
+  "gemma4:31b-cloud",
+  "kimi-k2.5:cloud",
+  "minimax-m2.7:cloud",
+  "glm-5.1:cloud",
+];
+
+/**
+ * Static capabilities for Ollama cloud models, sourced from
+ * https://ollama.com/search?c=cloud model capability badges.
+ *
+ * Keep this list aligned with capabilities that OpenClaw can actually route
+ * through documented Ollama APIs today. Ollama documents vision/image inputs,
+ * but not audio input or OpenAI-style audio transcription endpoints yet.
+ * Keys are model IDs without the `:cloud` suffix.
+ */
+export const OLLAMA_CLOUD_MODEL_CAPABILITIES: Record<string, string[]> = {
+  "gemma4:31b-cloud": ["vision", "tools", "thinking"],
+  "kimi-k2.5:cloud": ["vision", "tools", "thinking"],
+  "minimax-m2.7:cloud": ["tools", "thinking"],
+  "glm-5:cloud": ["tools", "thinking"],
+  "glm-5.1:cloud": ["tools", "thinking"],
+  "qwen3.5:cloud": ["vision", "tools"],
+  "qwen3-coder-next:cloud": ["tools"],
+  "devstral-small-2:cloud": ["vision", "tools"],
+  "devstral-2:cloud": ["tools"],
+  "nemotron-3-super:cloud": ["tools", "thinking"],
+  "qwen3-next:cloud": ["tools", "thinking"],
+  "rnj-1:cloud": ["tools"],
+  "nemotron-3-nano:cloud": ["tools", "thinking"],
+  "minimax-m2.5:cloud": ["tools", "thinking"],
+  "gemini-3-flash-preview:cloud": ["vision", "tools", "thinking"],
+  "glm-4.7:cloud": ["tools", "thinking"],
+  "deepseek-v3.2:cloud": ["tools", "thinking"],
+  "minimax-m2:cloud": ["tools", "thinking"],
+  "ministral-3:cloud": ["vision", "tools"],
+};
+
+/**
+ * Resolve capabilities for a cloud model ID.
+ * Falls back to the static map, then to an empty array.
+ */
+export function resolveOllamaCloudModelCapabilities(modelId: string): string[] {
+  return OLLAMA_CLOUD_MODEL_CAPABILITIES[modelId] ?? [];
+}
 
 export type OllamaTagModel = {
   name: string;
@@ -30,7 +79,6 @@ export type OllamaModelWithContext = OllamaTagModel & {
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
-const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
@@ -98,14 +146,19 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
+  apiKey?: string,
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
     const { response, release } = await fetchWithSsrFGuard({
       url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },
@@ -154,11 +207,12 @@ export async function queryOllamaModelShowInfo(
 async function queryOllamaModelShowInfoCached(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+  apiKey?: string,
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model);
   if (!cacheKey) {
-    return await queryOllamaModelShowInfo(normalizedApiBase, model.name);
+    return await queryOllamaModelShowInfo(normalizedApiBase, model.name, apiKey);
   }
 
   const cached = ollamaModelShowInfoCache.get(cacheKey);
@@ -166,7 +220,7 @@ async function queryOllamaModelShowInfoCached(
     return await cached;
   }
 
-  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name).then((result) => {
+  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name, apiKey).then((result) => {
     if (!hasCachedOllamaModelShowInfo(result)) {
       ollamaModelShowInfoCache.delete(cacheKey);
     }
@@ -187,19 +241,21 @@ export async function queryOllamaContextWindow(
 export async function enrichOllamaModelsWithContext(
   apiBase: string,
   models: OllamaTagModel[],
-  opts?: { concurrency?: number },
+  opts?: { concurrency?: number; apiKey?: string },
 ): Promise<OllamaModelWithContext[]> {
   const concurrency = Math.max(1, Math.floor(opts?.concurrency ?? OLLAMA_SHOW_CONCURRENCY));
+  const apiKey = opts?.apiKey;
   const enriched: OllamaModelWithContext[] = [];
   for (let index = 0; index < models.length; index += concurrency) {
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
       batch.map(async (model) => {
-        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model);
-        return Object.assign({}, model, {
+        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, apiKey);
+        return {
+          ...model,
           contextWindow: showInfo.contextWindow,
           capabilities: showInfo.capabilities,
-        });
+        };
       }),
     );
     enriched.push(...batchResults);
@@ -217,11 +273,12 @@ export function buildOllamaModelDefinition(
   capabilities?: string[],
 ): ModelDefinitionConfig {
   const hasVision = capabilities?.includes("vision") ?? false;
+  const hasThinking = capabilities?.includes("thinking") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   return {
     id: modelId,
     name: modelId,
-    reasoning: isReasoningModelHeuristic(modelId),
+    reasoning: hasThinking || isReasoningModelHeuristic(modelId),
     input,
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -231,12 +288,18 @@ export function buildOllamaModelDefinition(
 
 export async function fetchOllamaModels(
   baseUrl: string,
+  apiKey?: string,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
     const { response, release } = await fetchWithSsrFGuard({
       url: `${apiBase}/api/tags`,
       init: {
+        headers,
         signal: AbortSignal.timeout(5000),
       },
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
@@ -257,28 +320,43 @@ export async function fetchOllamaModels(
   }
 }
 
-export async function buildOllamaProvider(
-  configuredBaseUrl?: string,
-  opts?: { quiet?: boolean },
-): Promise<ModelProviderConfig> {
-  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
-  const { reachable, models } = await fetchOllamaModels(apiBase);
-  if (!reachable && !opts?.quiet) {
-    console.warn(`Ollama could not be reached at ${apiBase}.`);
-  }
-  const discovered = await enrichOllamaModelsWithContext(
-    apiBase,
-    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-  );
-  return {
-    baseUrl: apiBase,
-    api: "ollama",
-    models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
-    ),
-  };
-}
-
 export function resetOllamaModelShowInfoCacheForTest(): void {
   ollamaModelShowInfoCache.clear();
+}
+
+export async function checkOllamaCloudAuth(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<{ signedIn: boolean; signinUrl?: string }> {
+  try {
+    const apiBase = resolveOllamaApiBase(baseUrl);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${apiBase}/api/me`,
+      init: {
+        method: "POST",
+        headers,
+        signal: AbortSignal.timeout(5000),
+      },
+      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+      auditContext: "ollama-provider-models.me",
+    });
+    try {
+      if (response.status === 401) {
+        const data = (await response.json()) as { signin_url?: string };
+        return { signedIn: false, signinUrl: data.signin_url };
+      }
+      if (!response.ok) {
+        return { signedIn: false };
+      }
+      return { signedIn: true };
+    } finally {
+      await release();
+    }
+  } catch {
+    return { signedIn: false };
+  }
 }

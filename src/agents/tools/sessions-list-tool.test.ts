@@ -199,4 +199,56 @@ describe("sessions-list-tool", () => {
       responseUsage: "full",
     });
   });
+
+  it("keeps group naming metadata in sessions_list results", async () => {
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:whatsapp:group:120363000000000000@g.us",
+              kind: "group",
+              channel: "whatsapp",
+              sessionId: "sess-whatsapp-group",
+              subject: "فريق المنح 2026",
+              displayName: "whatsapp:g-fryq-almn7-2026",
+            },
+            {
+              key: "agent:main:slack:channel:C123",
+              kind: "group",
+              channel: "slack",
+              sessionId: "sess-slack-channel",
+              groupChannel: "#ops",
+              space: "Acme",
+              displayName: "slack:acme#ops",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-4", {});
+    const details = result.details as {
+      sessions?: Array<{
+        subject?: string;
+        groupChannel?: string;
+        space?: string;
+        displayName?: string;
+      }>;
+    };
+
+    expect(details.sessions?.[0]).toMatchObject({
+      subject: "فريق المنح 2026",
+      displayName: "whatsapp:g-fryq-almn7-2026",
+    });
+    expect(details.sessions?.[1]).toMatchObject({
+      groupChannel: "#ops",
+      space: "Acme",
+      displayName: "slack:acme#ops",
+    });
+  });
 });

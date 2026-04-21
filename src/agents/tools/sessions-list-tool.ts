@@ -75,6 +75,10 @@ export function createSessionsListTool(opts?: {
         cfg,
         sandboxed: opts?.sandboxed === true,
       });
+      // Avoid leaking raw transcript file paths when session visibility is widened
+      // beyond the current session tree. Otherwise `sessions_list` can become an
+      // unintended capability-escalation path for agents that already have FS tools.
+      const includeTranscriptPath = visibility === "self" || visibility === "tree";
 
       const kindsRaw = readStringArrayParam(params, "kinds")
         ?.map((value) => normalizeOptionalLowercaseString(value))
@@ -187,7 +191,7 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
         let transcriptPath: string | undefined;
-        if (sessionId) {
+        if (includeTranscriptPath && sessionId) {
           try {
             const agentId = resolveAgentIdFromSessionKey(key);
             const trimmedStorePath = storePath?.trim();
@@ -217,6 +221,9 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           channel: derivedChannel,
+          subject: readStringValue((entry as { subject?: unknown }).subject),
+          groupChannel: readStringValue((entry as { groupChannel?: unknown }).groupChannel),
+          space: readStringValue((entry as { space?: unknown }).space),
           origin:
             originChannel ||
             (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)

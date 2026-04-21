@@ -14,7 +14,7 @@ type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
     agentToAgent: { enabled: boolean };
-    sessions?: { visibility: "all" | "own" };
+    sessions?: { visibility: "self" | "tree" | "agent" | "all" | "own" };
   };
 };
 
@@ -171,6 +171,12 @@ function expectWorkerTranscriptPath(
   const transcriptPath = session?.transcriptPath ?? "";
   expect(path.normalize(transcriptPath)).toContain(path.normalize(params.containsPath));
   expect(transcriptPath).toMatch(new RegExp(`${params.sessionId}\\.jsonl$`));
+}
+
+function expectTranscriptPathOmitted(result: SessionsListResult) {
+  const session = getFirstListedSession(result);
+  expect(session).toMatchObject({ key: "agent:worker:main" });
+  expect(session?.transcriptPath).toBeUndefined();
 }
 
 async function withStubbedStateDir<T>(
@@ -466,7 +472,7 @@ describe("sessions_list transcriptPath resolution", () => {
     });
   });
 
-  it("resolves cross-agent transcript paths from agent defaults when gateway store path is relative", async () => {
+  it("omits cross-agent transcript paths when gateway store path is relative", async () => {
     await withStubbedStateDir("openclaw-state-relative", async () => {
       callGatewayMock.mockResolvedValueOnce({
         path: "agents/main/sessions/sessions.json",
@@ -480,14 +486,11 @@ describe("sessions_list transcriptPath resolution", () => {
       });
 
       const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker",
-      });
+      expectTranscriptPathOmitted(result);
     });
   });
 
-  it("resolves transcriptPath even when sessions.list does not return a store path", async () => {
+  it("omits transcriptPath even when sessions.list does not return a store path", async () => {
     await withStubbedStateDir("openclaw-state-no-path", async () => {
       callGatewayMock.mockResolvedValueOnce({
         sessions: [
@@ -500,14 +503,11 @@ describe("sessions_list transcriptPath resolution", () => {
       });
 
       const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker-no-path",
-      });
+      expectTranscriptPathOmitted(result);
     });
   });
 
-  it("falls back to agent defaults when gateway path is non-string", async () => {
+  it("keeps transcriptPath omitted when gateway path is non-string", async () => {
     await withStubbedStateDir("openclaw-state-non-string-path", async () => {
       callGatewayMock.mockResolvedValueOnce({
         path: { raw: "agents/main/sessions/sessions.json" },
@@ -521,14 +521,11 @@ describe("sessions_list transcriptPath resolution", () => {
       });
 
       const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker-shape",
-      });
+      expectTranscriptPathOmitted(result);
     });
   });
 
-  it("falls back to agent defaults when gateway path is '(multiple)'", async () => {
+  it("keeps transcriptPath omitted when gateway path is '(multiple)'", async () => {
     await withStubbedStateDir("openclaw-state-multiple", async (stateDir) => {
       callGatewayMock.mockResolvedValueOnce({
         path: "(multiple)",
@@ -542,14 +539,11 @@ describe("sessions_list transcriptPath resolution", () => {
       });
 
       const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join(stateDir, "agents", "worker", "sessions"),
-        sessionId: "sess-worker-multiple",
-      });
+      expectTranscriptPathOmitted(result);
     });
   });
 
-  it("resolves absolute {agentId} template paths per session agent", async () => {
+  it("omits transcriptPath for absolute {agentId} template paths when visibility is widened", async () => {
     const templateStorePath = "/tmp/openclaw/agents/{agentId}/sessions/sessions.json";
 
     callGatewayMock.mockResolvedValueOnce({
@@ -564,10 +558,52 @@ describe("sessions_list transcriptPath resolution", () => {
     });
 
     const result = await executeMainSessionsList();
-    const expectedSessionsDir = path.dirname(templateStorePath.replace("{agentId}", "worker"));
-    expectWorkerTranscriptPath(result, {
-      containsPath: expectedSessionsDir,
-      sessionId: "sess-worker-template",
+    expectTranscriptPathOmitted(result);
+  });
+
+  it("still resolves transcriptPath for tree-scoped listings", async () => {
+    await withStubbedStateDir("openclaw-state-tree", async () => {
+      loadConfigMock.mockReturnValue({
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "tree" },
+        },
+      });
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: Record<string, unknown> };
+        if (request.method !== "sessions.list") {
+          return {};
+        }
+        if (request.params?.spawnedBy === MAIN_AGENT_SESSION_KEY) {
+          return {
+            sessions: [
+              {
+                key: "agent:main:subagent:worker",
+              },
+            ],
+          };
+        }
+        return {
+          path: "agents/main/sessions/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:subagent:worker",
+              kind: "direct",
+              sessionId: "sess-tree-worker",
+            },
+          ],
+        };
+      });
+
+      const result = await executeMainSessionsList();
+      const session = getFirstListedSession(result);
+      expect(session).toMatchObject({ key: "agent:main:subagent:worker" });
+      const transcriptPath = session?.transcriptPath ?? "";
+      expect(path.normalize(transcriptPath)).toContain(
+        path.normalize(path.join("agents", "main", "sessions")),
+      );
+      expect(transcriptPath).toMatch(/sess-tree-worker\.jsonl$/);
     });
   });
 });

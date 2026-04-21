@@ -5,7 +5,7 @@ homepage: https://developers.notion.com
 metadata:
   {
     "openclaw":
-      { "emoji": "📝", "requires": { "env": ["NOTION_API_KEY"] }, "primaryEnv": "NOTION_API_KEY" },
+      { "emoji": "📝", "requires": { "env": ["NOTION_TOKEN"] }, "primaryEnv": "NOTION_TOKEN" },
   }
 ---
 
@@ -17,11 +17,10 @@ Use the Notion API to create/read/update pages, data sources (databases), and bl
 
 1. Create an integration at https://notion.so/my-integrations
 2. Copy the API key (starts with `ntn_` or `secret_`)
-3. Store it:
+3. Export it for OpenClaw:
 
 ```bash
-mkdir -p ~/.config/notion
-echo "ntn_your_key_here" > ~/.config/notion/api_key
+export NOTION_TOKEN="ntn_your_key_here"
 ```
 
 4. Share target pages/databases with your integration (click "..." → "Connect to" → your integration name)
@@ -31,14 +30,13 @@ echo "ntn_your_key_here" > ~/.config/notion/api_key
 All requests need:
 
 ```bash
-NOTION_KEY=$(cat ~/.config/notion/api_key)
 curl -X GET "https://api.notion.com/v1/..." \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json"
 ```
 
-> **Note:** The `Notion-Version` header is required. This skill uses `2025-09-03` (latest). In this version, databases are called "data sources" in the API.
+> **Note:** The `Notion-Version` header is required. This skill uses `2026-03-11` (latest). In this version, databases are called "data sources" in the API.
 
 ## Common Operations
 
@@ -46,8 +44,8 @@ curl -X GET "https://api.notion.com/v1/..." \
 
 ```bash
 curl -X POST "https://api.notion.com/v1/search" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{"query": "page title"}'
 ```
@@ -56,24 +54,24 @@ curl -X POST "https://api.notion.com/v1/search" \
 
 ```bash
 curl "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11"
 ```
 
 **Get page content (blocks):**
 
 ```bash
 curl "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11"
 ```
 
 **Create page in a data source:**
 
 ```bash
 curl -X POST "https://api.notion.com/v1/pages" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
     "parent": {"database_id": "xxx"},
@@ -88,8 +86,8 @@ curl -X POST "https://api.notion.com/v1/pages" \
 
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
     "filter": {"property": "Status", "select": {"equals": "Active"}},
@@ -101,11 +99,11 @@ curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
 
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
-    "parent": {"page_id": "xxx"},
+    "parent": {"database_id": "xxx"},
     "title": [{"text": {"content": "My Database"}}],
     "properties": {
       "Name": {"title": {}},
@@ -119,8 +117,8 @@ curl -X POST "https://api.notion.com/v1/data_sources" \
 
 ```bash
 curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{"properties": {"Status": {"select": {"name": "Done"}}}}'
 ```
@@ -129,8 +127,8 @@ curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
 
 ```bash
 curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
     "children": [
@@ -230,7 +228,7 @@ Common property formats for database items:
 - **Email:** `{"email": "a@b.com"}`
 - **Relation:** `{"relation": [{"id": "page_id"}]}`
 
-## Key Differences in 2025-09-03
+## Key Differences in 2026-03-11
 
 - **Databases → Data Sources:** Use `/data_sources/` endpoints for queries and retrieval
 - **Two IDs:** Each database now has both a `database_id` and a `data_source_id`

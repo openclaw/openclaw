@@ -462,6 +462,7 @@ export async function attachWebInboxToSocket(
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     let mediaFileName: string | undefined;
+    let mediaUrl: string | undefined;
     try {
       const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
       if (inboundMedia) {
@@ -478,6 +479,9 @@ export async function attachWebInboxToSocket(
           inboundMedia.fileName,
         );
         mediaPath = saved.path;
+        // Prefer the managed media-store URI in downstream prompts so image loading
+        // works through the trusted claim-check path instead of depending on a host path.
+        mediaUrl = `media://inbound/${saved.id}`;
         mediaType = inboundMedia.mimetype;
         mediaFileName = inboundMedia.fileName;
       }
@@ -492,6 +496,7 @@ export async function attachWebInboxToSocket(
       mediaPath,
       mediaType,
       mediaFileName,
+      mediaUrl,
     };
   };
 
@@ -528,6 +533,7 @@ export async function attachWebInboxToSocket(
         to: self.e164 ?? "me",
         body: enriched.body,
         mediaPath: enriched.mediaPath,
+        mediaUrl: enriched.mediaUrl,
         mediaType: enriched.mediaType,
         mediaFileName: enriched.mediaFileName,
         timestamp,
@@ -573,6 +579,7 @@ export async function attachWebInboxToSocket(
       reply,
       sendMedia,
       mediaPath: enriched.mediaPath,
+      mediaUrl: enriched.mediaUrl,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
       dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,

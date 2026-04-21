@@ -5,6 +5,7 @@ import {
   enrichOllamaModelsWithContext,
   resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
+  resolveOllamaCloudModelCapabilities,
   type OllamaTagModel,
 } from "./provider-models.js";
 
@@ -211,5 +212,13 @@ describe("ollama provider models", () => {
 
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);
+  });
+
+  it("does not advertise undocumented audio input for Ollama cloud models", () => {
+    expect(resolveOllamaCloudModelCapabilities("gemma4:31b-cloud")).toEqual([
+      "vision",
+      "tools",
+      "thinking",
+    ]);
   });
 });
