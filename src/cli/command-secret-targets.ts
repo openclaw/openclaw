@@ -74,6 +74,26 @@ function getChannelSecretTargetIds(): string[] {
   return cachedChannelSecretTargetIds;
 }
 
+function isScopedChannelSecretTargetEntry(params: {
+  pluginId: string;
+  entry: {
+    id: string;
+    configFile?: string;
+    pathPattern?: string;
+    refPathPattern?: string;
+  };
+}): boolean {
+  const allowedPrefix = `channels.${params.pluginId}.`;
+  return (
+    params.entry.id.startsWith(allowedPrefix) &&
+    params.entry.configFile === "openclaw.json" &&
+    typeof params.entry.pathPattern === "string" &&
+    params.entry.pathPattern.startsWith(allowedPrefix) &&
+    (params.entry.refPathPattern === undefined ||
+      params.entry.refPathPattern.startsWith(allowedPrefix))
+  );
+}
+
 function getConfiguredChannelSecretTargetIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -84,7 +104,7 @@ function getConfiguredChannelSecretTargetIds(
     includePersistedAuthState: false,
   })) {
     for (const entry of plugin.secrets?.secretTargetRegistryEntries ?? []) {
-      if (entry.id.startsWith(`channels.${plugin.id}.`)) {
+      if (isScopedChannelSecretTargetEntry({ pluginId: plugin.id, entry })) {
         targetIds.add(entry.id);
       }
     }

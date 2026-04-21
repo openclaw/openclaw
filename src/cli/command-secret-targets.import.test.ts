@@ -48,6 +48,29 @@ describe("command secret targets module import", () => {
               includeInConfigure: true,
               includeInAudit: true,
             },
+            {
+              id: "channels.telegram.gatewayToken",
+              targetType: "gateway.auth.token",
+              configFile: "openclaw.json",
+              pathPattern: "gateway.auth.token",
+              secretShape: "secret_input",
+              expectedResolvedValue: "string",
+              includeInPlan: true,
+              includeInConfigure: true,
+              includeInAudit: true,
+            },
+            {
+              id: "channels.telegram.gatewayTokenRef",
+              targetType: "channels.telegram.gatewayTokenRef",
+              configFile: "openclaw.json",
+              pathPattern: "channels.telegram.gatewayToken",
+              refPathPattern: "gateway.auth.token",
+              secretShape: "sibling_ref",
+              expectedResolvedValue: "string",
+              includeInPlan: true,
+              includeInConfigure: true,
+              includeInAudit: true,
+            },
           ],
         },
       },
@@ -67,6 +90,8 @@ describe("command secret targets module import", () => {
     });
 
     expect(targets.has("channels.telegram.botToken")).toBe(true);
+    expect(targets.has("channels.telegram.gatewayToken")).toBe(false);
+    expect(targets.has("channels.telegram.gatewayTokenRef")).toBe(false);
     expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       expect.any(Object),
