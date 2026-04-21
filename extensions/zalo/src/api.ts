@@ -194,7 +194,7 @@ export async function sendPhoto(
   return callZaloApi<ZaloMessage>(
     "sendPhoto",
     token,
-    { ...params, photo: photoUrl },
+    { ...params, photo: parsedPhotoUrl.href },
     { fetch: fetcher },
   );
 }

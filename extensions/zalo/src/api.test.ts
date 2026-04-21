@@ -128,4 +128,22 @@ describe("Zalo API request methods", () => {
     expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("rejects non-URL strings", async () => {
+    const fetcher = createOkFetcher();
+
+    await expect(
+      sendPhoto(
+        "test-token",
+        {
+          chat_id: "chat-123",
+          photo: "not a url",
+        },
+        fetcher,
+      ),
+    ).rejects.toThrow("Zalo photo URL must be an absolute HTTP or HTTPS URL");
+
+    expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 });
