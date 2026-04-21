@@ -123,6 +123,24 @@ describe("daily-content", () => {
     ).resolves.toBe(false);
   });
 
+  it("does not treat ordinary '## Conversation Summary' headings in missing slugged notes as deleted summaries", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-daily-content-summary-heading-"),
+    );
+    tmpDirs.push(root);
+    await fs.mkdir(path.join(root, "memory"), { recursive: true });
+
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "memory/2026-04-19-customer-call.md",
+        cache: new Map(),
+        snippet: "## Conversation Summary",
+        startLine: 3,
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("does not treat ordinary prose mentioning session id and session key as deleted summaries", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-session-keys-"));
     tmpDirs.push(root);
@@ -270,23 +288,35 @@ describe("daily-content", () => {
     ).resolves.toBe(false);
   });
 
-  it("treats deleted transcript snippets as likely missing session summaries only for session-memory-style slugs", () => {
+  it("requires stronger evidence than transcript-like snippets for missing slugged notes", () => {
     expect(
       isLikelyMissingSessionSummaryDailyMemory({
         filePath: "memory/2026-04-19-session-reset.md",
         snippet: "assistant: we should follow up with the vendor tomorrow",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isLikelyMissingSessionSummaryDailyMemory({
-        filePath: "memory/2026-04-19-vendor-summary.md",
+        filePath: "memory/2026-04-19-password-reset.md",
         snippet: "assistant: we should follow up with the vendor tomorrow",
       }),
     ).toBe(false);
     expect(
       isLikelyMissingSessionSummaryDailyMemory({
-        filePath: "memory/2026-04-19-vendor-pitch.md",
-        snippet: "we should follow up with the vendor tomorrow",
+        filePath: "memory/2026-04-19-session-plan.md",
+        snippet: "assistant: we should follow up with the vendor tomorrow",
+      }),
+    ).toBe(false);
+    expect(
+      isLikelyMissingSessionSummaryDailyMemory({
+        filePath: "memory/2026-04-19-session-reset.md",
+        snippet: "# Session: 2026-04-19 10:00:00 UTC",
+      }),
+    ).toBe(true);
+    expect(
+      isLikelyMissingSessionSummaryDailyMemory({
+        filePath: "memory/2026-04-19-session-reset.md",
+        snippet: "## Conversation Summary",
       }),
     ).toBe(false);
   });
@@ -724,8 +754,8 @@ describe("daily-content", () => {
         workspaceDir: root,
         filePath: "memory/2026-04-19-note.md",
         cache,
-        snippet: "## Conversation Summary",
-        startLine: 11,
+        snippet: "# Session: 2026-04-19 10:00:00 UTC",
+        startLine: 1,
       }),
     ).resolves.toBe(true);
     await expect(

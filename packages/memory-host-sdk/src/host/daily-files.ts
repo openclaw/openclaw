@@ -3,6 +3,7 @@ import path from "node:path";
 import { withFileLock } from "./file-lock.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { parseDailyMemoryFileName, type ParsedDailyMemoryFileName } from "./daily-paths.js";
+import { readSessionSummaryProbePrefixFromFile } from "./daily-session-summary-io.js";
 import { isSessionSummaryDailyMemory } from "./daily-session-summary.js";
 
 const DAILY_MEMORY_RECENT_INDEX_FILE_NAME = ".recent-daily-files.json";
@@ -130,7 +131,7 @@ async function resolveLiveSessionSummaryFlag(params: {
   }
   let raw;
   try {
-    raw = await fs.readFile(params.entry.absolutePath, "utf-8");
+    raw = await readSessionSummaryProbePrefixFromFile(params.entry.absolutePath);
   } catch (error) {
     if (isBenignDailyMemoryFileError(error) || isBenignDailyMemoryDirError(error)) {
       return false;

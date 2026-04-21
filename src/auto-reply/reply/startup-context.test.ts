@@ -1082,7 +1082,16 @@ describe("buildSessionStartupContextPrelude", () => {
 
   it("clamps oversized startupContext limits to safe caps", async () => {
     const workspaceDir = await makeWorkspace();
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
+    for (let offset = 0; offset < 14; offset += 1) {
+      const currentDay = new Date(Date.UTC(2026, 3, 11 - offset));
+      const stamp = currentDay.toISOString().slice(0, 10);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${stamp}.md`),
+        `notes ${stamp}`,
+        "utf-8",
+      );
+    }
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-03-28.md"), "too old", "utf-8");
 
     const prelude = await buildSessionStartupContextPrelude({
       workspaceDir,
@@ -1103,6 +1112,8 @@ describe("buildSessionStartupContextPrelude", () => {
     });
 
     expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-03-29.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-03-28.md]");
   });
 
   it("steps daily memory by calendar day across DST boundaries", async () => {

@@ -465,7 +465,7 @@ function isMergeableSameDayDailyVariantPair(leftPath: string, rightPath: string)
     return false;
   }
   if (left.normalizedPath === right.normalizedPath) {
-    return true;
+    return false;
   }
   return left.canonical || right.canonical;
 }
@@ -538,15 +538,15 @@ function findExistingDailyVariantEntryKey(params: {
     if (resolveDailyVariantComparableDir(normalizedEntryPath) !== candidateDir) {
       continue;
     }
-    if (!isMergeableSameDayDailyVariantPair(normalizedEntryPath, normalizedCandidatePath)) {
-      continue;
-    }
     if (normalizedEntryPath === normalizedCandidatePath) {
       if (entry.startLine !== candidateStartLine || entry.endLine !== candidateEndLine) {
         continue;
       }
       exactVariantKey = key;
       break;
+    }
+    if (!isMergeableSameDayDailyVariantPair(normalizedEntryPath, normalizedCandidatePath)) {
+      continue;
     }
     const lineDistance =
       Math.abs(entry.startLine - candidateStartLine) + Math.abs(entry.endLine - candidateEndLine);
@@ -1322,13 +1322,7 @@ async function isSessionSummaryShortTermPath(params: {
   startLine?: number;
   recordDependency?: (dependency: SessionSummaryDailyMemoryDependency) => void;
 }): Promise<boolean> {
-  return await isSessionSummaryDailyMemoryPath({
-    ...params,
-    // Upgraded workspaces can still contain deleted pre-index session-memory notes with
-    // semantic LLM slugs. Short-term cleanup should purge those bookkeeping recalls even
-    // though doctor keeps the default stricter heuristic for missing durable notes.
-    allowLegacySemanticSlugTranscriptFallback: true,
-  });
+  return await isSessionSummaryDailyMemoryPath(params);
 }
 
 async function shortTermRecallSourceExists(params: {

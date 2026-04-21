@@ -789,7 +789,7 @@ describe("doctor.memory.status", () => {
     }
   });
 
-  it("excludes deleted bookkeeping session-summary entries from dreaming status totals", async () => {
+  it("excludes deleted bookkeeping session-summary entries with strong markers from dreaming status totals", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "doctor-memory-bookkeeping-deleted-"),
     );
@@ -810,7 +810,7 @@ describe("doctor.memory.status", () => {
             bookkeeping: {
               path: "memory/2026-04-03-session-reset.md",
               source: "memory",
-              snippet: "assistant: bookkeeping only",
+              snippet: "# Session: 2026-04-03 10:00:00 UTC",
               recallCount: 3,
               dailyCount: 1,
             },
@@ -968,16 +968,16 @@ describe("doctor.memory.status", () => {
         true,
         expect.objectContaining({
           dreaming: expect.objectContaining({
-            shortTermCount: 1,
-            recallSignalCount: 2,
-            dailySignalCount: 1,
-            totalSignalCount: 3,
-            shortTermEntries: [
+            shortTermCount: 2,
+            recallSignalCount: 5,
+            dailySignalCount: 2,
+            totalSignalCount: 7,
+            shortTermEntries: expect.arrayContaining([
               expect.objectContaining({
                 path: "memory/2026-04-03-session-reset.md",
                 snippet: "Durable router note.",
               }),
-            ],
+            ]),
           }),
         }),
         undefined,

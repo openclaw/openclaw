@@ -193,7 +193,7 @@ describe("short-term promotion", () => {
                 startLine: 9,
                 endLine: 9,
                 source: "memory",
-                snippet: "assistant: bookkeeping only",
+                snippet: "# Session: 2026-04-03 10:00:00 UTC",
                 recallCount: 3,
                 dailyCount: 0,
                 groundedCount: 0,
@@ -1296,6 +1296,39 @@ describe("short-term promotion", () => {
     });
 
     expect(matchedKey).toBe("first");
+  });
+
+  it("does not merge repeated same-day snippets from different line ranges in the same file", () => {
+    const claimHash = __testing.buildClaimHash("same snippet");
+    const matchedKey = __testing.findExistingDailyVariantEntryKey({
+      entries: {
+        first: {
+          key: "first",
+          path: "memory/2026-04-03.md",
+          startLine: 3,
+          endLine: 3,
+          source: "memory",
+          snippet: "same snippet",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.9,
+          maxScore: 0.9,
+          firstRecalledAt: "2026-04-03T10:00:00.000Z",
+          lastRecalledAt: "2026-04-03T10:00:00.000Z",
+          queryHashes: ["a"],
+          recallDays: ["2026-04-03"],
+          conceptTags: [],
+          claimHash,
+        },
+      },
+      claimHash,
+      candidatePath: "memory/2026-04-03.md",
+      candidateStartLine: 20,
+      candidateEndLine: 20,
+    });
+
+    expect(matchedKey).toBeNull();
   });
 
   it("ignores legacy absolute-path same-day variants that resolve outside the current workspace", () => {
@@ -3059,7 +3092,7 @@ describe("short-term promotion", () => {
                 startLine: 9,
                 endLine: 9,
                 source: "memory",
-                snippet: "assistant: bookkeeping only",
+                snippet: "# Session: 2026-04-03 10:00:00 UTC",
                 recallCount: 3,
                 dailyCount: 0,
                 groundedCount: 0,
@@ -3148,7 +3181,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("purges deleted semantic LLM slug session summaries from pre-index workspaces", async () => {
+  it("keeps deleted semantic LLM slug recalls without remembered bookkeeping provenance", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       await fs.writeFile(
@@ -3189,17 +3222,12 @@ describe("short-term promotion", () => {
           workspaceDir,
           nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
         }),
-      ).resolves.toEqual([]);
-
-      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-      expect(repair.changed).toBe(true);
-      expect(repair.rewroteStore).toBe(true);
-      await expect(
-        fs.readFile(storePath, "utf-8").then((raw) => JSON.parse(raw)),
-      ).resolves.toMatchObject({
-        entries: {},
-        sessionSummaryPurgedAt: expect.any(String),
-      });
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "assistant: bookkeeping only",
+        }),
+      ]);
     });
   });
 
@@ -3253,7 +3281,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("purges deleted transcript-like semantic slugs from pre-index workspaces", async () => {
+  it("keeps deleted transcript-like semantic slugs without remembered bookkeeping provenance", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       await fs.writeFile(
@@ -3294,7 +3322,12 @@ describe("short-term promotion", () => {
           workspaceDir,
           nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "assistant: bookkeeping only",
+        }),
+      ]);
     });
   });
 
@@ -3314,7 +3347,7 @@ describe("short-term promotion", () => {
                 startLine: 9,
                 endLine: 9,
                 source: "memory",
-                snippet: "assistant: bookkeeping only",
+                snippet: "# Session: 2026-04-03 10:00:00 UTC",
                 recallCount: 3,
                 dailyCount: 0,
                 groundedCount: 0,
@@ -3378,7 +3411,7 @@ describe("short-term promotion", () => {
                 startLine: 9,
                 endLine: 9,
                 source: "memory",
-                snippet: "assistant: bookkeeping only",
+                snippet: "# Session: 2026-04-03 10:00:00 UTC",
                 recallCount: 3,
                 dailyCount: 0,
                 groundedCount: 0,
@@ -3592,6 +3625,66 @@ describe("short-term promotion", () => {
       ).resolves.toEqual([
         expect.objectContaining({
           path: "memory/2026-04-03-vendor-pitch.md",
+          snippet: "We should follow up with the vendor tomorrow.",
+        }),
+      ]);
+    });
+  });
+
+  it("does not let remembered canonical session-summary provenance purge sibling-backed durable recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-vendor-pitch.md"),
+        "We should follow up with the vendor tomorrow.\n",
+        "utf-8",
+      );
+      await rememberRecentDailyMemoryFile({
+        memoryDir: path.join(workspaceDir, "memory"),
+        fileName: "2026-04-03.md",
+        sessionSummary: true,
+      });
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03.md",
+                startLine: 11,
+                endLine: 11,
+                source: "memory",
+                snippet: "We should follow up with the vendor tomorrow.",
+                recallCount: 2,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1.8,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["legacy-q"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/2026-04-03.md",
           snippet: "We should follow up with the vendor tomorrow.",
         }),
       ]);
