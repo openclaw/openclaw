@@ -18,8 +18,8 @@ Do not start duplicate triage until this setup is complete.
 
 Install these skills first because they teach the agent how to use the two main CLIs correctly:
 
-- `ghreplica` skill from `/Users/onur/offline/ghreplica/skills/ghreplica/SKILL.md`
-- `prtags` skill from `/Users/onur/offline/prtags/skills/prtags/SKILL.md`
+- `ghreplica` skill from the `ghreplica` repo at `skills/ghreplica/SKILL.md`
+- `prtags` skill from the `prtags` repo at `skills/prtags/SKILL.md`
 
 This skill assumes those two skills are available and can be used during the same run.
 
