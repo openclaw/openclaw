@@ -18,6 +18,7 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -48,6 +49,18 @@ function resolveSlugTimeoutMs(cfg: OpenClawConfig): number {
     return DEFAULT_LLM_SLUG_TIMEOUT_MS;
   }
   return clampNumber(parsed, MIN_LLM_SLUG_TIMEOUT_MS, MAX_LLM_SLUG_TIMEOUT_MS);
+}
+
+function resolveSlugThinkingLevel(cfg: OpenClawConfig): ThinkLevel {
+  const hookEntry = cfg.hooks?.internal?.entries?.["session-memory"];
+  const raw =
+    hookEntry && typeof hookEntry === "object"
+      ? (hookEntry as Record<string, unknown>).thinking
+      : undefined;
+  if (typeof raw !== "string") {
+    return "minimal";
+  }
+  return normalizeThinkLevel(raw) ?? "minimal";
 }
 
 /**
@@ -117,6 +130,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       model = isCli ? DEFAULT_MODEL : rawModel;
     }
     const timeoutMs = resolveSlugTimeoutMs(params.cfg);
+    const thinkLevel = resolveSlugThinkingLevel(params.cfg);
 
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
@@ -130,7 +144,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       provider,
       model,
       trigger: "memory",
-      thinkLevel: "minimal",
+      thinkLevel,
       disableTools: true,
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,

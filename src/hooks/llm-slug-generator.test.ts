@@ -103,6 +103,56 @@ describe("generateSlugViaLLM", () => {
     );
   });
 
+  it("reads thinking from session-memory hook config", async () => {
+    const cfg = {
+      hooks: {
+        internal: {
+          entries: {
+            "session-memory": {
+              thinking: "low",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await generateSlugViaLLM({
+      sessionContent: "Conversation body",
+      cfg,
+    });
+
+    expect(mockRunEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinkLevel: "low",
+      }),
+    );
+  });
+
+  it("falls back to minimal when session-memory thinking is invalid", async () => {
+    const cfg = {
+      hooks: {
+        internal: {
+          entries: {
+            "session-memory": {
+              thinking: "turbo",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await generateSlugViaLLM({
+      sessionContent: "Conversation body",
+      cfg,
+    });
+
+    expect(mockRunEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinkLevel: "minimal",
+      }),
+    );
+  });
+
   it("clamps llmSlugTimeoutMs to safe bounds", async () => {
     const cfg = {
       hooks: {

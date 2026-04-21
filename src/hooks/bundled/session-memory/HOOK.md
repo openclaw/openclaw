@@ -59,9 +59,10 @@ The hook uses your configured LLM provider to generate slugs, so it works with a
 The hook supports optional configuration:
 
 | Option             | Type    | Default | Description                                                               |
-| ------------------ | ------- | ------- | ------------------------------------------------------------------------- |
+| ------------------ | ------- | ------- | ------------------------------------------------------------------------- | ------- | --- | ------ | ---- | ------- |
 | `messages`         | number  | 15      | Number of user/assistant messages to include in the memory file           |
 | `llmSlug`          | boolean | true    | Enable/disable LLM slug generation (when false, filenames use time only)  |
+| `thinking`         | string  | minimal | Thinking level for slug generation (`off                                  | minimal | low | medium | high | xhigh`) |
 | `llmSlugTimeoutMs` | number  | 45000   | Timeout for slug LLM generation in milliseconds (clamped to 5000..300000) |
 
 Example configuration:
@@ -75,6 +76,7 @@ Example configuration:
           "enabled": true,
           "messages": 25,
           "llmSlug": true,
+          "thinking": "low",
           "llmSlugTimeoutMs": 60000
         }
       }
