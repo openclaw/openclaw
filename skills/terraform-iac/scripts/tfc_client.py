@@ -1281,17 +1281,7 @@ data "terraform_remote_state" "vpc" {{
   }
 """
     else:
-        egress_block = """
-  # Locked down: no outbound traffic allowed.
-  # An explicit empty-destination egress rule revokes the AWS default allow-all.
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = []
-    description = "Deny all outbound (locked down)"
-  }
-"""
+        egress_block = ""  # No egress blocks → Terraform removes the AWS default allow-all, fully locking down outbound.
 
     main_tf = f"""terraform {{
   required_providers {{
@@ -3869,6 +3859,9 @@ output "bucket_arn" {{ value = aws_s3_bucket.this.arn }}
 
     elif args.resource == "rg":
         name = args.name
+        if not name:
+            print("❌ Missing required --name for Azure Resource Group.")
+            sys.exit(1)
         errors = validate_azure_rg_name(name)
         if errors:
             print("\u274c Invalid Azure Resource Group name:")
@@ -4044,7 +4037,10 @@ def cmd_destroy(args):
         print("ERROR: Destroy failed")
         sys.exit(1)
     print("\n✅ Destroy complete.")
-
+    if _git_enabled():
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _git_commit(f"destroy: completed at {ts}")
+        _git_push()
 
 
 
