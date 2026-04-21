@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendMessageMock = vi.fn();
 const sendPhotoMock = vi.fn();
 const resolveZaloProxyFetchMock = vi.fn();
+const prepareHostedZaloMediaUrlMock = vi.fn();
 
 vi.mock("./api.js", () => ({
   sendMessage: (...args: unknown[]) => sendMessageMock(...args),
@@ -13,6 +14,10 @@ vi.mock("./proxy.js", () => ({
   resolveZaloProxyFetch: (...args: unknown[]) => resolveZaloProxyFetchMock(...args),
 }));
 
+vi.mock("./outbound-media.js", () => ({
+  prepareHostedZaloMediaUrl: (...args: unknown[]) => prepareHostedZaloMediaUrlMock(...args),
+}));
+
 import { sendMessageZalo, sendPhotoZalo } from "./send.js";
 
 describe("zalo send", () => {
@@ -21,6 +26,7 @@ describe("zalo send", () => {
     sendPhotoMock.mockReset();
     resolveZaloProxyFetchMock.mockReset();
     resolveZaloProxyFetchMock.mockReturnValue(undefined);
+    prepareHostedZaloMediaUrlMock.mockReset();
   });
 
   it("sends text messages through the message API", async () => {
@@ -87,5 +93,43 @@ describe("zalo send", () => {
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(sendPhotoMock).not.toHaveBeenCalled();
+  });
+
+  it("re-hosts cfg-backed media sends before forwarding them to Zalo", async () => {
+    prepareHostedZaloMediaUrlMock.mockResolvedValueOnce(
+      "https://gateway.example.com/zalo-webhook/media/abc?token=secret",
+    );
+    sendPhotoMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-photo-2" },
+    });
+
+    const result = await sendPhotoZalo("dm-chat-5", "https://example.com/photo.jpg", {
+      cfg: {
+        channels: {
+          zalo: {
+            botToken: "zalo-token",
+            webhookUrl: "https://gateway.example.com/zalo-webhook",
+          },
+        },
+      } as never,
+    });
+
+    expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith({
+      mediaUrl: "https://example.com/photo.jpg",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      webhookPath: undefined,
+      maxBytes: 5 * 1024 * 1024,
+    });
+    expect(sendPhotoMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-5",
+        photo: "https://gateway.example.com/zalo-webhook/media/abc?token=secret",
+        caption: undefined,
+      },
+      undefined,
+    );
+    expect(result).toEqual({ ok: true, messageId: "z-photo-2" });
   });
 });

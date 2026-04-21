@@ -26,8 +26,8 @@ import {
   createChannelPairingController,
   createChannelReplyPipeline,
   deliverTextOrMediaReply,
-  resolveWebhookPath,
   logTypingFailure,
+  resolveWebhookPath,
   resolveDefaultGroupPolicy,
   resolveDirectDmAuthorizationOutcome,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
@@ -38,6 +38,7 @@ import {
 import { getZaloRuntime } from "./runtime.js";
 export type { ZaloRuntimeEnv } from "./monitor.types.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
+import { prepareHostedZaloMediaUrl, tryHandleHostedZaloMediaRequest } from "./outbound-media.js";
 
 export type ZaloMonitorOptions = {
   token: string;
@@ -566,6 +567,9 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           runtime,
           core,
           config,
+          webhookUrl: account.config.webhookUrl,
+          webhookPath: account.config.webhookPath,
+          mediaMaxBytes: effectiveMediaMaxMb * 1024 * 1024,
           accountId: account.accountId,
           statusSink,
           fetcher,
@@ -589,12 +593,28 @@ async function deliverZaloReply(params: {
   runtime: ZaloRuntimeEnv;
   core: ZaloCoreRuntime;
   config: OpenClawConfig;
+  webhookUrl?: string;
+  webhookPath?: string;
+  mediaMaxBytes: number;
   accountId?: string;
   statusSink?: ZaloStatusSink;
   fetcher?: ZaloFetch;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { payload, token, chatId, runtime, core, config, accountId, statusSink, fetcher } = params;
+  const {
+    payload,
+    token,
+    chatId,
+    runtime,
+    core,
+    config,
+    webhookUrl,
+    webhookPath,
+    mediaMaxBytes,
+    accountId,
+    statusSink,
+    fetcher,
+  } = params;
   const tableMode = params.tableMode ?? "code";
   const reply = resolveSendableOutboundReplyParts(payload, {
     text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
@@ -614,7 +634,15 @@ async function deliverZaloReply(params: {
       }
     },
     sendMedia: async ({ mediaUrl, caption }) => {
-      await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
+      const sendableMediaUrl = webhookUrl
+        ? await prepareHostedZaloMediaUrl({
+            mediaUrl,
+            webhookUrl,
+            webhookPath,
+            maxBytes: mediaMaxBytes,
+          })
+        : mediaUrl;
+      await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher);
       statusSink?.({ lastOutboundAt: Date.now() });
     },
     onMediaError: (error) => {
@@ -722,12 +750,15 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         {
           route: {
             auth: "plugin",
-            match: "exact",
+            match: "prefix",
             pluginId: "zalo",
             source: "zalo-webhook",
             accountId: account.accountId,
             log: runtime.log,
             handler: async (req, res) => {
+              if (await tryHandleHostedZaloMediaRequest(req, res)) {
+                return;
+              }
               const handled = await handleZaloWebhookRequest(req, res);
               if (!handled && !res.headersSent) {
                 res.statusCode = 404;
