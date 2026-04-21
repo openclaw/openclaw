@@ -1,6 +1,7 @@
 import {
   dedupeProfileIds,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -230,7 +231,9 @@ function hasAuthProfileCredentialSource(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
 }): boolean {
-  const store = resolveUsageAuthStore(params.state);
+  const store = ensureAuthProfileStoreWithoutExternalProfiles(params.state.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const order = resolveAuthProfileOrder({
     cfg: params.state.cfg,
     store,

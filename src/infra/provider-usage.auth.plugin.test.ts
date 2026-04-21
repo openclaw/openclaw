@@ -10,11 +10,16 @@ const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 const ensureAuthProfileStoreMock = vi.fn(() => ({
   profiles: {},
 }));
+const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn(() => ({
+  profiles: {},
+}));
 const resolveAuthProfileOrderMock = vi.fn((_params: unknown): string[] => []);
 
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
+  ensureAuthProfileStoreWithoutExternalProfiles: () =>
+    ensureAuthProfileStoreWithoutExternalProfilesMock(),
   hasAnyAuthProfileStoreSource: () => hasAnyAuthProfileStoreSourceMock(),
   listProfilesForProvider: () => [],
   resolveApiKeyForProfile: async () => null,
@@ -52,6 +57,10 @@ describe("resolveProviderAuths plugin boundary", () => {
     hasAnyAuthProfileStoreSourceMock.mockReturnValue(false);
     ensureAuthProfileStoreMock.mockClear();
     ensureAuthProfileStoreMock.mockReturnValue({
+      profiles: {},
+    });
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockClear();
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
       profiles: {},
     });
     resolveAuthProfileOrderMock.mockReset();
@@ -160,7 +169,7 @@ describe("resolveProviderAuths plugin boundary", () => {
 
   it("keeps auth-profile credential sources provider-specific", async () => {
     hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
-    ensureAuthProfileStoreMock.mockReturnValue({
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
       profiles: {
         "anthropic:default": {
           type: "api_key",
@@ -201,6 +210,25 @@ describe("resolveProviderAuths plugin boundary", () => {
         provider: "anthropic",
       }),
     );
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("does not overlay external auth profiles while checking the skip gate", async () => {
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuths({
+          providers: ["anthropic"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledTimes(1);
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+    expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("skips plugin usage auth per provider when only another provider has direct credentials", async () => {
