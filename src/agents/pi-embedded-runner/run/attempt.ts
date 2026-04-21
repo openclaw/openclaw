@@ -1144,9 +1144,11 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
-      const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
-      activeSession.agent.convertToLlm = async (messages) =>
-        await baseConvertToLlm(normalizeAssistantReplayContent(messages));
+      if (typeof activeSession.agent.convertToLlm === "function") {
+        const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
+        activeSession.agent.convertToLlm = async (messages) =>
+          await baseConvertToLlm(normalizeAssistantReplayContent(messages));
+      }
       let prePromptMessageCount = activeSession.messages.length;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
@@ -2193,7 +2195,7 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
             finalPromptText = effectivePrompt;
-            const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+            const btwSnapshotMessages = normalizedReplayMessages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,
