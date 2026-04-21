@@ -317,8 +317,11 @@ function getJiti(modulePath: string) {
 }
 
 function canTryNodeRequireBuiltModule(modulePath: string): boolean {
+  const isBuiltBundledArtifact =
+    modulePath.includes(`${path.sep}dist${path.sep}`) ||
+    modulePath.includes(`${path.sep}dist-runtime${path.sep}`);
   return (
-    modulePath.includes(`${path.sep}dist${path.sep}`) &&
+    isBuiltBundledArtifact &&
     [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
   );
 }

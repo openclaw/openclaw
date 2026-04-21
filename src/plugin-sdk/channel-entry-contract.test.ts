@@ -17,7 +17,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function expectBuiltArtifactNodeRequireFastPath(scope: string): Promise<void> {
+async function expectBuiltArtifactNodeRequireFastPath(
+  scope: string,
+  artifactRoot = "dist",
+): Promise<void> {
   vi.stubEnv("OPENCLAW_PLUGIN_LOAD_PROFILE", "1");
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
@@ -29,7 +32,7 @@ async function expectBuiltArtifactNodeRequireFastPath(scope: string): Promise<vo
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+    const pluginRoot = path.join(tempRoot, artifactRoot, "extensions", "telegram");
     fs.mkdirSync(pluginRoot, { recursive: true });
 
     const importerPath = path.join(pluginRoot, "index.js");
@@ -182,13 +185,8 @@ describe("loadBundledEntryExportSync", () => {
     await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
   });
 
-  it("keeps Win32 built sidecar loads on the nodeRequire fast-path", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      await expectBuiltArtifactNodeRequireFastPath("win32-profile-fast-path");
-    } finally {
-      platformSpy.mockRestore();
-    }
+  it("keeps dist-runtime built sidecar loads on the nodeRequire fast-path", async () => {
+    await expectBuiltArtifactNodeRequireFastPath("dist-runtime-profile-fast-path", "dist-runtime");
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {
