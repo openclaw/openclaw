@@ -509,7 +509,6 @@ describe("runEmbeddedPiAgent", () => {
       agentDir,
       runId: nextRunId("bundle-mcp-retry"),
       enqueue: immediateEnqueue,
-      cleanupBundleMcpOnRunEnd: true,
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);

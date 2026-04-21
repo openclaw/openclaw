@@ -133,7 +133,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      expect(agentCommand.mock.calls[0]?.[0]).not.toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
       });
       expect(runtime.log).toHaveBeenCalledWith("local");

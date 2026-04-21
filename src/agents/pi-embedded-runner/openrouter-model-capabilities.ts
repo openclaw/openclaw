@@ -37,6 +37,7 @@ const DISK_CACHE_FILENAME = "openrouter-models.json";
 
 interface OpenRouterApiModel {
   id: string;
+  canonical_slug?: string;
   name?: string;
   modality?: string;
   architecture?: {
@@ -206,7 +207,11 @@ async function doFetch(): Promise<void> {
       if (!model.id) {
         continue;
       }
-      map.set(model.id, parseModel(model));
+      const parsed = parseModel(model);
+      map.set(model.id, parsed);
+      if (model.canonical_slug && model.canonical_slug !== model.id) {
+        map.set(model.canonical_slug, parsed);
+      }
     }
 
     cache = map;

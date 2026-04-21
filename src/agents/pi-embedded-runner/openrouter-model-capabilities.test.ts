@@ -91,6 +91,55 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+  it("resolves canonical_slug entries with the same cached capability record", async () => {
+    await withOpenRouterStateDir(async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    id: "anthropic/claude-sonnet-4.5",
+                    canonical_slug: "anthropic/claude-4.5-sonnet-20250929",
+                    name: "Anthropic: Claude Sonnet 4.5",
+                    architecture: { modality: "text+image->text" },
+                    supported_parameters: ["reasoning"],
+                    context_length: 200000,
+                    max_completion_tokens: 64000,
+                    pricing: { prompt: "0.000003", completion: "0.000015" },
+                  },
+                ],
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            ),
+        ),
+      );
+
+      const module = await importOpenRouterModelCapabilities("canonical-slug");
+      await module.loadOpenRouterModelCapabilities("anthropic/claude-sonnet-4.5");
+
+      expect(module.getOpenRouterModelCapabilities("anthropic/claude-sonnet-4.5")).toMatchObject({
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 200000,
+        maxTokens: 64000,
+      });
+      expect(
+        module.getOpenRouterModelCapabilities("anthropic/claude-4.5-sonnet-20250929"),
+      ).toMatchObject({
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 200000,
+        maxTokens: 64000,
+      });
+    });
+  });
+
   it("does not refetch immediately after an awaited miss for the same model id", async () => {
     await withOpenRouterStateDir(async () => {
       const fetchSpy = vi.fn(
