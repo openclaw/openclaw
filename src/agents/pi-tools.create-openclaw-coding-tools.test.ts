@@ -252,6 +252,9 @@ describe("createOpenClawCodingTools", () => {
               sessionId: "session-acp-child",
               updatedAt: Date.now(),
               spawnedBy: "agent:main:subagent:parent",
+              spawnDepth: 2,
+              subagentRole: "leaf",
+              subagentControlScope: "none",
             },
             "agent:main:acp:plain": {
               sessionId: "session-acp-plain",
@@ -285,7 +288,7 @@ describe("createOpenClawCodingTools", () => {
         "utf-8",
       );
 
-      const restrictedTools = createOpenClawCodingTools({
+      const persistedEnvelopeTools = createOpenClawCodingTools({
         sessionKey: "agent:main:acp:child",
         config: {
           session: {
@@ -300,13 +303,13 @@ describe("createOpenClawCodingTools", () => {
           },
         },
       });
-      const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
-      expect(restrictedNames.has("sessions_spawn")).toBe(false);
-      expect(restrictedNames.has("sessions_list")).toBe(false);
-      expect(restrictedNames.has("sessions_history")).toBe(false);
-      expect(restrictedNames.has("subagents")).toBe(false);
+      const persistedEnvelopeNames = new Set(persistedEnvelopeTools.map((tool) => tool.name));
+      expect(persistedEnvelopeNames.has("sessions_spawn")).toBe(false);
+      expect(persistedEnvelopeNames.has("sessions_list")).toBe(false);
+      expect(persistedEnvelopeNames.has("sessions_history")).toBe(false);
+      expect(persistedEnvelopeNames.has("subagents")).toBe(false);
 
-      const plainTools = createOpenClawCodingTools({
+      const restrictedTools = createOpenClawCodingTools({
         sessionKey: "agent:main:acp:plain",
         config: {
           session: {
@@ -321,11 +324,11 @@ describe("createOpenClawCodingTools", () => {
           },
         },
       });
-      const plainNames = new Set(plainTools.map((tool) => tool.name));
-      expect(plainNames.has("sessions_spawn")).toBe(true);
-      expect(plainNames.has("subagents")).toBe(true);
+      const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
+      expect(restrictedNames.has("sessions_spawn")).toBe(true);
+      expect(restrictedNames.has("subagents")).toBe(true);
 
-      const crossAgentTools = createOpenClawCodingTools({
+      const ancestryTools = createOpenClawCodingTools({
         sessionKey: "agent:writer:acp:child",
         config: {
           session: {
@@ -340,11 +343,11 @@ describe("createOpenClawCodingTools", () => {
           },
         },
       });
-      const crossAgentNames = new Set(crossAgentTools.map((tool) => tool.name));
-      expect(crossAgentNames.has("sessions_spawn")).toBe(false);
-      expect(crossAgentNames.has("sessions_list")).toBe(false);
-      expect(crossAgentNames.has("sessions_history")).toBe(false);
-      expect(crossAgentNames.has("subagents")).toBe(false);
+      const ancestryNames = new Set(ancestryTools.map((tool) => tool.name));
+      expect(ancestryNames.has("sessions_spawn")).toBe(false);
+      expect(ancestryNames.has("sessions_list")).toBe(false);
+      expect(ancestryNames.has("sessions_history")).toBe(false);
+      expect(ancestryNames.has("subagents")).toBe(false);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
