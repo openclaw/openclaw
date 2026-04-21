@@ -12,17 +12,19 @@ import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
 } from "./path-utils.js";
+import { parseSandboxBindMount } from "./fs-paths.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
   writable: boolean;
   mountRootPath: string;
-  source: "workspace" | "agent";
+  source: "workspace" | "agent" | "bind";
 };
 
 type MountInfo = {
   containerRoot: string;
+  hostRoot?: string;
   writable: boolean;
-  source: "workspace" | "agent";
+  source: "workspace" | "agent" | "bind";
 };
 
 export type RemoteShellSandboxHandle = {
@@ -254,6 +256,18 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         containerRoot: normalizeContainerPath(this.runtime.remoteAgentWorkspaceDir),
         writable: this.sandbox.workspaceAccess === "rw",
         source: "agent",
+      });
+    }
+    for (const bind of this.sandbox.docker.binds ?? []) {
+      const parsed = parseSandboxBindMount(bind);
+      if (!parsed) {
+        continue;
+      }
+      mounts.push({
+        containerRoot: parsed.containerRoot,
+        hostRoot: parsed.hostRoot,
+        writable: parsed.writable,
+        source: "bind",
       });
     }
     return mounts;

@@ -160,6 +160,63 @@ describe("remote sandbox fs bridge", () => {
       });
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "resolves container paths inside a custom bind mount",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-bind-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const bindHostDir = path.join(stateDir, "skyvault");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(bindHostDir, { recursive: true });
+        await fs.writeFile(path.join(bindHostDir, "secret.txt"), "bind mount contents", "utf8");
+
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            docker: {
+              binds: [`${bindHostDir}:/skyvault:rw`],
+            },
+          }),
+          runtime,
+        });
+
+        const result = bridge.resolvePath({ filePath: "/skyvault/secret.txt" });
+        expect(result.containerPath).toBe("/skyvault/secret.txt");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects container paths outside all known mounts",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-escape-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+          }),
+          runtime,
+        });
+
+        expect(() => bridge.resolvePath({ filePath: "/etc/passwd" })).toThrow(
+          /sandbox path escapes allowed mounts/i,
+        );
+      });
+    },
+  );
 });
 
 async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {
