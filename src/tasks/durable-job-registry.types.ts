@@ -1,15 +1,18 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { JsonValue } from "./task-flow-registry.types.js";
 
-export type DurableJobStatus =
-  | "planned"
-  | "scheduled"
-  | "running"
-  | "waiting"
-  | "blocked"
-  | "completed"
-  | "cancelled"
-  | "superseded";
+export const DURABLE_JOB_STATUSES = [
+  "planned",
+  "scheduled",
+  "running",
+  "waiting",
+  "blocked",
+  "completed",
+  "cancelled",
+  "superseded",
+] as const;
+
+export type DurableJobStatus = (typeof DURABLE_JOB_STATUSES)[number];
 
 export type DurableJobJsonObject = {
   [key: string]: JsonValue | undefined;
@@ -101,13 +104,7 @@ export type DurableJobCreateInput = {
 export type DurableJobUpdateInput = Partial<
   Pick<
     DurableJobRecord,
-    | "title"
-    | "goal"
-    | "status"
-    | "stopCondition"
-    | "notifyPolicy"
-    | "requesterOrigin"
-    | "source"
+    "title" | "goal" | "status" | "stopCondition" | "notifyPolicy" | "requesterOrigin" | "source"
   >
 > & {
   currentStep?: string | null;

@@ -86,21 +86,23 @@ function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
-function parseJsonValue<T>(raw: string | null): T | undefined {
+function parseJsonValue(raw: string | null): unknown {
   if (!raw?.trim()) {
     return undefined;
   }
   try {
-    return JSON.parse(raw) as T;
+    return JSON.parse(raw);
   } catch {
     return undefined;
   }
 }
 
 function rowToBacking(row: DurableJobRow): DurableJobBacking {
-  const cronJobIds = parseJsonValue<string[]>(row.backing_cron_job_ids_json);
-  const childTaskIds = parseJsonValue<string[]>(row.backing_child_task_ids_json);
-  const childSessionKeys = parseJsonValue<string[]>(row.backing_child_session_keys_json);
+  const cronJobIds = parseJsonValue(row.backing_cron_job_ids_json) as string[] | undefined;
+  const childTaskIds = parseJsonValue(row.backing_child_task_ids_json) as string[] | undefined;
+  const childSessionKeys = parseJsonValue(row.backing_child_session_keys_json) as
+    | string[]
+    | undefined;
   return {
     ...(row.backing_task_flow_id ? { taskFlowId: row.backing_task_flow_id } : {}),
     ...(cronJobIds ? { cronJobIds } : {}),
@@ -110,10 +112,12 @@ function rowToBacking(row: DurableJobRow): DurableJobBacking {
 }
 
 function rowToDurableJobRecord(row: DurableJobRow): DurableJobRecord {
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
-  const source = parseJsonValue<DurableJobSource>(row.source_json);
-  const stopCondition = parseJsonValue<DurableJobStopCondition>(row.stop_condition_json);
-  const notifyPolicy = parseJsonValue<DurableJobNotifyPolicy>(row.notify_policy_json);
+  const requesterOrigin = parseJsonValue(row.requester_origin_json) as DeliveryContext | undefined;
+  const source = parseJsonValue(row.source_json) as DurableJobSource | undefined;
+  const stopCondition = parseJsonValue(row.stop_condition_json) as
+    | DurableJobStopCondition
+    | undefined;
+  const notifyPolicy = parseJsonValue(row.notify_policy_json) as DurableJobNotifyPolicy | undefined;
   return {
     jobId: row.job_id,
     title: row.title,
@@ -142,10 +146,10 @@ function rowToDurableJobRecord(row: DurableJobRow): DurableJobRecord {
   };
 }
 
-function rowToDurableJobTransitionRecord(
-  row: DurableJobTransitionRow,
-): DurableJobTransitionRecord {
-  const disposition = parseJsonValue<DurableJobTransitionDisposition>(row.disposition_json);
+function rowToDurableJobTransitionRecord(row: DurableJobTransitionRow): DurableJobTransitionRecord {
+  const disposition = parseJsonValue(row.disposition_json) as
+    | DurableJobTransitionDisposition
+    | undefined;
   return {
     transitionId: row.transition_id,
     jobId: row.job_id,
@@ -414,11 +418,15 @@ function ensureSchema(db: DatabaseSync) {
   }
   if (!hasTableColumn(db, "durable_jobs", "audit_created_at")) {
     db.exec(`ALTER TABLE durable_jobs ADD COLUMN audit_created_at INTEGER;`);
-    db.exec(`UPDATE durable_jobs SET audit_created_at = audit_updated_at WHERE audit_created_at IS NULL;`);
+    db.exec(
+      `UPDATE durable_jobs SET audit_created_at = audit_updated_at WHERE audit_created_at IS NULL;`,
+    );
   }
   if (!hasTableColumn(db, "durable_jobs", "audit_updated_at")) {
     db.exec(`ALTER TABLE durable_jobs ADD COLUMN audit_updated_at INTEGER;`);
-    db.exec(`UPDATE durable_jobs SET audit_updated_at = audit_created_at WHERE audit_updated_at IS NULL;`);
+    db.exec(
+      `UPDATE durable_jobs SET audit_updated_at = audit_created_at WHERE audit_updated_at IS NULL;`,
+    );
   }
   if (!hasTableColumn(db, "durable_jobs", "audit_created_by")) {
     db.exec(`ALTER TABLE durable_jobs ADD COLUMN audit_created_by TEXT;`);
@@ -436,7 +444,9 @@ function ensureSchema(db: DatabaseSync) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_durable_jobs_status ON durable_jobs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_durable_jobs_owner ON durable_jobs(owner_session_key);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_durable_jobs_updated ON durable_jobs(audit_updated_at);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_durable_job_transitions_job ON durable_job_transitions(job_id, at);`);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_durable_job_transitions_job ON durable_job_transitions(job_id, at);`,
+  );
 }
 
 function ensureDurableJobRegistryPermissions(pathname: string) {

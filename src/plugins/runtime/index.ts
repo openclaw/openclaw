@@ -25,6 +25,7 @@ import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
+import { createRuntimeJobs } from "./runtime-jobs.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
@@ -202,6 +203,7 @@ function createLateBindingSubagent(
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
+  const jobs = createRuntimeJobs();
   const taskFlow = createRuntimeTaskFlow();
   const tasks = createRuntimeTasks({
     legacyTaskFlow: taskFlow,
@@ -226,6 +228,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    jobs,
     tasks,
     taskFlow,
   } satisfies Omit<

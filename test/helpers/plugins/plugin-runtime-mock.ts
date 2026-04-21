@@ -380,6 +380,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
     },
+    jobs: {
+      bindSession: vi.fn(),
+      fromToolContext: vi.fn(),
+    } as PluginRuntime["jobs"],
     tasks: {
       runs: {
         bindSession: vi.fn(),

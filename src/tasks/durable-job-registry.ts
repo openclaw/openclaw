@@ -7,6 +7,7 @@ import {
   resetDurableJobRegistryRuntimeForTests,
   type DurableJobRegistryObserverEvent,
 } from "./durable-job-registry.store.js";
+import { DURABLE_JOB_STATUSES } from "./durable-job-registry.types.js";
 import type {
   DurableJobBacking,
   DurableJobCreateInput,
@@ -22,6 +23,8 @@ import type {
   DurableJobUpdateInput,
 } from "./durable-job-registry.types.js";
 
+const DURABLE_JOB_STATUS_SET = new Set<DurableJobStatus>(DURABLE_JOB_STATUSES);
+
 const jobs = new Map<string, DurableJobRecord>();
 const transitionsByJobId = new Map<string, DurableJobTransitionRecord[]>();
 let restoreAttempted = false;
@@ -30,13 +33,7 @@ let restoreFailureMessage: string | null = null;
 type DurableJobRecordPatch = Partial<
   Pick<
     DurableJobRecord,
-    | "title"
-    | "goal"
-    | "status"
-    | "stopCondition"
-    | "notifyPolicy"
-    | "requesterOrigin"
-    | "source"
+    "title" | "goal" | "status" | "stopCondition" | "notifyPolicy" | "requesterOrigin" | "source"
   >
 > & {
   currentStep?: string | null;
@@ -84,9 +81,9 @@ function cloneDurableJobRecord(record: DurableJobRecord): DurableJobRecord {
     ...(record.requesterOrigin
       ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
       : {}),
-    ...(record.source ? { source: cloneJsonObject(record.source)! } : {}),
-    stopCondition: cloneJsonObject(record.stopCondition)!,
-    notifyPolicy: cloneJsonObject(record.notifyPolicy)!,
+    ...(record.source ? { source: cloneJsonObject(record.source) } : {}),
+    stopCondition: cloneJsonObject(record.stopCondition),
+    notifyPolicy: cloneJsonObject(record.notifyPolicy),
     backing: cloneBacking(record.backing),
     audit: { ...record.audit },
   };
@@ -97,7 +94,7 @@ function cloneDurableJobTransitionRecord(
 ): DurableJobTransitionRecord {
   return {
     ...record,
-    ...(record.disposition ? { disposition: cloneJsonObject(record.disposition)! } : {}),
+    ...(record.disposition ? { disposition: cloneJsonObject(record.disposition) } : {}),
   };
 }
 
@@ -215,11 +212,18 @@ function normalizeOptionalTimestamp(value: number | null | undefined): number | 
 }
 
 function normalizeStatus(status: DurableJobStatus | undefined): DurableJobStatus {
-  return status ?? "planned";
+  const normalized = status ?? "planned";
+  if (!DURABLE_JOB_STATUS_SET.has(normalized)) {
+    throw new Error(`Unsupported durable job status: ${normalized}`);
+  }
+  return normalized;
 }
 
 function buildDurableJobRecord(params: DurableJobCreateInput): DurableJobRecord {
-  const now = normalizeOptionalTimestamp(params.updatedAt) ?? normalizeOptionalTimestamp(params.createdAt) ?? Date.now();
+  const now =
+    normalizeOptionalTimestamp(params.updatedAt) ??
+    normalizeOptionalTimestamp(params.createdAt) ??
+    Date.now();
   return {
     jobId: normalizeOptionalString(params.jobId) ?? `job_${crypto.randomUUID()}`,
     title: assertNonEmptyString(params.title, "Durable job title"),
@@ -273,7 +277,7 @@ function applyDurableJobPatch(
       ? { requesterOrigin: cloneStructuredValue(patch.requesterOrigin) }
       : {}),
     ...(patch.source !== undefined ? { source: normalizeSource(patch.source) } : {}),
-    ...(patch.status !== undefined ? { status: patch.status } : {}),
+    ...(patch.status !== undefined ? { status: normalizeStatus(patch.status) } : {}),
     ...(patch.stopCondition !== undefined
       ? { stopCondition: normalizeStopCondition(patch.stopCondition) }
       : {}),
@@ -370,7 +374,10 @@ function persistDurableJobTransitionAppend(transition: DurableJobTransitionRecor
   persistDurableJobRegistry();
 }
 
-function writeDurableJobRecord(next: DurableJobRecord, previous?: DurableJobRecord): DurableJobRecord {
+function writeDurableJobRecord(
+  next: DurableJobRecord,
+  previous?: DurableJobRecord,
+): DurableJobRecord {
   ensureDurableJobRegistryReady();
   jobs.set(next.jobId, cloneDurableJobRecord(next));
   persistDurableJobUpsert(next);
@@ -423,8 +430,8 @@ export function recordDurableJobTransition(
   const transition: DurableJobTransitionRecord = {
     transitionId: normalizeOptionalString(params.transitionId) ?? `jobtx_${crypto.randomUUID()}`,
     jobId: assertNonEmptyString(params.jobId, "Durable job transition jobId"),
-    ...(params.from ? { from: params.from } : {}),
-    to: params.to,
+    ...(params.from ? { from: normalizeStatus(params.from) } : {}),
+    to: normalizeStatus(params.to),
     ...(normalizeOptionalString(params.reason)
       ? { reason: normalizeOptionalString(params.reason)! }
       : {}),
@@ -463,7 +470,7 @@ export function listDurableJobRecords(): DurableJobRecord[] {
   ensureDurableJobRegistryReady();
   return [...jobs.values()]
     .slice()
-    .sort((left, right) => {
+    .toSorted((left, right) => {
       if (left.audit.updatedAt !== right.audit.updatedAt) {
         return right.audit.updatedAt - left.audit.updatedAt;
       }

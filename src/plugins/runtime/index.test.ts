@@ -190,6 +190,15 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
+      name: "exposes runtime.jobs helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.jobs as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+      },
+    },
+    {
       name: "exposes canonical runtime.tasks.runs and runtime.tasks.flows while keeping legacy TaskFlow aliases",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [

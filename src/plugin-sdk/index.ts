@@ -62,6 +62,25 @@ export type {
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
 export type {
+  BoundDurableJobsRuntime,
+  DurableJobAttachTaskFlowResult,
+  DurableJobBacking,
+  DurableJobCreateInput,
+  DurableJobListParams,
+  DurableJobNotifyPolicy,
+  DurableJobRecord,
+  DurableJobRuntimeTransitionParams,
+  DurableJobRuntimeTransitionResult,
+  DurableJobRuntimeUpdateResult,
+  DurableJobSource,
+  DurableJobStatus,
+  DurableJobStopCondition,
+  DurableJobTransitionDisposition,
+  DurableJobTransitionRecord,
+  DurableJobUpdateInput,
+  PluginRuntimeJobs,
+} from "../plugins/runtime/runtime-jobs.types.js";
+export type {
   BoundTaskFlowsRuntime,
   BoundTaskRunsRuntime,
   DetachedTaskLifecycleRuntime,

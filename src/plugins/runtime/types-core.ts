@@ -10,6 +10,7 @@ import type {
   TextToSpeech,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
+import type { PluginRuntimeJobs } from "./runtime-jobs.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 export type { HeartbeatRunResult };
@@ -153,6 +154,7 @@ export type PluginRuntimeCore = {
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
+  jobs: PluginRuntimeJobs;
   tasks: {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;

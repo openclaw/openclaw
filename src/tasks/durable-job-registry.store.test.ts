@@ -14,10 +14,7 @@ import {
   resolveDurableJobRegistrySqlitePath,
 } from "./durable-job-registry.paths.js";
 import { configureDurableJobRegistryRuntime } from "./durable-job-registry.store.js";
-import type {
-  DurableJobRecord,
-  DurableJobTransitionRecord,
-} from "./durable-job-registry.types.js";
+import type { DurableJobRecord, DurableJobTransitionRecord } from "./durable-job-registry.types.js";
 
 function createStoredJob(): DurableJobRecord {
   return {
@@ -27,8 +24,7 @@ function createStoredJob(): DurableJobRecord {
     ownerSessionKey: "agent:main:main",
     requesterOrigin: {
       channel: "slack",
-      chatId: "user:U123",
-      messageId: "111.222",
+      to: "user:U123",
     },
     source: {
       kind: "chat_commitment",
@@ -184,8 +180,7 @@ describe("durable-job-registry store runtime", () => {
         source: { kind: "chat_commitment", messageText: "I'll keep this moving." },
         requesterOrigin: {
           channel: "slack",
-          chatId: "user:U123",
-          messageId: "123.456",
+          to: "user:U123",
         },
         createdBy: "tests",
         createdAt: 400,

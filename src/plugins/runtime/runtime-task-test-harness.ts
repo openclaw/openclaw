@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
+import { resetDurableJobRegistryForTests } from "../../tasks/durable-job-runtime-internal.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
@@ -39,5 +40,6 @@ export function resetRuntimeTaskTestState(
   resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests(taskRegistryOptions);
   resetTaskFlowRegistryForTests({ persist: false });
+  resetDurableJobRegistryForTests({ persist: false });
   vi.clearAllMocks();
 }
