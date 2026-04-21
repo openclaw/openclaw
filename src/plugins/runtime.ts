@@ -40,6 +40,7 @@ const state: RegistryState = (() => {
       key: null,
       workspaceDir: null,
       runtimeSubagentMode: "default",
+      coreGatewayMethodNames: [],
       importedPluginIds: new Set<string>(),
     };
     globalState[PLUGIN_REGISTRY_STATE] = registryState;
@@ -127,6 +128,7 @@ export function setActivePluginRegistry(
   cacheKey?: string,
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
   workspaceDir?: string,
+  coreGatewayMethodNames?: readonly string[],
 ) {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = registry;
@@ -136,6 +138,7 @@ export function setActivePluginRegistry(
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
+  state.coreGatewayMethodNames = [...(coreGatewayMethodNames ?? [])];
   syncPluginAgentEventBridge(registry);
   if (
     !previousRegistry ||
@@ -256,6 +259,10 @@ export function getActivePluginRuntimeSubagentMode(): "default" | "explicit" | "
   return state.runtimeSubagentMode;
 }
 
+export function getActivePluginCoreGatewayMethodNames(): string[] {
+  return [...state.coreGatewayMethodNames];
+}
+
 export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
 }
@@ -301,6 +308,7 @@ export function resetPluginRuntimeStateForTest(): void {
   state.key = null;
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
+  state.coreGatewayMethodNames = [];
   state.importedPluginIds.clear();
   syncPluginAgentEventBridge(null);
   // Also clear the plugin host-hook runtime singleton (run context map,

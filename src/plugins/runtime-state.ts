@@ -18,6 +18,7 @@ export type RegistryState = {
   key: string | null;
   workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
+  coreGatewayMethodNames: string[];
   importedPluginIds: Set<string>;
 };
 

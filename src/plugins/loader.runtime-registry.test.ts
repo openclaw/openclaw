@@ -164,6 +164,42 @@ describe("getCompatibleActivePluginRegistry", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("reuses a gateway-bindable active registry when helper loads omit core gateway handlers", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+        "sessions.list": () => undefined,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayLoadOptions);
+    setActivePluginRegistry(
+      registry,
+      cacheKey,
+      "gateway-bindable",
+      gatewayLoadOptions.workspaceDir,
+      Object.keys(gatewayLoadOptions.coreGatewayHandlers),
+    );
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: gatewayLoadOptions.config,
+        workspaceDir: gatewayLoadOptions.workspaceDir,
+        runtimeOptions: gatewayLoadOptions.runtimeOptions,
+      }),
+    ).toBe(registry);
+  });
 });
 
 describe("resolveRuntimePluginRegistry", () => {
@@ -207,6 +243,40 @@ describe("resolveRuntimePluginRegistry", () => {
     const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
     expect(scopedEmpty).not.toBe(registry);
     expect(scopedEmpty?.plugins).toEqual([]);
+  });
+
+  it("reuses the gateway-bindable active registry for helper loads that omit core handlers", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayLoadOptions);
+    setActivePluginRegistry(
+      registry,
+      cacheKey,
+      "gateway-bindable",
+      gatewayLoadOptions.workspaceDir,
+      Object.keys(gatewayLoadOptions.coreGatewayHandlers),
+    );
+
+    expect(
+      resolveRuntimePluginRegistry({
+        config: gatewayLoadOptions.config,
+        workspaceDir: gatewayLoadOptions.workspaceDir,
+        runtimeOptions: gatewayLoadOptions.runtimeOptions,
+      }),
+    ).toBe(registry);
   });
 });
 
