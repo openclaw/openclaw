@@ -293,6 +293,10 @@ function buildTaskScript({
   return `${lines.join("\r\n")}\r\n`;
 }
 
+function renderStartupLaunchCommand(scriptPath: string): string {
+  return `start "" /min cmd.exe /d /c ${quoteCmdScriptArg(scriptPath)}`;
+}
+
 function buildStartupLauncherScript(params: { description?: string; scriptPath: string }): string {
   const lines = ["@echo off"];
   const trimmedDescription = params.description?.trim();
@@ -300,7 +304,7 @@ function buildStartupLauncherScript(params: { description?: string; scriptPath: 
     assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
     lines.push(`rem ${trimmedDescription}`);
   }
-  lines.push(`start "" /min cmd.exe /d /c ${quoteCmdScriptArg(params.scriptPath)}`);
+  lines.push(renderStartupLaunchCommand(params.scriptPath));
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -332,8 +336,26 @@ async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolea
   return res.code === 0;
 }
 
-function launchFallbackTaskScript(scriptPath: string): void {
-  const child = spawn("cmd.exe", ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)], {
+async function launchFallbackTaskScript(env: GatewayServiceEnv): Promise<void> {
+  const scriptPath = resolveTaskScriptPath(env);
+  const command = await readScheduledTaskCommand(env);
+  if (command?.programArguments.length) {
+    const [executable, ...args] = command.programArguments;
+    const child = spawn(executable, args, {
+      cwd: command.workingDirectory || undefined,
+      detached: true,
+      env: {
+        ...process.env,
+        ...command.environment,
+      },
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    return;
+  }
+
+  const child = spawn("cmd.exe", ["/d", "/c", scriptPath], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -586,7 +608,7 @@ async function restartStartupEntry(
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
-  launchFallbackTaskScript(resolveTaskScriptPath(env));
+  await launchFallbackTaskScript(env);
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
 }
@@ -807,7 +829,7 @@ async function runScheduledTaskOrThrow(params: {
   ) {
     return;
   }
-  launchFallbackTaskScript(params.scriptPath);
+  await launchFallbackTaskScript(params.env);
 }
 
 async function activateScheduledTask(params: {
@@ -854,7 +876,7 @@ async function activateScheduledTask(params: {
         scriptPath: params.scriptPath,
       });
       await fs.writeFile(startupEntryPath, launcher, "utf8");
-      launchFallbackTaskScript(params.scriptPath);
+      await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,
         [
