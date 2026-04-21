@@ -36,6 +36,11 @@ import {
 } from "../../agents/pi-embedded-runner/pending-injection.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+// P2.12b — auto-inject live plan-status preamble into executing-mode
+// turns so the agent sees ground truth before deciding NO_REPLY.
+// Read-only disk lookup; fail-open returns undefined when the
+// session isn't executing or when the read fails.
+import { buildExecutionStatusInjection } from "../../agents/plan-mode/execution-status-injection.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -921,8 +926,34 @@ export async function runAgentTurnWithFallback(params: {
       // transient-HTTP / empty-response retry paths that `continue`
       // back to the top of this loop.
       const hoistedPendingInjection = hoistedPendingInjectionAcrossRetries;
+      // P2.12b: build the [PLAN_STATUS] preamble for executing-mode
+      // turns. Unlike `hoistedPendingInjection` (captured ONCE above
+      // the retry loop), this is re-read per iteration of the
+      // while(true) retry loop so the preamble reflects fresh disk
+      // state if another turn mutated `planMode.mode` / `lastPlanSteps`
+      // between retries (e.g. close-on-complete firing from a sibling
+      // cron turn). Returns undefined when not executing OR when the
+      // read fails — fail-open keeps the turn from breaking on a
+      // transient disk error. Composed AHEAD of pending-injection
+      // text so the agent reads live status before consuming any
+      // [PLAN_DECISION] / [QUESTION_ANSWER] one-shots.
+      //
+      // Adversarial review #2 MAJOR 4: pass the already-resolved
+      // params.storePath to avoid a redundant loadConfig() +
+      // resolveStorePath round-trip on every executing-mode turn.
+      // The helper tolerates an undefined storePath (falls back to
+      // loadConfig + resolveStorePath), so we can pass the option
+      // object directly without a conditional-spread.
+      const executionStatusPrefix = params.sessionKey
+        ? await buildExecutionStatusInjection(params.sessionKey, {
+            storePath: params.storePath,
+          })
+        : undefined;
+      const composedInjections = [executionStatusPrefix, hoistedPendingInjection]
+        .filter((s): s is string => Boolean(s && s.length > 0))
+        .join("\n\n");
       const hoistedComposedPrompt = composePromptWithPendingInjection(
-        hoistedPendingInjection,
+        composedInjections.length > 0 ? composedInjections : undefined,
         params.commandBody,
       );
       const fallbackResult = await runWithModelFallback({

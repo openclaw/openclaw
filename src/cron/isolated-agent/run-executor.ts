@@ -1,3 +1,8 @@
+// P2.12b review (2026-04-22): the cron-nudge path must see the same
+// [PLAN_STATUS] preamble as the user-reply path, otherwise the exact
+// Eva stall scenario (+1/+3/+5 nudges with NO_REPLY) skips the whole
+// live-status enrichment. Adversarial review #2 MAJOR 1 flagged.
+import { prependExecutionStatusIfExecuting } from "../../agents/plan-mode/execution-status-injection.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -117,6 +122,16 @@ export function createCronPromptExecutor(params: {
   );
 
   const runPrompt = async (promptText: string) => {
+    // P2.12b: prepend the live [PLAN_STATUS] preamble on executing-
+    // mode sessions so cron-nudge turns (the exact Eva stall case)
+    // see ground-truth step counts alongside the [PLAN_NUDGE] body.
+    // `prependExecutionStatusIfExecuting` is fail-open: returns the
+    // prompt unchanged when the session isn't executing or the read
+    // fails.
+    const composedPrompt = await prependExecutionStatusIfExecuting(
+      promptText,
+      params.agentSessionKey,
+    );
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -141,7 +156,7 @@ export function createCronPromptExecutor(params: {
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
-            prompt: promptText,
+            prompt: composedPrompt,
             provider: providerOverride,
             model: modelOverride,
             thinkLevel: params.thinkLevel,
@@ -181,7 +196,7 @@ export function createCronPromptExecutor(params: {
           workspaceDir: params.workspaceDir,
           config: params.cfgWithAgentDefaults,
           skillsSnapshot: params.skillsSnapshot,
-          prompt: promptText,
+          prompt: composedPrompt,
           lane: resolveNestedAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
