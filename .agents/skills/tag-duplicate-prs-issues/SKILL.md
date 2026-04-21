@@ -3,7 +3,7 @@ name: tag-duplicate-prs-issues
 description: Maintainer workflow for deciding whether an OpenClaw pull request or issue is a duplicate, gathering evidence with ghreplica and pr-search-cli, grouping related work in prtags, and syncing the duplicate grouping back to GitHub through prtags. Use when Codex needs to search for duplicate PRs or issues, create or reuse a duplicate group, enforce one-group-per-target discipline, save duplicate judgments in prtags, or prepare group state for comment sync.
 ---
 
-# Tag Duplicate PRs And Issues
+# Tag Duplicate PRs and Issues
 
 Use this skill when a maintainer needs to decide whether a pull request or issue is a duplicate of existing work.
 
