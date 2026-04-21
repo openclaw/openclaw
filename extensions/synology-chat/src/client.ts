@@ -49,8 +49,11 @@ function isBlockedSpecialIpLiteral(hostname: string): boolean {
   }
 
   const parsed = ipaddr.parse(normalizedHostname);
-  if (parsed.kind() === "ipv6" && parsed.isIPv4MappedAddress()) {
-    return parsed.toIPv4Address().range() === "unspecified";
+  if (parsed.kind() === "ipv6") {
+    const ipv6 = parsed as ipaddr.IPv6;
+    if (ipv6.isIPv4MappedAddress()) {
+      return ipv6.toIPv4Address().range() === "unspecified";
+    }
   }
 
   return parsed.range() === "unspecified";
