@@ -91,6 +91,26 @@ function resolveSourceCheckoutDistPackageRoot(pluginRoot: string): string | null
   return isSourceCheckoutRoot(packageRoot) ? packageRoot : null;
 }
 
+function resolveBundledRuntimeDependencySearchRoots(params: {
+  installRoot: string;
+  pluginRoot: string;
+}): string[] {
+  const roots = new Set<string>([params.installRoot]);
+  const pluginRoot = path.resolve(params.pluginRoot);
+  const extensionsDir = path.dirname(pluginRoot);
+  const buildDir = path.dirname(extensionsDir);
+  if (
+    path.basename(extensionsDir) !== "extensions" ||
+    (path.basename(buildDir) !== "dist" && path.basename(buildDir) !== "dist-runtime")
+  ) {
+    return [...roots];
+  }
+  roots.add(extensionsDir);
+  roots.add(buildDir);
+  roots.add(path.dirname(buildDir));
+  return [...roots];
+}
+
 function createRuntimeDepsCacheKey(pluginId: string, specs: readonly string[]): string {
   return createHash("sha256")
     .update(pluginId)
@@ -119,6 +139,12 @@ function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
 
 function hasAllDependencySentinels(rootDir: string, deps: readonly { name: string }[]): boolean {
   return deps.every((dep) => fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))));
+}
+
+function hasDependencySentinel(searchRoots: readonly string[], dep: { name: string }): boolean {
+  return searchRoots.some((rootDir) =>
+    fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))),
+  );
 }
 
 function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
@@ -528,11 +554,15 @@ export function ensureBundledPluginRuntimeDeps(params: {
   }
 
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot);
+  const dependencySearchRoots = resolveBundledRuntimeDependencySearchRoots({
+    installRoot,
+    pluginRoot: params.pluginRoot,
+  });
   const dependencySpecs = deps
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
   const missingSpecs = deps
-    .filter((dep) => !fs.existsSync(path.join(installRoot, dependencySentinelPath(dep.name))))
+    .filter((dep) => !hasDependencySentinel(dependencySearchRoots, dep))
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
   if (missingSpecs.length === 0) {

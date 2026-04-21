@@ -275,6 +275,80 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
   });
 
+  it("skips install when runtime deps resolve from the package root", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "openai");
+    fs.mkdirSync(path.join(packageRoot, "node_modules", "@mariozechner", "pi-ai"), {
+      recursive: true,
+    });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "@mariozechner/pi-ai": "0.67.68",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "node_modules", "@mariozechner", "pi-ai", "package.json"),
+      JSON.stringify({ name: "@mariozechner/pi-ai", version: "0.67.68" }),
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: () => {
+        throw new Error("package-root runtime deps should not reinstall");
+      },
+      pluginId: "openai",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+  });
+
+  it("installs only deps missing from plugin and package-root resolution", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "codex");
+    fs.mkdirSync(path.join(packageRoot, "node_modules", "ws"), { recursive: true });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          ws: "^8.20.0",
+          zod: "^4.3.6",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "node_modules", "ws", "package.json"),
+      JSON.stringify({ name: "ws", version: "8.20.0" }),
+    );
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "codex",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["zod@^4.3.6"],
+      retainSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        missingSpecs: ["zod@^4.3.6"],
+        installSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
+      },
+    ]);
+  });
+
   it("does not treat sibling extension runtime deps as satisfying a plugin", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");
