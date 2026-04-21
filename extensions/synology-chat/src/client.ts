@@ -5,6 +5,7 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { isIP } from "node:net";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
@@ -131,8 +132,9 @@ export async function sendFileUrl(
   fileUrl: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  options?: { trustedFileUrlHostnames?: readonly string[] },
 ): Promise<boolean> {
-  await assertSafeWebhookFileUrl(fileUrl);
+  await assertSafeWebhookFileUrl(fileUrl, options);
   const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   try {
@@ -244,15 +246,55 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   return undefined;
 }
 
-async function assertSafeWebhookFileUrl(fileUrl: string): Promise<void> {
-  const parsed = new URL(fileUrl);
+function normalizeHostnameForAllowlist(value: string): string {
+  return value.trim().toLowerCase().replace(/\.+$/, "");
+}
+
+async function assertSafeWebhookFileUrl(
+  fileUrl: string,
+  options?: { trustedFileUrlHostnames?: readonly string[] },
+): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(fileUrl);
+  } catch {
+    throw new Error("Synology Chat file_url is not a valid URL");
+  }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Synology Chat file_url must use http or https");
   }
   if (!parsed.hostname) {
     throw new Error("Synology Chat file_url must include a hostname");
   }
-  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+
+  const normalizedHostname = normalizeHostnameForAllowlist(parsed.hostname);
+  if (isIP(normalizedHostname) !== 0) {
+    await resolvePinnedHostnameWithPolicy(parsed.hostname);
+    return;
+  }
+
+  const trustedHostnames = Array.from(
+    new Set(
+      (options?.trustedFileUrlHostnames ?? []).map(normalizeHostnameForAllowlist).filter(Boolean),
+    ),
+  );
+
+  // The NAS resolves hostname URLs independently when it later fetches file_url,
+  // so untrusted hostnames stay vulnerable to DNS rebinding after our preflight check.
+  if (trustedHostnames.length === 0) {
+    throw new Error(
+      "Synology Chat file_url hostname URLs require mediaUrlHostnameAllowlist; use a trusted hostname or a public IP literal",
+    );
+  }
+  if (!trustedHostnames.includes(normalizedHostname)) {
+    throw new Error(
+      `Synology Chat file_url hostname "${parsed.hostname}" is not in mediaUrlHostnameAllowlist`,
+    );
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    policy: { hostnameAllowlist: trustedHostnames },
+  });
 }
 
 function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {

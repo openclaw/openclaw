@@ -67,6 +67,19 @@ function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseStringList(raw: string | string[] | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  if (Array.isArray(raw)) {
+    return raw.map((entry) => entry.trim()).filter(Boolean);
+  }
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function parseRateLimitPerMinute(raw: string | undefined): number {
   if (raw == null) {
     return 30;
@@ -120,6 +133,7 @@ export function resolveAccount(
   const envIncomingUrl = process.env.SYNOLOGY_CHAT_INCOMING_URL ?? "";
   const envNasHost = process.env.SYNOLOGY_NAS_HOST ?? "localhost";
   const envAllowedUserIds = process.env.SYNOLOGY_ALLOWED_USER_IDS ?? "";
+  const envMediaUrlHostnameAllowlist = process.env.SYNOLOGY_MEDIA_URL_HOSTNAME_ALLOWLIST ?? "";
   const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
   const webhookPathSource = resolveWebhookPathSource({ accountId: id, channelCfg, rawAccount });
@@ -137,6 +151,9 @@ export function resolveAccount(
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
     webhookPathSource,
+    mediaUrlHostnameAllowlist: parseStringList(
+      merged.mediaUrlHostnameAllowlist ?? envMediaUrlHostnameAllowlist,
+    ),
     dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({
       providerConfig: channelCfg,
       accountConfig: accountOverrides,

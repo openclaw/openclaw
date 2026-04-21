@@ -27,6 +27,7 @@ function makeAccount(
     nasHost: "nas.example.com",
     webhookPath: "/webhook/synology",
     webhookPathSource: "default",
+    mediaUrlHostnameAllowlist: [],
     dangerouslyAllowNameMatching: false,
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "open",

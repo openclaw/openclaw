@@ -48,7 +48,7 @@ type MockRequestHandler = (
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
   const res = new EventEmitter() as Partial<IncomingMessage>;
   res.statusCode = statusCode;
-  return res;
+  return res as IncomingMessage;
 }
 
 function createMockRequestEmitter(): ClientRequest {
@@ -56,7 +56,7 @@ function createMockRequestEmitter(): ClientRequest {
   req.write = vi.fn() as ClientRequest["write"];
   req.end = vi.fn() as ClientRequest["end"];
   req.destroy = vi.fn() as ClientRequest["destroy"];
-  return req;
+  return req as ClientRequest;
 }
 
 async function settleTimers<T>(promise: Promise<T>): Promise<T> {
@@ -156,7 +156,15 @@ describe("sendFileUrl", () => {
   it("returns true on success", async () => {
     mockSuccessResponse();
     const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "https://example.com/file.png",
+        undefined,
+        false,
+        {
+          trustedFileUrlHostnames: ["example.com"],
+        },
+      ),
     );
     expect(result).toBe(true);
   });
@@ -164,7 +172,15 @@ describe("sendFileUrl", () => {
   it("returns false on failure", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "https://example.com/file.png",
+        undefined,
+        false,
+        {
+          trustedFileUrlHostnames: ["example.com"],
+        },
+      ),
     );
     expect(result).toBe(false);
   });
@@ -172,7 +188,15 @@ describe("sendFileUrl", () => {
   it("verifies TLS by default", async () => {
     mockSuccessResponse();
     await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "https://example.com/file.png",
+        undefined,
+        false,
+        {
+          trustedFileUrlHostnames: ["example.com"],
+        },
+      ),
     );
     const httpsRequest = vi.mocked(https.request);
     expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
@@ -181,9 +205,26 @@ describe("sendFileUrl", () => {
   it("validates the remote hostname before posting file_url", async () => {
     mockSuccessResponse();
     await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "https://example.com/file.png",
+        undefined,
+        false,
+        {
+          trustedFileUrlHostnames: ["example.com"],
+        },
+      ),
     );
-    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("example.com");
+    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("example.com", {
+      policy: { hostnameAllowlist: ["example.com"] },
+    });
+  });
+
+  it("rejects malformed URLs with an actionable error", async () => {
+    await expect(sendFileUrl("https://nas.example.com/incoming", "not-a-url")).rejects.toThrow(
+      /not a valid URL/i,
+    );
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
   it("rejects non-http(s) file URLs", async () => {
@@ -204,6 +245,37 @@ describe("sendFileUrl", () => {
       ),
     ).rejects.toThrow(/private\/internal\/special-use IP address/i);
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("rejects hostname URLs when no trusted hostname allowlist is configured", async () => {
+    await expect(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    ).rejects.toThrow(/require mediaUrlHostnameAllowlist/i);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("rejects hostname URLs outside the trusted hostname allowlist", async () => {
+    await expect(
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "https://example.com/file.png",
+        undefined,
+        false,
+        {
+          trustedFileUrlHostnames: ["cdn.example.com"],
+        },
+      ),
+    ).rejects.toThrow(/not in mediaUrlHostnameAllowlist/i);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("allows public IP literal URLs without a hostname allowlist", async () => {
+    mockSuccessResponse();
+    await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://93.184.216.34/file.png"),
+    );
+    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("93.184.216.34");
+    expect(vi.mocked(https.request)).toHaveBeenCalled();
   });
 });
 

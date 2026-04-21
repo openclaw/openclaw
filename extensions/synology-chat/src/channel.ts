@@ -83,6 +83,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "incomingUrl",
     "nasHost",
     "webhookPath",
+    "mediaUrlHostnameAllowlist",
     "dangerouslyAllowNameMatching",
     "dangerouslyAllowInheritedWebhookPath",
     "dmPolicy",
@@ -352,7 +353,9 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
           throw new Error("No media URL provided");
         }
 
-        const ok = await sendFileUrl(incomingUrl, mediaUrl, to, account.allowInsecureSsl);
+        const ok = await sendFileUrl(incomingUrl, mediaUrl, to, account.allowInsecureSsl, {
+          trustedFileUrlHostnames: account.mediaUrlHostnameAllowlist,
+        });
         if (!ok) {
           throw new Error("Failed to send media to Synology Chat");
         }

@@ -13,6 +13,7 @@ function makeSecurityAccount(
     nasHost: "h",
     webhookPath: "/w",
     webhookPathSource: "default" as const,
+    mediaUrlHostnameAllowlist: [],
     dangerouslyAllowNameMatching: false,
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist" as const,
@@ -27,6 +28,7 @@ function makeSecurityAccount(
 const clientModule = await import("./client.js");
 const gatewayRuntimeModule = await import("./gateway-runtime.js");
 const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const mockSendFileUrl = vi.spyOn(clientModule, "sendFileUrl").mockResolvedValue(true);
 const registerSynologyWebhookRouteMock = vi
   .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
   .mockImplementation(() => vi.fn());
@@ -43,8 +45,10 @@ describe("createSynologyChatPlugin", () => {
     vi.stubEnv("SYNOLOGY_CHAT_TOKEN", "");
     vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", "");
     mockSendMessage.mockClear();
+    mockSendFileUrl.mockClear();
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
+    mockSendFileUrl.mockResolvedValue(true);
     registerSynologyWebhookRouteMock.mockImplementation(() => vi.fn());
   });
 
@@ -100,6 +104,7 @@ describe("createSynologyChatPlugin", () => {
               office: {
                 token: "office-token",
                 allowInsecureSsl: true,
+                mediaUrlHostnameAllowlist: ["cdn.office.example"],
               },
             },
           },
@@ -116,6 +121,7 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 45,
         botName: "Base Bot",
         allowInsecureSsl: true,
+        mediaUrlHostnameAllowlist: ["cdn.office.example"],
       });
     });
 
@@ -175,6 +181,7 @@ describe("createSynologyChatPlugin", () => {
         nasHost: "h",
         webhookPath: "/w",
         webhookPathSource: "default" as const,
+        mediaUrlHostnameAllowlist: [],
         dangerouslyAllowNameMatching: false,
         dangerouslyAllowInheritedWebhookPath: false,
         dmPolicy: "allowlist" as const,
@@ -424,6 +431,32 @@ describe("createSynologyChatPlugin", () => {
           to: "user1",
         }),
       ).rejects.toThrow("not configured");
+    });
+
+    it("sendMedia passes the trusted media hostname allowlist to sendFileUrl", async () => {
+      const plugin = createSynologyChatPlugin();
+      await plugin.outbound.sendMedia({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              mediaUrlHostnameAllowlist: ["cdn.example.com"],
+            },
+          },
+        },
+        mediaUrl: "https://cdn.example.com/img.png",
+        to: "user1",
+      });
+
+      expect(mockSendFileUrl).toHaveBeenCalledWith(
+        "https://nas/incoming",
+        "https://cdn.example.com/img.png",
+        "user1",
+        false,
+        { trustedFileUrlHostnames: ["cdn.example.com"] },
+      );
     });
   });
 

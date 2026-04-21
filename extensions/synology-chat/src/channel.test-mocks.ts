@@ -106,6 +106,7 @@ export function makeSecurityAccount(
     nasHost: "h",
     webhookPath: "/w",
     webhookPathSource: "default",
+    mediaUrlHostnameAllowlist: [],
     dangerouslyAllowNameMatching: false,
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist" as const,
