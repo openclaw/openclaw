@@ -270,7 +270,7 @@ export async function getHealthSnapshot(params?: {
     const accountIdsToProbe = Array.from(
       new Set(
         [preferredAccountId, defaultAccountId, ...accountIds, ...boundAccountIdsAll].filter(
-          (value) => value && value.trim(),
+          (value) => typeof value === "string" && value.trim(),
         ),
       ),
     );
