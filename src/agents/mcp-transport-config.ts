@@ -1,5 +1,6 @@
 import { logWarn } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -95,11 +96,12 @@ export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
 ): ResolvedMcpTransportConfig | null {
+  const logServerName = sanitizeForLog(serverName);
   const requestedTransport = getRequestedTransport(rawServer);
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
     onDroppedEnv: (key) => {
       logWarn(
-        `bundle-mcp: server "${serverName}": env "${key}" is blocked for stdio startup safety and was ignored.`,
+        `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
       );
     },
   });
@@ -122,7 +124,7 @@ export function resolveMcpTransportConfig(
     requestedTransport !== "streamable-http"
   ) {
     logWarn(
-      `bundle-mcp: skipped server "${serverName}" because transport "${requestedTransport}" is not supported.`,
+      `bundle-mcp: skipped server "${logServerName}" because transport "${sanitizeForLog(requestedTransport)}" is not supported.`,
     );
     return null;
   }
@@ -142,7 +144,7 @@ export function resolveMcpTransportConfig(
   const httpLaunch = resolveHttpMcpServerLaunchConfig(rawServer);
   const httpReason = httpLaunch.ok ? "not an HTTP MCP server" : httpLaunch.reason;
   logWarn(
-    `bundle-mcp: skipped server "${serverName}" because ${stdioLaunch.reason} and ${httpReason}.`,
+    `bundle-mcp: skipped server "${logServerName}" because ${stdioLaunch.reason} and ${httpReason}.`,
   );
   return null;
 }
