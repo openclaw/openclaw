@@ -1,4 +1,6 @@
 import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -12,6 +14,7 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   ErrorCodes,
@@ -34,20 +37,20 @@ function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   }).filter((channelId) => cfg.channels?.[channelId]?.enabled !== false);
 }
 
-function assertConfiguredAnnounceChannel(params: {
+function resolveConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel";
-}) {
+}): string | undefined {
   if (params.channel === "last") {
-    return;
+    return undefined;
   }
 
   const configuredChannels = listConfiguredAnnounceChannelIds(params.cfg).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
   if (!normalizedChannel) {
     if (configuredChannels.length <= 1) {
-      return;
+      return configuredChannels[0];
     }
     throw new Error(
       `${params.field} is required when multiple channels are configured: ${configuredChannels.join(", ")}`,
@@ -55,14 +58,60 @@ function assertConfiguredAnnounceChannel(params: {
   }
 
   if (configuredChannels.length === 0) {
-    return;
+    return undefined;
   }
 
   if (configuredChannels.includes(normalizedChannel)) {
-    return;
+    return normalizedChannel;
   }
 
   throw new Error(`${params.field} must be one of: ${configuredChannels.join(", ")}`);
+}
+
+function assertConfiguredAnnounceChannel(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  field: "delivery.channel" | "delivery.failureDestination.channel";
+}) {
+  resolveConfiguredAnnounceChannel(params);
+}
+
+function assertConfiguredAnnounceAccount(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  channelField: "delivery.channel" | "delivery.failureDestination.channel";
+  accountId?: string;
+  field: "delivery.accountId" | "delivery.failureDestination.accountId";
+}) {
+  const accountId = normalizeOptionalString(params.accountId);
+  if (!accountId) {
+    return;
+  }
+  const resolvedChannel = resolveConfiguredAnnounceChannel({
+    cfg: params.cfg,
+    channel: params.channel,
+    field: params.channelField,
+  });
+  if (!resolvedChannel) {
+    return;
+  }
+  const plugin = getChannelPlugin(resolvedChannel);
+  if (!plugin) {
+    return;
+  }
+  const accountIds = plugin.config.listAccountIds(params.cfg);
+  const defaultAccountId = resolveChannelDefaultAccountId({
+    plugin,
+    cfg: params.cfg,
+    accountIds,
+  });
+  const configuredAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
+  if (configuredAccountIds.includes(accountId)) {
+    return;
+  }
+  throw new Error(
+    `${params.field} must be one of configured ${resolvedChannel} accounts: ${configuredAccountIds.join(", ")}`,
+  );
 }
 
 function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
@@ -72,6 +121,13 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
       channel: params.delivery.channel,
       field: "delivery.channel",
     });
+    assertConfiguredAnnounceAccount({
+      cfg: params.cfg,
+      channel: params.delivery.channel,
+      channelField: "delivery.channel",
+      accountId: params.delivery.accountId,
+      field: "delivery.accountId",
+    });
   }
 
   const failureDestination = params.delivery?.failureDestination;
@@ -80,6 +136,13 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
       cfg: params.cfg,
       channel: failureDestination.channel,
       field: "delivery.failureDestination.channel",
+    });
+    assertConfiguredAnnounceAccount({
+      cfg: params.cfg,
+      channel: failureDestination.channel,
+      channelField: "delivery.failureDestination.channel",
+      accountId: failureDestination.accountId,
+      field: "delivery.failureDestination.accountId",
     });
   }
 }
