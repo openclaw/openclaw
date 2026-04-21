@@ -644,6 +644,46 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("omits timezone suffix when dreaming timezone is blank", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: true,
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 3 * * *",
+                timezone: "   ",
+                phases: {
+                  light: { enabled: true },
+                  deep: { enabled: true },
+                  rem: { enabled: false },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Dreaming: 0 3 * * * · light on · deep on · rem off"),
+    );
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("(   )"));
+    expect(close).toHaveBeenCalled();
+  });
+
   it("defaults all dreaming phases to on when phases config is present but empty", async () => {
     loadConfig.mockReturnValue({
       plugins: {
