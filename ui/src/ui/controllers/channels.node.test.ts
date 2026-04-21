@@ -81,7 +81,7 @@ describe("loadChannels", () => {
 
     expect(requestCalls).toEqual([
       { probe: false, includeAccounts: false, timeoutMs: 8000 },
-      { probe: true, includeAccounts: true, timeoutMs: 8000 },
+      { probe: true, timeoutMs: 8000 },
     ]);
     expect(state.channelsSnapshot).toBeNull();
 
@@ -101,5 +101,59 @@ describe("loadChannels", () => {
       { accountId: "default", configured: true },
     ]);
     expect(state.channelsLoading).toBe(false);
+  });
+  it("keeps the lightweight snapshot if the queued stronger refresh fails", async () => {
+    const lightweightDeferred = createDeferred<ChannelsStatusSnapshot | null>();
+    const requestCalls: Array<Record<string, unknown>> = [];
+    const state = createState(async (_method, params) => {
+      requestCalls.push(params);
+      if (requestCalls.length === 1) {
+        return await lightweightDeferred.promise;
+      }
+      throw new Error("full refresh failed");
+    });
+
+    const lightweightLoad = loadChannels(state, false, { includeAccounts: false });
+    await flushMicrotasks();
+
+    void loadChannels(state, true, { includeAccounts: true });
+
+    const summarySnapshot: ChannelsStatusSnapshot = {
+      ts: 1,
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: true } },
+      channelAccounts: { telegram: [] },
+      channelDefaultAccountId: { telegram: "default" },
+    };
+    lightweightDeferred.resolve(summarySnapshot);
+
+    await lightweightLoad;
+    await waitFor(() => requestCalls.length === 2);
+    await waitFor(() => !state.channelsLoading);
+
+    expect(state.channelsSnapshot).toEqual(summarySnapshot);
+    expect(state.channelsError).toBe("Error: full refresh failed");
+  });
+
+  it("omits default includeAccounts=true for compatibility with older gateways", async () => {
+    const requestCalls: Array<Record<string, unknown>> = [];
+    const state = createState(async (_method, params) => {
+      requestCalls.push(params);
+      return {
+        ts: 1,
+        channelOrder: ["telegram"],
+        channelLabels: { telegram: "Telegram" },
+        channels: { telegram: { configured: true } },
+        channelAccounts: {
+          telegram: [{ accountId: "default", configured: true }],
+        },
+        channelDefaultAccountId: { telegram: "default" },
+      };
+    });
+
+    await loadChannels(state, true, { includeAccounts: true });
+
+    expect(requestCalls).toEqual([{ probe: true, timeoutMs: 8000 }]);
   });
 });
