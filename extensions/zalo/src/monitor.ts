@@ -74,6 +74,8 @@ type ZaloProcessingContext = {
   runtime: ZaloRuntimeEnv;
   core: ZaloCoreRuntime;
   canHostMedia: boolean;
+  webhookUrl?: string;
+  webhookPath?: string;
   statusSink?: ZaloStatusSink;
   fetcher?: ZaloFetch;
 };
@@ -213,6 +215,8 @@ export async function handleZaloWebhookRequest(
       core: target.core as ZaloCoreRuntime,
       mediaMaxMb: target.mediaMaxMb,
       canHostMedia: target.canHostMedia,
+      webhookUrl: target.webhookUrl,
+      webhookPath: target.webhookPath,
       statusSink: target.statusSink,
       fetcher: target.fetcher,
     });
@@ -241,6 +245,8 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     runtime,
     core,
     canHostMedia,
+    webhookUrl,
+    webhookPath,
     mediaMaxMb,
     statusSink,
     fetcher,
@@ -289,6 +295,8 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
     runtime,
     core,
     canHostMedia: params.canHostMedia,
+    webhookUrl: params.webhookUrl,
+    webhookPath: params.webhookPath,
     statusSink,
     fetcher,
   };
@@ -642,8 +650,9 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           runtime,
           core,
           config,
-          webhookUrl: account.config.webhookUrl,
-          webhookPath: account.config.webhookPath,
+          webhookUrl: params.webhookUrl,
+          webhookPath: params.webhookPath,
+          proxyUrl: account.config.proxy,
           mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
           canHostMedia: params.canHostMedia,
           accountId: account.accountId,
@@ -671,6 +680,7 @@ async function deliverZaloReply(params: {
   config: OpenClawConfig;
   webhookUrl?: string;
   webhookPath?: string;
+  proxyUrl?: string;
   mediaMaxBytes: number;
   canHostMedia: boolean;
   accountId?: string;
@@ -687,6 +697,7 @@ async function deliverZaloReply(params: {
     config,
     webhookUrl,
     webhookPath,
+    proxyUrl,
     mediaMaxBytes,
     canHostMedia,
     accountId,
@@ -720,7 +731,7 @@ async function deliverZaloReply(params: {
         webhookUrl,
         webhookPath,
         maxBytes: mediaMaxBytes,
-        fetcher,
+        proxyUrl,
       });
       await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher);
       statusSink?.({ lastOutboundAt: Date.now() });
@@ -829,6 +840,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
           runtime,
           core,
           path,
+          webhookUrl,
+          webhookPath: path,
           secret: webhookSecret,
           statusSink: (patch) => statusSink?.(patch),
           mediaMaxMb: effectiveMediaMaxMb,

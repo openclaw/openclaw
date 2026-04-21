@@ -3,7 +3,7 @@ import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { fetchRemoteMedia } from "./fetch.js";
@@ -42,6 +42,7 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
@@ -343,6 +344,7 @@ async function loadWebMediaInternal(
     maxBytes,
     optimizeImages = true,
     ssrfPolicy,
+    proxyUrl,
     fetchImpl,
     requestInit,
     trustExplicitProxyDns,
@@ -442,12 +444,20 @@ async function loadWebMediaInternal(
         : optimizeImages
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
+    const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxyUrl
+      ? {
+          mode: "explicit-proxy",
+          proxyUrl,
+          allowPrivateProxy: true,
+        }
+      : undefined;
     const fetched = await fetchRemoteMedia({
       url: mediaUrl,
       fetchImpl,
       requestInit,
       maxBytes: fetchCap,
       ssrfPolicy,
+      dispatcherPolicy,
       trustExplicitProxyDns,
     });
     const { buffer, contentType, fileName } = fetched;

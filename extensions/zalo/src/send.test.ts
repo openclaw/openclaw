@@ -144,7 +144,7 @@ describe("zalo send", () => {
       webhookUrl: "https://gateway.example.com/zalo-webhook",
       webhookPath: undefined,
       maxBytes: 5 * 1024 * 1024,
-      fetcher: undefined,
+      proxyUrl: undefined,
     });
     expect(sendPhotoMock).toHaveBeenCalledWith(
       "zalo-token",

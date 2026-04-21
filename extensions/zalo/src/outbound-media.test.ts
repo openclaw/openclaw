@@ -57,19 +57,16 @@ describe("zalo outbound hosted media", () => {
   });
 
   it("passes proxy-aware fetch options into hosted media downloads", async () => {
-    const fetcher = vi.fn();
-
     await prepareHostedZaloMediaUrl({
       mediaUrl: "https://example.com/photo.png",
       webhookUrl: "https://gateway.example.com/zalo-webhook",
       maxBytes: 1024,
-      fetcher: fetcher as never,
+      proxyUrl: "http://proxy.example:8080",
     });
 
     expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith("https://example.com/photo.png", {
       maxBytes: 1024,
-      fetchImpl: fetcher,
-      trustExplicitProxyDns: true,
+      proxyUrl: "http://proxy.example:8080",
     });
   });
 

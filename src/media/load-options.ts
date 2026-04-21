@@ -12,6 +12,7 @@ export type OutboundMediaLoadParams = {
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
+  proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
@@ -24,6 +25,7 @@ export type OutboundMediaLoadOptions = {
   maxBytes?: number;
   localRoots?: readonly string[] | "any";
   readFile?: (filePath: string) => Promise<Buffer>;
+  proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
@@ -88,6 +90,7 @@ export function buildOutboundMediaLoadOptions(
       localRoots,
       readFile,
       ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+      ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
       ...(params.requestInit ? { requestInit: params.requestInit } : {}),
       ...(params.trustExplicitProxyDns !== undefined
         ? { trustExplicitProxyDns: params.trustExplicitProxyDns }
@@ -100,6 +103,7 @@ export function buildOutboundMediaLoadOptions(
   return {
     ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
     ...(localRoots ? { localRoots } : {}),
+    ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
     ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
     ...(params.requestInit ? { requestInit: params.requestInit } : {}),
     ...(params.trustExplicitProxyDns !== undefined

@@ -64,11 +64,7 @@ function resolveSendContext(options: ZaloSendOptions): {
   return { token, fetcher: resolveZaloProxyFetch(proxy) };
 }
 
-async function resolveZaloPhotoParam(
-  photoUrl: string,
-  options: ZaloSendOptions,
-  fetcher?: ZaloFetch,
-): Promise<string> {
+async function resolveZaloPhotoParam(photoUrl: string, options: ZaloSendOptions): Promise<string> {
   const trimmedPhotoUrl = photoUrl.trim();
   if (!options.cfg) {
     throw new Error("Zalo photo sends require a configured webhookUrl to host media safely");
@@ -84,12 +80,13 @@ async function resolveZaloPhotoParam(
   }
 
   const mediaMaxBytes = (account.config.mediaMaxMb ?? 5) * 1024 * 1024;
+  const proxyUrl = options.proxy ?? account.config.proxy;
   return await prepareHostedZaloMediaUrl({
     mediaUrl: trimmedPhotoUrl,
     webhookUrl,
     webhookPath: account.config.webhookPath,
     maxBytes: mediaMaxBytes,
-    fetcher,
+    proxyUrl,
   });
 }
 
@@ -174,7 +171,7 @@ export async function sendPhotoZalo(
         context.token,
         {
           chat_id: context.chatId,
-          photo: await resolveZaloPhotoParam(photoUrl, options, context.fetcher),
+          photo: await resolveZaloPhotoParam(photoUrl, options),
           caption: options.caption?.slice(0, 2000),
         },
         context.fetcher,

@@ -20,8 +20,6 @@ type HostedZaloMediaMetadata = {
   expiresAt: number;
 };
 
-type HostedZaloMediaFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
 function resolveHostedZaloMediaMetadataPath(id: string): string {
   return join(ZALO_OUTBOUND_MEDIA_DIR, `${id}.json`);
 }
@@ -123,15 +121,14 @@ export async function prepareHostedZaloMediaUrl(params: {
   webhookUrl: string;
   webhookPath?: string;
   maxBytes: number;
-  fetcher?: HostedZaloMediaFetch;
+  proxyUrl?: string;
 }): Promise<string> {
   await ensureHostedZaloMediaDir();
   await cleanupExpiredHostedZaloMedia();
 
   const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
-    fetchImpl: params.fetcher,
-    trustExplicitProxyDns: params.fetcher ? true : undefined,
+    ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
   });
 
   const routePath = resolveHostedZaloMediaRoutePath({
