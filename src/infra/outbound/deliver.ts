@@ -128,6 +128,70 @@ async function loadChannelBootstrapRuntime() {
   return await channelBootstrapRuntimePromise;
 }
 
+/**
+ * Enriched return type for deliverOutboundPayloads that disambiguates hook
+ * cancellations from delivery failures (see #57766).
+ *
+ * Implemented as `OutboundDeliveryResult[]` augmented with optional outcome
+ * metadata so existing array-shape callers (`.length`, `.at(-1)`, `[i]`,
+ * `for...of`) keep working unchanged. Metadata is attached as
+ * non-enumerable own properties so `toEqual`/`toMatchObject` checks against
+ * the array elements are not affected. Plain `OutboundDeliveryResult[]`
+ * returns (e.g. from test mocks or third-party adapters) satisfy the type
+ * with metadata reading as `undefined` (falsy).
+ */
+export type DeliveryOutcome = OutboundDeliveryResult[] & {
+  /** Number of individual payloads cancelled by message_sending hooks. */
+  readonly cancelledCount?: number;
+  /** True when ALL payloads were cancelled by hooks (empty results is intentional). */
+  readonly allCancelledByHook?: boolean;
+};
+
+/**
+ * Attach DeliveryOutcome metadata to a results array as non-enumerable own
+ * properties. Non-enumerable so structural comparisons (toEqual, toMatchObject,
+ * Object.entries, JSON.stringify) skip them — only the array elements are
+ * visible to existing array-shape consumers.
+ */
+function attachDeliveryOutcomeMetadata(
+  results: OutboundDeliveryResult[],
+  meta: { cancelledCount: number; allCancelledByHook: boolean },
+): DeliveryOutcome {
+  Object.defineProperty(results, "cancelledCount", {
+    value: meta.cancelledCount,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  Object.defineProperty(results, "allCancelledByHook", {
+    value: meta.allCancelledByHook,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return results as DeliveryOutcome;
+}
+
+/**
+ * Thrown on non-bestEffort delivery failure when some payloads were already
+ * sent before the error. Callers can inspect sentBeforeError to avoid blind
+ * retries that would duplicate already-delivered messages (see #57766).
+ */
+export class DeliveryError extends Error {
+  /** Results for payloads successfully sent before the throw. */
+  readonly sentBeforeError: OutboundDeliveryResult[];
+
+  constructor(cause: unknown, sentBeforeError: OutboundDeliveryResult[]) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "DeliveryError";
+    this.sentBeforeError = sentBeforeError;
+    if (cause instanceof Error) {
+      this.stack = cause.stack;
+      this.cause = cause;
+    }
+  }
+}
+
 type ChannelHandler = {
   chunker: ChannelOutboundAdapter["chunker"] | null;
   chunkerMode?: "text" | "markdown";
@@ -1083,7 +1147,7 @@ async function applyMessageSendingHook(params: {
 
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
-): Promise<OutboundDeliveryResult[]> {
+): Promise<DeliveryOutcome> {
   const { channel, to, payloads } = params;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
@@ -1142,7 +1206,10 @@ export async function deliverOutboundPayloads(
     deliverOutboundPayloadsWithQueueCleanup(params, queueId),
   );
   if (claimResult.status === "claimed-by-other-owner") {
-    return [];
+    return attachDeliveryOutcomeMetadata([], {
+      cancelledCount: 0,
+      allCancelledByHook: false,
+    });
   }
   return claimResult.value;
 }
@@ -1150,7 +1217,7 @@ export async function deliverOutboundPayloads(
 async function deliverOutboundPayloadsWithQueueCleanup(
   params: DeliverOutboundPayloadsParams,
   queueId: string | null,
-): Promise<OutboundDeliveryResult[]> {
+): Promise<DeliveryOutcome> {
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
@@ -1168,7 +1235,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
 
   try {
     let platformSendStarted = false;
-    const results = await deliverOutboundPayloadsCore({
+    const outcome = await deliverOutboundPayloadsCore({
       ...wrappedParams,
       ...(queueId
         ? {
@@ -1187,44 +1254,65 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     platformResultsReturned = true;
     if (!queueId) {
       if (!params.deferCommitHooks) {
-        await runOutboundDeliveryCommitHooks(results);
+        await runOutboundDeliveryCommitHooks(outcome);
       }
-      return results;
+      return outcome;
     }
-    if (queueId) {
-      if (hadPartialFailure) {
-        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
-      } else {
-        if (platformSendStarted) {
-          await markQueuedPlatformOutcomeUnknown({
-            queueId,
-            queuePolicy,
-          });
-        }
-        const acked = await ackDelivery(queueId)
-          .then(() => true)
-          .catch((err: unknown) => {
-            if (queuePolicy === "required") {
-              throw err;
-            }
-            log.warn(
-              `failed to ack queued delivery ${queueId}; continuing best-effort delivery: ${formatErrorMessage(err)}`,
-            );
-            return false;
-          });
-        if (acked) {
-          await runOutboundDeliveryCommitHooks(results);
-        }
+    if (hadPartialFailure) {
+      await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
+    } else {
+      if (platformSendStarted) {
+        await markQueuedPlatformOutcomeUnknown({
+          queueId,
+          queuePolicy,
+        });
+      }
+      const acked = await ackDelivery(queueId)
+        .then(() => true)
+        .catch((err: unknown) => {
+          if (queuePolicy === "required") {
+            throw err;
+          }
+          log.warn(
+            `failed to ack queued delivery ${queueId}; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+          );
+          return false;
+        });
+      if (acked) {
+        await runOutboundDeliveryCommitHooks(outcome);
       }
     }
-    return results;
+    return outcome;
   } catch (err) {
     if (queueId) {
       if (isAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
+      } else if (err instanceof DeliveryError && err.sentBeforeError.length > 0) {
+        // Partial send: ack the queue entry so recovery doesn't replay and
+        // duplicate the already-sent prefix. The caller still receives the
+        // DeliveryError with sentBeforeError so they can decide what to do
+        // about the failed payloads — but the WAL contract here is "this
+        // delivery is terminal" because retry would duplicate (#57766).
+        const acked = await ackDelivery(queueId)
+          .then(() => true)
+          .catch(() => false);
+        if (acked && !params.deferCommitHooks) {
+          // Run commit hooks for the prefix that already landed: the queue
+          // entry is gone and recovery will not replay, so afterCommit-style
+          // side effects must fire here or be lost.
+          await runOutboundDeliveryCommitHooks(err.sentBeforeError).catch(() => {});
+        }
       } else if (!platformResultsReturned) {
         await failDelivery(queueId, formatErrorMessage(err)).catch(() => {});
       }
+    } else if (
+      err instanceof DeliveryError &&
+      err.sentBeforeError.length > 0 &&
+      !params.deferCommitHooks
+    ) {
+      // skipQueue path: no WAL entry to ack, but we still owe commit hooks
+      // for the prefix that already landed before the throw.
+      await runOutboundDeliveryCommitHooks(err.sentBeforeError).catch(() => {});
     }
     throw err;
   }
@@ -1233,7 +1321,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
 /** Core delivery logic (extracted for queue wrapper). */
 async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreRuntimeParams,
-): Promise<OutboundDeliveryResult[]> {
+): Promise<DeliveryOutcome> {
   const { cfg, channel, to, payloads } = params;
   const directiveOptions = await resolveChannelOutboundDirectiveOptions({ cfg, channel });
   const outboundPayloadPlan = createOutboundPayloadPlan(payloads, {
@@ -1348,6 +1436,7 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
+  let cancelledCount = 0;
   for (const payload of normalizedPayloads) {
     let payloadSummary = buildPayloadSummary(payload);
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
@@ -1407,6 +1496,7 @@ async function deliverOutboundPayloadsCore(
         threadId: params.threadId,
       });
       if (hookResult.cancelled) {
+        cancelledCount++;
         continue;
       }
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
@@ -1605,7 +1695,11 @@ async function deliverOutboundPayloadsCore(
         error: formatErrorMessage(err),
       });
       if (!params.bestEffort) {
-        throw err;
+        // Wrap in DeliveryError when payloads were already sent before the throw,
+        // so callers can detect partial delivery and avoid blind retries (#57766).
+        // Preserve AbortError identity so the outer queue wrapper can ack the
+        // write-ahead entry instead of marking it failed and replaying later.
+        throw results.length > 0 && !isAbortError(err) ? new DeliveryError(err, [...results]) : err;
       }
       params.onError?.(err, payloadSummary);
     }
@@ -1627,5 +1721,6 @@ async function deliverOutboundPayloadsCore(
     }
   }
 
-  return results;
+  const allCancelledByHook = cancelledCount > 0 && cancelledCount === normalizedPayloads.length;
+  return attachDeliveryOutcomeMetadata(results, { cancelledCount, allCancelledByHook });
 }

@@ -9,7 +9,7 @@ import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { type DeliveryError, deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -83,6 +83,19 @@ function enqueueRestartSentinelWake(
   requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
 
+// Match DeliveryError by name + shape rather than `instanceof`. Keeps
+// DeliveryError as a type-only import (resilient to test mocks that don't
+// re-export it) and falls through to the generic transient-retry path if a
+// third-party adapter throws an error with the same name but missing
+// `sentBeforeError` (#57766).
+function isDeliveryError(err: unknown): err is DeliveryError {
+  return (
+    err instanceof Error &&
+    err.name === "DeliveryError" &&
+    Array.isArray((err as { sentBeforeError?: unknown }).sentBeforeError)
+  );
+}
+
 async function waitForOutboundRetry(delayMs: number) {
   await new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, delayMs);
@@ -115,7 +128,7 @@ async function deliverRestartSentinelNotice(params: {
   }).catch(() => null);
   for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
     try {
-      const results = await deliverOutboundPayloads({
+      const outcome = await deliverOutboundPayloads({
         cfg: params.cfg,
         channel: params.channel,
         to: params.to,
@@ -128,7 +141,7 @@ async function deliverRestartSentinelNotice(params: {
         bestEffort: false,
         skipQueue: true,
       });
-      if (results.length > 0) {
+      if (outcome.length > 0 || outcome.allCancelledByHook) {
         if (queueId) {
           await ackDelivery(queueId).catch(() => {});
         }
@@ -136,6 +149,28 @@ async function deliverRestartSentinelNotice(params: {
       }
       throw new Error("outbound delivery returned no results");
     } catch (err) {
+      // Don't retry partial sends — the chunked prefix already landed and a
+      // full retry would duplicate it (#57766). Mirrors the cron direct-delivery
+      // guard in retryTransientDirectCronDelivery.
+      if (isDeliveryError(err) && err.sentBeforeError.length > 0) {
+        log.warn(
+          `${params.summary}: outbound delivery partial-failed after sending ${err.sentBeforeError.length} chunk(s); not retrying to avoid duplicating sent prefix: ${formatErrorMessage(err)}`,
+          {
+            channel: params.channel,
+            to: params.to,
+            sessionKey: params.sessionKey,
+            attempt,
+            sentBeforeError: err.sentBeforeError.length,
+          },
+        );
+        if (queueId) {
+          // Ack (not failDelivery): the partial send already landed and a
+          // future drain/restart replay would duplicate the sent prefix.
+          // Treat the queue entry as terminal. (#57766)
+          await ackDelivery(queueId).catch(() => undefined);
+        }
+        return;
+      }
       const retrying = attempt < OUTBOUND_MAX_ATTEMPTS;
       const suffix = retrying ? `; retrying in ${OUTBOUND_RETRY_DELAY_MS}ms` : "";
       log.warn(`${params.summary}: outbound delivery failed${suffix}: ${String(err)}`, {

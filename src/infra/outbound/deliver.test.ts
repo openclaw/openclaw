@@ -106,6 +106,8 @@ type DeliverModule = typeof import("./deliver.js");
 let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
 let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
 let resolveOutboundDurableFinalDeliverySupport: DeliverModule["resolveOutboundDurableFinalDeliverySupport"];
+let DeliveryError: DeliverModule["DeliveryError"];
+type DeliveryErrorType = InstanceType<DeliverModule["DeliveryError"]>;
 
 const matrixChunkConfig: OpenClawConfig = {
   channels: { matrix: { textChunkLimit: 4000 } } as OpenClawConfig["channels"],
@@ -197,7 +199,7 @@ async function runChunkedMatrixDelivery(params?: {
   const cfg: OpenClawConfig = {
     channels: { matrix: { textChunkLimit: 2 } } as OpenClawConfig["channels"],
   };
-  const results = await deliverOutboundPayloads({
+  const outcome = await deliverOutboundPayloads({
     cfg,
     channel: "matrix",
     to: "!room:example",
@@ -205,7 +207,7 @@ async function runChunkedMatrixDelivery(params?: {
     deps: { matrix: sendMatrix },
     ...(params?.mirror ? { mirror: params.mirror } : {}),
   });
-  return { sendMatrix, results };
+  return { sendMatrix, results: outcome };
 }
 
 async function deliverSingleMatrixForHookTest(params?: { sessionKey?: string }) {
@@ -231,7 +233,7 @@ async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean 
     .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
   const onError = vi.fn();
   const cfg: OpenClawConfig = {};
-  const results = await deliverOutboundPayloads({
+  const outcome = await deliverOutboundPayloads({
     cfg,
     channel: "matrix",
     to: "!room:example",
@@ -240,7 +242,7 @@ async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean 
     bestEffort: true,
     ...(params?.onError === false ? {} : { onError }),
   });
-  return { sendMatrix, onError, results };
+  return { sendMatrix, onError, results: outcome };
 }
 
 function expectSuccessfulMatrixInternalHookPayload(
@@ -266,6 +268,7 @@ describe("deliverOutboundPayloads", () => {
       deliverOutboundPayloads,
       normalizeOutboundPayloads,
       resolveOutboundDurableFinalDeliverySupport,
+      DeliveryError,
     } = await import("./deliver.js"));
   });
 
@@ -3113,6 +3116,182 @@ describe("deliverOutboundPayloads", () => {
       }),
       expect.objectContaining({ channelId: "matrix" }),
     );
+  });
+
+  // --- DeliveryOutcome tests (#57766) ---
+
+  it("returns cancelledCount and allCancelledByHook when hook cancels all payloads", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    (hookMocks.runner as Record<string, unknown>).runMessageSending = vi
+      .fn()
+      .mockResolvedValue({ cancel: true });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    const outcome = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "a" }, { text: "b" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(outcome).toHaveLength(0);
+    expect(outcome.cancelledCount).toBe(2);
+    expect(outcome.allCancelledByHook).toBe(true);
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("returns partial cancelledCount when hook cancels some payloads", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    (hookMocks.runner as Record<string, unknown>).runMessageSending = vi
+      .fn()
+      .mockResolvedValueOnce({ cancel: true })
+      .mockResolvedValueOnce(null);
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    const outcome = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "a" }, { text: "b" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(outcome).toHaveLength(1);
+    expect(outcome.cancelledCount).toBe(1);
+    expect(outcome.allCancelledByHook).toBe(false);
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns cancelledCount=0 and allCancelledByHook=false on normal delivery", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    const outcome = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(outcome).toHaveLength(1);
+    expect(outcome.cancelledCount).toBe(0);
+    expect(outcome.allCancelledByHook).toBe(false);
+  });
+
+  it("throws DeliveryError with sentBeforeError when non-bestEffort fails after partial send", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockRejectedValueOnce(new Error("second payload failed"));
+
+    let caughtError: unknown;
+    try {
+      await deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }, { text: "b" }],
+        deps: { matrix: sendMatrix },
+        bestEffort: false,
+      });
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeInstanceOf(DeliveryError);
+    const deliveryErr = caughtError as DeliveryErrorType;
+    expect(deliveryErr.sentBeforeError).toHaveLength(1);
+    expect(deliveryErr.sentBeforeError[0]).toMatchObject({ messageId: "m1" });
+    expect(deliveryErr.message).toBe("second payload failed");
+  });
+
+  it("throws original error (not DeliveryError) when non-bestEffort fails on first payload", async () => {
+    const sendMatrix = vi.fn().mockRejectedValue(new Error("first payload failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }],
+        deps: { matrix: sendMatrix },
+        bestEffort: false,
+      }),
+    ).rejects.toThrow("first payload failed");
+
+    // Should NOT be a DeliveryError since nothing was sent yet
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }],
+        deps: { matrix: sendMatrix },
+        bestEffort: false,
+      }),
+    ).rejects.not.toBeInstanceOf(DeliveryError);
+  });
+
+  it("preserves AbortError identity even after partial send (not wrapped in DeliveryError)", async () => {
+    const makeAbortingSendMatrix = (controller: AbortController) =>
+      vi
+        .fn()
+        .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+        .mockImplementationOnce(async () => {
+          controller.abort();
+          throw new DOMException("The operation was aborted", "AbortError");
+        });
+
+    const abortController1 = new AbortController();
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }, { text: "b" }],
+        deps: { matrix: makeAbortingSendMatrix(abortController1) },
+        bestEffort: false,
+        abortSignal: abortController1.signal,
+      }),
+    ).rejects.not.toBeInstanceOf(DeliveryError);
+
+    const abortController2 = new AbortController();
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }, { text: "b" }],
+        deps: { matrix: makeAbortingSendMatrix(abortController2) },
+        bestEffort: false,
+        abortSignal: abortController2.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("acks the queue entry on DeliveryError so recovery does not replay the sent prefix", async () => {
+    // When non-bestEffort delivery throws DeliveryError after a partial send,
+    // the WAL queue must NOT be left pending — recovery would otherwise replay
+    // the whole batch and duplicate the already-sent prefix (#57766).
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockRejectedValueOnce(new Error("second payload failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }, { text: "b" }],
+        deps: { matrix: sendMatrix },
+        bestEffort: false,
+      }),
+    ).rejects.toBeInstanceOf(DeliveryError);
+
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 });
 

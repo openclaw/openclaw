@@ -389,6 +389,28 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.failDelivery).toHaveBeenCalledWith("queue-1", "transport still not ready");
   });
 
+  it("acks the queued restart notice on DeliveryError partial-send to prevent replay duplication", async () => {
+    // When the chunked restart message partially lands and a later chunk
+    // throws DeliveryError, the queue entry must be acked (not failed) so a
+    // future drain/restart cannot replay the whole notice and duplicate the
+    // already-delivered prefix (#57766).
+    const partialError = Object.assign(new Error("second chunk failed"), {
+      name: "DeliveryError",
+      sentBeforeError: [{ channel: "whatsapp", messageId: "chunk-1" }],
+    });
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(partialError);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
+    expect(mocks.failDelivery).not.toHaveBeenCalled();
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("partial-failed after sending 1 chunk"),
+      expect.objectContaining({ sentBeforeError: 1 }),
+    );
+  });
+
   it("still dispatches continuation after restart notice retries are exhausted", async () => {
     vi.useFakeTimers();
     mocks.deliverOutboundPayloads.mockRejectedValue(new Error("transport still not ready"));

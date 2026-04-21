@@ -86,6 +86,18 @@ function getErrnoCode(err: unknown): string | null {
     : null;
 }
 
+// Match outbound DeliveryError by name + shape rather than `instanceof` so we
+// don't pull the heavy outbound delivery module into this recovery loader's
+// import graph. A partial send means at least one OutboundDeliveryResult is
+// in `sentBeforeError`. (#57766)
+function isRecoveryDeliveryErrorWithPartialSend(err: unknown): boolean {
+  if (!(err instanceof Error) || err.name !== "DeliveryError") {
+    return false;
+  }
+  const sent = (err as { sentBeforeError?: unknown }).sentBeforeError;
+  return Array.isArray(sent) && sent.length > 0;
+}
+
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
     recovered: 0,
@@ -449,6 +461,59 @@ async function drainQueuedEntry(opts: {
     return "recovered";
   } catch (err) {
     const errMsg = formatErrorMessage(err);
+    // Partial send during recovery replay: the prefix already landed, so a
+    // future drain/restart MUST NOT replay this entry — that would duplicate
+    // the sent prefix. Ack the entry as terminal even though delivery
+    // technically failed for the trailing payloads (#57766). Counted as
+    // "recovered" since the queue contract is satisfied (entry won't replay);
+    // the trailing-payload loss is logged separately.
+    if (isRecoveryDeliveryErrorWithPartialSend(err)) {
+      opts.log.warn(
+        `Delivery ${entry.id} partial-send during recovery; acking entry to prevent replay duplication: ${errMsg}`,
+      );
+      const sentPrefix = (err as { sentBeforeError?: unknown }).sentBeforeError;
+      try {
+        await ackDelivery(entry.id, opts.stateDir);
+        // Run commit hooks for the prefix that already landed: the queue
+        // entry is gone and a future drain won't replay, so afterCommit-style
+        // side effects must fire here or be lost.
+        if (Array.isArray(sentPrefix) && isOutboundDeliveryResultArray(sentPrefix)) {
+          try {
+            await runOutboundDeliveryCommitHooks(sentPrefix);
+          } catch (hookErr) {
+            opts.log.warn(
+              `Delivery ${entry.id} partial-send commit hooks failed: ${formatErrorMessage(hookErr)}`,
+            );
+          }
+        }
+        opts.onRecovered?.(entry);
+        return "recovered";
+      } catch (ackErr) {
+        if (getErrnoCode(ackErr) === "ENOENT") {
+          opts.onRecovered?.(entry);
+          return "already-gone";
+        }
+        // Ack failed for a non-ENOENT reason — but the prefix already landed
+        // on the platform, so the entry MUST NOT replay or it will duplicate.
+        // Move it out of pending into failed/ to take it off the recovery
+        // path; the trailing-payload loss is already accounted for.
+        opts.log.warn(
+          `Delivery ${entry.id} partial-send ack failed; moving to failed/ to prevent replay: ${formatErrorMessage(ackErr)}`,
+        );
+        try {
+          await moveToFailed(entry.id, opts.stateDir);
+          opts.onFailed?.(entry, errMsg);
+          return "moved-to-failed";
+        } catch (moveErr) {
+          if (getErrnoCode(moveErr) === "ENOENT") {
+            opts.onRecovered?.(entry);
+            return "already-gone";
+          }
+        }
+      }
+      opts.onFailed?.(entry, errMsg);
+      return "failed";
+    }
     opts.onFailed?.(entry, errMsg);
     if (isPermanentDeliveryError(errMsg)) {
       try {

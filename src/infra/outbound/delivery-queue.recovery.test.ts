@@ -110,6 +110,67 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastError).toBe("network down");
   });
 
+  it("acks the queue entry on DeliveryError partial-send during recovery to prevent replay duplication", async () => {
+    // Recovery delivery uses skipQueue:true, so the live-send ack-on-DeliveryError
+    // guard in deliverOutboundPayloads doesn't fire here. The recovery loop
+    // itself must detect partial-send DeliveryErrors and ack the entry as
+    // terminal — otherwise the next drain would replay the whole batch and
+    // duplicate the already-sent prefix (#57766).
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "a" }, { text: "b" }] },
+      tmpDir(),
+    );
+
+    const partialError = Object.assign(new Error("second chunk failed"), {
+      name: "DeliveryError",
+      sentBeforeError: [{ channel: "demo-channel-c", messageId: "chunk-1" }],
+    });
+    const deliver = vi.fn().mockRejectedValue(partialError);
+    const { result } = await runRecovery({ deliver });
+
+    expect(result.recovered).toBe(1);
+    expect(result.failed).toBe(0);
+
+    // Entry must be GONE from pending — recovery treated it as terminal.
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(0);
+
+    // And not moved to failed/ either — the partial send did land for the prefix.
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(
+      false,
+    );
+  });
+
+  it("runs commit hooks for the sent prefix on DeliveryError partial-send during recovery", async () => {
+    // When a partial-send DeliveryError fires during recovery replay we ack
+    // the entry as terminal so the queue won't replay — but the prefix
+    // already landed on the platform, so afterCommit-style side effects
+    // (message lifecycle hooks) must still fire or they'd be lost forever
+    // (#57766 follow-up).
+    await enqueueDelivery(
+      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "a" }, { text: "b" }] },
+      tmpDir(),
+    );
+    const hookCalled = vi.fn(async () => {});
+    const sentPrefix = [
+      attachOutboundDeliveryCommitHook(
+        { channel: "demo-channel-c", messageId: "chunk-1" },
+        hookCalled,
+      ),
+    ];
+    const partialError = Object.assign(new Error("second chunk failed"), {
+      name: "DeliveryError",
+      sentBeforeError: sentPrefix,
+    });
+    const deliver = vi.fn().mockRejectedValue(partialError);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result.recovered).toBe(1);
+    expect(hookCalled).toHaveBeenCalledTimes(1);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
   it("moves entries abandoned after platform send may have started to failed without reconciliation", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "maybe sent" }] },
