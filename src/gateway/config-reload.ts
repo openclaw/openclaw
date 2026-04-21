@@ -9,7 +9,12 @@ import type {
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isPlainObject } from "../utils.js";
-import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
+import {
+  buildGatewayReloadPlan,
+  listPluginInstallRecordMetadataOnlyPaths,
+  listPluginInstallRecordWholeRecordPaths,
+  type GatewayReloadPlan,
+} from "./config-reload-plan.js";
 
 export { buildGatewayReloadPlan };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
@@ -214,10 +219,32 @@ export function startGatewayConfigReloader(opts: {
   };
 
   const applySnapshot = async (nextConfig: OpenClawConfig) => {
-    const changedPaths = diffConfigPaths(currentConfig, nextConfig);
+    const rawChangedPaths = diffConfigPaths(currentConfig, nextConfig);
+    const metadataOnlyPaths = listPluginInstallRecordMetadataOnlyPaths({
+      prevInstalls: currentConfig.plugins?.installs,
+      nextInstalls: nextConfig.plugins?.installs,
+    });
+    const wholeRecordPaths = listPluginInstallRecordWholeRecordPaths({
+      prevInstalls: currentConfig.plugins?.installs,
+      nextInstalls: nextConfig.plugins?.installs,
+    });
     currentConfig = nextConfig;
     settings = resolveGatewayReloadSettings(nextConfig);
+    const changedPaths = rawChangedPaths.filter((path) => {
+      if (wholeRecordPaths.has(path)) {
+        return true;
+      }
+      if (metadataOnlyPaths.has(path)) {
+        return false;
+      }
+      return true;
+    });
     if (changedPaths.length === 0) {
+      if (rawChangedPaths.length > 0) {
+        opts.log.info(
+          `config change suppressed (install-record metadata only: ${rawChangedPaths.join(", ")})`,
+        );
+      }
       return;
     }
 

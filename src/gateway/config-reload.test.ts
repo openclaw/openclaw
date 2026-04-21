@@ -6,9 +6,18 @@ import {
 } from "../agents/skills/refresh-state.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { ConfigFileSnapshot, ConfigWriteNotification } from "../config/config.js";
+import type {
+  ConfigFileSnapshot,
+  ConfigWriteNotification,
+  OpenClawConfig,
+} from "../config/config.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  listPluginInstallRecordMetadataOnlyPaths,
+  listPluginInstallRecordWholeRecordPaths,
+} from "./config-reload-plan.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
@@ -87,6 +96,132 @@ describe("diffConfigPaths", () => {
     };
 
     expect(diffConfigPaths(prev, next)).toEqual(["agents.list"]);
+  });
+
+  it("emits duplicate path strings when dotted plugin ids collide with metadata leaves (#49474)", () => {
+    const prev = {
+      plugins: {
+        installs: {
+          foo: {
+            source: "npm",
+            resolvedAt: "2026-01-01T00:00:00.000Z",
+            installedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      },
+    };
+    const next = {
+      plugins: {
+        installs: {
+          foo: {
+            source: "npm",
+            resolvedAt: "2026-03-17T21:01:05.607Z",
+            installedAt: "2026-01-01T00:00:00.000Z",
+          },
+          "foo.resolvedAt": { source: "npm", version: "1.0.0" },
+        },
+      },
+    };
+    const paths = diffConfigPaths(prev, next);
+    expect(paths.filter((p) => p === "plugins.installs.foo.resolvedAt").length).toBe(2);
+  });
+});
+
+describe("listPluginInstallRecordWholeRecordPaths", () => {
+  it("lists prefix paths for added or removed install records", () => {
+    expect(
+      listPluginInstallRecordWholeRecordPaths({
+        prevInstalls: { a: { source: "npm" } },
+        nextInstalls: { a: { source: "npm" }, b: { source: "npm" } },
+      }),
+    ).toEqual(new Set(["plugins.installs.b"]));
+    expect(
+      listPluginInstallRecordWholeRecordPaths({
+        prevInstalls: { a: { source: "npm" } },
+        nextInstalls: {},
+      }),
+    ).toEqual(new Set(["plugins.installs.a"]));
+  });
+
+  it("flags dotted ids whose path collides with metadata leaves (#49474)", () => {
+    expect(
+      listPluginInstallRecordWholeRecordPaths({
+        prevInstalls: { foo: { source: "npm", resolvedAt: "a", installedAt: "b" } },
+        nextInstalls: {
+          foo: { source: "npm", resolvedAt: "c", installedAt: "b" },
+          "foo.resolvedAt": { source: "npm", version: "1.0.0" },
+        },
+      }),
+    ).toEqual(new Set(["plugins.installs.foo.resolvedAt"]));
+  });
+});
+
+describe("listPluginInstallRecordMetadataOnlyPaths", () => {
+  it("returns install-record timestamp leaves when metadata is the only change (#49474)", () => {
+    const initialInstall: PluginInstallRecord = {
+      source: "npm",
+      resolvedAt: "2026-01-01T00:00:00.000Z",
+      installedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    expect(
+      listPluginInstallRecordMetadataOnlyPaths({
+        prevInstalls: {
+          "lossless-claw": initialInstall,
+          "@scoped/pkg": initialInstall,
+        },
+        nextInstalls: {
+          "lossless-claw": {
+            ...initialInstall,
+            resolvedAt: "2026-03-17T21:01:05.607Z",
+            installedAt: "2026-03-17T21:01:29.442Z",
+          },
+          "@scoped/pkg": {
+            ...initialInstall,
+            resolvedAt: "2026-03-18T00:00:00.000Z",
+          },
+        },
+      }),
+    ).toEqual(
+      new Set([
+        "plugins.installs.lossless-claw.resolvedAt",
+        "plugins.installs.lossless-claw.installedAt",
+        "plugins.installs.@scoped/pkg.resolvedAt",
+      ]),
+    );
+  });
+
+  it("does not suppress whole-record changes for dotted plugin ids ending in metadata names", () => {
+    const suppressed = listPluginInstallRecordMetadataOnlyPaths({
+      prevInstalls: {},
+      nextInstalls: {
+        "demo.resolvedAt": { source: "npm", version: "1.0.0" },
+        "demo.installedAt": { source: "npm", version: "1.0.0" },
+      },
+    });
+
+    expect(suppressed).toEqual(new Set());
+  });
+
+  it("does not treat non-metadata install fields as metadata-only", () => {
+    const initialInstall: PluginInstallRecord = {
+      source: "npm",
+      version: "1.0.0",
+      resolvedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    expect(
+      listPluginInstallRecordMetadataOnlyPaths({
+        prevInstalls: { demo: initialInstall },
+        nextInstalls: {
+          demo: {
+            ...initialInstall,
+            version: "2.0.0",
+            resolvedAt: "2026-03-18T00:00:00.000Z",
+          },
+        },
+      }),
+    ).toEqual(new Set());
   });
 });
 
@@ -400,6 +535,7 @@ function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
   options: {
     initialInternalWriteHash?: string | null;
+    initialConfig?: OpenClawConfig;
     recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     onRecovered?: (params: {
@@ -428,7 +564,7 @@ function createReloaderHarness(
     error: vi.fn(),
   };
   const reloader = startGatewayConfigReloader({
-    initialConfig: { gateway: { reload: { debounceMs: 0 } } },
+    initialConfig: options.initialConfig ?? { gateway: { reload: { debounceMs: 0 } } },
     initialInternalWriteHash: options.initialInternalWriteHash,
     readSnapshot,
     recoverSnapshot: options.recoverSnapshot,
@@ -505,6 +641,146 @@ describe("startGatewayConfigReloader", () => {
     expect(log.warn).toHaveBeenCalledWith("config reload skipped (config file not found)");
 
     await reloader.stop();
+  });
+
+  it("ignores plugins.installs timestamp-only disk changes for reload (#49474)", async () => {
+    const initialInstall: PluginInstallRecord = {
+      source: "npm",
+      resolvedAt: "2026-01-01T00:00:00.000Z",
+      installedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        installs: {
+          "lossless-claw": initialInstall,
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      ...initialConfig,
+      plugins: {
+        installs: {
+          "lossless-claw": {
+            ...initialInstall,
+            resolvedAt: "2026-03-17T21:01:05.607Z",
+            installedAt: "2026-03-17T21:01:29.442Z",
+          },
+        },
+      },
+    };
+    const readSnapshot = vi.fn().mockResolvedValue(makeSnapshot({ config: nextConfig }));
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("config change suppressed (install-record metadata only:"),
+    );
+    await harness.reloader.stop();
+  });
+
+  it("restarts when install metadata collides with a dotted plugin id add (#49474)", async () => {
+    const initialInstall: PluginInstallRecord = {
+      source: "npm",
+      resolvedAt: "2026-01-01T00:00:00.000Z",
+      installedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        installs: {
+          foo: initialInstall,
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      ...initialConfig,
+      plugins: {
+        installs: {
+          foo: {
+            ...initialInstall,
+            resolvedAt: "2026-03-17T21:01:05.607Z",
+          },
+          "foo.resolvedAt": { source: "npm", version: "1.0.0" },
+        },
+      },
+    };
+    const readSnapshot = vi.fn().mockResolvedValue(makeSnapshot({ config: nextConfig }));
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.log.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("config change suppressed (install-record metadata only:"),
+    );
+    await harness.reloader.stop();
+  });
+
+  it("does not restart when install timestamps change alongside noop metadata", async () => {
+    const initialInstall: PluginInstallRecord = {
+      source: "npm",
+      resolvedAt: "2026-01-01T00:00:00.000Z",
+      installedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      meta: { lastTouchedAt: "2026-01-01T00:00:00.000Z" },
+      plugins: {
+        installs: {
+          "lossless-claw": initialInstall,
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      ...initialConfig,
+      meta: { lastTouchedAt: "2026-03-17T21:02:00.000Z" },
+      plugins: {
+        installs: {
+          "lossless-claw": {
+            ...initialInstall,
+            resolvedAt: "2026-03-17T21:01:05.607Z",
+            installedAt: "2026-03-17T21:01:29.442Z",
+          },
+        },
+      },
+    };
+    const readSnapshot = vi.fn().mockResolvedValue(makeSnapshot({ config: nextConfig }));
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.log.info).toHaveBeenCalledWith(
+      "config change detected; evaluating reload (meta.lastTouchedAt)",
+    );
+    await harness.reloader.stop();
+  });
+
+  it("still restarts when plugins.installs changes a non-metadata field", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        installs: {
+          "lossless-claw": { source: "npm", version: "1.0.0" },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      ...initialConfig,
+      plugins: {
+        installs: {
+          "lossless-claw": { source: "npm", version: "2.0.0" },
+        },
+      },
+    };
+    const readSnapshot = vi.fn().mockResolvedValue(makeSnapshot({ config: nextConfig }));
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    await harness.reloader.stop();
   });
 
   it("contains restart callback failures and retries on subsequent changes", async () => {

@@ -1,4 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 
 export type ChannelKind = ChannelId;
@@ -16,6 +18,89 @@ export type GatewayReloadPlan = {
   restartChannels: Set<ChannelKind>;
   noopPaths: string[];
 };
+
+const INSTALL_RECORD_METADATA_FIELDS = ["resolvedAt", "installedAt"] as const;
+type InstallRecordMetadataField = (typeof INSTALL_RECORD_METADATA_FIELDS)[number];
+const INSTALL_RECORD_METADATA_FIELD_SET = new Set<string>(INSTALL_RECORD_METADATA_FIELDS);
+
+/**
+ * Plugin install records (`plugins.installs.<id>.*`) refresh `resolvedAt` / `installedAt` during
+ * npm installs and runtime self-updates without changing `plugins.entries` or other effective
+ * gateway config. Only suppress leaf-field updates when the same install record exists on both
+ * sides and every changed field is metadata, so dotted plugin ids like `foo.resolvedAt` do not
+ * cause whole-record additions/removals to be misclassified as metadata-only changes (#49474).
+ */
+export function listPluginInstallRecordMetadataOnlyPaths(params: {
+  prevInstalls?: Record<string, PluginInstallRecord>;
+  nextInstalls?: Record<string, PluginInstallRecord>;
+}): Set<string> {
+  const prevInstalls = params.prevInstalls ?? {};
+  const nextInstalls = params.nextInstalls ?? {};
+  const suppressedPaths = new Set<string>();
+  const pluginIds = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
+
+  for (const pluginId of pluginIds) {
+    const prevRecord = prevInstalls[pluginId];
+    const nextRecord = nextInstalls[pluginId];
+    if (!prevRecord || !nextRecord) {
+      continue;
+    }
+
+    const changedFields: InstallRecordMetadataField[] = [];
+    const recordKeys = new Set([...Object.keys(prevRecord), ...Object.keys(nextRecord)]);
+    let hasNonMetadataChange = false;
+
+    for (const key of recordKeys) {
+      const typedKey = key as keyof PluginInstallRecord;
+      if (isDeepStrictEqual(prevRecord[typedKey], nextRecord[typedKey])) {
+        continue;
+      }
+      if (!INSTALL_RECORD_METADATA_FIELD_SET.has(key)) {
+        hasNonMetadataChange = true;
+        break;
+      }
+      changedFields.push(key as InstallRecordMetadataField);
+    }
+
+    if (hasNonMetadataChange || changedFields.length === 0) {
+      continue;
+    }
+
+    for (const field of changedFields) {
+      suppressedPaths.add(`plugins.installs.${pluginId}.${field}`);
+    }
+  }
+
+  return suppressedPaths;
+}
+
+/**
+ * Paths emitted as a single prefix when an install record is added or removed
+ * (`diffConfigPaths` returns `plugins.installs.<id>` when one side is missing and the other is an object).
+ * These strings collide with metadata leaf paths like `plugins.installs.foo.resolvedAt` when the plugin id
+ * is literally `foo.resolvedAt` (whole record) vs plugin `foo` field `resolvedAt` (metadata).
+ */
+export function listPluginInstallRecordWholeRecordPaths(params: {
+  prevInstalls?: Record<string, PluginInstallRecord>;
+  nextInstalls?: Record<string, PluginInstallRecord>;
+}): Set<string> {
+  const prevInstalls = params.prevInstalls ?? {};
+  const nextInstalls = params.nextInstalls ?? {};
+  const paths = new Set<string>();
+  const pluginIds = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
+
+  for (const pluginId of pluginIds) {
+    const prevRecord = prevInstalls[pluginId];
+    const nextRecord = nextInstalls[pluginId];
+    const hasPrev = prevRecord !== undefined;
+    const hasNext = nextRecord !== undefined;
+    if (hasPrev !== hasNext) {
+      paths.add(`plugins.installs.${pluginId}`);
+    }
+  }
+
+  return paths;
+}
 
 type ReloadRule = {
   prefix: string;
