@@ -44,6 +44,7 @@ export type ShellChainPart = {
 
 const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`"]);
+const MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH = 64 * 1024;
 const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   "&",
   "|",
@@ -213,16 +214,21 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
               pendingHeredocs.shift();
             }
           } else {
-            const continued = stripUnquotedHeredocLineContinuation(line);
-            if (
-              !unquotedHeredocLogicalLength &&
-              !continued.continues &&
-              line === current.delimiter
-            ) {
+            if (line === current.delimiter) {
               pendingHeredocs.shift();
+              unquotedHeredocLogicalChunks = [];
+              unquotedHeredocLogicalLength = 0;
             } else {
+              const continued = stripUnquotedHeredocLineContinuation(line);
               unquotedHeredocLogicalChunks.push(continued.line);
               unquotedHeredocLogicalLength += continued.line.length;
+              if (unquotedHeredocLogicalLength > MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH) {
+                return {
+                  ok: false,
+                  reason: "heredoc logical line too large",
+                  segments: [],
+                };
+              }
               if (!continued.continues) {
                 if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalChunks.join(""))) {
                   return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
@@ -366,12 +372,10 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   if (inHeredocBody && pendingHeredocs.length > 0) {
     const current = pendingHeredocs[0];
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-    if (
-      current.quoted
-        ? line === current.delimiter
-        : !unquotedHeredocLogicalLength && line === current.delimiter
-    ) {
+    if (line === current.delimiter) {
       pendingHeredocs.shift();
+      unquotedHeredocLogicalChunks = [];
+      unquotedHeredocLogicalLength = 0;
       if (pendingHeredocs.length === 0) {
         inHeredocBody = false;
       }

@@ -428,6 +428,22 @@ describe("exec approvals shell analysis", () => {
       expect(res.reason).toBe(reason);
     });
 
+    it("does not treat a delimiter after a continued heredoc line as heredoc content", () => {
+      const res = analyzeShellCommand({
+        command: "/usr/bin/cat <<EOF\nsafe\\\nEOF\n/usr/bin/printf hi\nEOF",
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("unsupported shell token: \n");
+    });
+
+    it("rejects oversized unquoted heredoc logical lines", () => {
+      const res = analyzeShellCommand({
+        command: `/usr/bin/cat <<EOF\n${"a".repeat(64 * 1024 + 1)}\nEOF`,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("heredoc logical line too large");
+    });
+
     it("parses windows quoted executables", () => {
       const res = analyzeShellCommand({
         command: '"C:\\Program Files\\Tool\\tool.exe" --version',
