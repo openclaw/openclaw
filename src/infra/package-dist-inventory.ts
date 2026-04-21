@@ -3,10 +3,7 @@ import path from "node:path";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
-const PACKAGED_QA_RUNTIME_PATHS = new Set([
-  "dist/extensions/qa-channel/runtime-api.js",
-  `dist/extensions/${LEGACY_QA_LAB_DIR}/runtime-api.js`,
-]);
+const PACKAGED_QA_RUNTIME_PATHS = new Set(["dist/extensions/qa-channel/runtime-api.js"]);
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   `dist/extensions/${LEGACY_QA_LAB_DIR}/`,

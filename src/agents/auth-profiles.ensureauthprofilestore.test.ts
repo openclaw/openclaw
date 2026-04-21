@@ -86,6 +86,22 @@ describe("ensureAuthProfileStore", () => {
     return profile;
   }
 
+  function restoreEnvValue(name: string, previous: string | undefined): void {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
+
+  function restoreAgentDirEnv(params: {
+    previousAgentDir: string | undefined;
+    previousPiAgentDir: string | undefined;
+  }): void {
+    restoreEnvValue("OPENCLAW_AGENT_DIR", params.previousAgentDir);
+    restoreEnvValue("PI_CODING_AGENT_DIR", params.previousPiAgentDir);
+  }
+
   function expectApiKeyProfile(
     profile: AuthProfileCredential,
   ): Extract<AuthProfileCredential, { type: "api_key" }> {
@@ -209,16 +225,7 @@ describe("ensureAuthProfileStore", () => {
         key: "agent-key",
       });
     } finally {
-      if (previousAgentDir === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-      }
-      if (previousPiAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-      }
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -376,21 +383,8 @@ describe("ensureAuthProfileStore", () => {
       });
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      if (previousAgentDir === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-      }
-      if (previousPiAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-      }
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -432,16 +426,7 @@ describe("ensureAuthProfileStore", () => {
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
-      if (previousAgentDir === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-      }
-      if (previousPiAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-      }
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -485,11 +470,7 @@ describe("ensureAuthProfileStore", () => {
       expect(fs.existsSync(workerStorePath)).toBe(false);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

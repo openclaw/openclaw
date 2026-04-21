@@ -208,12 +208,13 @@ export function getActiveSessionMaintenanceWarning(params: {
   const cutoffMs = now - params.pruneAfterMs;
   const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
   const keys = Object.keys(params.store);
-  const wouldCap =
-    keys.length > params.maxEntries &&
-    keys
-      .toSorted((a, b) => getEntryUpdatedAt(params.store[b]) - getEntryUpdatedAt(params.store[a]))
-      .slice(params.maxEntries)
-      .includes(activeSessionKey);
+  const wouldCap = wouldCapActiveSession({
+    store: params.store,
+    keys,
+    activeEntry,
+    activeSessionKey,
+    maxEntries: params.maxEntries,
+  });
 
   if (!wouldPrune && !wouldCap) {
     return null;
@@ -228,6 +229,40 @@ export function getActiveSessionMaintenanceWarning(params: {
     wouldPrune,
     wouldCap,
   };
+}
+
+function wouldCapActiveSession(params: {
+  store: Record<string, SessionEntry>;
+  keys: string[];
+  activeEntry: SessionEntry;
+  activeSessionKey: string;
+  maxEntries: number;
+}): boolean {
+  if (params.keys.length <= params.maxEntries) {
+    return false;
+  }
+  if (params.maxEntries <= 0) {
+    return true;
+  }
+
+  const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
+  let newerOrTieBeforeActive = 0;
+  let seenActive = false;
+  for (const key of params.keys) {
+    if (key === params.activeSessionKey) {
+      seenActive = true;
+      continue;
+    }
+    const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
+    if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
+      newerOrTieBeforeActive++;
+      if (newerOrTieBeforeActive >= params.maxEntries) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /**

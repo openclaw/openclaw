@@ -433,7 +433,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Abliteration: `abliteration` (`ABLITERATION_API_KEY`)
 - Example model: `abliteration/abliterated-model`
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
-- Example model: `moonshot/kimi-k2.5`
+- Example model: `moonshot/kimi-k2.6`
 - Kimi Coding: `kimi` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
 - Example model: `kimi/kimi-code`
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
@@ -490,13 +490,14 @@ need to override the base URL or model metadata:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
-- Example model: `moonshot/kimi-k2.5`
+- Example model: `moonshot/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice moonshot-api-key` or `openclaw onboard --auth-choice moonshot-api-key-cn`
 
 Kimi K2 model IDs:
 
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
+- `moonshot/kimi-k2.6`
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
@@ -507,7 +508,7 @@ Kimi K2 model IDs:
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2.5" } },
+    defaults: { model: { primary: "moonshot/kimi-k2.6" } },
   },
   models: {
     mode: "merge",
@@ -516,7 +517,7 @@ Kimi K2 model IDs:
         baseUrl: "https://api.moonshot.ai/v1",
         apiKey: "${MOONSHOT_API_KEY}",
         api: "openai-completions",
-        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
+        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
       },
     },
   },

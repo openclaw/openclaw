@@ -125,6 +125,7 @@ vi.mock("../infra/exec-inline-eval.js", () => ({
 }));
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
+type GatewayAllowlistParams = Parameters<typeof processGatewayAllowlist>[0];
 
 describe("processGatewayAllowlist", () => {
   beforeAll(async () => {
@@ -192,6 +193,28 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
+  function runGatewayAllowlist(
+    overrides: Partial<GatewayAllowlistParams> & Pick<GatewayAllowlistParams, "command">,
+  ) {
+    const { command, ...rest } = overrides;
+    return processGatewayAllowlist({
+      command,
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      ...rest,
+    });
+  }
+
   async function runTimedOutStrictInlineEval(params: {
     security: "full" | "allowlist";
     askFallback: "full" | "allowlist";
@@ -215,39 +238,17 @@ describe("processGatewayAllowlist", () => {
       deniedReason: "approval-timeout",
     });
 
-    return processGatewayAllowlist({
+    return runGatewayAllowlist({
       command: "python3 -c 'print(1)'",
-      workdir: process.cwd(),
-      env: process.env as Record<string, string>,
-      pty: false,
-      defaultTimeoutSec: 30,
       security: params.security,
       ask: "always",
-      safeBins: new Set(),
-      safeBinProfiles: {},
       strictInlineEval: true,
-      warnings: [],
-      approvalRunningNoticeMs: 0,
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
     });
   }
 
   it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
-    const result = await processGatewayAllowlist({
+    const result = await runGatewayAllowlist({
       command: "echo ok",
-      workdir: process.cwd(),
-      env: process.env as Record<string, string>,
-      pty: false,
-      defaultTimeoutSec: 30,
-      security: "allowlist",
-      ask: "off",
-      safeBins: new Set(),
-      safeBinProfiles: {},
-      warnings: [],
-      approvalRunningNoticeMs: 0,
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
@@ -268,20 +269,8 @@ describe("processGatewayAllowlist", () => {
       command: "node --version",
     });
 
-    const result = await processGatewayAllowlist({
+    const result = await runGatewayAllowlist({
       command: "node --version",
-      workdir: process.cwd(),
-      env: process.env as Record<string, string>,
-      pty: false,
-      defaultTimeoutSec: 30,
-      security: "allowlist",
-      ask: "off",
-      safeBins: new Set(),
-      safeBinProfiles: {},
-      warnings: [],
-      approvalRunningNoticeMs: 0,
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
@@ -299,39 +288,15 @@ describe("processGatewayAllowlist", () => {
     hasDurableExecApprovalMock.mockReturnValue(false);
 
     await expect(
-      processGatewayAllowlist({
+      runGatewayAllowlist({
         command: "node --version",
-        workdir: process.cwd(),
-        env: process.env as Record<string, string>,
-        pty: false,
-        defaultTimeoutSec: 30,
-        security: "allowlist",
-        ask: "off",
-        safeBins: new Set(),
-        safeBinProfiles: {},
-        warnings: [],
-        approvalRunningNoticeMs: 0,
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
       }),
     ).rejects.toThrow("exec denied: allowlist miss");
   });
 
   it("uses sessionKey for followups when notifySessionKey is absent", async () => {
-    await processGatewayAllowlist({
+    await runGatewayAllowlist({
       command: "echo ok",
-      workdir: process.cwd(),
-      env: process.env as Record<string, string>,
-      pty: false,
-      defaultTimeoutSec: 30,
-      security: "allowlist",
-      ask: "off",
-      safeBins: new Set(),
-      safeBinProfiles: {},
-      warnings: [],
-      approvalRunningNoticeMs: 0,
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
       sessionKey: "agent:main:telegram:direct:123",
     });
 

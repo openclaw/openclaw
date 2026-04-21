@@ -43,6 +43,7 @@ async function resolveImageRuntime(params: {
   model: string;
   profile?: string;
   preferredProfile?: string;
+  authStore?: ImageDescriptionRequest["authStore"];
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
@@ -62,6 +63,7 @@ async function resolveImageRuntime(params: {
     agentDir: params.agentDir,
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
+    store: params.authStore,
   });
   const apiKey = requireApiKey(apiKeyInfo, model.provider);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
@@ -226,6 +228,7 @@ export async function describeImageWithModel(
     timeoutMs: params.timeoutMs,
     profile: params.profile,
     preferredProfile: params.preferredProfile,
+    authStore: params.authStore,
     agentDir: params.agentDir,
     cfg: params.cfg,
   });
