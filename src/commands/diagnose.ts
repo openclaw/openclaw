@@ -42,17 +42,37 @@ export async function diagnoseCommand(
   }
 
   // Phase 3: stream report from LLM.
-  const report = await streamDiagnosticReport({
-    context: context.text,
-    knownIssues: KNOWN_ISSUES_PROMPT,
-    modelOverride: opts.model,
-    json: opts.json,
-    onChunk: opts.json
-      ? undefined
-      : (chunk: string) => {
-          process.stdout.write(chunk);
-        },
-  });
+  // When --json is used and the gateway is unreachable, return the raw context
+  // without AI analysis so the user can feed it to their own LLM offline.
+  let report: { markdown: string; inputTokens: number; outputTokens: number; costUsd: number };
+  try {
+    report = await streamDiagnosticReport({
+      context: context.text,
+      knownIssues: KNOWN_ISSUES_PROMPT,
+      modelOverride: opts.model,
+      json: opts.json,
+      onChunk: opts.json
+        ? undefined
+        : (chunk: string) => {
+            process.stdout.write(chunk);
+          },
+    });
+  } catch (err) {
+    if (opts.json) {
+      // Return raw context as fallback so --json is usable even when the
+      // gateway is down — the documented offline analysis workflow.
+      runtime.writeJson({
+        status: "context-only",
+        error: String(err),
+        context: context.text,
+        logEntryCount: context.logEntryCount,
+        authRejectCount: context.authRejectCount,
+        version: context.version,
+      });
+      return;
+    }
+    throw err;
+  }
 
   if (!opts.json) {
     // Ensure final newline after streaming.

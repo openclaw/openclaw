@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { callGatewayFromCli } from "../../cli/gateway-rpc.js";
 import type { GatewayRpcOpts } from "../../cli/gateway-rpc.types.js";
 
@@ -64,6 +65,7 @@ export async function streamDiagnosticReport(
 
   const agentParams: Record<string, unknown> = {
     message: prompt,
+    idempotencyKey: crypto.randomUUID(),
   };
   if (opts.modelOverride) {
     agentParams.model = opts.modelOverride;

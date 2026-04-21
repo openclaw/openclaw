@@ -161,6 +161,9 @@ function md2html(md) {
 }
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function inline(s) {
+  // Escape HTML FIRST to prevent script injection from log/config content,
+  // then apply markdown formatting on the safe escaped text.
+  s = esc(s);
   s = s.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
   s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
   s = s.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
