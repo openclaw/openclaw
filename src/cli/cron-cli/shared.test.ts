@@ -145,6 +145,7 @@ describe("printCronList", () => {
 
     expect(logs[0]).toContain("Delivery");
     expect(logs[1]).toContain("announce -> telegram:-100");
+    expect(logs[1]).toContain("resolved from last");
   });
 
   it("shows dash in Model column for systemEvent jobs", () => {

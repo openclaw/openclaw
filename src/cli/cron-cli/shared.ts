@@ -152,7 +152,7 @@ const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
 const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
-const CRON_DELIVERY_PAD = 42;
+const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
@@ -278,13 +278,18 @@ export async function resolveCronDeliveryPreview(job: CronJob): Promise<CronDeli
   ]);
   const cfg = loadConfig();
   const agentId = job.agentId?.trim() || resolveDefaultAgentId(cfg);
-  const resolved = await resolveDeliveryTarget(cfg, agentId, {
-    channel: requestedChannel,
-    to: plan.to,
-    threadId: plan.threadId,
-    accountId: plan.accountId,
-    sessionKey: job.sessionKey,
-  });
+  const resolved = await resolveDeliveryTarget(
+    cfg,
+    agentId,
+    {
+      channel: requestedChannel,
+      to: plan.to,
+      threadId: plan.threadId,
+      accountId: plan.accountId,
+      sessionKey: job.sessionKey,
+    },
+    { dryRun: true },
+  );
   if (!resolved.ok) {
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
@@ -358,10 +363,10 @@ export function printCronList(
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
-    const deliveryLabel = pad(
-      truncate(deliveryPreview?.label ?? "-", CRON_DELIVERY_PAD),
-      CRON_DELIVERY_PAD,
-    );
+    const deliveryText = deliveryPreview
+      ? `${deliveryPreview.label} (${deliveryPreview.detail})`
+      : "-";
+    const deliveryLabel = pad(truncate(deliveryText, CRON_DELIVERY_PAD), CRON_DELIVERY_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
