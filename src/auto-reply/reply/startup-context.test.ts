@@ -90,7 +90,7 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("utc dated reset hook notes");
   });
 
-  it("keeps merged local and UTC startup dates within dailyMemoryDays", async () => {
+  it("keeps the local-day window and includes a differing current UTC date", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-10.md"),
@@ -115,10 +115,47 @@ describe("buildSessionStartupContextPrelude", () => {
       nowMs: Date.UTC(2026, 3, 10, 15, 30, 0),
     });
 
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+    expect(prelude).toContain("utc yesterday");
     expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
     expect(prelude).toContain("local today");
-    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
-    expect(prelude).not.toContain("utc yesterday");
+  });
+
+  it("preserves the full local-day window while adding a differing current UTC date", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11-late-reset.md"),
+      "utc tomorrow reset",
+      "utf-8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-10.md"), "local today", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-09.md"),
+      "local yesterday",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 2,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      // 2026-04-10 20:30 in America/Chicago, but 2026-04-11 in UTC.
+      nowMs: Date.UTC(2026, 3, 11, 1, 30, 0),
+    });
+
+    expect(prelude).toContain("utc tomorrow reset");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+    expect(prelude).toContain("local today");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-09.md]");
+    expect(prelude).toContain("local yesterday");
   });
 
   it("prioritizes the newer UTC-dated artifact before older local-day files when startup context is truncated", async () => {

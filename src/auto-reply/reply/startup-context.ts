@@ -95,16 +95,17 @@ function buildStartupMemoryDateStamps(params: {
 }): string[] {
   const localTodayStamp = formatDateStamp(params.nowMs, params.timezone);
   const utcTodayStamp = formatDateStamp(params.nowMs, "UTC");
-  const ordered = new Set<string>();
+  const localWindow: string[] = [];
 
   for (let offset = 0; offset < params.dailyMemoryDays; offset += 1) {
-    ordered.add(shiftDateStampByCalendarDays(localTodayStamp, offset));
-    ordered.add(shiftDateStampByCalendarDays(utcTodayStamp, offset));
+    localWindow.push(shiftDateStampByCalendarDays(localTodayStamp, offset));
   }
 
-  return [...ordered]
-    .toSorted((left, right) => right.localeCompare(left))
-    .slice(0, params.dailyMemoryDays);
+  if (utcTodayStamp === localTodayStamp || localWindow.includes(utcTodayStamp)) {
+    return localWindow;
+  }
+
+  return [utcTodayStamp, ...localWindow];
 }
 
 function trimStartupMemoryContent(content: string, maxChars: number): string {
