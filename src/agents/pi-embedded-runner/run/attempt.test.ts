@@ -426,16 +426,16 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(streamFn).not.toBe(streamSimple);
   });
 
-  it("keeps explicit custom currentStreamFn values unchanged", () => {
+  it("keeps explicit custom currentStreamFn values unchanged for apis without a boundary-aware transport", () => {
     const currentStreamFn = vi.fn();
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: currentStreamFn as never,
       shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
+        api: "mistral-conversations",
+        provider: "mistral",
+        id: "mistral-large",
       } as never,
     });
 
