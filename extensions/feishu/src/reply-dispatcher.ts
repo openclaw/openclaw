@@ -420,6 +420,29 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let thinkingActivityTick = 0;
   let claudeCliInitThinkingPanelEnabled = false;
   let replyCycleInitialized = false;
+  let preservePendingThinkingCardOnIdle = false;
+  let forcePendingThinkingPreview = false;
+
+  const resetReplyCycleState = () => {
+    replyCycleInitialized = true;
+    deliveredFinalTexts.clear();
+    hasVisibleTextInReply = false;
+    finalTextEmitted = false;
+    hasThinkingPrelude = false;
+    thinkingCollapsed = false;
+    streamPhase = "idle";
+    activeTools.length = 0;
+    clearToolElapsedTimer();
+    clearStreamingActivityTimer();
+    seenToolCallIds.clear();
+    completedToolSummaries.length = 0;
+    toolCallCount = 0;
+    lastRenderedStreamContent = "";
+    replaceNextPartialAfterTool = false;
+    thinkingActivityTick = 0;
+    preservePendingThinkingCardOnIdle = false;
+    forcePendingThinkingPreview = false;
+  };
   /**
    * Deliver media files and emit persistence signals for media-only final payloads.
    * Extracted to avoid duplicating this logic across streaming/non-streaming paths.
@@ -908,7 +931,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       toolCallCount > 0 ||
       activeTools.length > 0 ||
       hasReasoningText() ||
-      ((reasoningPreviewEnabled || claudeCliInitThinkingPanelEnabled) && hasThinkingPrelude),
+      ((reasoningPreviewEnabled ||
+        claudeCliInitThinkingPanelEnabled ||
+        forcePendingThinkingPreview) &&
+        hasThinkingPrelude),
     );
 
   const queueThinkingPrelude = (options?: { forcePreview?: boolean }): boolean => {
@@ -1204,22 +1230,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: async () => {
         if (!replyCycleInitialized) {
-          replyCycleInitialized = true;
-          deliveredFinalTexts.clear();
-          hasVisibleTextInReply = false;
-          finalTextEmitted = false;
-          hasThinkingPrelude = false;
-          thinkingCollapsed = false;
-          streamPhase = "idle";
-          activeTools.length = 0;
-          clearToolElapsedTimer();
-          clearStreamingActivityTimer();
-          seenToolCallIds.clear();
-          completedToolSummaries.length = 0;
-          toolCallCount = 0;
-          lastRenderedStreamContent = "";
-          replaceNextPartialAfterTool = false;
-          thinkingActivityTick = 0;
+          resetReplyCycleState();
         }
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
@@ -1480,6 +1491,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           // It will close the streaming card itself once the hook resolves.
           // Closing here would race and cause a duplicate non-streaming send.
           logDispatcher(`onIdle DEFERRED — deliver in flight`);
+        } else if (preservePendingThinkingCardOnIdle) {
+          logDispatcher(`onIdle preserving pending thinking card`);
         } else {
           await closeStreaming({ emitFinalText: true, reason: "idle" });
         }
@@ -1613,5 +1626,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
     },
     markDispatchIdle,
+    showPendingThinkingCard: async () => {
+      if (!streamingEnabled) {
+        return { messageId: undefined };
+      }
+      if (!replyCycleInitialized) {
+        resetReplyCycleState();
+      }
+      preservePendingThinkingCardOnIdle = true;
+      forcePendingThinkingPreview = true;
+      queueThinkingPrelude({ forcePreview: true });
+      startStreaming();
+      queueThinkingPanelUpdate();
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      await partialUpdateQueue;
+      return { messageId: streaming?.getMessageId() };
+    },
   };
 }
