@@ -1606,7 +1606,8 @@
   },
   "overrides": {
     "axios": "1.15.0",
-    "follow-redirects": "1.16.0"
+    "follow-redirects": "1.16.0",
+    "node-domexception": "npm:@nolyfill/domexception@^1.0.28"
   },
   "engines": {
     "node": ">=22.14.0"
