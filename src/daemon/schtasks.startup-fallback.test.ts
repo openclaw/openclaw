@@ -220,6 +220,21 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("falls back to a Startup-folder launcher when schtasks availability is slow", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push(
+        { code: 124, stdout: "", stderr: "schtasks produced no output for 30000ms" },
+        { code: 124, stdout: "", stderr: "schtasks produced no output for 30000ms" },
+        { code: 124, stdout: "", stderr: "schtasks produced no output for 30000ms" },
+      );
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn(env);
+    });
+  });
+
   it("launches the task script directly when schtasks /Run is accepted but never starts the task", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();

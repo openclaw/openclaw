@@ -578,7 +578,7 @@ async function writeScheduledTaskScript({
   scriptPath: string;
   taskDescription: string;
 }> {
-  await assertSchtasksAvailable();
+  await assertSchtasksAvailable().catch(() => undefined);
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
