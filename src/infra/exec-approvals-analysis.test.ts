@@ -362,6 +362,10 @@ describe("exec approvals shell analysis", () => {
         command: "/usr/bin/cat <<EOF\njust plain text\nno expansions here\nEOF",
         expectedArgv: ["/usr/bin/cat"],
       },
+      {
+        command: "/usr/bin/cat <<EOF\nprice is $ 10\nliteral trailing dollar $\nEOF",
+        expectedArgv: ["/usr/bin/cat"],
+      },
     ])("accepts safe heredoc form %j", ({ command, expectedArgv }) => {
       const res = expectAnalyzedShellCommand(command);
       expect(res.segments.map((segment) => segment.argv[0])).toEqual(expectedArgv);
@@ -378,6 +382,26 @@ describe("exec approvals shell analysis", () => {
       },
       {
         command: "/usr/bin/cat <<EOF\n${PATH}\nEOF",
+        reason: "command substitution in unquoted heredoc",
+      },
+      {
+        command: "/usr/bin/cat <<EOF\n$OPENAI_API_KEY\nEOF",
+        reason: "command substitution in unquoted heredoc",
+      },
+      {
+        command: "/usr/bin/cat <<EOF\n$?\nEOF",
+        reason: "command substitution in unquoted heredoc",
+      },
+      {
+        command: "/usr/bin/cat <<EOF\n$$\nEOF",
+        reason: "command substitution in unquoted heredoc",
+      },
+      {
+        command: "/usr/bin/cat <<EOF\n$1\nEOF",
+        reason: "command substitution in unquoted heredoc",
+      },
+      {
+        command: "/usr/bin/cat <<EOF\n$@\nEOF",
         reason: "command substitution in unquoted heredoc",
       },
       {

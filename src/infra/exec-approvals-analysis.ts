@@ -170,7 +170,12 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       }
       if (ch === "$" && !isEscapedInHeredocLine(line, i)) {
         const next = line[i + 1];
-        if (next === "(" || next === "{") {
+        if (
+          next === "(" ||
+          next === "{" ||
+          (next !== undefined &&
+            (/^[A-Za-z_]$/.test(next) || /^[0-9]$/.test(next) || "@*?!$#-".includes(next)))
+        ) {
           return true;
         }
       }
