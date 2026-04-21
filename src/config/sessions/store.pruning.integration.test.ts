@@ -246,6 +246,57 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(Object.keys(loaded)).toHaveLength(2);
   });
 
+  it("loadSessionStore prunes stale entries from oversized stores by default", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          maxEntries: 2,
+          pruneAfter: "7d",
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      stale: makeEntry(now - 31 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(loaded.stale).toBeUndefined();
+    expect(loaded.recent).toBeDefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
+  it("loadSessionStore caps oversized stores by default", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          maxEntries: 2,
+          pruneAfter: "365d",
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      oldest: makeEntry(now - 3 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(Object.keys(loaded)).toHaveLength(2);
+    expect(loaded.oldest).toBeUndefined();
+    expect(loaded.recent).toBeDefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
   it("archives transcript files for entries evicted by maxEntries capping", async () => {
     applyCappedMaintenanceConfig(mockLoadConfig);
 
