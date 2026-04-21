@@ -203,8 +203,8 @@ Advisory triage guidance:
 - **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens).
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
-- **Plugins** (extensions exist without an explicit allowlist).
-- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns because matching is exact command-name only (for example `system.run`) and does not inspect shell text; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
+- **Plugins** (plugins load without an explicit allowlist).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns because matching is exact command-name only (for example `system.run`) and does not inspect shell text; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; plugin-owned tools reachable under permissive tool policy).
 - **Runtime expectation drift** (for example assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or explicitly setting `tools.exec.host="sandbox"` while sandbox mode is off).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
@@ -233,7 +233,7 @@ When the audit prints findings, treat this as a priority order:
 2. **Public network exposure** (LAN bind, Funnel, missing auth): fix immediately.
 3. **Browser control remote exposure**: treat it like operator access (tailnet-only, pair nodes deliberately, avoid public exposure).
 4. **Permissions**: make sure state/config/credentials/auth are not group/world-readable.
-5. **Plugins/extensions**: only load what you explicitly trust.
+5. **Plugins**: only load what you explicitly trust.
 6. **Model choice**: prefer modern, instruction-hardened models for any bot with tools.
 
 ## Security audit glossary
@@ -322,14 +322,14 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `tools.exec.safe_bins_broad_behavior`                         | warn          | Broad-behavior tools in `safeBins` weaken the low-risk stdin-filter trust model      | `tools.exec.safeBins`, `agents.list[].tools.exec.safeBins`                                           | no       |
 | `tools.exec.safe_bin_trusted_dirs_risky`                      | warn          | `safeBinTrustedDirs` includes mutable or risky directories                           | `tools.exec.safeBinTrustedDirs`, `agents.list[].tools.exec.safeBinTrustedDirs`                       | no       |
 | `skills.workspace.symlink_escape`                             | warn          | Workspace `skills/**/SKILL.md` resolves outside workspace root (symlink-chain drift) | workspace `skills/**` filesystem state                                                               | no       |
-| `plugins.extensions_no_allowlist`                             | warn          | Extensions are installed without an explicit plugin allowlist                        | `plugins.allowlist`                                                                                  | no       |
+| `plugins.extensions_no_allowlist`                             | warn          | Plugins are installed without an explicit plugin allowlist                           | `plugins.allowlist`                                                                                  | no       |
 | `plugins.installs_unpinned_npm_specs`                         | warn          | Plugin install records are not pinned to immutable npm specs                         | plugin install metadata                                                                              | no       |
 | `plugins.installs_missing_integrity`                          | warn          | Plugin install records lack integrity metadata                                       | plugin install metadata                                                                              | no       |
 | `plugins.installs_version_drift`                              | warn          | Plugin install records drift from installed packages                                 | plugin install metadata                                                                              | no       |
 | `plugins.code_safety`                                         | warn/critical | Plugin code scan found suspicious or dangerous patterns                              | plugin code / install source                                                                         | no       |
 | `plugins.code_safety.entry_path`                              | warn          | Plugin entry path points into hidden or `node_modules` locations                     | plugin manifest `entry`                                                                              | no       |
 | `plugins.code_safety.entry_escape`                            | critical      | Plugin entry escapes the plugin directory                                            | plugin manifest `entry`                                                                              | no       |
-| `plugins.code_safety.scan_failed`                             | warn          | Plugin code scan could not complete                                                  | plugin extension path / scan environment                                                             | no       |
+| `plugins.code_safety.scan_failed`                             | warn          | Plugin code scan could not complete                                                  | plugin path / scan environment                                                                       | no       |
 | `skills.code_safety`                                          | warn/critical | Skill installer metadata/code contains suspicious or dangerous patterns              | skill install source                                                                                 | no       |
 | `skills.code_safety.scan_failed`                              | warn          | Skill code scan could not complete                                                   | skill scan environment                                                                               | no       |
 | `security.exposure.open_channels_with_exec`                   | warn/critical | Shared/public rooms can reach exec-enabled agents                                    | `channels.*.dmPolicy`, `channels.*.groupPolicy`, `tools.exec.*`, `agents.list[].tools.exec.*`        | no       |
@@ -393,15 +393,15 @@ schema:
 - `channels.googlechat.dangerouslyAllowNameMatching`
 - `channels.googlechat.accounts.<accountId>.dangerouslyAllowNameMatching`
 - `channels.msteams.dangerouslyAllowNameMatching`
-- `channels.synology-chat.dangerouslyAllowNameMatching` (extension channel)
-- `channels.synology-chat.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
-- `channels.synology-chat.dangerouslyAllowInheritedWebhookPath` (extension channel)
-- `channels.zalouser.dangerouslyAllowNameMatching` (extension channel)
-- `channels.zalouser.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
-- `channels.irc.dangerouslyAllowNameMatching` (extension channel)
-- `channels.irc.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
-- `channels.mattermost.dangerouslyAllowNameMatching` (extension channel)
-- `channels.mattermost.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
+- `channels.synology-chat.dangerouslyAllowNameMatching` (plugin channel)
+- `channels.synology-chat.accounts.<accountId>.dangerouslyAllowNameMatching` (plugin channel)
+- `channels.synology-chat.dangerouslyAllowInheritedWebhookPath` (plugin channel)
+- `channels.zalouser.dangerouslyAllowNameMatching` (plugin channel)
+- `channels.zalouser.accounts.<accountId>.dangerouslyAllowNameMatching` (plugin channel)
+- `channels.irc.dangerouslyAllowNameMatching` (plugin channel)
+- `channels.irc.accounts.<accountId>.dangerouslyAllowNameMatching` (plugin channel)
+- `channels.mattermost.dangerouslyAllowNameMatching` (plugin channel)
+- `channels.mattermost.accounts.<accountId>.dangerouslyAllowNameMatching` (plugin channel)
 - `channels.telegram.network.dangerouslyAllowPrivateNetwork`
 - `channels.telegram.accounts.<accountId>.network.dangerouslyAllowPrivateNetwork`
 - `agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets`
@@ -561,7 +561,7 @@ For any agent/surface that handles untrusted content, deny these by default:
 
 `commands.restart=false` only blocks restart actions. It does not disable `gateway` config/update actions.
 
-## Plugins/extensions
+## Plugins
 
 Plugins run **in-process** with the Gateway. Treat them as trusted code:
 

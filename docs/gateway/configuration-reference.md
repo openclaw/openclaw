@@ -631,7 +631,7 @@ exec ssh -T gateway-host imsg "$@"
 
 ### Matrix
 
-Matrix is extension-backed and configured under `channels.matrix`.
+Matrix is plugin-backed and configured under `channels.matrix`.
 
 ```json5
 {
@@ -679,7 +679,7 @@ Matrix is extension-backed and configured under `channels.matrix`.
 
 ### Microsoft Teams
 
-Microsoft Teams is extension-backed and configured under `channels.msteams`.
+Microsoft Teams is plugin-backed and configured under `channels.msteams`.
 
 ```json5
 {
@@ -699,7 +699,7 @@ Microsoft Teams is extension-backed and configured under `channels.msteams`.
 
 ### IRC
 
-IRC is extension-backed and configured under `channels.irc`.
+IRC is plugin-backed and configured under `channels.irc`.
 
 ```json5
 {
@@ -755,9 +755,9 @@ Run multiple accounts per channel (each with its own `accountId`):
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
 - `openclaw doctor --fix` also repairs mixed shapes by moving account-scoped top-level single-account values into the promoted account chosen for that channel. Most channels use `accounts.default`; Matrix can preserve an existing matching named/default target instead.
 
-### Other extension channels
+### Other plugin channels
 
-Many extension channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
+Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
 See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating

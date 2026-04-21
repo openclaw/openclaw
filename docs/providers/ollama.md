@@ -3,6 +3,7 @@ summary: "Run OpenClaw with Ollama (cloud and local models)"
 read_when:
   - You want to run OpenClaw with cloud or local models via Ollama
   - You need Ollama setup and configuration guidance
+  - You want Ollama vision models for image understanding
 title: "Ollama"
 ---
 
@@ -181,6 +182,56 @@ The new model will be automatically discovered and available to use.
 <Note>
 If you set `models.providers.ollama` explicitly, auto-discovery is skipped and you must define models manually. See the explicit config section below.
 </Note>
+
+## Vision and image description
+
+The bundled Ollama plugin registers Ollama as an image-capable media-understanding provider. This lets OpenClaw route explicit image-description requests and configured image-model defaults through local or hosted Ollama vision models.
+
+For local vision, pull a model that supports images:
+
+```bash
+ollama pull qwen2.5vl:7b
+export OLLAMA_API_KEY="ollama-local"
+```
+
+Then verify with the infer CLI:
+
+```bash
+openclaw infer image describe \
+  --file ./photo.jpg \
+  --model ollama/qwen2.5vl:7b \
+  --json
+```
+
+`--model` must be a full `<provider/model>` ref. When it is set, `openclaw infer image describe` runs that model directly instead of skipping description because the model supports native vision.
+
+To make Ollama the default image-understanding model for inbound media, configure `agents.defaults.imageModel`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageModel: {
+        primary: "ollama/qwen2.5vl:7b",
+      },
+    },
+  },
+}
+```
+
+If you define `models.providers.ollama.models` manually, mark vision models with image input support:
+
+```json5
+{
+  id: "qwen2.5vl:7b",
+  name: "qwen2.5vl:7b",
+  input: ["text", "image"],
+  contextWindow: 128000,
+  maxTokens: 8192,
+}
+```
+
+OpenClaw rejects image-description requests for models that are not marked image-capable. With implicit discovery, OpenClaw reads this from Ollama when `/api/show` reports a vision capability.
 
 ## Configuration
 
