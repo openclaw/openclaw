@@ -36,7 +36,7 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -47,6 +47,7 @@ import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.sha
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
@@ -447,8 +448,23 @@ export async function initSessionState(params: {
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
     : undefined;
+  const softResetAllowed =
+    softReset.matched &&
+    resetAuthorized &&
+    !isAcpSessionKey(
+      resolveEffectiveResetTargetSessionKey({
+        cfg,
+        channel: conversationBindingContext?.channel,
+        accountId: conversationBindingContext?.accountId,
+        conversationId: conversationBindingContext?.conversationId,
+        parentConversationId: conversationBindingContext?.parentConversationId,
+        activeSessionKey: sessionKey,
+        allowNonAcpBindingSessionKey: false,
+        skipConfiguredFallbackWhenActiveSessionNonAcp: false,
+      }) ?? "",
+    );
   const freshEntry =
-    (entryFreshness?.fresh ?? false) || (softReset.matched && canReuseExistingEntry);
+    (entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
