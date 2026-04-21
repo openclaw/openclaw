@@ -737,11 +737,12 @@ export async function runEmbeddedPiAgent(
               decisionEffective: false,
             },
           });
-          if (decision.next !== "noop") {
+          if (decision.next === "continue") {
             throw new Error(
-              `Embedded run lifecycle seam returned ${decision.next} before transition execution is wired for ${params2.source}.`,
+              `Embedded run lifecycle seam returned continue before live continue transition execution is wired for ${params2.source}.`,
             );
           }
+          return decision;
         };
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
@@ -761,7 +762,7 @@ export async function runEmbeddedPiAgent(
               fallbackConfigured,
               failoverReason: lastRetryFailoverReason,
             });
-            await resolvePassTransitionDecision({
+            const retryLimitTransitionDecision = await resolvePassTransitionDecision({
               passIndex: runLoopIterations,
               passKind: "model_call",
               correlationId: lastPassCorrelationId,
@@ -772,6 +773,11 @@ export async function runEmbeddedPiAgent(
               proposedReason:
                 "reason" in retryLimitDecision ? retryLimitDecision.reason : undefined,
             });
+            if (retryLimitTransitionDecision.next === "halt") {
+              throw new Error(
+                `Embedded run lifecycle seam halted retry_limit transition before ${retryLimitDecision.action}.`,
+              );
+            }
             return handleRetryLimitExhaustion({
               message,
               decision: retryLimitDecision,
@@ -1570,7 +1576,7 @@ export async function runEmbeddedPiAgent(
               thinkLevel = fallbackThinking;
               continue;
             }
-            await resolvePassTransitionDecision({
+            const promptTransitionDecision = await resolvePassTransitionDecision({
               passIndex,
               passKind,
               correlationId: passCorrelationId,
@@ -1581,6 +1587,11 @@ export async function runEmbeddedPiAgent(
               proposedReason:
                 "reason" in promptFailoverDecision ? promptFailoverDecision.reason : undefined,
             });
+            if (promptTransitionDecision.next === "halt") {
+              throw new Error(
+                `Embedded run lifecycle seam halted prompt transition before ${promptFailoverDecision.action}.`,
+              );
+            }
             // Throw FailoverError for prompt-side failover reasons when fallbacks
             // are configured so outer model fallback can continue on overload,
             // rate-limit, auth, or billing failures.
@@ -1749,7 +1760,7 @@ export async function runEmbeddedPiAgent(
             advanceAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
-          await resolvePassTransitionDecision({
+          const assistantTransitionDecision = await resolvePassTransitionDecision({
             passIndex,
             passKind,
             correlationId: passCorrelationId,
@@ -1768,6 +1779,17 @@ export async function runEmbeddedPiAgent(
                 ? assistantFailoverReason
                 : undefined,
           });
+          if (assistantTransitionDecision.next === "halt") {
+            throw new Error(
+              `Embedded run lifecycle seam halted assistant transition before ${
+                assistantFailoverOutcome.action === "retry"
+                  ? "continue"
+                  : assistantFailoverOutcome.action === "throw"
+                    ? "halt"
+                    : "noop"
+              }.`,
+            );
+          }
           if (assistantFailoverOutcome.action === "retry") {
             traceAttempts.push({
               provider: activeErrorContext.provider,
