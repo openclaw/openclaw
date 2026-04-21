@@ -1972,6 +1972,75 @@ describe("spawnAcpDirect", () => {
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
   });
 
+  it("does not implicitly stream for ACP requester sessions inside a subagent envelope", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          heartbeat: {
+            every: "30m",
+            target: "last",
+          },
+        },
+      },
+    });
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
+      const store: Record<
+        string,
+        {
+          sessionId: string;
+          updatedAt: number;
+          deliveryContext?: unknown;
+          spawnedBy?: string;
+          spawnDepth?: number;
+          subagentRole?: string;
+          subagentControlScope?: string;
+        }
+      > = {
+        "agent:main:acp:child": {
+          sessionId: "parent-sess-1",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:parent-channel",
+            accountId: "default",
+          },
+          spawnedBy: "agent:main:subagent:parent",
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+      };
+      return new Proxy(store, {
+        get(target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return target[prop as keyof typeof target];
+        },
+      });
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:acp:child",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
   it("does not implicitly stream when heartbeat target is not session-local", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,

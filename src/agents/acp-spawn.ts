@@ -54,6 +54,7 @@ import {
 } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -722,11 +723,7 @@ function resolveAcpSpawnRequesterState(params: {
   const bindingService = getSessionBindingService();
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
-    Boolean(requesterParsedSession) &&
-    isSubagentEnvelopeSession(params.parentSessionKey, {
-      cfg: params.cfg,
-      store: params.subagentStore,
-    });
+    Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
   const hasActiveSubagentBinding =
     isSubagentSession && params.parentSessionKey
       ? bindingService
