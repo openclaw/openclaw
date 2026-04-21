@@ -1,7 +1,8 @@
+import fsCore from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 
@@ -15,6 +16,7 @@ async function makeWorkspace(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -122,6 +124,39 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("notes xx-old");
     expect(prelude).not.toContain("notes yy-old");
     expect(prelude).not.toContain("notes zz-old");
+  });
+
+  it("keeps readable slugged artifacts when one stat call fails", async () => {
+    const workspaceDir = await makeWorkspace();
+    const readableA = path.join(workspaceDir, "memory", "2026-04-11-readable-a.md");
+    const readableB = path.join(workspaceDir, "memory", "2026-04-11-readable-b.md");
+    const flaky = path.join(workspaceDir, "memory", "2026-04-11-flaky.md");
+    await fs.writeFile(readableA, "notes readable a", "utf-8");
+    await fs.writeFile(readableB, "notes readable b", "utf-8");
+    await fs.writeFile(flaky, "notes flaky", "utf-8");
+
+    const originalStat = fsCore.promises.stat.bind(fsCore.promises);
+    const statSpy = vi
+      .spyOn(fsCore.promises, "stat")
+      .mockImplementation(async (target, options) => {
+        if (String(target) === flaky) {
+          throw new Error("transient stat failure");
+        }
+        return originalStat(target, options);
+      });
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "America/Chicago" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(statSpy).toHaveBeenCalled();
+    expect(prelude).toContain("notes readable a");
+    expect(prelude).toContain("notes readable b");
+    expect(prelude).not.toContain("notes flaky");
   });
 
   it("returns null when no daily memory files exist", async () => {

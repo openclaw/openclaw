@@ -221,13 +221,16 @@ async function listStartupMemoryPathsForDate(params: {
       })
       .map((entry) => entry.name);
 
-    const sluggedNames = await Promise.all(
+    const sluggedNameResults = await Promise.allSettled(
       candidates
         .filter((name) => name !== exactName)
         .map(async (name) => ({
           name,
           stat: await fs.promises.stat(path.join(memoryDir, name)),
         })),
+    );
+    const sluggedNames = sluggedNameResults.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
     );
     const newestSluggedNames = sluggedNames
       .toSorted((left, right) => {
