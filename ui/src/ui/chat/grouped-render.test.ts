@@ -18,7 +18,7 @@ vi.mock("../markdown.ts", () => ({
 vi.mock("../views/agents-utils.ts", () => ({
   agentLogoUrl: () => "/openclaw-logo.svg",
   isRenderableControlUiAvatarUrl: (value: string) =>
-    /^data:image\//i.test(value) || value.startsWith("/"),
+    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
 }));
 
 vi.mock("./speech.ts", () => ({

@@ -135,6 +135,14 @@ describe("resolveAgentAvatarUrl", () => {
     ).toBeNull();
   });
 
+  it("ignores protocol-relative avatars so the control UI cannot be tricked into a cross-origin fetch", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "//evil.example/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for initials or emoji avatar values without a URL", () => {
     expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
     expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
