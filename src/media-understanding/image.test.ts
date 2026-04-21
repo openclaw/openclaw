@@ -294,6 +294,7 @@ describe("describeImageWithModel", () => {
       discoverModelsMock.mockReturnValue({
         find: vi.fn(() => model),
       });
+      resolveModelWithRegistryMock.mockReturnValue(model);
       completeMock
         .mockResolvedValueOnce({
           role: "assistant",
