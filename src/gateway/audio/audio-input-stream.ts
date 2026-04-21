@@ -12,7 +12,6 @@
  * audioIn.handleFrame)`.
  */
 import {
-  DEFAULT_INPUT_FORMAT,
   RealtimeInputBuffer,
   type AudioFormat,
   type CommitResult,

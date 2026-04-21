@@ -209,7 +209,7 @@ export class MultiplexControlChannel {
     const msg: ControlAckMessage = {
       type: "ack",
       forType,
-      ...(extras ?? {}),
+      ...extras,
     };
     this.send(encodeJsonFrame(msg));
     this.framesSent++;
@@ -278,8 +278,11 @@ export class MultiplexControlChannel {
           type,
           ...(typeof obj.streamId === "number" ? { streamId: obj.streamId } : {}),
         };
-        if (type === "pause") this.opts.onPause?.(msg);
-        else this.opts.onResume?.(msg);
+        if (type === "pause") {
+          this.opts.onPause?.(msg);
+        } else {
+          this.opts.onResume?.(msg);
+        }
         return;
       }
       case "error": {
