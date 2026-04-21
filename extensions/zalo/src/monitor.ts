@@ -805,7 +805,9 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     }
   };
   const stopOnAbort = () => {
-    stop();
+    if (!useWebhook) {
+      stop();
+    }
   };
 
   abortSignal.addEventListener("abort", stopOnAbort, { once: true });
