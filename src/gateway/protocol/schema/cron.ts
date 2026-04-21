@@ -7,6 +7,24 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSch
       kind: Type.Literal("agentTurn"),
       message: params.message,
       planCycleId: Type.Optional(Type.String()),
+      /**
+       * PR #68939 follow-up (P2.9) — execution-phase cycle token
+       * for post-approval nudges (sibling to planCycleId design-
+       * phase). Distinct field so the cron-fire-time suppression
+       * guard in `cron/isolated-agent/run.ts` can route to the
+       * right check (executing vs plan). Same UUID value as
+       * `planMode.cycleId` at schedule time.
+       *
+       * Without this wire-schema entry, cron.add rejects the
+       * scheduling call with `unexpected property 'executionCycleId'`
+       * — live-observed during Phase-2 smoke test on 2026-04-21,
+       * all 8 approve cycles failed to schedule execution nudges
+       * because the protocol validator (additionalProperties:
+       * false) rejected the payload. This is the wire-level
+       * mirror of the CronAgentTurnPayloadFields type added in
+       * src/cron/types.ts as part of P2.9.
+       */
+      executionCycleId: Type.Optional(Type.String()),
       model: Type.Optional(Type.String()),
       fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),
