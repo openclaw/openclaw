@@ -58,6 +58,7 @@ const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_MAX_TURN_RAW_CHARS = 2 * 1024 * 1024;
 const CLAUDE_LIVE_MAX_TURN_LINES = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
+const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -68,6 +69,7 @@ export function resetClaudeLiveSessionsForTest(): void {
     closeLiveSession(session, "restart");
   }
   liveSessions.clear();
+  liveSessionCreates.clear();
 }
 
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
@@ -793,6 +795,7 @@ export async function runClaudeLiveSessionTurn(params: {
     closeLiveSession(session, "restart");
     session = null;
   }
+  let cleanupTurnArtifacts = Boolean(session);
   try {
     ensureLiveSessionCapacity(key, params.context);
   } catch (error) {
@@ -800,8 +803,23 @@ export async function runClaudeLiveSessionTurn(params: {
     throw error;
   }
   if (!session) {
-    try {
-      session = await createClaudeLiveSession({
+    const pendingSession = liveSessionCreates.get(key);
+    if (pendingSession) {
+      try {
+        session = await pendingSession;
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
+      if (session.fingerprint !== fingerprint) {
+        closeLiveSession(session, "restart");
+        session = null;
+      } else {
+        cleanupTurnArtifacts = true;
+      }
+    }
+    if (!session) {
+      const createSession = createClaudeLiveSession({
         context: params.context,
         argv,
         env: params.env,
@@ -810,12 +828,21 @@ export async function runClaudeLiveSessionTurn(params: {
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         supervisor: params.getProcessSupervisor(),
         cleanup,
+      }).finally(() => {
+        if (liveSessionCreates.get(key) === createSession) {
+          liveSessionCreates.delete(key);
+        }
       });
-    } catch (error) {
-      await cleanup();
-      throw error;
+      liveSessionCreates.set(key, createSession);
+      try {
+        session = await createSession;
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
     }
-  } else {
+  }
+  if (cleanupTurnArtifacts && session) {
     await cleanup();
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);

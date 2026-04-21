@@ -805,6 +805,75 @@ describe("runCliAgent spawn path", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
+  it("serializes concurrent Claude live session creation for the same key", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let releaseSpawn: (() => void) | undefined;
+    let turn = 0;
+    const spawnReady = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        turn += 1;
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-concurrent" }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-concurrent",
+              result: turn === 1 ? "one" : "two",
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      await spawnReady;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const backend = {
+      liveSession: "claude-stdio" as const,
+    };
+    const first = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-concurrent-1",
+        prompt: "first",
+        backend,
+      }),
+    );
+    const second = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-concurrent-2",
+        prompt: "second",
+        backend,
+      }),
+    );
+    await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledOnce());
+    releaseSpawn?.();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ text: "one" }),
+      expect.objectContaining({ text: "two" }),
+    ]);
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
   it("preserves Claude resume args when building live session argv", () => {
     const backend: PreparedCliRunContext["preparedBackend"]["backend"] = {
       command: "claude",
