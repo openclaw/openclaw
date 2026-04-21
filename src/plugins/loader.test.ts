@@ -917,7 +917,7 @@ module.exports = {
       },
       bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
         installedSpecs.push(...missingSpecs);
-        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(bundledDir));
+        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
         fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
           recursive: true,
         });
@@ -1030,7 +1030,7 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "openai")?.status).toBe("loaded");
   });
 
-  it("retains earlier bundled runtime deps across sequential repairs", () => {
+  it("installs bundled runtime deps into each plugin root", () => {
     const bundledDir = makeTempDir();
     const alpha = writePlugin({
       id: "alpha",
@@ -1110,7 +1110,7 @@ module.exports = {
       },
       {
         missingSpecs: ["beta-runtime@1.0.0"],
-        installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"],
+        installSpecs: ["beta-runtime@1.0.0"],
       },
     ]);
   });

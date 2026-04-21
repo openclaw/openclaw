@@ -233,6 +233,123 @@ describe("describeImageWithModel", () => {
     expect(context?.messages?.[0]?.content).toHaveLength(1);
   });
 
+  it.each([
+    {
+      name: "direct OpenAI Responses baseUrl",
+      provider: "openai",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      },
+      expectedRetryPayload: {
+        reasoning: { effort: "none" },
+      },
+    },
+    {
+      name: "default OpenAI Responses route without explicit baseUrl",
+      provider: "openai",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+      },
+      expectedRetryPayload: {
+        reasoning: { effort: "none" },
+      },
+    },
+    {
+      name: "azure-openai provider using openai-responses api",
+      provider: "azure-openai",
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://myresource.openai.azure.com/openai/v1",
+      },
+      expectedRetryPayload: {
+        reasoning: { effort: "none" },
+      },
+    },
+    {
+      name: "proxy-like openai-responses route",
+      provider: "openai",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://proxy.example.com/v1",
+      },
+      expectedRetryPayload: {},
+    },
+  ])(
+    "retries reasoning-only image responses with reasoning disabled for $name",
+    async ({ provider, model, expectedRetryPayload }) => {
+      discoverModelsMock.mockReturnValue({
+        find: vi.fn(() => model),
+      });
+      completeMock
+        .mockResolvedValueOnce({
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal image reasoning",
+              thinkingSignature: "reasoning_content",
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [{ type: "text", text: "retry ok" }],
+        });
+
+      const result = await describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider,
+        model: model.id,
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      });
+
+      expect(result).toEqual({
+        text: "retry ok",
+        model: model.id,
+      });
+      expect(completeMock).toHaveBeenCalledTimes(2);
+      const [, , retryOptions] = completeMock.mock.calls[1] ?? [];
+      expect(retryOptions?.onPayload).toEqual(expect.any(Function));
+      const retryPayload = await retryOptions?.onPayload?.(
+        {
+          reasoning: { effort: "high", summary: "auto" },
+          reasoning_effort: "high",
+          include: ["reasoning.encrypted_content"],
+        },
+        completeMock.mock.calls[1]?.[0],
+      );
+      expect(retryPayload).toEqual(expectedRetryPayload);
+    },
+  );
+
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
