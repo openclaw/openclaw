@@ -105,7 +105,7 @@ describe("loginOpenAICodexOAuth", () => {
       },
     );
 
-    const openUrl = vi.fn(async () => {});
+    const openUrl = vi.fn(async () => true);
     const { runtime } = await runCodexOAuth({ isRemote: false, openUrl });
 
     expect(openUrl).toHaveBeenCalledWith(
@@ -133,7 +133,7 @@ describe("loginOpenAICodexOAuth", () => {
       },
     );
 
-    const openUrl = vi.fn(async () => {});
+    const openUrl = vi.fn(async () => true);
     await runCodexOAuth({ isRemote: false, openUrl });
 
     expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize?state=abc");
@@ -156,7 +156,7 @@ describe("loginOpenAICodexOAuth", () => {
       },
     );
 
-    const openUrl = vi.fn(async () => {});
+    const openUrl = vi.fn(async () => true);
     await runCodexOAuth({ isRemote: false, openUrl });
 
     expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize/?state=abc");
@@ -172,7 +172,7 @@ describe("loginOpenAICodexOAuth", () => {
         prompter,
         runtime,
         isRemote: true,
-        openUrl: async () => {},
+        openUrl: async () => true,
       }),
     ).rejects.toThrow("oauth failed");
 
@@ -251,7 +251,7 @@ describe("loginOpenAICodexOAuth", () => {
         prompter,
         runtime,
         isRemote: false,
-        openUrl: async () => {},
+        openUrl: async () => true,
       }),
     ).resolves.toMatchObject({
       access: "access-token",
@@ -314,6 +314,99 @@ describe("loginOpenAICodexOAuth", () => {
     );
   });
 
+  it("falls back to manual entry when browser open returns undefined", async () => {
+    const { prompter } = createPrompter();
+    const runtime = createRuntime();
+    const openUrl = vi.fn(async () => undefined);
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: {
+        onAuth: (event: { url: string }) => Promise<void>;
+        onManualCodeInput?: () => Promise<string>;
+      }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize?state=abc",
+        });
+        const manualCode = await opts.onManualCodeInput?.();
+        return {
+          provider: "openai-codex" as const,
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "user@example.com",
+          manualCode,
+        };
+      },
+    );
+
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl,
+      }),
+    ).resolves.toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+    });
+
+    expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize?state=abc");
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Paste the authorization code (or full redirect URL):",
+      validate: expect.any(Function),
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "\nOpen this URL in your browser:\n\nhttps://auth.openai.com/oauth/authorize?state=abc\n",
+    );
+  });
+
+  it("falls back to manual entry when opening the browser throws", async () => {
+    const { prompter } = createPrompter();
+    const runtime = createRuntime();
+    const openUrl = vi.fn(async () => {
+      throw new Error("spawn failed");
+    });
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: {
+        onAuth: (event: { url: string }) => Promise<void>;
+        onManualCodeInput?: () => Promise<string>;
+      }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize?state=abc",
+        });
+        const manualCode = await opts.onManualCodeInput?.();
+        return {
+          provider: "openai-codex" as const,
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "user@example.com",
+          manualCode,
+        };
+      },
+    );
+
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl,
+      }),
+    ).resolves.toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+    });
+
+    expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize?state=abc");
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Paste the authorization code (or full redirect URL):",
+      validate: expect.any(Function),
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "\nOpen this URL in your browser:\n\nhttps://auth.openai.com/oauth/authorize?state=abc\n",
+    );
+  });
   it("clears the local manual fallback timer when browser callback settles first", async () => {
     vi.useFakeTimers();
     mocks.loginOpenAICodex.mockImplementation(
@@ -395,7 +488,7 @@ describe("loginOpenAICodexOAuth", () => {
         prompter,
         runtime,
         isRemote: false,
-        openUrl: async () => {},
+        openUrl: async () => true,
       }),
     ).rejects.toThrow(/OAuth prerequisites/i);
 
@@ -430,7 +523,7 @@ describe("loginOpenAICodexOAuth", () => {
         prompter,
         runtime,
         isRemote: false,
-        openUrl: async () => {},
+        openUrl: async () => true,
       }),
     ).resolves.toMatchObject({
       access: "access-token",
@@ -474,7 +567,7 @@ describe("loginOpenAICodexOAuth", () => {
         prompter,
         runtime,
         isRemote: false,
-        openUrl: async () => {},
+        openUrl: async () => true,
       }),
     ).resolves.toMatchObject({
       access: "access-token",

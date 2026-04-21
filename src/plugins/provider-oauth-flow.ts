@@ -38,8 +38,13 @@ export function createVpsAwareOAuthHandlers(params: {
       }
 
       params.spin.update(params.localBrowserMessage);
-      const opened = await params.openUrl(url);
-      if (opened === false) {
+      let opened: unknown;
+      try {
+        opened = await params.openUrl(url);
+      } catch {
+        opened = false;
+      }
+      if (opened !== true) {
         params.spin.update(
           "Could not open a browser automatically. Open the URL below, then paste the redirect URL here…",
         );
