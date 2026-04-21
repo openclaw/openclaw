@@ -20,7 +20,10 @@ const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const hasControlCommand = () => false;
 const resolveInboundDebounceMs = () => 0;
 const createInboundDebouncer = () => ({
-  run: async <T>(fn: () => Promise<T>) => await fn(),
+  enqueue: async () => {},
+  flushKey: async () => false,
+  flushAll: async () => 0,
+  unregister: () => {},
 });
 const createMonitorRuntime = () =>
   ({
