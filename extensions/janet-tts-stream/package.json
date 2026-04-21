@@ -4,7 +4,8 @@
   "description": "Janet-specific low-latency Microsoft TTS streaming plugin",
   "type": "module",
   "dependencies": {
-    "node-edge-tts": "^1.2.10"
+    "node-edge-tts": "^1.2.10",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

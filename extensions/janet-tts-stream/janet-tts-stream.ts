@@ -12,6 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS } from "./edge-tts.js";
 
 const JANET_CLIENT_ID = "openclaw-ios";
+const JANET_CAPABILITIES_METHOD = "janet.capabilities";
 const JANET_TTS_STREAM_METHOD = "janet.tts_stream.start";
 const JANET_TTS_STREAM_ABORT_METHOD = "janet.tts_stream.abort";
 const JANET_TTS_STREAM_EVENT = "janet.tts_stream.event";
@@ -566,6 +567,21 @@ export function createJanetTtsStreamService(
 }
 
 export function registerJanetTtsGateway(api: OpenClawPluginApi): void {
+  api.registerGatewayMethod(
+    JANET_CAPABILITIES_METHOD,
+    (ctx: GatewayRequestHandlerOptions) => {
+      ctx.respond(true, {
+        ok: true,
+        plugin: "janet-tts-stream",
+        clientId: JANET_CLIENT_ID,
+        transport: "websocket",
+        preferredWebSocketPath: "/ws",
+        methods: [JANET_TTS_STREAM_METHOD, JANET_TTS_STREAM_ABORT_METHOD],
+      });
+    },
+    { scope: "operator.read" },
+  );
+
   api.registerGatewayMethod(
     JANET_TTS_STREAM_METHOD,
     async (ctx: GatewayRequestHandlerOptions) => {

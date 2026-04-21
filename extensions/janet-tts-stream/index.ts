@@ -1,4 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { registerJanetCli } from "./cli.js";
 import { createJanetTtsStreamService, registerJanetTtsGateway } from "./janet-tts-stream.js";
 
 export default definePluginEntry({
@@ -8,5 +9,19 @@ export default definePluginEntry({
   register(api) {
     registerJanetTtsGateway(api);
     api.registerService(createJanetTtsStreamService(api.runtime, api.logger));
+    api.registerCli(
+      async ({ program }) => {
+        registerJanetCli(program, api);
+      },
+      {
+        descriptors: [
+          {
+            name: "janet",
+            description: "Generate Janet config links and QR codes",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
   },
 });

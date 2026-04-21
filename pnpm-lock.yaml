@@ -641,6 +641,22 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/janet-tts-stream:
+    dependencies:
+      node-edge-tts:
+        specifier: ^1.2.10
+        version: 1.2.10
+      qrcode-terminal:
+        specifier: ^0.12.0
+        version: 0.12.0
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/kilocode:
     devDependencies:
       '@openclaw/plugin-sdk':
