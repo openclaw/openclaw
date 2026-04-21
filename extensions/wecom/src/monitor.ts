@@ -27,6 +27,7 @@ import {
 import type { WsFrame, Logger } from "@wecom/aibot-node-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueWeComChatTask } from "./chat-queue.js";
 import {
   CHANNEL_ID,
   THINKING_MESSAGE,
@@ -422,7 +423,9 @@ async function sendMediaBatch(ctx: DeliverContext, mediaUrls: string[]): Promise
  * 1. 有可见文本 → 用完整文本关闭
  * 2. 有模板卡片发送成功 → "📋 卡片消息已发送。"
  * 3. 有媒体成功发送（通过 deliver 回调） → 用友好提示"文件已发送"
- * 4. 媒体发送失败 → 直接用错误摘要替换 thinking
+ *    3a. 同时存在失败 → 在文末追加错误摘要
+ * 4. 媒体全部发送失败（无任何成功媒体） → 直接用错误摘要替换 thinking
+ *    （否则 hasMedia 为 false 会跳过此处，thinking 永远卡住）
  *
  * 降级策略：
  * - 当 streamExpired=true（errcode 846608）时，流式通道已不可用（>6分钟），
@@ -450,6 +453,10 @@ async function finishThinkingStream(ctx: DeliverContext): Promise<void> {
     } else if (!finishText) {
       finishText = "📎 文件已发送，请查收。";
     }
+  } else if (state.hasMediaFailed && state.mediaErrorSummary) {
+    // 媒体全部失败且无可见文本/卡片/成功媒体：直接用错误摘要替换 thinking，
+    // 避免用户停留在空 thinking 动画上没有反馈。
+    finishText = state.mediaErrorSummary;
   }
 
   if (finishText) {
@@ -1025,17 +1032,28 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
           return;
         }
 
-        // Queue logic temporarily disabled, process messages directly
-        // const { status } = enqueueWeComChatTask({
-        //   accountId: entry.account.accountId,
-        //   chatId: entry.chatId,
-        //   task: () => processWeComMessageNow(entry),
-        // });
-        //
-        // if (status === "queued") {
-        //   runtime.log?.(`[wecom] Chat task queued for chat=${entry.chatId} (previous task still running)`);
-        // }
-        await processWeComMessageNow(entry);
+        // Per-chat serialization: messages within the same (accountId, chatId)
+        // run serially so turn state isn't interleaved across concurrent
+        // messages. Different chats remain independent and are processed in
+        // parallel. The listener returns immediately after enqueueing; task
+        // errors are caught inside the task so the queue keeps draining.
+        const { status } = enqueueWeComChatTask({
+          accountId: entry.account.accountId,
+          chatId: entry.chatId,
+          task: async () => {
+            try {
+              await processWeComMessageNow(entry);
+            } catch (err) {
+              runtime.error?.(`[${account.accountId}] Failed to process message: ${String(err)}`);
+            }
+          },
+        });
+
+        if (status === "queued") {
+          runtime.log?.(
+            `[wecom] Chat task queued for chat=${entry.chatId} (previous task still running)`,
+          );
+        }
       } catch (err) {
         runtime.error?.(`[${account.accountId}] Failed to process message: ${String(err)}`);
       }
