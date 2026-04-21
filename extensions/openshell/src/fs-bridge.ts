@@ -6,7 +6,7 @@ import type {
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import { writeFileWithinRoot } from "../../../src/infra/fs-safe.js";
+import { writeFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
