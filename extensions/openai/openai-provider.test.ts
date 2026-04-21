@@ -209,7 +209,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai-codex",
       id: "gpt-5.4",
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });

@@ -14,8 +14,8 @@ const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 130),
-  bundledPluginCallsite("bluebubbles", "src/types.ts", 189),
+  bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 132),
+  bundledPluginCallsite("bluebubbles", "src/types.ts", 194),
   bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 268),
   bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
   bundledPluginCallsite("browser", "src/browser/test-fetch.ts", 24),
@@ -60,9 +60,9 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("qqbot", "src/tools/channel.ts", 180),
   bundledPluginCallsite("qqbot", "src/utils/audio-convert.ts", 377),
   bundledPluginCallsite("signal", "src/install-signal-cli.ts", 224),
-  bundledPluginCallsite("slack", "src/monitor/media.ts", 96),
-  bundledPluginCallsite("slack", "src/monitor/media.ts", 115),
-  bundledPluginCallsite("slack", "src/monitor/media.ts", 120),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 99),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 118),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 123),
   bundledPluginCallsite("tlon", "src/tlon-api.ts", 185),
   bundledPluginCallsite("tlon", "src/tlon-api.ts", 235),
   bundledPluginCallsite("tlon", "src/tlon-api.ts", 289),

@@ -11,8 +11,8 @@ import {
   type ConfigWriteScopeLike,
   type ConfigWriteTargetLike,
 } from "../channels/plugins/config-write-policy-shared.js";
+import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -46,83 +46,6 @@ type ChannelConfigAdapterWithAccessors<ResolvedAccount> = Pick<
   | "formatAllowFrom"
   | "resolveDefaultTo"
 >;
-
-function formatPairingApproveHint(channelId: string): string {
-  const listCmd = formatCliCommand(`openclaw pairing list ${channelId}`);
-  const approveCmd = formatCliCommand(`openclaw pairing approve ${channelId} <code>`);
-  return `Approve via: ${listCmd} / ${approveCmd}`;
-}
-
-function buildAccountScopedDmSecurityPolicy(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  accountId?: string | null;
-  fallbackAccountId?: string | null;
-  policy?: string | null;
-  allowFrom?: Array<string | number> | null;
-  defaultPolicy?: string;
-  allowFromPathSuffix?: string;
-  policyPathSuffix?: string;
-  approveChannelId?: string;
-  approveHint?: string;
-  normalizeEntry?: (raw: string) => string;
-  inheritSharedDefaultsFromDefaultAccount?: boolean;
-}) {
-  const resolvedAccountId = params.accountId ?? params.fallbackAccountId ?? DEFAULT_ACCOUNT_ID;
-  const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
-    params.channelKey
-  ] as { accounts?: Record<string, Record<string, unknown>> } | undefined;
-  const rootBasePath = `channels.${params.channelKey}.`;
-  const accountBasePath = `channels.${params.channelKey}.accounts.${resolvedAccountId}.`;
-  const defaultBasePath = `channels.${params.channelKey}.accounts.${DEFAULT_ACCOUNT_ID}.`;
-  const accountConfig = channelConfig?.accounts?.[resolvedAccountId];
-  const defaultAccountConfig =
-    params.inheritSharedDefaultsFromDefaultAccount && resolvedAccountId !== DEFAULT_ACCOUNT_ID
-      ? channelConfig?.accounts?.[DEFAULT_ACCOUNT_ID]
-      : undefined;
-  const resolveFieldName = (suffix: string | undefined, fallbackField: string): string | null =>
-    suffix == null || suffix === ""
-      ? fallbackField
-      : /^[A-Za-z0-9_-]+$/.test(suffix)
-        ? suffix
-        : null;
-  const simplePolicyField = resolveFieldName(params.policyPathSuffix, "dmPolicy");
-  const simpleAllowFromField = resolveFieldName(params.allowFromPathSuffix, "allowFrom");
-  const matchesAnyField = (
-    config: Record<string, unknown> | undefined,
-    fields: Array<string | null>,
-  ) => fields.some((field) => field != null && config?.[field] !== undefined);
-  const basePath =
-    simplePolicyField || simpleAllowFromField
-      ? matchesAnyField(accountConfig, [simplePolicyField, simpleAllowFromField])
-        ? accountBasePath
-        : matchesAnyField(defaultAccountConfig, [simplePolicyField, simpleAllowFromField])
-          ? defaultBasePath
-          : matchesAnyField(channelConfig as Record<string, unknown> | undefined, [
-                simplePolicyField,
-                simpleAllowFromField,
-              ])
-            ? rootBasePath
-            : accountConfig
-              ? accountBasePath
-              : rootBasePath
-      : accountConfig
-        ? accountBasePath
-        : rootBasePath;
-  const allowFromPath = `${basePath}${params.allowFromPathSuffix ?? ""}`;
-  const policyPath =
-    params.policyPathSuffix != null ? `${basePath}${params.policyPathSuffix}` : undefined;
-
-  return {
-    policy: params.policy ?? params.defaultPolicy ?? "pairing",
-    allowFrom: params.allowFrom ?? [],
-    policyPath,
-    allowFromPath,
-    approveHint:
-      params.approveHint ?? formatPairingApproveHint(params.approveChannelId ?? params.channelKey),
-    normalizeEntry: params.normalizeEntry,
-  };
-}
 
 export function resolveChannelConfigWrites(params: {
   cfg: OpenClawConfig;
@@ -181,6 +104,18 @@ type MultiAccountChannelConfigAdapterParams<
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 };
 
+type NamedAccountChannelConfigBaseParams<
+  ResolvedAccount,
+  Config extends OpenClawConfig = OpenClawConfig,
+> = {
+  sectionKey: string;
+  listAccountIds: (cfg: Config) => string[];
+  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
+  defaultAccountId: (cfg: Config) => string;
+  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
+  clearBaseFields: string[];
+};
+
 /** Coerce mixed allowlist config values into plain strings without trimming or deduping. */
 export function mapAllowFromEntries(
   allowFrom: Array<string | number> | null | undefined,
@@ -214,6 +149,7 @@ export function adaptScopedAccountAccessor<Result, Config extends OpenClawConfig
 /** Build the shared allowlist/default target adapter surface for account-scoped channel configs. */
 export function createScopedAccountConfigAccessors<
   ResolvedAccount,
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Config preserves caller-specific config subtype for account resolvers.
   Config extends OpenClawConfig = OpenClawConfig,
 >(params: {
   resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
@@ -357,23 +293,11 @@ function createChannelConfigAdapterFromBase<
 export function createScopedChannelConfigBase<
   ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
->(params: {
-  sectionKey: string;
-  listAccountIds: (cfg: Config) => string[];
-  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
-  defaultAccountId: (cfg: Config) => string;
-  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
-  clearBaseFields: string[];
-  allowTopLevel?: boolean;
-}): Pick<
-  ChannelConfigAdapter<ResolvedAccount>,
-  | "listAccountIds"
-  | "resolveAccount"
-  | "inspectAccount"
-  | "defaultAccountId"
-  | "setAccountEnabled"
-  | "deleteAccount"
-> {
+>(
+  params: NamedAccountChannelConfigBaseParams<ResolvedAccount, Config> & {
+    allowTopLevel?: boolean;
+  },
+): ChannelCrudConfigAdapter<ResolvedAccount> {
   return createNamedAccountConfigBase<ResolvedAccount, Config>({
     listAccountIds: params.listAccountIds,
     resolveAccount: params.resolveAccount,
@@ -582,23 +506,11 @@ export function createTopLevelChannelConfigAdapter<
 export function createHybridChannelConfigBase<
   ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
->(params: {
-  sectionKey: string;
-  listAccountIds: (cfg: Config) => string[];
-  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
-  defaultAccountId: (cfg: Config) => string;
-  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
-  clearBaseFields: string[];
-  preserveSectionOnDefaultDelete?: boolean;
-}): Pick<
-  ChannelConfigAdapter<ResolvedAccount>,
-  | "listAccountIds"
-  | "resolveAccount"
-  | "inspectAccount"
-  | "defaultAccountId"
-  | "setAccountEnabled"
-  | "deleteAccount"
-> {
+>(
+  params: NamedAccountChannelConfigBaseParams<ResolvedAccount, Config> & {
+    preserveSectionOnDefaultDelete?: boolean;
+  },
+): ChannelCrudConfigAdapter<ResolvedAccount> {
   return createNamedAccountConfigBase<ResolvedAccount, Config>({
     listAccountIds: params.listAccountIds,
     resolveAccount: params.resolveAccount,

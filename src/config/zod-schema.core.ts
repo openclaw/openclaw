@@ -193,6 +193,7 @@ export const ModelCompatSchema = z
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
@@ -315,6 +316,19 @@ export const ModelDefinitionSchema = z
         output: z.number().optional(),
         cacheRead: z.number().optional(),
         cacheWrite: z.number().optional(),
+        tieredPricing: z
+          .array(
+            z
+              .object({
+                input: z.number(),
+                output: z.number(),
+                cacheRead: z.number(),
+                cacheWrite: z.number(),
+                range: z.union([z.tuple([z.number(), z.number()]), z.tuple([z.number()])]),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),
