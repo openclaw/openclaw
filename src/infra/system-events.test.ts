@@ -77,6 +77,36 @@ describe("system events (session routing)", () => {
     expect(second).toBe(false);
   });
 
+  it("returns false for non-consecutive duplicate events in the same queue", () => {
+    const key = "agent:main:non-consecutive-dedup-test";
+    const first = enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
+    expect(first).toBe(true);
+    expect(peekSystemEvents(key)).toEqual(["Node connected"]);
+
+    // Enqueue a different event — lastText becomes "Node disconnected"
+    enqueueSystemEvent("Node disconnected", { sessionKey: key });
+    expect(peekSystemEvents(key)).toEqual(["Node connected", "Node disconnected"]);
+
+    // Now try to enqueue the same first event again — it should be deduplicated
+    const dup = enqueueSystemEvent("Node connected", { sessionKey: key });
+    expect(dup).toBe(false);
+    expect(peekSystemEvents(key)).toEqual(["Node connected", "Node disconnected"]);
+  });
+
+  it("does not update lastContextKey when skipping duplicate (prevents spurious context-change detection)", () => {
+    const key = "agent:main:context-key-bug-test";
+    // first event with context build:123
+    enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
+
+    // duplicate with different contextKey — original code updated lastContextKey (bug), fix preserves it
+    const dup = enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:456" });
+    expect(dup).toBe(false); // must be deduplicated
+
+    // isSystemEventContextChanged should detect no change from the original event
+    expect(isSystemEventContextChanged(key, "build:456")).toBe(false);
+    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+  });
+
   it("normalizes context keys when checking for context changes", () => {
     const key = "agent:main:test-context";
     expect(isSystemEventContextChanged(key, " build:123 ")).toBe(true);

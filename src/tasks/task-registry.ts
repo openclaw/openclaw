@@ -1471,7 +1471,7 @@ export function createTaskRecord(params: {
     status,
     deliveryStatus,
     notifyPolicy,
-    createdAt: now,
+    createdAt: typeof params.startedAt === "number" && params.startedAt < now ? params.startedAt : now,
     startedAt: params.startedAt,
     lastEventAt,
     cleanupAfter: params.cleanupAfter,

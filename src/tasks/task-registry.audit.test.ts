@@ -125,4 +125,55 @@ describe("task-registry audit", () => {
 
     expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
   });
+
+  it("does not flag inconsistent_timestamps when startedAt is captured before task registration", () => {
+    // Regression: tool runners capture startedAt = Date.now() before calling
+    // createTaskRecord. By the time the registry records createdAt = Date.now(),
+    // a few ms may have passed, making startedAt < createdAt architecturally.
+    // createTaskRecord clamps createdAt >= startedAt, so this state never
+    // persists — but we test the audit still handles the invariant correctly
+    // for pre-clamped record inputs (e.g. restored legacy data).
+    const startedAt = Date.parse("2026-03-30T00:00:00.000Z"); // older than createdAt
+    const createdAt = startedAt + 10; // 10 ms later
+    const findings = listTaskAuditFindings({
+      now: createdAt + 60_000,
+      tasks: [
+        createTask({
+          taskId: "ts-clock-skew",
+          status: "running",
+          createdAt,
+          startedAt, // intentionally earlier than createdAt (pre-clamp legacy state)
+        }),
+      ],
+    });
+
+    expect(findings.map((f) => [f.code, f.detail])).toEqual([
+      ["inconsistent_timestamps", "startedAt is earlier than createdAt"],
+    ]);
+  });
+
+  it("flags inconsistent_timestamps for a succeeded task with pre-createdAt startedAt", () => {
+    // Even for terminal tasks, a genuine startedAt < createdAt ordering is still
+    // an inconsistency that should be surfaced (e.g. from pre-fix persisted data).
+    const createdAt = Date.parse("2026-03-30T01:00:00.000Z");
+    const startedAt = createdAt - 1; // pre-existing ordering bug
+    const endedAt = startedAt + 60_000;
+    const findings = listTaskAuditFindings({
+      now: endedAt + 60_000,
+      tasks: [
+        createTask({
+          taskId: "ts-terminal-ordering-bug",
+          status: "succeeded",
+          createdAt,
+          startedAt,
+          endedAt,
+          cleanupAfter: 300_000, // terminal task with cleanup policy so no missing_cleanup fires
+        }),
+      ],
+    });
+
+    expect(findings.map((f) => [f.code, f.detail])).toEqual([
+      ["inconsistent_timestamps", "startedAt is earlier than createdAt"],
+    ]);
+  });
 });
