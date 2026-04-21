@@ -5,12 +5,36 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 export const TOKENHUB_BASE_URL = "https://tokenhub.tencentmaas.com/v1";
 export const TOKENHUB_PROVIDER_ID = "tencent-tokenhub";
 
-// Hy pricing ($ per 1M tokens)
-const HY_COST = {
-  input: 0.23,
-  output: 0.59,
+// Hy3 preview pricing ($ per 1M tokens), tiered by input context length.
+// Flat rates mirror the first tier; tieredPricing drives actual cost calculation.
+const HY3_PREVIEW_COST = {
+  input: 0.176,
+  output: 0.587,
   cacheRead: 0.059,
   cacheWrite: 0,
+  tieredPricing: [
+    {
+      input: 0.176,
+      output: 0.587,
+      cacheRead: 0.059,
+      cacheWrite: 0,
+      range: [0, 16_000] as [number, number],
+    },
+    {
+      input: 0.235,
+      output: 0.939,
+      cacheRead: 0.088,
+      cacheWrite: 0,
+      range: [16_000, 32_000] as [number, number],
+    },
+    {
+      input: 0.293,
+      output: 1.173,
+      cacheRead: 0.117,
+      cacheWrite: 0,
+      range: [32_000] as [number],
+    },
+  ],
 };
 
 export const TOKENHUB_MODEL_CATALOG: ModelDefinitionConfig[] = [
@@ -21,7 +45,7 @@ export const TOKENHUB_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 256_000,
     maxTokens: 64_000,
-    cost: HY_COST,
+    cost: HY3_PREVIEW_COST,
     compat: {
       supportsUsageInStreaming: true,
       supportsReasoningEffort: true,
@@ -51,7 +75,7 @@ export const TOKEN_PLAN_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 256_000,
     maxTokens: 64_000,
-    cost: HY_COST,
+    cost: HY3_PREVIEW_COST,
     compat: {
       supportsUsageInStreaming: true,
       supportsReasoningEffort: true,
