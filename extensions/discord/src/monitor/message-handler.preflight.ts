@@ -571,6 +571,10 @@ export async function preflightDiscordMessage(
   }
 
   const botId = params.botUserId;
+  // Computed early so wasBotMentioned can be passed to routing before full mention detection runs.
+  const explicitlyMentioned = Boolean(
+    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+  );
   const baseText = resolveDiscordMessageText(message, {
     includeForwarded: false,
   });
@@ -663,6 +667,7 @@ export async function preflightDiscordMessage(
     }),
     parentConversationId: earlyThreadParentId,
     mentionedRoleAgentId,
+    wasBotMentioned: !isDirectMessage && explicitlyMentioned,
   });
   const bindingConversationId = isDirectMessage
     ? (resolveDiscordConversationIdentity({
@@ -743,9 +748,6 @@ export async function preflightDiscordMessage(
     return null;
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
-  const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
-  );
   const hasAnyMention = Boolean(
     !isDirectMessage &&
     ((message.mentionedUsers?.length ?? 0) > 0 ||
