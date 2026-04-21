@@ -42,11 +42,22 @@ function resolveReadOnlyChannelPluginOptions(
 function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
   plugins: Iterable<ChannelPlugin | undefined>,
+  options?: {
+    onlyIds?: ReadonlySet<string>;
+    allowOverwrite?: boolean;
+  },
 ): void {
   for (const plugin of plugins) {
-    if (plugin) {
-      byId.set(plugin.id, plugin);
+    if (!plugin) {
+      continue;
     }
+    if (options?.onlyIds && !options.onlyIds.has(plugin.id)) {
+      continue;
+    }
+    if (options?.allowOverwrite === false && byId.has(plugin.id)) {
+      continue;
+    }
+    byId.set(plugin.id, plugin);
   }
 }
 
@@ -135,7 +146,7 @@ export function listReadOnlyChannelPluginsForConfig(
         workspaceDir,
         env,
         cache: options.cache,
-        includePersistedAuthState: options.includePersistedAuthState ?? false,
+        includePersistedAuthState: options.includePersistedAuthState,
         manifestRecords: externalManifestRecords,
       }),
     ),
@@ -179,6 +190,10 @@ export function listReadOnlyChannelPluginsForConfig(
     addChannelPlugins(
       byId,
       registry.channelSetups.map((setup) => setup.plugin),
+      {
+        onlyIds: new Set(missingConfiguredChannelIds),
+        allowOverwrite: false,
+      },
     );
   }
 
