@@ -263,6 +263,37 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
+  it("keeps plugin usage auth when provider-owned usage env credentials exist", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "plugin-minimax-token",
+    });
+
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuths({
+          providers: ["minimax"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: {
+            HOME: homeDir,
+            MINIMAX_CODE_PLAN_KEY: "code-plan-key",
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "minimax",
+          token: "plugin-minimax-token",
+        },
+      ]);
+    });
+
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+      }),
+    );
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
   it("does not overlay external auth profiles while checking the skip gate", async () => {
     hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
 

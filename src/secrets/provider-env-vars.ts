@@ -210,8 +210,6 @@ export function getProviderEnvVars(
   return Array.isArray(envVars) ? [...envVars] : [];
 }
 
-const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
-
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
@@ -219,7 +217,6 @@ export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupPa
     ...new Set([
       ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
       ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
-      ...EXTRA_PROVIDER_AUTH_ENV_VARS,
     ]),
   ];
 }
