@@ -467,6 +467,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     if (parsed.type === "result") {
       const turnToClear = session.currentTurn;
       if (turnToClear) {
+        clearTurnTimers(turnToClear);
         session.currentTurn = null;
       }
       session.drainingAbortedTurn = false;
@@ -673,8 +674,7 @@ async function createClaudeLiveSession(params: {
     (exit) => handleClaudeExit(session, exit.exitCode),
     (error) => {
       if (session) {
-        cleanupLiveSession(session);
-        failTurn(session, error);
+        closeLiveSession(session, "abort", error);
       }
     },
   );
