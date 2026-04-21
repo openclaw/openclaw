@@ -170,18 +170,14 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     return logger;
   }
 
-  // Lazy-cached redaction policy for the file-log transport.
+  // Resolve the redaction policy once per logger instance, on the first write.
+  // Rebuilding the logger (via resetLogger / setLoggerOverride / settings change)
+  // naturally produces a fresh closure, so the policy is re-read after any
+  // config change that already triggers a rebuild.
   //
-  // Lifecycle note (C5 / X5): the cache lives inside the buildLogger closure.
-  // When resetLogger() / setLoggerOverride() is called, loggingState.cachedLogger
-  // is cleared, which causes getLogger() to call buildLogger() again, rebuilding
-  // this closure with a fresh getSinkRedaction(). Any code path that mutates
-  // logging-relevant config MUST call resetLogger() (or setLoggerOverride()) to
-  // ensure the redaction policy is re-resolved on the next log write.
-  // Currently the only known mutation path is: setLoggerOverride() and resetLogger()
-  // in test helpers, and settingsChanged() forcing a rebuild in getLogger().
-  // If new config mutation entry points are added in the future, they MUST also
-  // invalidate the logger cache or this policy will silently go stale.
+  // If you add a new entry point that mutates logging config without rebuilding
+  // the logger, you must also call resetLogger() there, or this cache will serve
+  // the old policy for the lifetime of the current logger instance.
   let cachedPolicy: ResolvedRedactOptions | undefined;
   const getSinkRedaction = (): ResolvedRedactOptions => {
     cachedPolicy ??= getLoggingRedactionPolicy().resolved;
