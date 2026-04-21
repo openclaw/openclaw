@@ -80,6 +80,20 @@ function formatCurrentValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function isPluginPromptEligible(
+  config: OpenClawConfig,
+  plugin: {
+    id: string;
+    enabledByDefault?: boolean;
+  },
+): boolean {
+  if (config.plugins?.deny?.includes(plugin.id)) {
+    return false;
+  }
+  const entry = config.plugins?.entries?.[plugin.id];
+  return plugin.enabledByDefault === true || entry?.enabled === true;
+}
+
 /**
  * Discover plugins that have non-advanced uiHints fields.
  * Returns only plugins that have at least one promptable field.
@@ -316,14 +330,7 @@ export async function setupPluginConfig(params: {
   const surface = params.surface ?? "onboard";
 
   const unconfigured = discoverUnconfiguredPlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      // Only show enabled plugins that are not explicitly denied.
-      const entry = params.config.plugins?.entries?.[p.id];
-      if (params.config.plugins?.deny?.includes(p.id)) {
-        return false;
-      }
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins: registry.plugins.filter((p) => isPluginPromptEligible(params.config, p)),
     config: params.config,
     surface,
   });
@@ -387,10 +394,7 @@ export async function configurePluginConfig(params: {
   });
 
   const configurable = discoverConfigurablePlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      const entry = params.config.plugins?.entries?.[p.id];
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins: registry.plugins.filter((p) => isPluginPromptEligible(params.config, p)),
   });
 
   if (configurable.length === 0) {
