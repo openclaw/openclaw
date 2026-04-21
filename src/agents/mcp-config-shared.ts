@@ -1,7 +1,4 @@
-import {
-  isDangerousHostEnvOverrideVarName,
-  isDangerousHostEnvVarName,
-} from "../infra/host-env-security.js";
+import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 
 export function isMcpConfigRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -11,15 +8,18 @@ function toMcpFilteredStringRecord(
   value: unknown,
   options?: {
     onDroppedEntry?: (key: string, value: unknown) => void;
+    preserveEmptyWhenKeysDropped?: boolean;
     shouldDropKey?: (key: string) => boolean;
   },
 ): Record<string, string> | undefined {
   if (!isMcpConfigRecord(value)) {
     return undefined;
   }
+  let droppedByKey = false;
   const entries = Object.entries(value)
     .map(([key, entry]) => {
       if (options?.shouldDropKey?.(key)) {
+        droppedByKey = true;
         options?.onDroppedEntry?.(key, entry);
         return null;
       }
@@ -33,6 +33,9 @@ function toMcpFilteredStringRecord(
       return null;
     })
     .filter((entry): entry is readonly [string, string] => entry !== null);
+  if (entries.length === 0 && droppedByKey && options?.preserveEmptyWhenKeysDropped) {
+    return {};
+  }
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
@@ -49,8 +52,8 @@ export function toMcpEnvRecord(
 ): Record<string, string> | undefined {
   return toMcpFilteredStringRecord(value, {
     ...options,
-    shouldDropKey: (key) =>
-      isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key),
+    preserveEmptyWhenKeysDropped: true,
+    shouldDropKey: (key) => isDangerousHostEnvVarName(key),
   });
 }
 
