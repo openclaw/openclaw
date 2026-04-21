@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { CHANNEL_ID } from "./const.js";
 import type { WeComConfig, WeComAccountConfig, ResolvedWeComAccount } from "./utils.js";
 import { DefaultWsUrl } from "./utils.js";
@@ -89,8 +90,10 @@ export function resolveDefaultWeComAccountId(cfg: OpenClawConfig): string {
  *
  * Top-level fields (e.g. dmPolicy, allowFrom) serve as defaults for all accounts.
  * Fields in accounts.xxx override the corresponding top-level fields.
- * For nested Record objects like groups, deep merge is used
- * (account-level entries override same keys, but other keys from the base config are preserved).
+ * For nested object fields like `groups` and `dynamicAgents`, fields are merged
+ * shallowly so per-account partial overrides don't erase inherited flags
+ * (e.g. setting only `dynamicAgents.adminUsers` at account level must keep
+ * top-level `dynamicAgents.enabled`).
  */
 function mergeWeComAccountConfig(cfg: OpenClawConfig, accountId: string): WeComConfig {
   const wecomConfig = cfg.channels?.[CHANNEL_ID] as WeComMultiAccountConfig | undefined;
@@ -101,17 +104,23 @@ function mergeWeComAccountConfig(cfg: OpenClawConfig, accountId: string): WeComC
   // Find account-level overrides (supports normalized key matching)
   const account = findAccountConfig(wecomConfig?.accounts, accountId);
 
-  // Deep merge: nested merge for groups, account-level override for other fields
-  const { groups: baseGroups, ...baseRest } = base;
-  const { groups: accountGroups, ...accountRest } = account;
+  // Deep-merge nested object fields by key; account-level override for other fields
+  const { groups: baseGroups, dynamicAgents: baseDynamicAgents, ...baseRest } = base;
+  const { groups: accountGroups, dynamicAgents: accountDynamicAgents, ...accountRest } = account;
 
   const mergedGroups =
     baseGroups || accountGroups ? { ...baseGroups, ...accountGroups } : undefined;
+
+  const mergedDynamicAgents =
+    baseDynamicAgents || accountDynamicAgents
+      ? { ...baseDynamicAgents, ...accountDynamicAgents }
+      : undefined;
 
   return {
     ...baseRest,
     ...accountRest,
     ...(mergedGroups !== undefined ? { groups: mergedGroups } : {}),
+    ...(mergedDynamicAgents !== undefined ? { dynamicAgents: mergedDynamicAgents } : {}),
   } as WeComConfig;
 }
 
@@ -178,7 +187,8 @@ export function resolveWeComAccountMulti(params: {
     enabled: baseEnabled && accountEnabled,
     websocketUrl: merged.websocketUrl || DefaultWsUrl,
     botId: merged.botId ?? "",
-    secret: merged.secret ?? "",
+    // Normalize SecretInput → string; unresolved SecretRef becomes "" (treated as "not available").
+    secret: normalizeSecretInputString(merged.secret) ?? "",
     sendThinkingMessage: merged.sendThinkingMessage ?? true,
     config: merged,
   };

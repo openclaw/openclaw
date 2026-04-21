@@ -3,6 +3,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { type SecretInput, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { CHANNEL_ID } from "./const.js";
 import { DEFAULT_ACCOUNT_ID } from "./openclaw-compat.js";
 import type {
@@ -30,7 +31,12 @@ export interface WeComConfig {
   enabled?: boolean;
   websocketUrl?: string;
   botId?: string;
-  secret?: string;
+  /**
+   * Bot secret. Accepts a plain string or a {@link SecretInput} (e.g. `{ source: "env", ... }`).
+   * Consumers must go through {@link resolveWeComAccount} (or `accounts.ts::resolveWeComAccountMulti`)
+   * to obtain a normalized `string` via `normalizeSecretInputString`.
+   */
+  secret?: SecretInput;
   name?: string;
   allowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
@@ -84,7 +90,8 @@ export function resolveWeComAccount(cfg: OpenClawConfig): ResolvedWeComAccount {
     enabled: wecomConfig.enabled !== false,
     websocketUrl: wecomConfig.websocketUrl || DefaultWsUrl,
     botId: wecomConfig.botId ?? "",
-    secret: wecomConfig.secret ?? "",
+    // Normalize SecretInput → string; unresolved SecretRef becomes "" (treated as "not available").
+    secret: normalizeSecretInputString(wecomConfig.secret) ?? "",
     sendThinkingMessage: wecomConfig.sendThinkingMessage ?? true,
     config: wecomConfig,
   };
