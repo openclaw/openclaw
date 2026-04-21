@@ -31,6 +31,10 @@ openclaw diagnose --output diagnostics.md   # save report to file
 openclaw diagnose --json                    # structured JSON output
 openclaw diagnose --model claude-haiku-4-5  # use a specific model
 openclaw diagnose --max-log-entries 50      # limit log entries (faster, cheaper)
+openclaw diagnose --last 2h                 # analyze only the last 2 hours
+openclaw diagnose --last 7d                 # analyze the last 7 days (reads daily log files)
+openclaw diagnose --since 2026-04-20        # analyze since a specific date
+openclaw diagnose --since 2026-04-20T10:00:00  # analyze since a precise timestamp
 ```
 
 ## Options
@@ -40,6 +44,8 @@ openclaw diagnose --max-log-entries 50      # limit log entries (faster, cheaper
 - `--json`: Output result as structured JSON (includes raw context and report)
 - `--model <id>`: Override the model used for analysis (default: user's configured primary model)
 - `--max-log-entries <n>`: Maximum WARN/ERROR/FATAL log entries to include (default: 200)
+- `--since <value>`: Only include log entries from this point onward. Accepts an ISO timestamp (e.g. `2026-04-20`, `2026-04-20T10:00:00`) **or** a duration (e.g. `2h`, `7d`). When the window extends across day boundaries, `diagnose` reads every dated daily log file (`openclaw-YYYY-MM-DD.log`) that falls within it.
+- `--last <duration>`: Shorthand for `--since` with a duration relative to now. Units: `ms`, `s`, `m`, `h`, `d`, `w`. Mutually exclusive with `--since`.
 
 ## What gets analyzed
 

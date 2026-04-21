@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { diagnoseCommand } from "../../commands/diagnose.js";
+import { parseTimeFilter } from "../../commands/diagnose/parse-time-filter.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { resetCommand } from "../../commands/reset.js";
 import { uninstallCommand } from "../../commands/uninstall.js";
@@ -27,6 +28,8 @@ ${theme.heading("Examples:")}
   ${theme.command("openclaw diagnose --output r.md")} ${theme.muted("# save report to file")}
   ${theme.command("openclaw diagnose --json")}        ${theme.muted("# structured JSON output")}
   ${theme.command("openclaw diagnose --model claude-haiku-4-5")} ${theme.muted("# override model")}
+  ${theme.command("openclaw diagnose --last 2h")}     ${theme.muted("# only analyze the last 2 hours")}
+  ${theme.command("openclaw diagnose --since 2026-04-20")} ${theme.muted("# only analyze since a date")}
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/diagnose", "docs.openclaw.ai/cli/diagnose")}\n`,
     )
@@ -39,14 +42,41 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/diagnose", "docs.openclaw.ai/cli/
       "Maximum WARN/ERROR/FATAL log entries to include (default: 200)",
       "200",
     )
+    .option(
+      "--since <value>",
+      "Only include log entries from this point onward. Accepts an ISO timestamp (e.g. 2026-04-20, 2026-04-20T10:00:00) or a duration (e.g. 2h, 7d).",
+    )
+    .option(
+      "--last <duration>",
+      "Only include log entries from the last N duration (e.g. 30m, 2h, 7d). Mutually exclusive with --since.",
+    )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        let sinceMs: number | undefined;
+        let sinceLabel: string | undefined;
+        try {
+          const filter = parseTimeFilter({
+            since: opts.since as string | undefined,
+            last: opts.last as string | undefined,
+          });
+          if (filter) {
+            sinceMs = filter.sinceMs;
+            sinceLabel = filter.label;
+          }
+        } catch (err) {
+          defaultRuntime.error(err instanceof Error ? err.message : String(err));
+          defaultRuntime.exit(1);
+          return;
+        }
+
         await diagnoseCommand(defaultRuntime, {
           output: opts.output as string | undefined,
           canvas: Boolean(opts.canvas),
           json: Boolean(opts.json),
           model: opts.model as string | undefined,
           maxLogEntries: Number.parseInt(opts.maxLogEntries as string, 10) || 200,
+          sinceMs,
+          sinceLabel,
         });
         defaultRuntime.exit(0);
       });

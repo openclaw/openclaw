@@ -12,6 +12,10 @@ export interface DiagnoseCommandOptions {
   json: boolean;
   model?: string;
   maxLogEntries: number;
+  /** Optional cutoff (epoch ms); log entries older than this are excluded. */
+  sinceMs?: number;
+  /** Human-readable label for the time filter (e.g. "last 2h"). */
+  sinceLabel?: string;
 }
 
 export async function diagnoseCommand(
@@ -27,6 +31,8 @@ export async function diagnoseCommand(
   // Phase 2: assemble context from log, config, health, version, auth, memory.
   const context = await assembleDiagnosticContext({
     maxLogEntries: opts.maxLogEntries,
+    sinceMs: opts.sinceMs,
+    sinceLabel: opts.sinceLabel,
   });
 
   if (!opts.json) {

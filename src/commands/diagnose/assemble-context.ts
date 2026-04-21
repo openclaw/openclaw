@@ -19,6 +19,10 @@ export interface DiagnosticContext {
 
 interface AssembleOptions {
   maxLogEntries: number;
+  /** When set, only include log entries with timestamp >= sinceMs (epoch ms). */
+  sinceMs?: number;
+  /** Human-readable label for the time filter, embedded in section headings. */
+  sinceLabel?: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -64,12 +68,31 @@ function resolveLogDir(): string {
   return resolvePreferredOpenClawTmpDir();
 }
 
-function todayLogFileName(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
+function dailyLogFileName(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
   return `openclaw-${year}-${month}-${day}.log`;
+}
+
+function todayLogFileName(): string {
+  return dailyLogFileName(new Date());
+}
+
+/**
+ * Enumerate each daily log file name from startDate through endDate (inclusive,
+ * at local midnight boundaries). Used when a --since / --last filter widens the
+ * window beyond today.
+ */
+function dailyLogFileNamesInRange(startDate: Date, endDate: Date): string[] {
+  const names: string[] = [];
+  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  while (cursor.getTime() <= end.getTime()) {
+    names.push(dailyLogFileName(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return names;
 }
 
 interface ParsedLogEntry {
@@ -78,6 +101,14 @@ interface ParsedLogEntry {
   subsystem: string;
   message: string;
   raw: string;
+}
+
+function parseEntryTimestampMs(entry: ParsedLogEntry): number | null {
+  if (!entry.timestamp) {
+    return null;
+  }
+  const ms = Date.parse(entry.timestamp);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 // OpenClaw gateway logs are JSON lines. Each line is a JSON object with:
@@ -135,49 +166,102 @@ function parseLogLine(line: string): ParsedLogEntry | null {
 
 // ── Section assemblers ───────────────────────────────────────────────────
 
-function assembleGatewayLog(maxEntries: number): {
+function assembleGatewayLog(
+  maxEntries: number,
+  sinceMs?: number,
+  sinceLabel?: string,
+): {
   section: string;
   entryCount: number;
   allParsed: ParsedLogEntry[];
 } {
   const logDir = resolveLogDir();
-  const datedPath = path.join(logDir, todayLogFileName());
-  const fallbackPath = path.join(logDir, "openclaw.log");
-  const datedExists = fs.existsSync(datedPath);
-  const fallbackExists = fs.existsSync(fallbackPath);
 
-  if (!datedExists && !fallbackExists) {
+  // Decide which log files to read.
+  //   - Default (no time filter): today's dated log, or openclaw.log as fallback.
+  //   - With time filter: every daily file in the [sinceMs, now] window that exists,
+  //     falling back to openclaw.log only if no dated files are found.
+  const filesToRead: string[] = [];
+  let sourceLabel: string;
+
+  if (sinceMs !== undefined) {
+    const candidates = dailyLogFileNamesInRange(new Date(sinceMs), new Date());
+    for (const name of candidates) {
+      const p = path.join(logDir, name);
+      if (fs.existsSync(p)) {
+        filesToRead.push(p);
+      }
+    }
+    if (filesToRead.length === 0) {
+      const fallbackPath = path.join(logDir, "openclaw.log");
+      if (fs.existsSync(fallbackPath)) {
+        filesToRead.push(fallbackPath);
+      }
+    }
+    sourceLabel =
+      filesToRead.length === 0
+        ? "(no log files found in range)"
+        : filesToRead.map((p) => path.basename(p)).join(", ");
+  } else {
+    const datedPath = path.join(logDir, todayLogFileName());
+    const fallbackPath = path.join(logDir, "openclaw.log");
+    if (fs.existsSync(datedPath)) {
+      filesToRead.push(datedPath);
+    } else if (fs.existsSync(fallbackPath)) {
+      filesToRead.push(fallbackPath);
+    }
+    sourceLabel = todayLogFileName();
+  }
+
+  if (filesToRead.length === 0) {
+    const filterSuffix = sinceLabel ? ` (${sinceLabel})` : "";
     return {
-      section: "## Gateway Log\nLog file not found — gateway may not have run today.\n",
+      section: `## Gateway Log${filterSuffix}\nLog file not found — gateway may not have run in this window.\n`,
       entryCount: 0,
       allParsed: [],
     };
   }
 
-  const actualPath = datedExists ? datedPath : fallbackPath;
-
   try {
-    const content = fs.readFileSync(actualPath, { encoding: "utf-8" });
-    const lines = content.split("\n");
-    const totalLines = lines.length;
+    let totalLines = 0;
     const allParsed: ParsedLogEntry[] = [];
     const issueEntries: ParsedLogEntry[] = [];
+    let droppedByTimeFilter = 0;
 
-    for (const line of lines) {
-      const entry = parseLogLine(line);
-      if (!entry) {
-        continue;
-      }
-      allParsed.push(entry);
-      if (["WARN", "WARNING", "ERROR", "FATAL"].includes(entry.level)) {
-        issueEntries.push(entry);
+    for (const filePath of filesToRead) {
+      const content = fs.readFileSync(filePath, { encoding: "utf-8" });
+      const lines = content.split("\n");
+      totalLines += lines.length;
+
+      for (const line of lines) {
+        const entry = parseLogLine(line);
+        if (!entry) {
+          continue;
+        }
+        if (sinceMs !== undefined) {
+          const ts = parseEntryTimestampMs(entry);
+          // When the timestamp is unparseable we keep the entry rather than
+          // silently dropping it — safer than hiding potentially relevant noise.
+          if (ts !== null && ts < sinceMs) {
+            droppedByTimeFilter++;
+            continue;
+          }
+        }
+        allParsed.push(entry);
+        if (["WARN", "WARNING", "ERROR", "FATAL"].includes(entry.level)) {
+          issueEntries.push(entry);
+        }
       }
     }
 
     const totalIssues = issueEntries.length;
     const shown = issueEntries.slice(-maxEntries);
-    let section = `## Gateway Log (${todayLogFileName()}) — WARN/ERROR/FATAL entries\n`;
-    section += `Total log lines: ${totalLines}. Total issues: ${totalIssues}.`;
+    const filterSuffix = sinceLabel ? ` — filtered: ${sinceLabel}` : "";
+    let section = `## Gateway Log (${sourceLabel})${filterSuffix} — WARN/ERROR/FATAL entries\n`;
+    section += `Total log lines scanned: ${totalLines}. Total issues in window: ${totalIssues}.`;
+    if (droppedByTimeFilter > 0) {
+      section += ` ${droppedByTimeFilter} entries excluded by time filter.`;
+    }
     if (totalIssues > shown.length) {
       section += ` Showing most recent ${shown.length} (truncated to fit token limit).`;
     }
@@ -188,7 +272,7 @@ function assembleGatewayLog(maxEntries: number): {
         section += `[${entry.timestamp}] [${entry.level}] [${entry.subsystem}] ${entry.message}\n`;
       }
     } else {
-      section += "(No WARN/ERROR/FATAL entries found — gateway log appears clean.)\n";
+      section += "(No WARN/ERROR/FATAL entries found in window — gateway log appears clean.)\n";
     }
 
     return { section, entryCount: shown.length, allParsed };
@@ -257,7 +341,10 @@ async function assembleVersionInfo(): Promise<{ section: string; version: string
   }
 }
 
-function assembleAuthSummary(allParsed: ParsedLogEntry[]): {
+function assembleAuthSummary(
+  allParsed: ParsedLogEntry[],
+  sinceLabel?: string,
+): {
   section: string;
   count: number;
 } {
@@ -279,9 +366,10 @@ function assembleAuthSummary(allParsed: ParsedLogEntry[]): {
     if (match) sourceIps.add(match[0]);
   }
 
-  let section = "## Security Events — Auth Rejections\n";
+  const windowLabel = sinceLabel ?? "today's log";
+  let section = `## Security Events — Auth Rejections (${windowLabel})\n`;
   if (rejects.length === 0) {
-    section += "No auth rejection events found in today's log.\n";
+    section += `No auth rejection events found in ${windowLabel}.\n`;
   } else {
     section += `${rejects.length} auth rejection event(s) detected.`;
     if (rejects.length >= 2) {
@@ -314,11 +402,11 @@ function assembleSystemMemory(): string {
 export async function assembleDiagnosticContext(
   opts: AssembleOptions,
 ): Promise<DiagnosticContext> {
-  const logResult = assembleGatewayLog(opts.maxLogEntries);
+  const logResult = assembleGatewayLog(opts.maxLogEntries, opts.sinceMs, opts.sinceLabel);
   const configSection = assembleRedactedConfig();
   const healthSection = assembleHealthData();
   const versionResult = await assembleVersionInfo();
-  const authResult = assembleAuthSummary(logResult.allParsed);
+  const authResult = assembleAuthSummary(logResult.allParsed, opts.sinceLabel);
   const memorySection = assembleSystemMemory();
 
   const text = [
