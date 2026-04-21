@@ -260,6 +260,8 @@ not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
 Current consumers use it as a narrowing hint before broader plugin loading, so
 missing activation metadata usually only costs performance; it should not
 change correctness while legacy manifest ownership fallbacks still exist.
+`requiresSlots` is the exception: omit it only when the plugin can run correctly
+without the selected slot owner being loaded in the same scoped runtime.
 
 ```json
 {
@@ -268,18 +270,20 @@ change correctness while legacy manifest ownership fallbacks still exist.
     "onCommands": ["models"],
     "onChannels": ["web"],
     "onRoutes": ["gateway-webhook"],
-    "onCapabilities": ["provider", "tool"]
+    "onCapabilities": ["provider", "tool"],
+    "requiresSlots": ["memory"]
   }
 }
 ```
 
-| Field            | Required | Type                                                 | What it means                                                     |
-| ---------------- | -------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| `onProviders`    | No       | `string[]`                                           | Provider ids that should activate this plugin when requested.     |
-| `onCommands`     | No       | `string[]`                                           | Command ids that should activate this plugin.                     |
-| `onChannels`     | No       | `string[]`                                           | Channel ids that should activate this plugin.                     |
-| `onRoutes`       | No       | `string[]`                                           | Route kinds that should activate this plugin.                     |
-| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. |
+| Field            | Required | Type                                                 | What it means                                                                                   |
+| ---------------- | -------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `onProviders`    | No       | `string[]`                                           | Provider ids that should activate this plugin when requested.                                   |
+| `onCommands`     | No       | `string[]`                                           | Command ids that should activate this plugin.                                                   |
+| `onChannels`     | No       | `string[]`                                           | Channel ids that should activate this plugin.                                                   |
+| `onRoutes`       | No       | `string[]`                                           | Route kinds that should activate this plugin.                                                   |
+| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning.                               |
+| `requiresSlots`  | No       | `Array<"memory" \| "contextEngine">`                 | Exclusive plugin slots that should load alongside this activation target during scoped startup. |
 
 Current live consumers:
 

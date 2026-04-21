@@ -111,7 +111,8 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     onCommands: ["models", ""],
     onChannels: ["web", ""],
     onRoutes: ["gateway-webhook", ""],
-    onCapabilities: ["provider", "tool", "wat"]
+    onCapabilities: ["provider", "tool", "wat"],
+    requiresSlots: ["memory", "contextEngine", "wat", ""]
   },
   setup: {
     providers: [
@@ -134,6 +135,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],
         onCapabilities: ["provider", "tool"],
+        requiresSlots: ["memory", "contextEngine"],
       });
       expect(result.manifest.setup).toEqual({
         providers: [

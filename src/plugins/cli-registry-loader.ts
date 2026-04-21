@@ -1,8 +1,10 @@
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
+import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -10,6 +12,7 @@ import {
   resolvePluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+import type { PluginSlotKey } from "./slots.js";
 import type {
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliContext,
@@ -67,7 +70,7 @@ function resolvePrimaryCommandPluginIds(
   if (!normalizedPrimary) {
     return [];
   }
-  return resolveManifestActivationPluginIds({
+  const primaryPluginIds = resolveManifestActivationPluginIds({
     trigger: {
       kind: "command",
       command: normalizedPrimary,
@@ -76,6 +79,58 @@ function resolvePrimaryCommandPluginIds(
     workspaceDir: context.workspaceDir,
     env: context.env,
   });
+  if (primaryPluginIds.length === 0) {
+    return [];
+  }
+  return includePrimaryCommandSlotDependencies(context, primaryPluginIds);
+}
+
+function includePrimaryCommandSlotDependencies(
+  context: PluginCliLoadContext,
+  primaryPluginIds: readonly string[],
+): string[] {
+  const requiredSlots = resolvePrimaryCommandRequiredSlots(context, primaryPluginIds);
+  if (requiredSlots.length === 0) {
+    return [...primaryPluginIds];
+  }
+  const slotPluginIds = resolveSelectedSlotPluginIds(context.activationSourceConfig, requiredSlots);
+  return [...new Set([...primaryPluginIds, ...slotPluginIds])].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+function resolvePrimaryCommandRequiredSlots(
+  context: PluginCliLoadContext,
+  primaryPluginIds: readonly string[],
+): PluginSlotKey[] {
+  const primaryPluginIdSet = new Set(primaryPluginIds);
+  return [
+    ...new Set(
+      loadPluginManifestRegistry({
+        config: context.activationSourceConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+        cache: true,
+      })
+        .plugins.filter((plugin) => primaryPluginIdSet.has(plugin.id))
+        .flatMap((plugin) => plugin.activation?.requiresSlots ?? []),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveSelectedSlotPluginIds(
+  config: OpenClawConfig | undefined,
+  slotKeys: readonly PluginSlotKey[],
+): string[] {
+  const slots = normalizePluginsConfig(config?.plugins).slots;
+  return [
+    ...new Set(
+      slotKeys
+        .map((slotKey) => slots[slotKey])
+        .filter((pluginId): pluginId is string => Boolean(pluginId))
+        .map((pluginId) => normalizePluginId(pluginId)),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function resolvePluginCliLoadContext(params: {

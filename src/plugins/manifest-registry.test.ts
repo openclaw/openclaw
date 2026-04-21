@@ -489,6 +489,7 @@ describe("loadPluginManifestRegistry", () => {
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],
         onCapabilities: ["provider", "tool"],
+        requiresSlots: ["memory"],
       },
       setup: {
         providers: [
@@ -517,6 +518,7 @@ describe("loadPluginManifestRegistry", () => {
       onChannels: ["web"],
       onRoutes: ["gateway-webhook"],
       onCapabilities: ["provider", "tool"],
+      requiresSlots: ["memory"],
     });
     expect(registry.plugins[0]?.setup).toEqual({
       providers: [

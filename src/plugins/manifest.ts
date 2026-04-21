@@ -13,6 +13,7 @@ import {
 } from "./manifest-command-aliases.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginSlotKey } from "./slots.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
@@ -69,6 +70,8 @@ export type PluginManifestActivation = {
   onRoutes?: string[];
   /** Cheap capability hints used by future activation planning. */
   onCapabilities?: PluginManifestActivationCapability[];
+  /** Exclusive plugin slots that must be loaded alongside this plugin's activation target. */
+  requiresSlots?: PluginSlotKey[];
 };
 
 export type PluginManifestSetupProvider = {
@@ -495,6 +498,9 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
       capability === "tool" ||
       capability === "hook",
   );
+  const requiresSlots = normalizeTrimmedStringList(value.requiresSlots).filter(
+    (slot): slot is PluginSlotKey => slot === "memory" || slot === "contextEngine",
+  );
 
   const activation = {
     ...(onProviders.length > 0 ? { onProviders } : {}),
@@ -503,6 +509,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
     ...(onChannels.length > 0 ? { onChannels } : {}),
     ...(onRoutes.length > 0 ? { onRoutes } : {}),
     ...(onCapabilities.length > 0 ? { onCapabilities } : {}),
+    ...(requiresSlots.length > 0 ? { requiresSlots } : {}),
   } satisfies PluginManifestActivation;
 
   return Object.keys(activation).length > 0 ? activation : undefined;

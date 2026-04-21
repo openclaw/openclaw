@@ -174,5 +174,8 @@
   "configContracts": {
     "compatibilityMigrationPaths": ["plugins.entries.memory-wiki.config.bridge.readMemoryCore"]
   },
+  "activation": {
+    "requiresSlots": ["memory"]
+  },
   "commandAliases": [{ "name": "wiki" }]
 }
