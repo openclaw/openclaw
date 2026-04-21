@@ -217,9 +217,12 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     expect(loadSettings()).toMatchObject({
-      gatewayUrl: gwUrl,
-      token: "gateway-a-token",
+      gatewayUrl: otherUrl,
+      token: "",
     });
+    // Verify gwUrl's token is still in sessionStorage (scoped per gateway)
+    const gwScopedKey = `openclaw.control.token.v1:${gwUrl}`;
+    expect(sessionStorage.getItem(gwScopedKey)).toBe("gateway-a-token");
   });
 
   it("does not persist gateway tokens when saving settings", async () => {

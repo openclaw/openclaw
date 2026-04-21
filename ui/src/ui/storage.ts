@@ -368,10 +368,9 @@ function persistSettings(next: UiSettings) {
     // without falling back to the shared legacy key.  This ensures that
     // nginx reverse-proxy multi-instance setups (e.g. /a, /b, /c) each
     // get their own authoritative scoped record after the first visit.
-    // Only write when the key does not already exist, to avoid overwriting
-    // a page-scoped record that carries a different user-chosen gatewayUrl.
+    // Always update so that user endpoint changes are reflected on reload.
     const pageDerivedKey = settingsKeyForGateway(deriveDefaultGatewayUrl().pageUrl);
-    if (pageDerivedKey !== scopedKey && storage?.getItem(pageDerivedKey) === null) {
+    if (pageDerivedKey !== scopedKey) {
       storage?.setItem(pageDerivedKey, serialized);
     }
   } catch {
