@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as sessionStore from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
@@ -112,6 +112,15 @@ function setSubagentControlDepsForTest(
   __testing.setDepsForTest({
     abortEmbeddedPiRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+    updateSessionStore: async <T>(
+      storePath: string,
+      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+    ) => {
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const result = await mutator(store);
+      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+      return result;
+    },
     ...overrides,
   });
 }
@@ -150,6 +159,9 @@ beforeEach(() => {
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
     ensureRuntimePluginsLoaded: () => {},
+    getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
+    persistSubagentRunsToDisk: () => {},
+    restoreSubagentRunsFromDisk: () => 0,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
@@ -623,26 +635,24 @@ describe("killSubagentRunAdmin", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    const updateSessionStoreSpy = vi
-      .spyOn(sessionStore, "updateSessionStore")
-      .mockRejectedValueOnce(new Error("session store unavailable"));
+    setSubagentControlDepsForTest({
+      updateSessionStore: async () => {
+        throw new Error("session store unavailable");
+      },
+    });
 
-    try {
-      const result = await killSubagentRunAdmin({
-        cfg: cfgWithSessionStore(storePath),
-        sessionKey: childSessionKey,
-      });
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
 
-      expect(result).toMatchObject({
-        found: true,
-        killed: true,
-        runId: "run-worker-store-fail",
-        sessionKey: childSessionKey,
-      });
-      expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
-    } finally {
-      updateSessionStoreSpy.mockRestore();
-    }
+    expect(result).toMatchObject({
+      found: true,
+      killed: true,
+      runId: "run-worker-store-fail",
+      sessionKey: childSessionKey,
+    });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 });
 

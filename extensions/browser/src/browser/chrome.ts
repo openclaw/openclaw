@@ -8,7 +8,9 @@ import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
+  CHROME_BOOTSTRAP_EXIT_POLL_MS,
   CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
+  CHROME_BOOTSTRAP_PREFS_POLL_MS,
   CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS,
   CHROME_LAUNCH_READY_POLL_MS,
   CHROME_LAUNCH_READY_WINDOW_MS,
@@ -18,7 +20,13 @@ import {
   CHROME_STOP_TIMEOUT_MS,
   CHROME_WS_READY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
-import { assertCdpEndpointAllowed, isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import {
+  assertCdpEndpointAllowed,
+  isDirectCdpWebSocketEndpoint,
+  isWebSocketUrl,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  openCdpWebSocket,
+} from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   diagnoseChromeCdp,
@@ -161,12 +169,26 @@ export async function isChromeReachable(
 ): Promise<boolean> {
   try {
     await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
-    if (isWebSocketUrl(cdpUrl)) {
-      // Direct WebSocket endpoint — probe via WS handshake.
+    if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+      // Handshake-ready direct WS endpoint — probe via WS handshake.
       return await canOpenWebSocket(cdpUrl, timeoutMs);
     }
-    const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
-    return Boolean(version);
+    // Either an http(s) discovery URL or a bare ws/wss root. Try
+    // /json/version discovery first. For bare ws/wss URLs, fall back to a
+    // direct WS handshake when discovery is unavailable — some providers
+    // (e.g. Browserless/Browserbase) expose a direct WebSocket root without
+    // a /json/version endpoint.
+    const discoveryUrl = isWebSocketUrl(cdpUrl)
+      ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+      : cdpUrl;
+    const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    if (version) {
+      return true;
+    }
+    if (isWebSocketUrl(cdpUrl)) {
+      return await canOpenWebSocket(cdpUrl, timeoutMs);
+    }
+    return false;
   } catch {
     return false;
   }
@@ -190,16 +212,31 @@ export async function getChromeWebSocketUrl(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<string | null> {
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
-  if (isWebSocketUrl(cdpUrl)) {
-    // Direct WebSocket endpoint — the cdpUrl is already the WebSocket URL.
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
+    // the WebSocket URL.
     return cdpUrl;
   }
-  const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+  // Either an http(s) endpoint or a bare ws/wss root; discover the
+  // actual WebSocket URL via /json/version. Normalise the scheme so
+  // fetch() can reach the endpoint.
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
+    // /json/version unavailable or returned no WebSocket URL. For bare
+    // ws/wss inputs, the URL itself may be a direct WebSocket endpoint
+    // (e.g. Browserless/Browserbase-style providers without /json/version).
+    // The SSRF check on cdpUrl was already performed at the start of this
+    // function, so we can return it directly.
+    if (isWebSocketUrl(cdpUrl)) {
+      return cdpUrl;
+    }
     return null;
   }
-  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, cdpUrl);
+  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
   await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy);
   return normalizedWsUrl;
 }
@@ -278,7 +315,7 @@ export async function launchOpenClawChrome(
       if (exists(localStatePath) && exists(preferencesPath)) {
         break;
       }
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, CHROME_BOOTSTRAP_PREFS_POLL_MS));
     }
     try {
       bootstrap.kill("SIGTERM");
@@ -290,7 +327,7 @@ export async function launchOpenClawChrome(
       if (bootstrap.exitCode != null) {
         break;
       }
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, CHROME_BOOTSTRAP_EXIT_POLL_MS));
     }
   }
 
@@ -396,7 +433,8 @@ export async function stopOpenClawChrome(
     if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))) {
       return;
     }
-    await new Promise((r) => setTimeout(r, 100));
+    const remainingMs = timeoutMs - (Date.now() - start);
+    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(100, remainingMs))));
   }
 
   try {

@@ -15,8 +15,8 @@ import { formatInstallFailureMessage } from "./skills-install-output.js";
 import type { SkillInstallResult } from "./skills-install.types.js";
 import {
   hasBinary as defaultHasBinary,
-  loadWorkspaceSkillEntries,
-  resolveSkillsInstallPreferences,
+  loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries,
+  resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
@@ -34,12 +34,16 @@ export type { SkillInstallResult } from "./skills-install.types.js";
 
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
+  loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
   resolveBrewExecutable: () => string | undefined;
+  resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
 };
 
 const defaultSkillsInstallDeps: SkillsInstallDeps = {
   hasBinary: defaultHasBinary,
+  loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
   resolveBrewExecutable: defaultResolveBrewExecutable,
+  resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
 };
 
 let skillsInstallDeps = defaultSkillsInstallDeps;
@@ -419,7 +423,8 @@ async function executeInstallCommand(params: {
 export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
-  const entries = loadWorkspaceSkillEntries(workspaceDir);
+  const deps = getSkillsInstallDeps();
+  const entries = deps.loadWorkspaceSkillEntries(workspaceDir);
   const entry = entries.find((item) => item.skill.name === params.skillName);
   if (!entry) {
     return {
@@ -483,7 +488,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     return withWarnings(downloadResult, warnings);
   }
 
-  const prefs = resolveSkillsInstallPreferences(params.config);
+  const prefs = deps.resolveSkillsInstallPreferences(params.config);
   const command = buildInstallCommand(spec, prefs);
   if (command.error) {
     return withWarnings(
@@ -498,7 +503,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     );
   }
 
-  const deps = getSkillsInstallDeps();
   const brewExe = deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
     return withWarnings(resolveBrewMissingFailure(spec), warnings);

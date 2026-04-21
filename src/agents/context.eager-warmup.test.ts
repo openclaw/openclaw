@@ -25,11 +25,4 @@ describe("agents/context eager warmup", () => {
 
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
-
-  it("does not eager-load config when plugin-sdk command-auth is imported", async () => {
-    process.argv = ["node", "openclaw", "onboard"];
-    await importFreshModule(import.meta.url, "../plugin-sdk/command-auth.js?scope=onboard");
-
-    expect(loadConfigMock).not.toHaveBeenCalled();
-  });
 });

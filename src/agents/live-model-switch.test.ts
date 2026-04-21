@@ -58,6 +58,23 @@ async function loadModule() {
   return mod;
 }
 
+type ShouldSwitchParams = Parameters<
+  typeof import("./live-model-switch.js").shouldSwitchToLiveModel
+>[0];
+
+function makeShouldSwitchParams(overrides: Partial<ShouldSwitchParams> = {}): ShouldSwitchParams {
+  return {
+    cfg: { session: { store: "/tmp/custom-store.json" } },
+    sessionKey: "main",
+    agentId: "reply",
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-6",
+    currentProvider: "anthropic",
+    currentModel: "claude-opus-4-6",
+    ...overrides,
+  };
+}
+
 describe("live model switch", () => {
   beforeAll(async () => {
     mod = await import("./live-model-switch.js");
@@ -391,15 +408,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toEqual({
         provider: "openai",
@@ -419,15 +428,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
     });
@@ -443,15 +444,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
     });
@@ -472,15 +465,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
       // Give the fire-and-forget clearLiveModelSwitchPending a tick to resolve
@@ -492,15 +477,7 @@ describe("live model switch", () => {
     it("returns undefined when sessionKey is missing", async () => {
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: undefined,
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams({ sessionKey: undefined }));
 
       expect(result).toBeUndefined();
     });

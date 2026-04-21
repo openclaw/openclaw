@@ -65,6 +65,18 @@ function listConfiguredAccountIds(
   return [];
 }
 
+function expectExternalChatEnabledConfigWrite() {
+  expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+    expect.objectContaining({
+      channels: {
+        "external-chat": expect.objectContaining({
+          enabled: true,
+        }),
+      },
+    }),
+  );
+}
+
 function createLifecycleChatAddTestPlugin(): ChannelPlugin {
   const resolveLifecycleChatAccount = (
     cfg: Parameters<NonNullable<ChannelPlugin["config"]["resolveAccount"]>>[0],
@@ -314,15 +326,7 @@ describe("channelsAddCommand", () => {
       expect.objectContaining({ entry: catalogEntry }),
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          "external-chat": expect.objectContaining({
-            enabled: true,
-          }),
-        },
-      }),
-    );
+    expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
 
@@ -343,15 +347,7 @@ describe("channelsAddCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          "external-chat": expect.objectContaining({
-            enabled: true,
-          }),
-        },
-      }),
-    );
+    expectExternalChatEnabledConfigWrite();
   });
 
   it("uses the installed plugin id when channel and plugin ids differ", async () => {
@@ -416,15 +412,7 @@ describe("channelsAddCommand", () => {
     );
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          "external-chat": expect.objectContaining({
-            enabled: true,
-          }),
-        },
-      }),
-    );
+    expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });

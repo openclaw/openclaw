@@ -46,6 +46,36 @@ function createServiceRunArgs(checkTokenDrift?: boolean) {
   };
 }
 
+function stubConfigSecretRefGatewayToken() {
+  loadConfig.mockReturnValue({
+    secrets: {
+      providers: {
+        default: { source: "env" },
+      },
+    },
+    gateway: {
+      auth: {
+        mode: "token",
+        token: {
+          source: "env",
+          provider: "default",
+          id: "SERVICE_GATEWAY_TOKEN",
+        },
+      },
+    },
+  });
+}
+
+function stubServiceGatewayTokenEnv() {
+  service.readCommand.mockResolvedValue({
+    programArguments: [],
+    environment: {
+      OPENCLAW_GATEWAY_TOKEN: "service-token",
+      SERVICE_GATEWAY_TOKEN: "service-token",
+    },
+  });
+}
+
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
     ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
@@ -122,30 +152,8 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("resolves config token SecretRefs using service command env before drift checks", async () => {
-    loadConfig.mockReturnValue({
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        auth: {
-          mode: "token",
-          token: {
-            source: "env",
-            provider: "default",
-            id: "SERVICE_GATEWAY_TOKEN",
-          },
-        },
-      },
-    });
-    service.readCommand.mockResolvedValue({
-      programArguments: [],
-      environment: {
-        OPENCLAW_GATEWAY_TOKEN: "service-token",
-        SERVICE_GATEWAY_TOKEN: "service-token",
-      },
-    });
+    stubConfigSecretRefGatewayToken();
+    stubServiceGatewayTokenEnv();
 
     await runServiceRestart(createServiceRunArgs(true));
 
@@ -154,30 +162,8 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("prefers service command env over process env for SecretRef token drift resolution", async () => {
-    loadConfig.mockReturnValue({
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        auth: {
-          mode: "token",
-          token: {
-            source: "env",
-            provider: "default",
-            id: "SERVICE_GATEWAY_TOKEN",
-          },
-        },
-      },
-    });
-    service.readCommand.mockResolvedValue({
-      programArguments: [],
-      environment: {
-        OPENCLAW_GATEWAY_TOKEN: "service-token",
-        SERVICE_GATEWAY_TOKEN: "service-token",
-      },
-    });
+    stubConfigSecretRefGatewayToken();
+    stubServiceGatewayTokenEnv();
     vi.stubEnv("SERVICE_GATEWAY_TOKEN", "process-token");
 
     await runServiceRestart(createServiceRunArgs(true));

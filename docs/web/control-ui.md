@@ -58,6 +58,11 @@ If the browser retries pairing with changed auth details (role/scopes/public
 key), the previous pending request is superseded and a new `requestId` is
 created. Re-run `openclaw devices list` before approval.
 
+If the browser is already paired and you change it from read access to
+write/admin access, this is treated as an approval upgrade, not a silent
+reconnect. OpenClaw keeps the old approval active, blocks the broader reconnect,
+and asks you to approve the new scope set explicitly.
+
 Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
@@ -278,7 +283,7 @@ See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build
 ```
 
 Optional absolute base (when you want fixed asset URLs):
@@ -290,7 +295,7 @@ OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
 For local development (separate dev server):
 
 ```bash
-pnpm ui:dev # auto-installs UI deps on first run
+pnpm ui:dev
 ```
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).

@@ -115,6 +115,69 @@ const baseEntry: ChannelPluginCatalogEntry = {
   },
 };
 
+function mockBundledChatSource() {
+  resolveBundledPluginSources.mockReturnValue(
+    new Map([
+      [
+        "bundled-chat",
+        {
+          pluginId: "bundled-chat",
+          localPath: bundledPluginRootAt("/opt/openclaw", "bundled-chat"),
+          npmSpec: "@openclaw/bundled-chat",
+        },
+      ],
+    ]),
+  );
+}
+
+function makeSkipInstallPrompter() {
+  const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
+  const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+  return { prompter, select };
+}
+
+function mockActivationOnlyPlugin(plugin: {
+  id: string;
+  origin?: "bundled" | "global" | "workspace";
+}) {
+  loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: plugin.id,
+        channels: [],
+        ...(plugin.origin === undefined ? {} : { origin: plugin.origin }),
+        activation: {
+          onChannels: ["external-chat"],
+        },
+      },
+    ],
+    diagnostics: [],
+  });
+}
+
+function expectSetupSnapshotDoesNotScopeToPlugin(params: {
+  cfg: OpenClawConfig;
+  runtime: ReturnType<typeof makeRuntime>;
+  pluginId: string;
+}) {
+  loadChannelSetupPluginRegistrySnapshotForChannel({
+    cfg: params.cfg,
+    runtime: params.runtime,
+    channel: "external-chat",
+    workspaceDir: "/tmp/openclaw-workspace",
+  });
+
+  expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect.not.objectContaining({
+      onlyPluginIds: [params.pluginId],
+    }),
+  );
+  expect(
+    (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
+      .onlyPluginIds,
+  ).toBeUndefined();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
@@ -251,22 +314,10 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
   it("defaults to bundled local path on beta channel when available", async () => {
     const runtime = makeRuntime();
-    const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
-    const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+    const { prompter, select } = makeSkipInstallPrompter();
     const cfg: OpenClawConfig = { update: { channel: "beta" } };
     vi.mocked(fs.existsSync).mockReturnValue(false);
-    resolveBundledPluginSources.mockReturnValue(
-      new Map([
-        [
-          "bundled-chat",
-          {
-            pluginId: "bundled-chat",
-            localPath: bundledPluginRootAt("/opt/openclaw", "bundled-chat"),
-            npmSpec: "@openclaw/bundled-chat",
-          },
-        ],
-      ]),
-    );
+    mockBundledChatSource();
 
     await ensureChannelSetupPluginInstalled({
       cfg,
@@ -290,22 +341,10 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
   it("does not default to bundled local path when an external catalog overrides the npm spec", async () => {
     const runtime = makeRuntime();
-    const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
-    const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+    const { prompter, select } = makeSkipInstallPrompter();
     const cfg: OpenClawConfig = { update: { channel: "beta" } };
     vi.mocked(fs.existsSync).mockReturnValue(false);
-    resolveBundledPluginSources.mockReturnValue(
-      new Map([
-        [
-          "bundled-chat",
-          {
-            pluginId: "bundled-chat",
-            localPath: bundledPluginRootAt("/opt/openclaw", "bundled-chat"),
-            npmSpec: "@openclaw/bundled-chat",
-          },
-        ],
-      ]),
-    );
+    mockBundledChatSource();
 
     await ensureChannelSetupPluginInstalled({
       cfg,
@@ -664,18 +703,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes snapshots by activation-declared channel ownership when direct channel lists are empty", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-external-chat-plugin",
-          channels: [],
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
+    mockActivationOnlyPlugin({ id: "custom-external-chat-plugin" });
 
     loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg,
@@ -699,18 +727,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("uses uncached manifest discovery for activation-declared setup scoping", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-external-chat-plugin",
-          channels: [],
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
+    mockActivationOnlyPlugin({ id: "custom-external-chat-plugin" });
 
     loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg,
@@ -730,36 +747,16 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("does not trust unconfigured workspace activation-only channel ownership during setup", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "evil-external-chat-shadow",
-          channels: [],
-          origin: "workspace",
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockActivationOnlyPlugin({
+      id: "evil-external-chat-shadow",
+      origin: "workspace",
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
+    expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
+      pluginId: "evil-external-chat-shadow",
     });
-
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: ["evil-external-chat-shadow"],
-      }),
-    );
-    expect(
-      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-        .onlyPluginIds,
-    ).toBeUndefined();
   });
 
   it("does not trust allowlist-excluded bundled activation-only channel ownership during setup", () => {
@@ -769,36 +766,16 @@ describe("ensureChannelSetupPluginInstalled", () => {
         allow: ["other-plugin"],
       },
     };
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-external-chat-plugin",
-          channels: [],
-          origin: "bundled",
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockActivationOnlyPlugin({
+      id: "custom-external-chat-plugin",
+      origin: "bundled",
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
+    expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
+      pluginId: "custom-external-chat-plugin",
     });
-
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: ["custom-external-chat-plugin"],
-      }),
-    );
-    expect(
-      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-        .onlyPluginIds,
-    ).toBeUndefined();
   });
 
   it("does not trust explicitly denied bundled activation-only channel ownership during setup", () => {
@@ -808,36 +785,16 @@ describe("ensureChannelSetupPluginInstalled", () => {
         deny: ["custom-external-chat-plugin"],
       },
     };
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-external-chat-plugin",
-          channels: [],
-          origin: "bundled",
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockActivationOnlyPlugin({
+      id: "custom-external-chat-plugin",
+      origin: "bundled",
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
+    expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
+      pluginId: "custom-external-chat-plugin",
     });
-
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: ["custom-external-chat-plugin"],
-      }),
-    );
-    expect(
-      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-        .onlyPluginIds,
-    ).toBeUndefined();
   });
 
   it("does not trust explicitly disabled workspace activation-only channel ownership during setup", () => {
@@ -851,36 +808,16 @@ describe("ensureChannelSetupPluginInstalled", () => {
         },
       },
     };
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "evil-external-chat-shadow",
-          channels: [],
-          origin: "workspace",
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockActivationOnlyPlugin({
+      id: "evil-external-chat-shadow",
+      origin: "workspace",
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
+    expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
+      pluginId: "evil-external-chat-shadow",
     });
-
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: ["evil-external-chat-shadow"],
-      }),
-    );
-    expect(
-      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-        .onlyPluginIds,
-    ).toBeUndefined();
   });
 
   it("does not trust explicitly disabled bundled activation-only channel ownership during setup", () => {
@@ -892,71 +829,31 @@ describe("ensureChannelSetupPluginInstalled", () => {
         },
       },
     };
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-external-chat-plugin",
-          channels: [],
-          origin: "bundled",
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockActivationOnlyPlugin({
+      id: "custom-external-chat-plugin",
+      origin: "bundled",
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
+    expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
+      pluginId: "custom-external-chat-plugin",
     });
-
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: ["custom-external-chat-plugin"],
-      }),
-    );
-    expect(
-      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-        .onlyPluginIds,
-    ).toBeUndefined();
   });
 
   it("does not trust unenabled global activation-only channel ownership during setup", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-external-chat-global",
-          channels: [],
-          origin: "global",
-          activation: {
-            onChannels: ["external-chat"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockActivationOnlyPlugin({
+      id: "custom-external-chat-global",
+      origin: "global",
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
+    expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
+      pluginId: "custom-external-chat-global",
     });
-
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: ["custom-external-chat-global"],
-      }),
-    );
-    expect(
-      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-        .onlyPluginIds,
-    ).toBeUndefined();
   });
 
   it("scopes snapshots by plugin id when channel and plugin ids differ", () => {

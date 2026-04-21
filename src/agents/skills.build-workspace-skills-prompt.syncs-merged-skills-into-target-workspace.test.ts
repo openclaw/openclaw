@@ -87,7 +87,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
   const buildPrompt = (
     workspaceDir: string,
     opts?: Parameters<typeof buildWorkspaceSkillsPrompt>[1],
-  ) => withEnv({ HOME: workspaceDir }, () => buildWorkspaceSkillsPrompt(workspaceDir, opts));
+  ) =>
+    withEnv({ HOME: workspaceDir }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        ...opts,
+      }),
+    );
 
   const cloneSourceTemplate = async () => {
     const sourceWorkspace = await createCaseDir("source");

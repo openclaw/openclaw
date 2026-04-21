@@ -157,9 +157,9 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 ## Security model (important)
 
 - Default: tools run on the host for the `main` session, so the agent has full access when it is just you.
-- Group/channel safety: set `agents.defaults.sandbox.mode: "non-main"` to run non-`main` sessions inside per-session Docker sandboxes.
+- Group/channel safety: set `agents.defaults.sandbox.mode: "non-main"` to run non-`main` sessions inside sandboxes. Docker is the default sandbox backend; SSH and OpenShell backends are also available.
 - Typical sandbox default: allow `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`; deny `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`.
-- Before exposing anything remotely, read [Security](https://docs.openclaw.ai/gateway/security), [Docker sandboxing](https://docs.openclaw.ai/install/docker), and [Configuration](https://docs.openclaw.ai/gateway/configuration).
+- Before exposing anything remotely, read [Security](https://docs.openclaw.ai/gateway/security), [Sandboxing](https://docs.openclaw.ai/gateway/sandboxing), and [Configuration](https://docs.openclaw.ai/gateway/configuration).
 
 ## Operator quick refs
 
@@ -173,7 +173,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - New here: [Getting started](https://docs.openclaw.ai/start/getting-started), [Onboarding](https://docs.openclaw.ai/start/wizard), [Updating](https://docs.openclaw.ai/install/updating)
 - Channel setup: [Channels index](https://docs.openclaw.ai/channels), [WhatsApp](https://docs.openclaw.ai/channels/whatsapp), [Telegram](https://docs.openclaw.ai/channels/telegram), [Discord](https://docs.openclaw.ai/channels/discord), [Slack](https://docs.openclaw.ai/channels/slack)
 - Apps + nodes: [macOS](https://docs.openclaw.ai/platforms/macos), [iOS](https://docs.openclaw.ai/platforms/ios), [Android](https://docs.openclaw.ai/platforms/android), [Nodes](https://docs.openclaw.ai/nodes)
-- Config + security: [Configuration](https://docs.openclaw.ai/gateway/configuration), [Security](https://docs.openclaw.ai/gateway/security), [Docker sandboxing](https://docs.openclaw.ai/install/docker)
+- Config + security: [Configuration](https://docs.openclaw.ai/gateway/configuration), [Security](https://docs.openclaw.ai/gateway/security), [Sandboxing](https://docs.openclaw.ai/gateway/sandboxing)
 - Remote + web: [Gateway](https://docs.openclaw.ai/gateway), [Remote access](https://docs.openclaw.ai/gateway/remote), [Tailscale](https://docs.openclaw.ai/gateway/tailscale), [Web surfaces](https://docs.openclaw.ai/web)
 - Tools + automation: [Tools](https://docs.openclaw.ai/tools), [Skills](https://docs.openclaw.ai/tools/skills), [Cron jobs](https://docs.openclaw.ai/automation/cron-jobs), [Webhooks](https://docs.openclaw.ai/automation/webhook), [Gmail Pub/Sub](https://docs.openclaw.ai/automation/gmail-pubsub)
 - Internals: [Architecture](https://docs.openclaw.ai/concepts/architecture), [Agent](https://docs.openclaw.ai/concepts/agent), [Session model](https://docs.openclaw.ai/concepts/session), [Gateway protocol](https://docs.openclaw.ai/reference/rpc)
@@ -212,21 +212,34 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
 
+For the dev loop:
+
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
-pnpm build
 
-pnpm openclaw onboard --install-daemon
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw setup
+
+# Optional: prebuild Control UI before first startup
+pnpm ui:build
 
 # Dev loop (auto-reload on source/config changes)
 pnpm gateway:watch
 ```
 
-Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
+If you need a built `dist/` from the checkout (for Node, packaging, or release validation), run:
+
+```bash
+pnpm build
+pnpm ui:build
+```
+
+`pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
+
+Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary, while `pnpm gateway:watch` rebuilds the runtime on demand during the dev loop.
 
 ## Development channels
 

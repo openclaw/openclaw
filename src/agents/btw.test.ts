@@ -245,6 +245,18 @@ function expectSanitizedAssistantContext(context: unknown, text: string) {
   });
 }
 
+function expectSeedOnlyUserContext(context: unknown) {
+  expect(context).toMatchObject({
+    messages: [
+      expect.objectContaining({
+        role: "user",
+        content: [{ type: "text", text: "seed" }],
+      }),
+      expect.objectContaining({ role: "user" }),
+    ],
+  });
+}
+
 describe("runBtwSideQuestion", () => {
   beforeEach(() => {
     streamSimpleMock.mockReset();
@@ -766,15 +778,7 @@ describe("runBtwSideQuestion", () => {
     ]);
 
     const context = await runMathSideQuestionAndCaptureContext();
-    expect(context).toMatchObject({
-      messages: [
-        expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: "seed" }],
-        }),
-        expect.objectContaining({ role: "user" }),
-      ],
-    });
+    expectSeedOnlyUserContext(context);
   });
 
   it("drops assistant thinking blocks from BTW context", async () => {
@@ -828,15 +832,7 @@ describe("runBtwSideQuestion", () => {
     ]);
 
     const context = await runMathSideQuestionAndCaptureContext();
-    expect(context).toMatchObject({
-      messages: [
-        expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: "seed" }],
-        }),
-        expect.objectContaining({ role: "user" }),
-      ],
-    });
+    expectSeedOnlyUserContext(context);
   });
 
   it("normalizes malformed assistant content before stripping tool blocks", async () => {

@@ -24,6 +24,36 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
+vi.mock("../../agents/auth-profiles/store.js", () => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {
+      authProfilesStoreMock.profiles = {};
+    },
+    ensureAuthProfileStore: store,
+    ensureAuthProfileStoreForLocalUpdate: store,
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+    loadAuthProfileStore: store,
+    loadAuthProfileStoreForRuntime: store,
+    loadAuthProfileStoreForSecretsRuntime: store,
+    loadAuthProfileStoreWithoutExternalProfiles: store,
+    replaceRuntimeAuthProfileStoreSnapshots: (
+      snapshots: Array<{
+        store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
+      }>,
+    ) => {
+      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
+    },
+    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
+  };
+});
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -650,6 +680,23 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
+  it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      sessionEntry,
+    });
+
+    expect(sessionEntry.thinkingLevel).toBe("medium");
+    expect(persisted.thinkingRemap).toEqual({
+      from: "adaptive",
+      to: "medium",
+      provider: "openai",
+      model: "gpt-4o",
+    });
+  });
+
   it("does not request a live restart when /model mutates an active session", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();
@@ -781,7 +828,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: off, minimal, low, medium, high, adaptive.");
+    expect(result?.text).toContain("Options: off, minimal, low, medium, adaptive, high.");
   });
 
   it("persists verbose on and off directives", async () => {
@@ -1027,7 +1074,7 @@ describe("persistInlineDirectives internal exec scope gate", () => {
   it("treats internal provider context as authoritative over external surface metadata", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
       messageProvider: "webchat",
-      surface: "telegram",
+      surface: "forum",
     });
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
