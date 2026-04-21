@@ -27,6 +27,14 @@ RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/ap
   && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends ${PACKAGES}
 
+# Debian bookworm dropped the unversioned `python` command. Restore a `python`
+# shim so agents that default to `python` (rather than `python3`) keep working
+# without burning a tool round trip on `command not found`. Skip if an operator
+# has already provided one (e.g. via the `python-is-python3` package).
+RUN if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then \
+      ln -sf "$(command -v python3)" /usr/local/bin/python; \
+    fi
+
 RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
 
 RUN if [ "${INSTALL_BUN}" = "1" ]; then \

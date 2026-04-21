@@ -206,6 +206,14 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES; \
     fi
 
+# Debian bookworm dropped the unversioned `python` command. Restore a `python`
+# shim so agents that default to `python` (rather than `python3`) keep working
+# without burning a tool round trip on `command not found`. Skip if an operator
+# has already provided one (e.g. via the `python-is-python3` package).
+RUN if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then \
+      ln -sf "$(command -v python3)" /usr/local/bin/python; \
+    fi
+
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
