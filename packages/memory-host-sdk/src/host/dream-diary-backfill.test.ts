@@ -108,4 +108,32 @@ describe("collectDreamDiaryBackfillEntries", () => {
       "- Shared bullet",
     ]);
   });
+
+  it("keeps independent same-day topic notes as separate backfill entries", () => {
+    const entries = collectDreamDiaryBackfillEntries({
+      files: [
+        {
+          path: "memory/2026-04-19-travel.md",
+          renderedMarkdown: ["## Travel", "- Flight moved to 7pm"].join("\n"),
+        },
+        {
+          path: "memory/2026-04-19-workshop.md",
+          renderedMarkdown: ["## Workshop", "- Bring slides"].join("\n"),
+        },
+      ],
+    }).toSorted((left, right) => (left.sourcePath ?? "").localeCompare(right.sourcePath ?? ""));
+
+    expect(entries).toEqual([
+      {
+        isoDay: "2026-04-19",
+        sourcePath: "memory/2026-04-19-travel.md",
+        bodyLines: ["Travel", "- Flight moved to 7pm"],
+      },
+      {
+        isoDay: "2026-04-19",
+        sourcePath: "memory/2026-04-19-workshop.md",
+        bodyLines: ["Workshop", "- Bring slides"],
+      },
+    ]);
+  });
 });

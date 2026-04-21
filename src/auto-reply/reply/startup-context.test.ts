@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { readRememberedDailyMemoryFile } from "../../memory-host-sdk/host/daily-files.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 
 const tmpDirs: string[] = [];
@@ -507,6 +508,46 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("slugged notes");
   });
 
+  it("backfills remembered provenance for preexisting semantic session-summary notes", async () => {
+    const workspaceDir = await makeWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const fileName = "2026-04-11-vendor-pitch.md";
+    await fs.writeFile(
+      path.join(memoryDir, fileName),
+      [
+        "# Session: 2026-04-11 12:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: vendor-pitch",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "UTC" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain(`[Untrusted daily memory: memory/${fileName}]`);
+    await expect(
+      readRememberedDailyMemoryFile({
+        memoryDir,
+        fileName,
+      }),
+    ).resolves.toMatchObject({
+      fileName,
+      sessionSummary: true,
+    });
+  });
+
   it("loads canonical and dated-slug notes for the same day with canonical first", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "canonical", "utf-8");
@@ -800,6 +841,60 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
   });
 
+  it("prefers the UTC boundary summary over the local-yesterday fallback when only one extra day fits", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-10-reset-summary.md"),
+      [
+        "# Session: 2026-04-10 21:00:00 America/Chicago",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: old-summary",
+        "- **Source**: cli",
+        "",
+        "assistant: older continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-12-reset-summary.md"),
+      [
+        "# Session: 2026-04-12 00:30:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: new-summary",
+        "- **Source**: cli",
+        "",
+        "assistant: newest boundary continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 1,
+              maxFileChars: 500,
+              maxTotalChars: 220,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 12, 0, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10-reset-summary.md]");
+  });
+
   it("does not inject the previous UTC day when it only has an ordinary daily note", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-12.md"), "today notes", "utf-8");
@@ -958,6 +1053,65 @@ describe("buildSessionStartupContextPrelude", () => {
       new Date("2026-04-11T12:00:00.000Z"),
       new Date("2026-04-11T12:00:00.000Z"),
     );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "UTC",
+            startupContext: {
+              dailyMemoryDays: 1,
+              maxFileChars: 160,
+              maxTotalChars: 260,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+  });
+
+  it("prefers the slugged same-day session summary when equal mtimes would otherwise fall back to index order", async () => {
+    const workspaceDir = await makeWorkspace();
+    const canonicalPath = path.join(workspaceDir, "memory", "2026-04-11.md");
+    const sluggedPath = path.join(workspaceDir, "memory", "2026-04-11-reset-summary.md");
+    const sharedMtime = new Date("2026-04-11T12:00:00.000Z");
+    await fs.writeFile(
+      canonicalPath,
+      [
+        "# Session: 2026-04-11 08:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: old-summary",
+        "- **Source**: cli",
+        "",
+        "assistant: old continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      sluggedPath,
+      [
+        "# Session: 2026-04-11 12:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: new-summary",
+        "- **Source**: cli",
+        "",
+        "assistant: latest continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.utimes(canonicalPath, sharedMtime, sharedMtime);
+    await fs.utimes(sluggedPath, sharedMtime, sharedMtime);
 
     const prelude = await buildSessionStartupContextPrelude({
       workspaceDir,

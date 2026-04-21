@@ -231,6 +231,41 @@ describe("daily-content", () => {
     );
   });
 
+  it("invalidates file dependencies when contents change without changing size or mtime", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-deps-same-"));
+    tmpDirs.push(root);
+    await fs.mkdir(path.join(root, "memory"), { recursive: true });
+    const notePath = path.join(root, "memory", "2026-04-19.md");
+    const stableMtime = new Date("2026-04-19T10:00:00.000Z");
+    const initialContent = "Durable planning note.\n";
+    const updatedContent = "Session planning note.\n";
+    expect(initialContent.length).toBe(updatedContent.length);
+    await fs.writeFile(notePath, initialContent, "utf-8");
+    await fs.utimes(notePath, stableMtime, stableMtime);
+
+    const dependencies: SessionSummaryDailyMemoryDependency[] = [];
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "memory/2026-04-19.md",
+        cache: new Map(),
+        snippet: "Durable planning note.",
+        startLine: 1,
+        recordDependency: (dependency) => {
+          dependencies.push(dependency);
+        },
+      }),
+    ).resolves.toBe(false);
+    await expect(areSessionSummaryDailyMemoryDependenciesCurrent(dependencies)).resolves.toBe(true);
+
+    await fs.writeFile(notePath, updatedContent, "utf-8");
+    await fs.utimes(notePath, stableMtime, stableMtime);
+
+    await expect(areSessionSummaryDailyMemoryDependenciesCurrent(dependencies)).resolves.toBe(
+      false,
+    );
+  });
+
   it("does not probe sibling daily files outside the workspace boundary", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-boundary-root-"));
     const outside = await fs.mkdtemp(
@@ -634,6 +669,7 @@ describe("daily-content", () => {
       fileName: "2026-04-19-vendor-pitch.md",
       sessionSummary: true,
     });
+    const windowsAbsoluteAlias = "C:/Users/example/workspace/memory/2026-04-19-vendor-pitch.md";
 
     await expect(
       isSessionSummaryDailyMemoryPath({
@@ -648,6 +684,15 @@ describe("daily-content", () => {
       isSessionSummaryDailyMemoryPath({
         workspaceDir: root,
         filePath: path.join(root, "memory", "2026-04-19-vendor-pitch.md"),
+        cache: new Map(),
+        snippet: "We should follow up with the vendor tomorrow.",
+        startLine: 11,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: windowsAbsoluteAlias,
         cache: new Map(),
         snippet: "We should follow up with the vendor tomorrow.",
         startLine: 11,

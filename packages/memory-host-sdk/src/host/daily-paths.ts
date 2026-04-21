@@ -8,6 +8,7 @@ const SHORT_TERM_LEGACY_ABSOLUTE_MEMORY_FILE_RE =
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/i;
 const WINDOWS_ABSOLUTE_PATH_RE = /^[a-z]:\//i;
+const SESSION_SUMMARY_VARIANT_SLUG_TOKENS = new Set(["reset", "session", "summary"]);
 
 export type ParsedDailyMemoryFileName = {
   day: string;
@@ -25,7 +26,7 @@ function normalizeDailyMemoryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
-function isCrossPlatformAbsolutePath(normalizedPath: string): boolean {
+export function isCrossPlatformAbsolutePath(normalizedPath: string): boolean {
   return (
     path.isAbsolute(normalizedPath) ||
     WINDOWS_ABSOLUTE_PATH_RE.test(normalizedPath) ||
@@ -103,6 +104,39 @@ function resolveComparableDailyVariantDir(filePath: string): string | null {
     return "memory";
   }
   return path.posix.dirname(normalizedPath);
+}
+
+function isSummaryStyleDailyMemoryVariantSlug(slug: string | undefined): boolean {
+  if (!slug) {
+    return false;
+  }
+  const tokens = slug
+    .toLowerCase()
+    .split(/[-_.]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  if (tokens.length === 0) {
+    return false;
+  }
+  if (!tokens.every((token) => SESSION_SUMMARY_VARIANT_SLUG_TOKENS.has(token))) {
+    return false;
+  }
+  return tokens.includes("summary") && (tokens.includes("reset") || tokens.includes("session"));
+}
+
+export function resolveDailyMemoryVariantMergeKey(filePath: string): string | null {
+  const parsed = parseDailyMemoryPathInfo(filePath);
+  if (!parsed) {
+    return null;
+  }
+  const comparableDir = resolveComparableDailyVariantDir(filePath);
+  if (!comparableDir) {
+    return null;
+  }
+  if (parsed.canonical || isSummaryStyleDailyMemoryVariantSlug(parsed.slug)) {
+    return `${comparableDir}/${parsed.day}`;
+  }
+  return `${comparableDir}/${parsed.fileName}`;
 }
 
 function resolveComparableDailyVariantPath(

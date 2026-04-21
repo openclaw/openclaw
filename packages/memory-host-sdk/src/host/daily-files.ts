@@ -27,6 +27,10 @@ export type DailyMemoryFileEntry = ParsedDailyMemoryFileName & {
   sessionSummary?: boolean;
 };
 
+type RememberedDailyMemoryFileEntry = DailyMemoryFileEntry & {
+  sessionSummaryKnown?: boolean;
+};
+
 type DailyMemoryRecentIndexPayload = {
   version: number;
   files: Array<{
@@ -66,7 +70,8 @@ function toDailyMemoryFileEntry(params: {
   fileName: string;
   mtimeMs: number;
   sessionSummary?: boolean;
-}): DailyMemoryFileEntry | null {
+  sessionSummaryKnown?: boolean;
+}): RememberedDailyMemoryFileEntry | null {
   const parsed = parseDailyMemoryFileName(params.fileName);
   if (!parsed) {
     return null;
@@ -77,6 +82,7 @@ function toDailyMemoryFileEntry(params: {
     relativePath: `memory/${parsed.fileName}`,
     mtimeMs: params.mtimeMs,
     ...(params.sessionSummary ? { sessionSummary: true } : {}),
+    ...(params.sessionSummaryKnown ? { sessionSummaryKnown: true } : {}),
   };
 }
 
@@ -117,45 +123,46 @@ async function statDailyMemoryFile(params: {
 }
 
 async function resolveLiveSessionSummaryFlag(params: {
-  entry: Pick<DailyMemoryFileEntry, "absolutePath" | "canonical" | "mtimeMs">;
+  entry: Pick<DailyMemoryFileEntry, "absolutePath">;
   rememberedSessionSummary?: boolean;
-  rememberedMtimeMs?: number;
-  detectUnrememberedVariants?: boolean;
-}): Promise<boolean> {
-  const shouldRecheckLiveFile =
-    params.detectUnrememberedVariants ||
-    params.rememberedSessionSummary === true ||
-    params.rememberedMtimeMs !== params.entry.mtimeMs;
-  if (!shouldRecheckLiveFile) {
-    return false;
-  }
+  rememberedSessionSummaryKnown?: boolean;
+}): Promise<{ sessionSummary: boolean; sessionSummaryKnown: boolean }> {
   let raw;
   try {
     raw = await readSessionSummaryProbePrefixFromFile(params.entry.absolutePath);
   } catch (error) {
     if (isBenignDailyMemoryFileError(error) || isBenignDailyMemoryDirError(error)) {
-      return false;
+      return {
+        sessionSummary: params.rememberedSessionSummary === true,
+        sessionSummaryKnown: params.rememberedSessionSummaryKnown === true,
+      };
     }
     throw error;
   }
-  return isSessionSummaryDailyMemory(raw);
+  return {
+    sessionSummary: isSessionSummaryDailyMemory(raw),
+    sessionSummaryKnown: true,
+  };
 }
 
 async function mergeRememberedSessionSummaryFlags(params: {
   entries: DailyMemoryFileEntry[];
-  rememberedByFileName: ReadonlyMap<string, DailyMemoryFileEntry>;
+  rememberedByFileName: ReadonlyMap<string, RememberedDailyMemoryFileEntry>;
   detectUnrememberedVariants?: boolean;
-}): Promise<DailyMemoryFileEntry[]> {
+}): Promise<RememberedDailyMemoryFileEntry[]> {
   return await Promise.all(
     params.entries.map(async (entry) => {
       const remembered = params.rememberedByFileName.get(entry.fileName);
-      const sessionSummary = await resolveLiveSessionSummaryFlag({
+      const resolved = await resolveLiveSessionSummaryFlag({
         entry,
         rememberedSessionSummary: remembered?.sessionSummary,
-        rememberedMtimeMs: remembered?.mtimeMs,
-        detectUnrememberedVariants: params.detectUnrememberedVariants,
+        rememberedSessionSummaryKnown: remembered?.sessionSummaryKnown,
       });
-      return sessionSummary ? { ...entry, sessionSummary: true } : entry;
+      return {
+        ...entry,
+        ...(resolved.sessionSummary ? { sessionSummary: true } : {}),
+        ...(resolved.sessionSummaryKnown ? { sessionSummaryKnown: true } : {}),
+      };
     }),
   );
 }
@@ -208,7 +215,7 @@ async function listDailyMemoryFileNamesForDays(params: {
 
 async function readDailyMemoryRecentIndex(memoryDir: string): Promise<{
   exists: boolean;
-  entries: DailyMemoryFileEntry[];
+  entries: RememberedDailyMemoryFileEntry[];
   mtimeMs: number | null;
 }> {
   const indexPath = resolveDailyMemoryRecentIndexPath(memoryDir);
@@ -251,15 +258,19 @@ async function readDailyMemoryRecentIndex(memoryDir: string): Promise<{
         mtimeMs:
           typeof entry?.mtimeMs === "number" && Number.isFinite(entry.mtimeMs) ? entry.mtimeMs : 0,
         sessionSummary: entry?.sessionSummary === true,
+        sessionSummaryKnown:
+          entry !== null &&
+          typeof entry === "object" &&
+          Object.prototype.hasOwnProperty.call(entry, "sessionSummary"),
       }),
     )
-    .filter((entry): entry is DailyMemoryFileEntry => entry !== null);
+    .filter((entry): entry is RememberedDailyMemoryFileEntry => entry !== null);
   return { exists: true, entries: indexed, mtimeMs: stat.mtimeMs };
 }
 
 async function persistDailyMemoryRecentIndex(
   memoryDir: string,
-  entries: DailyMemoryFileEntry[],
+  entries: RememberedDailyMemoryFileEntry[],
 ): Promise<void> {
   const payload: DailyMemoryRecentIndexPayload = {
     version: DAILY_MEMORY_RECENT_INDEX_VERSION,
@@ -271,18 +282,16 @@ async function persistDailyMemoryRecentIndex(
         return left.fileName.localeCompare(right.fileName);
       })
       .slice(0, DAILY_MEMORY_RECENT_INDEX_MAX_ENTRIES)
-      .map((entry) =>
-        entry.sessionSummary
-          ? {
-              fileName: entry.fileName,
-              mtimeMs: entry.mtimeMs,
-              sessionSummary: true,
-            }
-          : {
-              fileName: entry.fileName,
-              mtimeMs: entry.mtimeMs,
-            },
-      ),
+      .map((entry) => {
+        const nextEntry: DailyMemoryRecentIndexPayload["files"][number] = {
+          fileName: entry.fileName,
+          mtimeMs: entry.mtimeMs,
+        };
+        if (entry.sessionSummaryKnown) {
+          nextEntry.sessionSummary = entry.sessionSummary === true;
+        }
+        return nextEntry;
+      }),
   };
   await writeJsonAtomic(resolveDailyMemoryRecentIndexPath(memoryDir), payload, {
     mode: 0o600,
@@ -292,11 +301,11 @@ async function persistDailyMemoryRecentIndex(
 }
 
 function mergeDailyMemoryRecentIndexEntries(params: {
-  currentEntries: DailyMemoryFileEntry[];
-  nextEntries: DailyMemoryFileEntry[];
+  currentEntries: RememberedDailyMemoryFileEntry[];
+  nextEntries: RememberedDailyMemoryFileEntry[];
   replaceDays?: ReadonlySet<string>;
-}): DailyMemoryFileEntry[] {
-  const byFileName = new Map<string, DailyMemoryFileEntry>();
+}): RememberedDailyMemoryFileEntry[] {
+  const byFileName = new Map<string, RememberedDailyMemoryFileEntry>();
   for (const entry of params.currentEntries) {
     if (params.replaceDays?.has(entry.day)) {
       continue;
@@ -309,9 +318,19 @@ function mergeDailyMemoryRecentIndexEntries(params: {
   return [...byFileName.values()];
 }
 
+function didRememberedSessionSummaryFlagChange(
+  remembered: RememberedDailyMemoryFileEntry | undefined,
+  entry: RememberedDailyMemoryFileEntry,
+): boolean {
+  return (
+    (remembered?.sessionSummaryKnown === true) !== (entry.sessionSummaryKnown === true) ||
+    (remembered?.sessionSummary === true) !== (entry.sessionSummary === true)
+  );
+}
+
 async function persistMergedDailyMemoryRecentIndex(params: {
   memoryDir: string;
-  nextEntries: DailyMemoryFileEntry[];
+  nextEntries: RememberedDailyMemoryFileEntry[];
   replaceDays?: ReadonlySet<string>;
 }): Promise<void> {
   await withDailyMemoryRecentIndexLock(params.memoryDir, async () => {
@@ -379,6 +398,7 @@ export async function rememberRecentDailyMemoryFile(params: {
     fileName: params.fileName,
     mtimeMs: params.mtimeMs ?? Date.now(),
     sessionSummary: params.sessionSummary,
+    sessionSummaryKnown: params.sessionSummary !== undefined,
   });
   if (!nextEntry) {
     return;
@@ -455,7 +475,12 @@ export async function listRecentDailyMemoryFiles(params: {
     shouldRefreshIndex =
       indexedForDays.length !== recentEntries.length ||
       recentEntries.some(
-        (entry) => indexedForDaysByFileName.get(entry.fileName)?.mtimeMs !== entry.mtimeMs,
+        (entry) =>
+          indexedForDaysByFileName.get(entry.fileName)?.mtimeMs !== entry.mtimeMs ||
+          didRememberedSessionSummaryFlagChange(
+            indexedForDaysByFileName.get(entry.fileName),
+            entry,
+          ),
       );
     const recentEntriesByFileName = new Set(recentEntries.map((entry) => entry.fileName));
     const candidateFileNames = await listDailyMemoryFileNamesForDays({

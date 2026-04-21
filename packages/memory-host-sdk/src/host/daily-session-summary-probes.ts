@@ -1,8 +1,16 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRememberedDailyMemoryFile, listRecentDailyMemoryFiles } from "./daily-files.js";
-import { parseDailyMemoryFileName, parseDailyMemoryPathInfo } from "./daily-paths.js";
-import { readSessionSummaryProbePrefixFromFile } from "./daily-session-summary-io.js";
+import {
+  isCrossPlatformAbsolutePath,
+  parseDailyMemoryFileName,
+  parseDailyMemoryPathInfo,
+} from "./daily-paths.js";
+import {
+  readSessionSummaryProbePrefixFromFd,
+  readSessionSummaryProbePrefixFromFile,
+} from "./daily-session-summary-io.js";
 import {
   isLikelyMissingSessionSummaryDailyMemory,
   normalizeSessionSummarySnippet,
@@ -37,9 +45,16 @@ function isPathInside(parentPath: string, candidatePath: string): boolean {
 
 function resolveSessionSummaryProbeInputPath(workspaceDir: string, filePath: string): string {
   const normalizedPath = normalizeSessionSummaryPath(filePath);
+  if (isCrossPlatformAbsolutePath(normalizedPath)) {
+    const relativeFromMemory = normalizedPath.match(/(?:^|.*\/)(memory\/.+)$/)?.[1];
+    if (relativeFromMemory) {
+      return normalizeSessionSummaryPath(relativeFromMemory);
+    }
+    return "";
+  }
   const resolvedPath = path.resolve(workspaceDir, normalizedPath);
   const relativePath = normalizeSessionSummaryPath(path.relative(workspaceDir, resolvedPath));
-  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+  if (!relativePath || relativePath.startsWith("..") || isCrossPlatformAbsolutePath(relativePath)) {
     return "";
   }
   return relativePath;
@@ -110,6 +125,17 @@ async function readSessionSummaryDailyMemoryDependencyToken(params: {
   absolutePath: string;
 }): Promise<string> {
   try {
+    if (params.kind === "file") {
+      const handle = await fs.open(params.absolutePath, "r");
+      try {
+        const stats = await handle.stat();
+        const raw = await readSessionSummaryProbePrefixFromFd(handle.fd);
+        const contentHash = createHash("sha1").update(raw).digest("hex");
+        return `present:${params.kind}:${stats.size}:${stats.mtimeMs}:${contentHash}`;
+      } finally {
+        await handle.close();
+      }
+    }
     const stats = await fs.stat(params.absolutePath);
     return `present:${params.kind}:${stats.size}:${stats.mtimeMs}`;
   } catch (error) {
@@ -423,7 +449,7 @@ export async function isSessionSummaryDailyMemoryPath(params: {
     const relativeToWorkspace = path.relative(params.workspaceDir, candidate.absolutePath);
     if (
       relativeToWorkspace.startsWith("..") ||
-      path.isAbsolute(relativeToWorkspace) ||
+      isCrossPlatformAbsolutePath(relativeToWorkspace) ||
       relativeToWorkspace.length === 0
     ) {
       missingCandidateRelativePaths.add(candidate.relativePath);

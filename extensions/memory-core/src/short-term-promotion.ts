@@ -10,6 +10,7 @@ import {
   isSessionSummaryDailyMemoryPath,
   parseDailyMemoryPathInfo,
   parseDailyMemoryFileName,
+  resolveDailyMemoryVariantMergeKey,
   type MemorySearchResult,
   type SessionSummaryDailyMemoryDependency,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -38,6 +39,7 @@ const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
+const WINDOWS_ABSOLUTE_PATH_RE = /^[a-z]:\//i;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
@@ -425,6 +427,15 @@ function buildSessionSummaryDailyMemoryDependencyKey(
   return `${dependency.kind}\u0000${dependency.absolutePath}`;
 }
 
+function isCrossPlatformAbsoluteMemoryPath(normalizedPath: string): boolean {
+  return (
+    path.isAbsolute(normalizedPath) ||
+    path.win32.isAbsolute(normalizedPath) ||
+    WINDOWS_ABSOLUTE_PATH_RE.test(normalizedPath) ||
+    normalizedPath.startsWith("//")
+  );
+}
+
 function normalizeIsoDay(isoLike: string): string | null {
   if (typeof isoLike !== "string") {
     return null;
@@ -458,16 +469,12 @@ function isLegacyBasenameDailyMemoryPath(filePath: string): boolean {
 function isMergeableSameDayDailyVariantPair(leftPath: string, rightPath: string): boolean {
   const left = parseDailyMemoryPathInfo(leftPath);
   const right = parseDailyMemoryPathInfo(rightPath);
-  if (!left || !right || left.day !== right.day) {
+  if (!left || !right || left.normalizedPath === right.normalizedPath) {
     return false;
   }
-  if (resolveDailyVariantComparableDir(leftPath) !== resolveDailyVariantComparableDir(rightPath)) {
-    return false;
-  }
-  if (left.normalizedPath === right.normalizedPath) {
-    return false;
-  }
-  return left.canonical || right.canonical;
+  const leftMergeKey = resolveDailyMemoryVariantMergeKey(leftPath);
+  const rightMergeKey = resolveDailyMemoryVariantMergeKey(rightPath);
+  return leftMergeKey !== null && leftMergeKey === rightMergeKey;
 }
 
 function resolveWorkspaceRelativeLegacyMergePath(
@@ -475,7 +482,7 @@ function resolveWorkspaceRelativeLegacyMergePath(
   filePath: string,
 ): string | null {
   const normalizedPath = normalizeMemoryPath(filePath);
-  if (!path.isAbsolute(normalizedPath)) {
+  if (!isCrossPlatformAbsoluteMemoryPath(normalizedPath)) {
     return normalizedPath;
   }
   if (!workspaceDir) {
@@ -489,7 +496,11 @@ function resolveWorkspaceRelativeLegacyMergePath(
     return null;
   }
   const relativePath = normalizeMemoryPath(path.relative(normalizedWorkspaceDir, normalizedPath));
-  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+  if (
+    !relativePath ||
+    relativePath.startsWith("..") ||
+    isCrossPlatformAbsoluteMemoryPath(relativePath)
+  ) {
     return null;
   }
   return relativePath;
@@ -1289,12 +1300,7 @@ async function persistReadOnlyStoreSanitization(params: {
         if (!isBenignReadOnlyStoreWritebackError(error)) {
           throw error;
         }
-        shortTermStoreCache.set(storePath, {
-          rawHash,
-          recentDailyIndexHash,
-          dependencies: cloneSessionSummaryDailyMemoryDependencies(dependencies),
-          store: cloneShortTermRecallStore(store),
-        });
+        shortTermStoreCache.delete(storePath);
         return true;
       }
     } else {

@@ -6,6 +6,7 @@ import {
   isSupportedShortTermMemoryPath,
   parseDailyMemoryFileName,
   parseDailyMemoryPathInfo,
+  resolveDailyMemoryVariantMergeKey,
 } from "./daily-paths.js";
 
 describe("daily-paths", () => {
@@ -55,6 +56,31 @@ describe("daily-paths", () => {
         "memory/archive/2026-04-19-reset.md",
       ),
     ).toBe(0);
+  });
+
+  it("keeps topic slugs separate from canonical same-day variant merge groups", () => {
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19.md")).toBe("memory/2026-04-19");
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-session-reset.md")).toBe(
+      "memory/2026-04-19-session-reset.md",
+    );
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-reset-summary.md")).toBe(
+      "memory/2026-04-19",
+    );
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-workshop.md")).toBe(
+      "memory/2026-04-19-workshop.md",
+    );
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-summary.md")).toBe(
+      "memory/2026-04-19-summary.md",
+    );
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-session.md")).toBe(
+      "memory/2026-04-19-session.md",
+    );
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-reset.md")).toBe(
+      "memory/2026-04-19-reset.md",
+    );
+    expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-other-reset.md")).toBe(
+      "memory/2026-04-19-other-reset.md",
+    );
   });
 
   it("matches the runtime-supported short-term memory path shapes", () => {

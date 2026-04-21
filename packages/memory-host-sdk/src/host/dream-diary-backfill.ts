@@ -1,4 +1,4 @@
-import { extractDailyMemoryDayFromPath } from "./daily-paths.js";
+import { extractDailyMemoryDayFromPath, resolveDailyMemoryVariantMergeKey } from "./daily-paths.js";
 
 export type DreamDiaryBackfillEntry = {
   isoDay: string;
@@ -63,9 +63,10 @@ export function collectDreamDiaryBackfillEntries(params: {
       continue;
     }
     const sourcePath = params.resolveSourcePath?.(file.path, isoDay) ?? file.path;
-    const existing = entries.get(isoDay);
+    const mergeKey = resolveDailyMemoryVariantMergeKey(file.path) ?? `${isoDay}\u0000${sourcePath}`;
+    const existing = entries.get(mergeKey);
     if (!existing) {
-      entries.set(isoDay, {
+      entries.set(mergeKey, {
         isoDay,
         sourcePath,
         bodyLines: bodyLines.map((line) => line.text),

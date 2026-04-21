@@ -1804,6 +1804,38 @@ describe("memory cli", () => {
     });
   });
 
+  it("keeps independent same-day topic files as separate grounded rem backfill entries", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(historyDir, "2025-01-01-travel.md"),
+        ["## Travel", "- Flight moved to 7pm."].join("\n") + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(historyDir, "2025-01-01-workshop.md"),
+        ["## Workshop", "- Bring slides."].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--path", historyDir]);
+
+      const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(dreams.match(/openclaw:dreaming:backfill-entry/g)?.length).toBe(2);
+      expect(dreams).toContain("source=");
+      expect(dreams).toContain("Flight moved to 7pm.");
+      expect(dreams).toContain("Bring slides.");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("treats a missing historical path as a controlled empty-source error", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const close = vi.fn(async () => {});

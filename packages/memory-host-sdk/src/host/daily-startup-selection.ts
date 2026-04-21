@@ -1,5 +1,9 @@
 import path from "node:path";
-import { type DailyMemoryFileEntry, listRecentDailyMemoryFiles } from "./daily-files.js";
+import {
+  type DailyMemoryFileEntry,
+  listRecentDailyMemoryFiles,
+  rememberRecentDailyMemoryFile,
+} from "./daily-files.js";
 import { isSessionSummaryDailyMemory } from "./daily-session-summary.js";
 
 const STARTUP_SELECTION_DAILY_DAYS_CAP = 14;
@@ -81,10 +85,35 @@ function groupStartupPathsByDay(params: {
           if (leftPriority === 0 && left.entry.mtimeMs !== right.entry.mtimeMs) {
             return right.entry.mtimeMs - left.entry.mtimeMs;
           }
+          if (leftPriority === 0 && left.entry.canonical !== right.entry.canonical) {
+            return left.entry.canonical ? 1 : -1;
+          }
+          if (leftPriority === 0 && left.entry.relativePath !== right.entry.relativePath) {
+            return right.entry.relativePath.localeCompare(left.entry.relativePath);
+          }
           return left.index - right.index;
         })
         .map(({ entry }) => entry.relativePath),
     ]),
+  );
+}
+
+async function seedStartupSessionSummaryProvenance(params: {
+  memoryDir: string;
+  entries: DailyMemoryFileEntry[];
+  sessionSummaryPaths: ReadonlySet<string>;
+}): Promise<void> {
+  await Promise.allSettled(
+    params.entries
+      .filter((entry) => params.sessionSummaryPaths.has(entry.relativePath))
+      .map(async (entry) => {
+        await rememberRecentDailyMemoryFile({
+          memoryDir: params.memoryDir,
+          fileName: entry.fileName,
+          mtimeMs: entry.mtimeMs,
+          sessionSummary: true,
+        });
+      }),
   );
 }
 
@@ -170,6 +199,7 @@ export async function selectStartupDailyMemoryPaths(params: {
     days: targetDays,
     persistIndex: false,
   });
+  const memoryDir = path.join(params.workspaceDir, "memory");
   const summaryPriorityDays = [...new Set([currentLocalDay, localYesterday, utcToday])].filter(
     (day) => Boolean(day) && targetDays.includes(day),
   );
@@ -184,6 +214,11 @@ export async function selectStartupDailyMemoryPaths(params: {
       sessionSummaryPaths.add(relativePath);
     }
   }
+  await seedStartupSessionSummaryProvenance({
+    memoryDir,
+    entries,
+    sessionSummaryPaths,
+  });
   const pathsByDay = groupStartupPathsByDay({
     entries,
     prioritizedPaths: sessionSummaryPaths,
@@ -209,6 +244,16 @@ export async function selectStartupDailyMemoryPaths(params: {
     selectedDays.push(currentLocalDay);
   }
   if (
+    boundaryDay &&
+    !selectedDays.includes(boundaryDay) &&
+    (await hasReadableStartupMemoryPathForDay({
+      relativePaths: pathsByDay.get(boundaryDay) ?? [],
+      readDailyMemory: params.readDailyMemory,
+    }))
+  ) {
+    selectedDays.push(boundaryDay);
+  }
+  if (
     params.dailyMemoryDays === 1 &&
     !selectedDays.includes(localYesterday) &&
     selectedDays.length === 0 &&
@@ -220,16 +265,6 @@ export async function selectStartupDailyMemoryPaths(params: {
     }))
   ) {
     selectedDays.push(localYesterday);
-  }
-  if (
-    boundaryDay &&
-    !selectedDays.includes(boundaryDay) &&
-    (await hasReadableStartupMemoryPathForDay({
-      relativePaths: pathsByDay.get(boundaryDay) ?? [],
-      readDailyMemory: params.readDailyMemory,
-    }))
-  ) {
-    selectedDays.push(boundaryDay);
   }
   for (const day of existingLocalDays) {
     if (selectedDays.length >= params.dailyMemoryDays) {

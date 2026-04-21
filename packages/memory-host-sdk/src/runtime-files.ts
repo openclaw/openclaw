@@ -30,6 +30,7 @@ export {
   isSupportedShortTermMemoryPath,
   parseDailyMemoryFileName,
   parseDailyMemoryPathInfo,
+  resolveDailyMemoryVariantMergeKey,
 } from "./host/daily-paths.js";
 export { listMemoryFiles, normalizeExtraMemoryPaths } from "./host/internal.js";
 export { readAgentMemoryFile } from "./host/read-file.js";

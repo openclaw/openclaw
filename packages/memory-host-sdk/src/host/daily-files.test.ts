@@ -358,6 +358,39 @@ describe("listRecentDailyMemoryFiles", () => {
     });
   });
 
+  it("refreshes session-summary provenance when a tracked file changes without an mtime bump", async () => {
+    const memoryDir = await makeMemoryDir();
+    const fileName = "2026-04-25-vendor-pitch.md";
+    const filePath = path.join(memoryDir, fileName);
+    await fs.writeFile(filePath, "durable note\n", "utf-8");
+
+    await listRecentDailyMemoryFiles({
+      memoryDir,
+      days: ["2026-04-25"],
+    });
+
+    const initialStat = await fs.stat(filePath);
+    await fs.writeFile(
+      filePath,
+      [
+        "# Session: 2026-04-25 12:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.utimes(filePath, new Date(initialStat.atimeMs), new Date(initialStat.mtimeMs));
+
+    await expect(
+      listRecentDailyMemoryFiles({
+        memoryDir,
+        days: ["2026-04-25"],
+      }),
+    ).resolves.toEqual([expect.objectContaining({ fileName, sessionSummary: true })]);
+  });
+
   it("falls back to a directory scan when the index does not cover a requested day", async () => {
     const memoryDir = await makeMemoryDir();
     await fs.writeFile(path.join(memoryDir, "2026-04-22-reset.md"), "older", "utf-8");
@@ -503,6 +536,54 @@ describe("listRecentDailyMemoryFiles", () => {
       }),
     ).resolves.toMatchObject({
       fileName: "2026-04-25-session-reset.md",
+      sessionSummary: true,
+    });
+  });
+
+  it("backfills session-summary provenance from legacy index entries with unchanged mtimes", async () => {
+    const memoryDir = await makeMemoryDir();
+    const fileName = "2026-04-25-session-reset.md";
+    const filePath = path.join(memoryDir, fileName);
+    await fs.writeFile(
+      filePath,
+      [
+        "# Session: 2026-04-25 12:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: abc123",
+        "- **Source**: cli",
+      ].join("\n"),
+      "utf-8",
+    );
+    const stat = await fs.stat(filePath);
+    await rememberRecentDailyMemoryFile({
+      memoryDir,
+      fileName,
+      mtimeMs: stat.mtimeMs,
+    });
+
+    await expect(
+      readRememberedDailyMemoryFile({
+        memoryDir,
+        fileName,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ fileName }));
+
+    await expect(
+      listRecentDailyMemoryFiles({
+        memoryDir,
+        days: ["2026-04-25"],
+      }),
+    ).resolves.toEqual([expect.objectContaining({ fileName, sessionSummary: true })]);
+    await expect(
+      readRememberedDailyMemoryFile({
+        memoryDir,
+        fileName,
+      }),
+    ).resolves.toMatchObject({
+      fileName,
       sessionSummary: true,
     });
   });
