@@ -22,6 +22,16 @@
       "groupHint": "Codex OAuth + API key"
     },
     {
+      "provider": "openai-codex",
+      "method": "device-code",
+      "choiceId": "openai-codex-device-code",
+      "choiceLabel": "OpenAI Codex (device code)",
+      "choiceHint": "Browser device-code sign-in",
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "Codex OAuth + API key"
+    },
+    {
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",

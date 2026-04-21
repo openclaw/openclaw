@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
+import {
+  resolveCodexAuthIdentity,
+  resolveCodexChatgptAccountId,
+} from "./openai-codex-auth-identity.js";
 
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -52,5 +55,23 @@ describe("resolveCodexAuthIdentity", () => {
 
   it("returns no metadata when token parsing yields no identity", () => {
     expect(resolveCodexAuthIdentity({ accessToken: "not-a-jwt-token" })).toEqual({});
+  });
+});
+
+describe("resolveCodexChatgptAccountId", () => {
+  it("extracts the ChatGPT account id from the auth claim", () => {
+    expect(
+      resolveCodexChatgptAccountId(
+        createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct_123",
+          },
+        }),
+      ),
+    ).toBe("acct_123");
+  });
+
+  it("returns undefined when the account id is missing", () => {
+    expect(resolveCodexChatgptAccountId(createJwt({}))).toBeUndefined();
   });
 });

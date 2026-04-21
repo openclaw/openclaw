@@ -8,6 +8,7 @@ type CodexJwtPayload = {
     email?: unknown;
   };
   "https://api.openai.com/auth"?: {
+    chatgpt_account_id?: unknown;
     chatgpt_account_user_id?: unknown;
     chatgpt_user_id?: unknown;
     user_id?: unknown;
@@ -57,6 +58,11 @@ export function resolveCodexStableSubject(payload: CodexJwtPayload | null): stri
     return `${iss}|${sub}`;
   }
   return sub;
+}
+
+export function resolveCodexChatgptAccountId(token: string): string | undefined {
+  const auth = decodeCodexJwtPayload(token)?.["https://api.openai.com/auth"];
+  return trimNonEmptyString(auth?.chatgpt_account_id);
 }
 
 export function resolveCodexAccessTokenExpiry(accessToken: string): number | undefined {

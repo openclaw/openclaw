@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const readOpenAICodexCliOAuthProfileMock = vi.hoisted(() => vi.fn());
+const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
@@ -17,6 +18,10 @@ vi.mock("./openai-codex-cli-auth.js", async (importOriginal) => {
     readOpenAICodexCliOAuthProfile: readOpenAICodexCliOAuthProfileMock,
   };
 });
+
+vi.mock("./openai-codex-device-code.js", () => ({
+  loginOpenAICodexDeviceCode: loginOpenAICodexDeviceCodeMock,
+}));
 
 let buildOpenAICodexProviderPlugin: typeof import("./openai-codex-provider.js").buildOpenAICodexProviderPlugin;
 const tempDirs: string[] = [];
@@ -61,6 +66,7 @@ describe("openai codex provider", () => {
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
     readOpenAICodexCliOAuthProfileMock.mockReset();
+    loginOpenAICodexDeviceCodeMock.mockReset();
   });
 
   afterEach(async () => {
@@ -139,14 +145,82 @@ describe("openai codex provider", () => {
     );
   });
 
-  it("offers explicit browser and one-time Codex CLI import auth methods", () => {
+  it("offers browser, device-code, and one-time Codex CLI import auth methods", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
-    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "import-codex-cli"]);
+    expect(provider.auth?.map((method) => method.id)).toEqual([
+      "oauth",
+      "device-code",
+      "import-codex-cli",
+    ]);
+    expect(provider.auth?.find((method) => method.id === "device-code")).toMatchObject({
+      label: "ChatGPT device code",
+      hint: "Browser device-code sign-in",
+      kind: "device_code",
+      wizard: {
+        choiceId: "openai-codex-device-code",
+      },
+    });
     expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
       label: "Import Codex CLI login",
       hint: "Use existing .codex auth once",
       kind: "oauth",
+    });
+  });
+
+  it("stores device-code logins as OpenAI Codex oauth profiles", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    const note = vi.fn(async () => {});
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce({
+      access:
+        "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
+      refresh: "device-refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct-device-123",
+      idToken: "device-id-token",
+    });
+
+    const result = await deviceCodeMethod?.run({
+      config: {},
+      env: process.env,
+      prompter: {
+        note,
+        progress: vi.fn(() => progress),
+      } as never,
+      runtime: runtime as never,
+      isRemote: false,
+      openUrl: async () => {},
+      oauth: { createVpsAwareHandlers: (() => ({})) as never },
+    });
+
+    expect(loginOpenAICodexDeviceCodeMock).toHaveBeenCalledOnce();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalledWith(
+      "Trouble with device code login? See https://docs.openclaw.ai/start/faq",
+      "OAuth help",
+    );
+    expect(result).toMatchObject({
+      profiles: [
+        {
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access:
+              "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
+            refresh: "device-refresh-token",
+            accountId: "acct-device-123",
+            idToken: "device-id-token",
+          },
+        },
+      ],
+      defaultModel: "openai-codex/gpt-5.4",
     });
   });
 

@@ -14,16 +14,31 @@ export function createOpenAICodexProvider(): ProviderPlugin {
         label: "ChatGPT OAuth",
         hint: "Browser sign-in",
         run: noopAuth,
+        wizard: {
+          choiceId: "openai-codex",
+          choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
+          choiceHint: "Browser sign-in",
+          groupId: "openai",
+          groupLabel: "OpenAI",
+          groupHint: "Codex OAuth + API key",
+        },
+      },
+      {
+        id: "device-code",
+        kind: "device_code",
+        label: "ChatGPT device code",
+        hint: "Browser device-code sign-in",
+        run: noopAuth,
+        wizard: {
+          choiceId: "openai-codex-device-code",
+          choiceLabel: "OpenAI Codex (device code)",
+          choiceHint: "Browser device-code sign-in",
+          groupId: "openai",
+          groupLabel: "OpenAI",
+          groupHint: "Codex OAuth + API key",
+        },
       },
     ],
-    wizard: {
-      setup: {
-        choiceId: "openai-codex",
-        choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
-        choiceHint: "Browser sign-in",
-        methodId: "oauth",
-      },
-    },
   };
 }
 
