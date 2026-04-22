@@ -895,7 +895,11 @@ describe("sessions tools", () => {
 
     expect(initialWaitCount).toBe(2);
     expect(
-      calls.filter((call) => call.method === "agent.wait" && call.params?.runId === "run-1"),
+      calls.filter(
+        (call) =>
+          call.method === "agent.wait" &&
+          (call.params as { runId?: string } | undefined)?.runId === "run-1",
+      ),
     ).toHaveLength(2);
   });
 
@@ -968,7 +972,11 @@ describe("sessions tools", () => {
     await vi.waitFor(
       () => {
         expect(
-          calls.filter((call) => call.method === "agent.wait" && call.params?.runId === "run-1"),
+          calls.filter(
+            (call) =>
+              call.method === "agent.wait" &&
+              (call.params as { runId?: string } | undefined)?.runId === "run-1",
+          ),
         ).toHaveLength(2);
       },
       { timeout: 2_000, interval: 5 },
