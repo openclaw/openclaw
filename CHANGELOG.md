@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/auth profiles: after an OAuth refresh, broadcast the fresh credential to every peer agent that already holds the same profile id, not just the main agent store. Previously, rotating-refresh-token providers (notably `openai-codex`) would silently invalidate idle peers whose stale refresh token was rotated out server-side; the expiry check then flagged those peers as EXPIRED until the next use hit the main-store adoption fallback. Closes #59272.
 - Docs/Codex harness: narrow native compaction docs to the current start/completion signals, without promising a readable summary or kept-entry audit list yet. (#69612) Thanks @91wan.
 - Providers/Amazon Bedrock: use known context-window metadata for discovered models while keeping the unknown-model fallback conservative, so compaction and overflow handling improve for newer Bedrock models without overstating unlisted model limits. Thanks @wirjo.
 - Providers/Amazon Bedrock Mantle: refresh IAM-backed bearer tokens at runtime instead of baking discovery-time tokens into provider config, so long-lived Mantle sessions keep working after the initial token ages out. Thanks @wirjo.

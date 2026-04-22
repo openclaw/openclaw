@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import {
@@ -19,7 +20,12 @@ import {
   shouldReplaceStoredOAuthCredential,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
-import { ensureAuthStoreFile, resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
+import {
+  ensureAuthStoreFile,
+  listPeerAuthStorePaths,
+  resolveAuthStorePath,
+  resolveOAuthRefreshLockPath,
+} from "./paths.js";
 import {
   ensureAuthProfileStore,
   loadAuthProfileStoreForSecretsRuntime,
@@ -294,17 +300,27 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     }
   }
 
-  async function mirrorRefreshedCredentialIntoMainStore(params: {
+  async function mirrorRefreshedCredentialIntoStore(params: {
+    storePath: string;
+    agentDir: string | undefined;
     profileId: string;
     refreshed: OAuthCredential;
+    /**
+     * When true, do not write the credential unless the store already has a
+     * profile with this id. Used for peer agent stores, which should never
+     * have new profiles created implicitly — only refreshed in place.
+     */
+    requireExistingProfile: boolean;
   }): Promise<void> {
     try {
-      const mainPath = resolveAuthStorePath(undefined);
-      ensureAuthStoreFile(mainPath);
+      ensureAuthStoreFile(params.storePath);
       await updateAuthProfileStoreWithLock({
-        agentDir: undefined,
+        agentDir: params.agentDir,
         updater: (store) => {
           const existing = store.profiles[params.profileId];
+          if (params.requireExistingProfile && !existing) {
+            return false;
+          }
           const decision = shouldMirrorRefreshedOAuthCredential({
             existing,
             refreshed: params.refreshed,
@@ -313,13 +329,15 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (decision.reason === "identity-mismatch-or-regression") {
               log.warn("refused to mirror OAuth credential: identity mismatch or regression", {
                 profileId: params.profileId,
+                storePath: params.storePath,
               });
             }
             return false;
           }
           store.profiles[params.profileId] = { ...params.refreshed };
-          log.debug("mirrored refreshed OAuth credential to main agent store", {
+          log.debug("mirrored refreshed OAuth credential", {
             profileId: params.profileId,
+            storePath: params.storePath,
             expires: Number.isFinite(params.refreshed.expires)
               ? new Date(params.refreshed.expires).toISOString()
               : undefined,
@@ -328,9 +346,60 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         },
       });
     } catch (err) {
-      log.debug("mirrorRefreshedCredentialIntoMainStore failed", {
+      log.debug("mirrorRefreshedCredentialIntoStore failed", {
         profileId: params.profileId,
+        storePath: params.storePath,
         error: formatErrorMessage(err),
+      });
+    }
+  }
+
+  /**
+   * After a successful OAuth refresh, propagate the fresh credential to the
+   * main agent store (existing #26322 behavior) and to every peer agent that
+   * already holds the same profile id (closes #59272).
+   *
+   * Peers with a profile whose identity regresses (different accountId/email)
+   * are skipped with a warning — the existing `shouldMirrorRefreshedOAuthCredential`
+   * guard prevents a refresh from one account clobbering another account's
+   * tokens. Peers without the profile are left untouched — we never create
+   * new profiles implicitly.
+   *
+   * The `sourceAuthPath` is the store the refresh was written to; we skip
+   * mirroring back into it to avoid redundant work and any lock-ordering
+   * surprises. Opt out of the peer broadcast with
+   * `OPENCLAW_DISABLE_AUTH_PEER_MIRROR=1`.
+   */
+  async function mirrorRefreshedCredentialToPeers(params: {
+    profileId: string;
+    refreshed: OAuthCredential;
+    sourceAuthPath: string;
+  }): Promise<void> {
+    const mainPath = resolveAuthStorePath(undefined);
+    if (path.resolve(mainPath) !== path.resolve(params.sourceAuthPath)) {
+      await mirrorRefreshedCredentialIntoStore({
+        storePath: mainPath,
+        agentDir: undefined,
+        profileId: params.profileId,
+        refreshed: params.refreshed,
+        // Preserve pre-fix behavior: main-store mirror may create the profile
+        // if absent. Main is the documented source of truth (see #26322).
+        requireExistingProfile: false,
+      });
+    }
+    const peerPaths = listPeerAuthStorePaths({
+      exclude: [params.sourceAuthPath, mainPath],
+    });
+    for (const peerPath of peerPaths) {
+      // peerPath = <stateDir>/agents/<id>/agent/auth-profiles.json
+      // agentDir = <stateDir>/agents/<id>/agent   (i.e. the file's directory)
+      const peerAgentDir = path.dirname(peerPath);
+      await mirrorRefreshedCredentialIntoStore({
+        storePath: peerPath,
+        agentDir: peerAgentDir,
+        profileId: params.profileId,
+        refreshed: params.refreshed,
+        requireExistingProfile: true,
       });
     }
   }
@@ -456,15 +525,11 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
           store.profiles[params.profileId] = refreshedCredentials;
           saveAuthProfileStore(store, params.agentDir);
-          if (params.agentDir) {
-            const mainPath = resolveAuthStorePath(undefined);
-            if (mainPath !== authPath) {
-              await mirrorRefreshedCredentialIntoMainStore({
-                profileId: params.profileId,
-                refreshed: refreshedCredentials,
-              });
-            }
-          }
+          await mirrorRefreshedCredentialToPeers({
+            profileId: params.profileId,
+            refreshed: refreshedCredentials,
+            sourceAuthPath: authPath,
+          });
           return {
             apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials),
             credential: refreshedCredentials,
