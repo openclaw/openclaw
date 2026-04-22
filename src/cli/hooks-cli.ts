@@ -177,7 +177,7 @@ async function runHooksCliAction(action: () => Promise<void> | void): Promise<vo
   }
 }
 
-async function runHooksInspectionCliAction(action: () => Promise<void> | void): Promise<void> {
+async function runOneShotHooksCliAction(action: () => Promise<void> | void): Promise<void> {
   await runHooksCliAction(action);
   exitAfterHooksInspection();
 }
@@ -489,7 +489,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) =>
-      runHooksInspectionCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksList(report, opts), opts.json);
@@ -501,7 +501,7 @@ export function registerHooksCli(program: Command): void {
     .description("Show detailed information about a hook")
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) =>
-      runHooksInspectionCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
@@ -513,7 +513,7 @@ export function registerHooksCli(program: Command): void {
     .description("Check hooks eligibility status")
     .option("--json", "Output as JSON", false)
     .action(async (opts) =>
-      runHooksInspectionCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksCheck(report, opts), opts.json);
@@ -524,7 +524,7 @@ export function registerHooksCli(program: Command): void {
     .command("enable <name>")
     .description("Enable a hook")
     .action(async (name) =>
-      runHooksInspectionCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         await enableHook(name);
       }),
     );
@@ -533,7 +533,7 @@ export function registerHooksCli(program: Command): void {
     .command("disable <name>")
     .description("Disable a hook")
     .action(async (name) =>
-      runHooksInspectionCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         await disableHook(name);
       }),
     );
@@ -565,7 +565,7 @@ export function registerHooksCli(program: Command): void {
     });
 
   hooks.action(async () =>
-    runHooksInspectionCliAction(async () => {
+    runOneShotHooksCliAction(async () => {
       const config = loadConfig();
       const report = buildHooksReport(config);
       defaultRuntime.log(formatHooksList(report, {}));
