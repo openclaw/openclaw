@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -100,10 +101,67 @@ export function buildCompactionSummarizationInstructions(
   return `${identifierPreservation}\n\nAdditional focus:\n${custom}`;
 }
 
+/**
+ * Compute the additional tokens that CJK text in a message contributes
+ * beyond the upstream {@link estimateTokens} estimate, which uses chars/4
+ * for all scripts and underestimates CJK content by 2–4×.
+ *
+ * Pure ASCII/Latin messages return 0 (no correction needed).
+ */
+function cjkTokenCorrection(message: AgentMessage): number {
+  const texts: string[] = [];
+  const msg = message as unknown as Record<string, unknown>;
+  const content = msg.content;
+
+  if (typeof content === "string") {
+    texts.push(content);
+  } else if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block && typeof block === "object") {
+        const rec = block as Record<string, unknown>;
+        if (rec.type === "text" && typeof rec.text === "string") {
+          texts.push(rec.text);
+        } else if (rec.type === "thinking" && typeof rec.thinking === "string") {
+          texts.push(rec.thinking);
+        }
+      }
+    }
+  }
+
+  // bashExecution: command + output; branchSummary / compactionSummary: summary
+  if (typeof msg.command === "string") texts.push(msg.command);
+  if (typeof msg.output === "string") texts.push(msg.output);
+  if (typeof msg.summary === "string") texts.push(msg.summary);
+
+  if (texts.length === 0) return 0;
+
+  let rawLength = 0;
+  let weightedLength = 0;
+  for (const text of texts) {
+    rawLength += text.length;
+    weightedLength += estimateStringChars(text);
+  }
+
+  const extraChars = weightedLength - rawLength;
+  if (extraChars <= 0) return 0;
+  return Math.ceil(extraChars / CHARS_PER_TOKEN_ESTIMATE);
+}
+
+/**
+ * CJK-aware wrapper around the upstream {@link estimateTokens}.
+ *
+ * Adds a correction for CJK characters that the upstream chars/4 heuristic
+ * underestimates.  For pure Latin/ASCII content the result is identical to
+ * the upstream function.
+ */
+export function estimateTokensCjkAware(message: AgentMessage): number {
+  return estimateTokens(message) + cjkTokenCorrection(message);
+}
+
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
-  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+  return safe.reduce((sum, message) => sum + estimateTokensCjkAware(message), 0);
 }
 
 function estimateCompactionMessageTokens(message: AgentMessage): number {

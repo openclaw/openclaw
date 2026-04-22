@@ -4,9 +4,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
-  estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { estimateTokensCjkAware } from "../compaction.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -277,7 +277,7 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     contributors.push({ role, chars, tool: resolveMessageToolLabel(msg) });
     if (!tokenEstimationFailed) {
       try {
-        estTokens += estimateTokens(msg);
+        estTokens += estimateTokensCjkAware(msg);
       } catch {
         tokenEstimationFailed = true;
       }
@@ -966,7 +966,7 @@ export async function compactEmbeddedPiSessionDirect(
             originalMessages,
             currentMessages: session.messages,
             observedTokenCount,
-            estimateTokensFn: estimateTokens,
+            estimateTokensFn: estimateTokensCjkAware,
           });
           const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
             hookRunner,
@@ -1016,7 +1016,7 @@ export async function compactEmbeddedPiSessionDirect(
           // history subset, not the full session.
           let fullSessionTokensBefore = 0;
           try {
-            fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+            fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokensCjkAware(msg), 0);
           } catch {
             // If token estimation throws on a malformed message, fall back to 0 so
             // the sanity check below becomes a no-op instead of crashing compaction.
@@ -1067,7 +1067,7 @@ export async function compactEmbeddedPiSessionDirect(
             messagesAfter: session.messages,
             observedTokenCount,
             fullSessionTokensBefore,
-            estimateTokensFn: estimateTokens,
+            estimateTokensFn: estimateTokensCjkAware,
           });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
