@@ -61,33 +61,3 @@ export function buildTokenHubModelDefinition(
     api: "openai-completions",
   };
 }
-
-// ---------- Token Plan provider ----------
-
-export const TOKEN_PLAN_BASE_URL = "https://api.lkeap.cloud.tencent.com/plan/v3";
-export const TOKEN_PLAN_PROVIDER_ID = "tencent-token-plan";
-
-export const TOKEN_PLAN_MODEL_CATALOG: ModelDefinitionConfig[] = [
-  {
-    id: "hy3-preview",
-    name: "Hy3 preview (Token Plan)",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 256_000,
-    maxTokens: 64_000,
-    cost: HY3_PREVIEW_COST,
-    compat: {
-      supportsUsageInStreaming: true,
-      supportsReasoningEffort: true,
-    },
-  },
-];
-
-export function buildTokenPlanModelDefinition(
-  model: (typeof TOKEN_PLAN_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  return {
-    ...model,
-    api: "openai-completions",
-  };
-}

@@ -33,6 +33,16 @@ const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
 const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfigMock()),
+  };
+});
+
 vi.mock("./outbound-media-runtime.js", () => ({
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
 }));
@@ -179,6 +189,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -202,6 +213,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -246,6 +258,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -279,6 +292,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "voice caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/clip.mp3",
       audioAsVoice: true,
       replyToId: "$reply",
@@ -310,6 +324,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "voice caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/clip.wav",
       audioAsVoice: true,
     });
@@ -334,6 +349,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -401,6 +417,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
@@ -426,6 +443,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "hello", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -439,6 +457,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "hello @alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -455,6 +474,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "hello @alice", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -470,6 +490,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "\\@alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -485,6 +506,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "\\@room please review", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -497,6 +519,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "@room please review", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -509,6 +532,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "caption @alice:example.org", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -528,6 +552,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/room.png",
     });
 
@@ -552,6 +577,7 @@ describe("sendMessageMatrix threads", () => {
 
     await sendMessageMatrix("room:!room:example", "hello thread", {
       client,
+      cfg: {} as never,
       threadId: "$thread",
     });
 
@@ -575,6 +601,7 @@ describe("sendMessageMatrix threads", () => {
 
     await sendMessageMatrix("room:!room:example", "hello", {
       client,
+      cfg: {} as never,
       accountId: "ops",
     });
 
@@ -593,6 +620,7 @@ describe("sendMessageMatrix threads", () => {
 
     const result = await sendMessageMatrix("room:!room:example", "ignored", {
       client,
+      cfg: {} as never,
     });
 
     expect(result).toMatchObject({
@@ -618,6 +646,7 @@ describe("sendSingleTextMessageMatrix", () => {
     await expect(
       sendSingleTextMessageMatrix("room:!room:example", "1234", {
         client,
+        cfg: {} as never,
       }),
     ).rejects.toThrow("Matrix single-message text exceeds limit");
 
@@ -629,6 +658,7 @@ describe("sendSingleTextMessageMatrix", () => {
 
     await sendSingleTextMessageMatrix("room:!room:example", "@room hi @alice:example.org", {
       client,
+      cfg: {} as never,
       msgtype: "m.notice",
       includeMentions: false,
     });
@@ -648,6 +678,7 @@ describe("sendSingleTextMessageMatrix", () => {
 
     await sendSingleTextMessageMatrix("room:!room:example", "done", {
       client,
+      cfg: {} as never,
       extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
     });
 
@@ -679,6 +710,7 @@ describe("editMessageMatrix mentions", () => {
       "hello @alice:example.org and @bob:example.org",
       {
         client,
+        cfg: {} as never,
       },
     );
 
@@ -700,6 +732,7 @@ describe("editMessageMatrix mentions", () => {
 
     await editMessageMatrix("room:!room:example", "$original", "hello again @alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -722,6 +755,7 @@ describe("editMessageMatrix mentions", () => {
 
     await editMessageMatrix("room:!room:example", "$original", "@alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -743,6 +777,7 @@ describe("editMessageMatrix mentions", () => {
 
     await editMessageMatrix("room:!room:example", "$original", "@room hi @alice:example.org", {
       client,
+      cfg: {} as never,
       msgtype: "m.notice",
       includeMentions: false,
     });
@@ -772,6 +807,7 @@ describe("editMessageMatrix mentions", () => {
 
     await editMessageMatrix("room:!room:example", "$original", "done", {
       client,
+      cfg: {} as never,
       extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
     });
 
@@ -801,6 +837,7 @@ describe("sendPollMatrix mentions", () => {
       },
       {
         client,
+        cfg: {} as never,
       },
     );
 
@@ -841,6 +878,7 @@ describe("voteMatrixPoll", () => {
 
     const result = await voteMatrixPoll("room:!room:example", "$poll", {
       client,
+      cfg: {} as never,
       optionIndex: 2,
     });
 
@@ -877,6 +915,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndex: 2,
       }),
     ).rejects.toThrow("out of range");
@@ -901,6 +940,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndexes: [1, 2],
       }),
     ).rejects.toThrow("at most 1 selection");
@@ -916,6 +956,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndex: 1,
       }),
     ).rejects.toThrow("is not a Matrix poll start event");
@@ -938,6 +979,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndex: 1,
       }),
     ).resolves.toMatchObject({
