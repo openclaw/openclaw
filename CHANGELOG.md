@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - memory-core/dreaming: surface a `Dreaming status: blocked` line in `openclaw memory status` when dreaming is enabled but the heartbeat that drives the managed cron is not firing for the default agent, and add a Troubleshooting section to the dreaming docs covering the two common causes (per-agent `heartbeat` blocks excluding `main`, and `heartbeat.every` set to `0`/empty/invalid), so the silent failure described in #69843 becomes legible on the status surface.
 - Cron/run-log: report generic `message` tool sends under the resolved delivery channel when they match the cron target, while preserving account-specific mismatch checks for delivery traces. (#69940) Thanks @davehappyminion.
 - Doctor/channels: merge configured-channel doctor hooks across read-only, loaded, setup, and runtime plugin discovery so partial adapters no longer hide runtime-only compatibility repair or allowlist warnings, preserve disabled-channel opt-outs, and ignore malformed hook values before they can mask valid fallbacks. (#69919) Thanks @gumadeiras.
+- Models/CLI: show bundled provider-owned static catalog rows in `models list --all` before auth is configured, including Kimi K2.6 rows for Moonshot, OpenRouter, and Vercel AI Gateway, while keeping local-only and workspace plugin catalog paths isolated. (#69909) Thanks @shakkernerd.
 
 ## 2026.4.21
 
