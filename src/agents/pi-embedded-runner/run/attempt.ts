@@ -238,7 +238,7 @@ import {
   shouldUseOpenAIWebSocketTransport,
 } from "./attempt.thread-helpers.js";
 import {
-  shouldRepairMalformedAnthropicToolCallArguments,
+  shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
@@ -1464,8 +1464,10 @@ export async function runEmbeddedAttempt(
       );
 
       if (
-        params.model.api === "anthropic-messages" &&
-        shouldRepairMalformedAnthropicToolCallArguments(params.provider)
+        shouldRepairMalformedToolCallArguments({
+          provider: params.provider,
+          modelApi: params.model.api,
+        })
       ) {
         activeSession.agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(
           activeSession.agent.streamFn,
