@@ -86,6 +86,19 @@ export const mockedTruncateOversizedToolResultsInSession = vi.fn<
   reason: "no oversized tool results",
 }));
 
+type MockStripAssistantAudioPayloadsResult = {
+  stripped: boolean;
+  strippedCount: number;
+  reason?: string;
+};
+export const mockedStripAssistantAudioPayloadsInSession = vi.fn<
+  () => Promise<MockStripAssistantAudioPayloadsResult>
+>(async () => ({
+  stripped: false,
+  strippedCount: 0,
+  reason: "no assistant audio payloads",
+}));
+
 type MockFailoverErrorDescription = {
   message: string;
   reason: string | undefined;
@@ -236,6 +249,12 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     truncated: false,
     truncatedCount: 0,
     reason: "no oversized tool results",
+  });
+  mockedStripAssistantAudioPayloadsInSession.mockReset();
+  mockedStripAssistantAudioPayloadsInSession.mockResolvedValue({
+    stripped: false,
+    strippedCount: 0,
+    reason: "no assistant audio payloads",
   });
 
   mockedCoerceToFailoverError.mockReset();
@@ -426,6 +445,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
+  }));
+
+  vi.doMock("./assistant-audio-recovery.js", () => ({
+    stripAssistantAudioPayloadsInSession: mockedStripAssistantAudioPayloadsInSession,
   }));
 
   vi.doMock("./context-engine-maintenance.js", () => ({

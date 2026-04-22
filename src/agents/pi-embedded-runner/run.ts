@@ -70,6 +70,7 @@ import {
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { stripAssistantAudioPayloadsInSession } from "./assistant-audio-recovery.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
@@ -1129,6 +1130,22 @@ export async function runEmbeddedPiAgent(
                     );
                   }
                 }
+                // Recovery-only: compaction-safeguard commonly writes an empty
+                // summary and the tool-result truncator only targets tool_result
+                // parts, leaving base64 assistant-audio payloads in the re-sent
+                // history. Strip them here before the next retry so the next
+                // prompt is not dominated by the same audio load.
+                const postCompactionAudioStrip = await stripAssistantAudioPayloadsInSession({
+                  sessionFile: params.sessionFile,
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                });
+                if (postCompactionAudioStrip.stripped) {
+                  log.info(
+                    `[context-overflow-recovery] post-compaction assistant-audio strip for ` +
+                      `${provider}/${modelId}; stripped ${postCompactionAudioStrip.strippedCount} payload(s)`,
+                  );
+                }
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
@@ -1174,6 +1191,22 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
                 );
+              }
+              // Parallel recovery: base64 assistant-audio content parts are not
+              // touched by the tool-result truncator and not summarized by
+              // compaction. When such payloads dominate the live history, the
+              // only effective reduction at this stage is to replace them with
+              // a short text marker. Idempotent: a no-op if no audio present.
+              const audioStrip = await stripAssistantAudioPayloadsInSession({
+                sessionFile: params.sessionFile,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+              });
+              if (audioStrip.stripped) {
+                log.info(
+                  `[context-overflow-recovery] Stripped ${audioStrip.strippedCount} assistant audio payload(s); retrying prompt`,
+                );
+                continue;
               }
             }
             if (

@@ -20,6 +20,7 @@ import {
   mockedRunContextEngineMaintenance,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
+  mockedStripAssistantAudioPayloadsInSession,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
@@ -431,5 +432,42 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       }),
     );
     expect(mockedResolveFailoverStatus).toHaveBeenCalledWith("rate_limit");
+  });
+
+  it("strips assistant audio payloads during overflow recovery and retries the prompt", async () => {
+    // Arrange: first attempt hits context overflow, compaction succeeds,
+    // assistant-audio strip removes 2 base64 audio payloads, retry succeeds.
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+    mockedStripAssistantAudioPayloadsInSession.mockResolvedValueOnce({
+      stripped: true,
+      strippedCount: 2,
+    });
+
+    // Act
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-audio-strip-recovery",
+    });
+
+    // Assert: strip ran in the real recovery path with the session identity
+    // forwarded verbatim from run params (post-compaction call site).
+    expect(mockedStripAssistantAudioPayloadsInSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: overflowBaseRunParams.sessionFile,
+        sessionId: overflowBaseRunParams.sessionId,
+        sessionKey: overflowBaseRunParams.sessionKey,
+      }),
+    );
+    expect(mockedStripAssistantAudioPayloadsInSession).toHaveBeenCalledTimes(1);
+
+    // And: the retry path was actually taken — two attempts ran, the second
+    // completed without error.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(result.meta.agentMeta).toBeDefined();
+    expect(result.meta.error).toBeUndefined();
   });
 });
