@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -619,11 +620,19 @@ export async function runEmbeddedAttempt(
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
-    const workspaceNotes = hookAdjustedBootstrapFiles.some(
-      (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-    )
-      ? ["Reminder: commit your changes in this workspace after edits."]
-      : undefined;
+    const workspaceNotes: string[] = [];
+    if (
+      hookAdjustedBootstrapFiles.some(
+        (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
+      )
+    ) {
+      workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
+    }
+    if (isEmbeddedMode()) {
+      workspaceNotes.push(
+        "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
+      );
+    }
 
     const { defaultAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
@@ -876,7 +885,7 @@ export async function runEmbeddedAttempt(
         skillsPrompt: effectiveSkillsPrompt,
         docsPath: docsPath ?? undefined,
         ttsHint,
-        workspaceNotes,
+        workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
         promptMode: effectivePromptMode,
         acpEnabled: params.config?.acp?.enabled !== false,
