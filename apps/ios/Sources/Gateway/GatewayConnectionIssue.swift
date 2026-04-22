@@ -91,7 +91,7 @@ enum GatewayConnectionIssue: Equatable {
 
     private static func extractRequestId(from statusText: String) -> String? {
         let marker = "requestId:"
-        guard let range = statusText.range(of: marker) else { return nil }
+        guard let range = statusText.range(of: marker, options: .caseInsensitive) else { return nil }
         let suffix = statusText[range.upperBound...]
         let trimmed = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
         let end = trimmed.firstIndex(where: { ch in
