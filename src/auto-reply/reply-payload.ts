@@ -73,9 +73,14 @@ export function sanitizeMediaDisplayName(mediaSource: string): string {
   // leaking userinfo, query tokens, or fragment identifiers.
   try {
     const parsed = new URL(mediaSource);
-    const pathname = parsed.pathname;
-    const basename = path.basename(pathname) || "(url)";
-    return basename.replace(/[`\n\r]/g, "_");
+    // Skip URL parsing for Windows drive-letter paths (e.g. "C:\..." parses
+    // with protocol "c:", but path.basename on POSIX won't split backslashes
+    // in the resulting pathname, leaking the full path).
+    if (parsed.protocol.length > 2) {
+      const pathname = parsed.pathname;
+      const basename = path.basename(pathname) || "(url)";
+      return basename.replace(/[`\n\r]/g, "_");
+    }
   } catch {
     // Not a valid URL — treat as a filesystem path.
   }
