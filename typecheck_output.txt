@@ -1,0 +1,5 @@
+
+> openclaw@2026.4.22 tsgo:all /workspaces/openclaw
+> node scripts/run-tsgo.mjs -b tsconfig.projects.json
+
+ ELIFECYCLE  Command failed with exit code 1.
