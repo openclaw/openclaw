@@ -160,6 +160,7 @@ async fn get_metrics(state: State<'_, GatewayState>) -> Result<GatewayMetrics, S
     let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
     let process_lock = state.process.lock().map_err(|e| e.to_string())?;
     
+    let mut metrics = GatewayMetrics {
         online: false,
         cpu_usage: 0.0,
         memory_mb: 0,
