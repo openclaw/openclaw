@@ -1,0 +1,10 @@
+{
+  "id": "tokenjuice",
+  "name": "tokenjuice",
+  "description": "Compacts exec and bash tool results with tokenjuice reducers.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

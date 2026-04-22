@@ -1210,6 +1210,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/tokenjuice:
+    dependencies:
+      tokenjuice:
+        specifier: ^0.6.0
+        version: 0.6.0
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/together:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -7145,6 +7155,11 @@ packages:
 
   token-stream@1.0.0:
     resolution: {integrity: sha512-VSsyNPPW74RpHwR8Fc21uubwHY7wMDeJLys2IX5zJNih+OnAnaifKHo+1LHT7DAdloQ7apeaaWg8l7qnf/TnEg==}
+
+  tokenjuice@0.6.0:
+    resolution: {integrity: sha512-I9xnxEHZ2HuRY+TLLbaHCUmGuGCAvWYfA7Uw+oXrwENZzipIgcSTP6+G8NfZYnQoyXgbn9tD8P+a/4jILY1yXw==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   token-types@6.1.2:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
@@ -14216,6 +14231,8 @@ snapshots:
   toidentifier@1.0.1: {}
 
   token-stream@1.0.0: {}
+
+  tokenjuice@0.6.0: {}
 
   token-types@6.1.2:
     dependencies:
