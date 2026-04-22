@@ -30,6 +30,7 @@ describe("setup promotion helpers", () => {
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",
       channel: {
+        defaultAccount: "ops",
         dmPolicy: "allowlist",
         allowFrom: ["+15551234567"],
         groupPolicy: "allowlist",

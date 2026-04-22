@@ -102,7 +102,10 @@ export function resolveSingleAccountKeysToMove(params: {
     Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
     0;
   const entries = Object.entries(params.channel)
-    .filter(([key, value]) => key !== "accounts" && key !== "enabled" && value !== undefined)
+    .filter(
+      ([key, value]) =>
+        key !== "accounts" && key !== "defaultAccount" && key !== "enabled" && value !== undefined,
+    )
     .map(([key]) => key);
   if (entries.length === 0) {
     return [];
