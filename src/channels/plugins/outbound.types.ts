@@ -29,6 +29,8 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  /** Session key for hook correlation. */
+  sessionKey?: string;
   gatewayClientScopes?: readonly string[];
 };
 

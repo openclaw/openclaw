@@ -1042,13 +1042,13 @@ export async function runReplyAgent(params: {
     workspaceDir: followupRun.run.workspaceDir,
     messageProvider: followupRun.run.messageProvider,
     accountId: followupRun.originatingAccountId ?? followupRun.run.agentAccountId,
-    groupId: followupRun.run.groupId,
-    groupChannel: followupRun.run.groupChannel,
-    groupSpace: followupRun.run.groupSpace,
-    requesterSenderId: followupRun.run.senderId,
-    requesterSenderName: followupRun.run.senderName,
-    requesterSenderUsername: followupRun.run.senderUsername,
-    requesterSenderE164: followupRun.run.senderE164,
+    groupId: followupRun.run.groupId ?? undefined,
+    groupChannel: followupRun.run.groupChannel ?? undefined,
+    groupSpace: followupRun.run.groupSpace ?? undefined,
+    requesterSenderId: followupRun.run.senderId ?? undefined,
+    requesterSenderName: followupRun.run.senderName ?? undefined,
+    requesterSenderUsername: followupRun.run.senderUsername ?? undefined,
+    requesterSenderE164: followupRun.run.senderE164 ?? undefined,
   });
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
