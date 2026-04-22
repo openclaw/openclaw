@@ -84,8 +84,20 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
+  /**
+   * Optional stale-output fence. When provided and returns false, the delivery
+   * is dropped silently — used to prevent a run that has been superseded by
+   * abort or new-message takeover from emitting late block replies. Callers
+   * typically pass `() => replyOperation.isCurrent()` from
+   * `./reply-run-registry.js`.
+   */
+  isRunCurrent?: () => boolean;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
+    if (params.isRunCurrent && !params.isRunCurrent()) {
+      logVerbose("block reply dropped: run superseded");
+      return;
+    }
     const { text, skip } = params.normalizeStreamingText(payload);
     if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return;

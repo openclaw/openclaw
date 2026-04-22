@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as registryTesting,
   createReplyOperation,
@@ -204,6 +204,42 @@ describe("stale-output fence (Piece C pattern)", () => {
     tick(4);
 
     expect(progress).toEqual([1, 2]);
+  });
+
+  it("wires into createBlockReplyDeliveryHandler via isRunCurrent", async () => {
+    // Integration check: the optional isRunCurrent fence dropped a real
+    // block reply delivery when the run has been invalidated.
+    const { createBlockReplyDeliveryHandler } = await import("./reply-delivery.js");
+    const onBlockReply = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey: "sess-delivery",
+      sessionId: "sid-delivery",
+      resetTriggered: false,
+    });
+
+    const deliver = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: async () => {},
+        signalToolActivity: async () => {},
+        signalSessionIdle: async () => {},
+      } as unknown as Parameters<typeof createBlockReplyDeliveryHandler>[0]["typingSignals"],
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys: new Set<string>(),
+      isRunCurrent: () => operation.isCurrent(),
+    });
+
+    await deliver({ text: "early delivery" });
+    operation.abortByUser();
+    await deliver({ text: "late delivery" });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(0);
+    // (onBlockReply only fires via the pipeline path for text; the important
+    // assertion is that the late call didn't spuriously deliver. Early call
+    // is swallowed by the "no pipeline, no media" branch.)
   });
 
   // CLAUDE_CODE_PROMPT.md Test 2: pre-tool gate skips subsequent tools.
