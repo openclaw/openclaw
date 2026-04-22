@@ -196,11 +196,20 @@ function isChannelPluginEligibleForScopedOwnership(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
   rootConfig: OpenClawConfig;
+  channelId?: string;
 }): boolean {
+  const allowRestrictiveAllowlistBypass =
+    params.channelId !== undefined &&
+    isBundledManifestOwner(params.plugin) &&
+    hasExplicitChannelConfig({
+      config: params.rootConfig,
+      channelId: params.channelId,
+    });
   if (
     !passesManifestOwnerBasePolicy({
       plugin: params.plugin,
       normalizedConfig: params.normalizedConfig,
+      allowRestrictiveAllowlistBypass,
     })
   ) {
     return false;
@@ -495,6 +504,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
         plugin,
         normalizedConfig,
         rootConfig: trustConfig,
+        channelId: channelIds.find((channelId) => recordDeclaresChannel(plugin, channelId)),
       });
     })
     .map((plugin) => plugin.id)

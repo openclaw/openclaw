@@ -643,6 +643,25 @@ describe("resolveConfiguredChannelPluginIds", () => {
     ).toEqual([]);
   });
 
+  it("keeps explicitly configured bundled channel owners under restrictive allowlists", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: {
+          channels: {
+            "demo-channel": {
+              token: "configured",
+            },
+          },
+          plugins: {
+            allow: ["browser"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toEqual(["demo-channel"]);
+  });
+
   it("blocks bundled activation owners when explicitly denied", () => {
     expect(
       resolveConfiguredChannelPluginIds({
