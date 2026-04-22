@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import {
   getRegisteredAgentHarness,
   registerAgentHarness as registerGlobalAgentHarness,
@@ -22,6 +23,10 @@ import {
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  getDetachedTaskLifecycleRuntimeRegistration,
+  registerDetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
@@ -31,6 +36,7 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import { PI_EMBEDDED_EXTENSION_RUNTIME_ID } from "./embedded-extension-factory.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
@@ -192,6 +198,69 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
+  };
+
+  const registerPiEmbeddedExtensionFactory = (
+    record: PluginRecord,
+    factory: Parameters<OpenClawPluginApi["registerEmbeddedExtensionFactory"]>[0],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register Pi embedded extension factories",
+      });
+      return;
+    }
+    if (
+      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
+        PI_EMBEDDED_EXTENSION_RUNTIME_ID,
+      )
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          'plugin must declare contracts.embeddedExtensionFactories: ["pi"] to register Pi embedded extension factories',
+      });
+      return;
+    }
+    if (typeof (factory as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "embedded extension factory must be a function",
+      });
+      return;
+    }
+    if (
+      registry.embeddedExtensionFactories.some(
+        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
+      )
+    ) {
+      return;
+    }
+    const safeFactory: ExtensionFactory = async (pi) => {
+      try {
+        await factory(pi);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        registryParams.logger.warn(
+          `[plugins] embedded extension factory failed for ${record.id}: ${detail}`,
+        );
+      }
+    };
+    registry.embeddedExtensionFactories.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawFactory: factory,
+      factory: safeFactory,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
   };
 
   const registerTool = (
@@ -656,14 +725,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerUniqueProviderLike = <
-    T extends { id: string },
-    R extends PluginOwnedProviderRegistration<T>,
-  >(params: {
+  const registerUniqueProviderLike = <T extends { id: string }>(params: {
     record: PluginRecord;
     provider: T;
     kindLabel: string;
-    registrations: R[];
+    registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
   }) => {
     const id = params.provider.id.trim();
@@ -696,7 +762,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       provider: params.provider,
       source: record.source,
       rootDir: record.rootDir,
-    } as R);
+    });
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -1202,6 +1268,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
+              registerDetachedTaskRuntime: (runtime) => {
+                const existing = getDetachedTaskLifecycleRuntimeRegistration();
+                if (existing && existing.pluginId !== record.id) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `detached task runtime already registered by ${existing.pluginId}`,
+                  });
+                  return;
+                }
+                registerDetachedTaskLifecycleRuntime(record.id, runtime);
+              },
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
               registerRealtimeTranscriptionProvider: (provider) =>
                 registerRealtimeTranscriptionProvider(record, provider),
@@ -1286,6 +1365,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerCompactionProvider(provider, { ownerPluginId: record.id });
+              },
+              registerEmbeddedExtensionFactory: (factory) => {
+                registerPiEmbeddedExtensionFactory(record, factory);
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

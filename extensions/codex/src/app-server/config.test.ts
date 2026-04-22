@@ -60,6 +60,21 @@ describe("Codex app-server config", () => {
     ).toThrow("appServer.url is required");
   });
 
+  it("defaults native Codex approvals to unchained local execution", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: {},
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),

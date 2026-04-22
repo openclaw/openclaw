@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -34,6 +35,7 @@ export type SlackMonitorContext = {
   runtime: RuntimeEnv;
 
   botUserId: string;
+  botId?: string;
   teamId: string;
   apiAppId: string;
 
@@ -102,6 +104,7 @@ export function createSlackMonitorContext(params: {
   runtime: RuntimeEnv;
 
   botUserId: string;
+  botId?: string;
   teamId: string;
   apiAppId: string;
 
@@ -282,7 +285,9 @@ export function createSlackMonitorContext(params: {
         status: p.status,
       });
     } catch (err) {
-      logVerbose(`slack status update failed for channel ${p.channelId}: ${String(err)}`);
+      logVerbose(
+        `slack status update failed for channel ${p.channelId}: ${formatErrorMessage(err)}`,
+      );
     }
   };
 
@@ -395,6 +400,7 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     botUserId: params.botUserId,
+    botId: params.botId,
     teamId: params.teamId,
     apiAppId: params.apiAppId,
     historyLimit: params.historyLimit,
