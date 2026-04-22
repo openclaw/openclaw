@@ -13,8 +13,6 @@
  */
 
 import path from "node:path";
-import { getPlatformAdapter } from "../adapter/index.js";
-import { parseApprovalButtonData } from "../approval/index.js";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
@@ -27,14 +25,13 @@ import {
   sendInputNotify as senderSendInputNotify,
   createRawInputNotifyFn,
   accountToCreds,
-  acknowledgeInteraction,
 } from "../messaging/sender.js";
 import { setRefIndex } from "../ref/store.js";
-import type { InteractionEvent } from "../types.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { runWithRequestContext } from "../utils/request-context.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipeline.js";
+import { createInteractionHandler } from "./interaction-handler.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type {
@@ -194,7 +191,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   };
 
   // ---- 8. Interaction handler ----
-  const handleInteraction = createApprovalInteractionHandler(account, log);
+  const handleInteraction = createInteractionHandler(account, ctx.runtime, log);
 
   // ---- 9. Start connection ----
   const connection = new GatewayConnection({
@@ -275,44 +272,4 @@ async function startTypingForEvent(
     log?.error(`sendInputNotify error: ${err instanceof Error ? err.message : String(err)}`);
     return { keepAlive: null };
   }
-}
-
-// ============ Interaction handler ============
-
-/**
- * Default INTERACTION_CREATE handler — ACK the interaction and resolve
- * approval button clicks via the registered PlatformAdapter.
- */
-function createApprovalInteractionHandler(
-  account: GatewayAccount,
-  log?: EngineLogger,
-): (event: InteractionEvent) => void {
-  return (event) => {
-    const creds = accountToCreds(account);
-
-    // ACK the interaction first to prevent QQ from showing a timeout error.
-    void acknowledgeInteraction(creds, event.id).catch((err) => {
-      log?.error(`Interaction ACK failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-
-    const buttonData = event.data?.resolved?.button_data ?? "";
-    const parsed = parseApprovalButtonData(buttonData);
-    if (!parsed) {
-      return;
-    }
-
-    const adapter = getPlatformAdapter();
-    if (!adapter.resolveApproval) {
-      log?.error(`resolveApproval not available on PlatformAdapter`);
-      return;
-    }
-
-    void adapter.resolveApproval(parsed.approvalId, parsed.decision).then((ok) => {
-      if (ok) {
-        log?.info(`Approval resolved: id=${parsed.approvalId}, decision=${parsed.decision}`);
-      } else {
-        log?.error(`Approval resolve failed: id=${parsed.approvalId}`);
-      }
-    });
-  };
 }

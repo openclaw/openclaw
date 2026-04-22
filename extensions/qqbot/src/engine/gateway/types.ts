@@ -70,6 +70,17 @@ export interface GatewayPluginRuntime {
       error?: string;
     }>;
   };
+  /**
+   * Config API for reading/writing the framework configuration.
+   *
+   * Used by the interaction handler (config query/update) directly
+   * within the engine layer. Optional because not all runtime
+   * environments provide config write capability.
+   */
+  config?: {
+    loadConfig: () => Record<string, unknown>;
+    writeConfigFile: (cfg: unknown) => Promise<void>;
+  };
 }
 
 // ============ Shared result types ============

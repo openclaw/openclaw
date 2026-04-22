@@ -12,6 +12,7 @@ const INTENTS = {
   PUBLIC_GUILD_MESSAGES: 1 << 30,
   DIRECT_MESSAGE: 1 << 12,
   GROUP_AND_C2C: 1 << 25,
+  /** Button interaction callbacks (INTERACTION_CREATE). */
   INTERACTION: 1 << 26,
 } as const;
 
@@ -103,4 +104,14 @@ export const GatewayEvent = {
    */
   GROUP_MESSAGE_CREATE: "GROUP_MESSAGE_CREATE",
   INTERACTION_CREATE: "INTERACTION_CREATE",
+} as const;
+
+// ============ Interaction Type Constants ============
+
+/** Interaction sub-types carried in `InteractionEvent.data.type`. */
+export const InteractionType = {
+  /** Remote config query — bot reports its current claw_cfg snapshot. */
+  CONFIG_QUERY: 2001,
+  /** Remote config update — caller pushes new settings. */
+  CONFIG_UPDATE: 2002,
 } as const;

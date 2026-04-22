@@ -338,10 +338,14 @@ export async function acknowledgeInteraction(
   creds: AccountCreds,
   interactionId: string,
   code: 0 | 1 | 2 | 3 | 4 | 5 = 0,
+  data?: Record<string, unknown>,
 ): Promise<void> {
   const ctx = resolveAccount(creds.appId);
   const token = await ctx.tokenMgr.getAccessToken(creds.appId, creds.clientSecret);
-  await ctx.client.request(token, "PUT", `/interactions/${interactionId}`, { code });
+  await ctx.client.request(token, "PUT", `/interactions/${interactionId}`, {
+    code,
+    ...(data ? { data } : {}),
+  });
 }
 
 // ============ Types ============

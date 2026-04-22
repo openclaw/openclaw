@@ -804,7 +804,7 @@ registerCommand({
 
     try {
       const configApi = runtime.config;
-      const currentCfg = structuredClone(configApi.loadConfig()) as Record<string, unknown>;
+      const currentCfg = structuredClone(configApi.loadConfig());
       const qqbot = ((currentCfg.channels ?? {}) as Record<string, unknown>).qqbot as
         | Record<string, unknown>
         | undefined;
@@ -820,7 +820,7 @@ registerCommand({
         const prevAccounts =
           (qqbot.accounts as Record<string, Record<string, unknown>> | undefined) ?? {};
         const nextAccounts = { ...prevAccounts };
-        const acct = { ...(nextAccounts[accountId] ?? {}) };
+        const acct = { ...nextAccounts[accountId] };
         acct.streaming = newVal;
         nextAccounts[accountId] = acct;
         qqbot.accounts = nextAccounts;
@@ -1082,6 +1082,11 @@ export async function matchSlashCommand(ctx: SlashCommandContext): Promise<Slash
 /** Return the plugin version for external callers. */
 export function getPluginVersion(): string {
   return PLUGIN_VERSION;
+}
+
+/** Return the framework version for external callers. */
+export function getFrameworkVersion(): string {
+  return _resolveVersion();
 }
 
 // Utility used by /bot-logs command.

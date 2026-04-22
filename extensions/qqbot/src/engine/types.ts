@@ -255,6 +255,36 @@ export interface InteractionEvent {
   };
 }
 
+// ============ Account Config View ============
+
+import type { QQBotDmPolicy, QQBotGroupPolicy } from "./access/types.js";
+
+/**
+ * Typed view of known per-account configuration fields.
+ *
+ * Used for `as QQBotAccountConfigView` casts when reading fields from
+ * the raw `Record<string, unknown>` config. The actual config type
+ * stays `Record<string, unknown>` to avoid schema incompatibility.
+ */
+export interface QQBotAccountConfigView {
+  allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
+  dmPolicy?: QQBotDmPolicy;
+  groupPolicy?: QQBotGroupPolicy;
+  groups?: Record<string, Record<string, unknown>>;
+  streaming?:
+    | boolean
+    | {
+        mode?: string;
+        c2cStreamApi?: boolean;
+      };
+  audioFormatPolicy?: {
+    uploadDirectFormats?: string[];
+    transcodeEnabled?: boolean;
+  };
+  voiceDirectUploadFormats?: string[];
+}
+
 // ============ Gateway Account ============
 
 /**

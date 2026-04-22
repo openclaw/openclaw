@@ -6,7 +6,6 @@
  */
 
 import type { GatewayAccount } from "../types.js";
-/* eslint-disable no-undef -- Buffer is a Node.js global */
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { normalizePath } from "../utils/platform.js";
 import {
