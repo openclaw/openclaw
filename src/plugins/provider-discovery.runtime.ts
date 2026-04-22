@@ -52,6 +52,9 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   if (records.length === 0) {
     return [];
   }
+  if (records.length < pluginIdSet.size) {
+    return [];
+  }
   const loadSource = createPluginSourceLoader();
   const providers: ProviderPlugin[] = [];
   for (const manifest of records) {
