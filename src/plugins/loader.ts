@@ -73,6 +73,7 @@ import {
   getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  registerMemoryCapability,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -2881,10 +2882,29 @@ export async function loadOpenClawPluginCliRegistry(
       resolvePath: (input) => resolveUserPath(input),
       handlers: {
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
+        registerMemoryCapability: (capability) => {
+          if (!hasKind(record.kind, "memory")) {
+            return;
+          }
+          if (
+            Array.isArray(record.kind) &&
+            record.kind.length > 1 &&
+            !record.memorySlotSelected
+          ) {
+            return;
+          }
+          registerMemoryCapability(record.id, capability);
+        },
       },
     });
 
     const registrySnapshot = snapshotPluginRegistry(registry);
+    const previousMemoryCapability = getMemoryCapabilityRegistration();
+    const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
+    const previousMemoryPromptSupplements = listMemoryPromptSupplements();
+    const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
+    const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
+    const previousMemoryRuntime = getMemoryRuntime();
     try {
       withProfile({ pluginId: record.id, source: record.source }, "cli-metadata:register", () =>
         runPluginRegisterSync(register, api),
@@ -2893,6 +2913,14 @@ export async function loadOpenClawPluginCliRegistry(
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
       restorePluginRegistry(registry, registrySnapshot);
+      restoreMemoryPluginState({
+        capability: previousMemoryCapability,
+        corpusSupplements: previousMemoryCorpusSupplements,
+        promptSupplements: previousMemoryPromptSupplements,
+        promptBuilder: previousMemoryPromptBuilder,
+        flushPlanResolver: previousMemoryFlushPlanResolver,
+        runtime: previousMemoryRuntime,
+      });
       recordPluginError({
         logger,
         registry,
