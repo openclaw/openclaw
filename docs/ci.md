@@ -56,7 +56,7 @@ On pushes, the `checks` matrix adds the push-only `compat-node22` lane. On pull 
 The slowest Node test families are split or balanced so each job stays small: channel contracts split registry and core coverage into eight weighted shards each, bundled plugin tests balance across six extension workers, auto-reply runs as three balanced workers instead of six tiny workers, and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. `check-additional` keeps package-boundary compile/canary work together and separates it from runtime topology gateway/architecture work; the boundary guard shard runs its small independent guards concurrently inside one job, and the gateway watch regression uses the minimal `gatewayWatch` build profile instead of rebuilding the full CI artifact sidecar set.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Aggregate shard checks use `!cancelled() && always()` so they still report normal shard failures but do not queue after the whole workflow has already been superseded.
-The CI concurrency key is versioned (`CI-v5-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs.
+The CI concurrency key is versioned (`CI-v6-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs.
 
 ## Runners
 

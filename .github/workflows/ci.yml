@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-v5-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v5-{1}', github.workflow, github.ref) || format('{0}-v5-{1}-{2}', github.workflow, github.ref, github.sha)) }}
+  group: ${{ github.event_name == 'pull_request' && format('{0}-v6-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v6-{1}', github.workflow, github.ref) || format('{0}-v6-{1}-{2}', github.workflow, github.ref, github.sha)) }}
   cancel-in-progress: true
 
 env:

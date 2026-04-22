@@ -664,11 +664,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   }): Promise<ShortTermPromotionDreamingConfig> => {
     const startupCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
+    const pluginConfig =
+      params.reason === "runtime"
+        ? resolveMemoryCorePluginConfig(startupCfg)
+        : (resolveMemoryCorePluginConfig(startupCfg) ??
+          resolveMemoryCorePluginConfig(api.config) ??
+          api.pluginConfig);
     const config = resolveShortTermPromotionDreamingConfig({
-      pluginConfig:
-        resolveMemoryCorePluginConfig(startupCfg) ??
-        resolveMemoryCorePluginConfig(api.config) ??
-        api.pluginConfig,
+      pluginConfig,
       cfg: startupCfg,
     });
     if (params.reason === "startup") {

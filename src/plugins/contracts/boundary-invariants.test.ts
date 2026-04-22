@@ -46,6 +46,29 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]
 >;
+const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
+  "extensions/active-memory/index.ts": [
+    'resolvePluginConfigObject(api.runtime.config.loadConfig(), "active-memory")',
+    "api.runtime.config.loadConfig()",
+  ],
+  "extensions/memory-core/src/dreaming.ts": [
+    'params.reason === "runtime"',
+    "resolveMemoryCorePluginConfig(startupCfg)",
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
+  "extensions/memory-lancedb/index.ts": [
+    'resolvePluginConfigObject(runtimeConfig, "memory-lancedb")',
+    "api.runtime.config?.loadConfig?.()",
+  ],
+  "extensions/skill-workshop/index.ts": [
+    'resolvePluginConfigObject(runtimeConfig, "skill-workshop")',
+    "api.runtime.config?.loadConfig?.()",
+  ],
+  "extensions/thread-ownership/index.ts": [
+    'resolvePluginConfigObject(currentConfig, "thread-ownership")',
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
+} as const satisfies Record<string, readonly string[]>;
 
 type FileFilter = {
   excludeTests?: boolean;
@@ -212,5 +235,17 @@ describe("plugin contract boundary invariants", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const offenders = files.filter((file) => /\bregisterHook\(/u.test(readRepoSource(file)));
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps long-lived bundled hook handlers on live runtime config lookups", () => {
+    const missingGuards = Object.entries(BUNDLED_LIVE_CONFIG_HOOK_GUARDS).flatMap(
+      ([file, requiredSnippets]) => {
+        const source = readRepoSource(file);
+        return requiredSnippets
+          .filter((snippet) => !source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
+    expect(missingGuards).toEqual([]);
   });
 });

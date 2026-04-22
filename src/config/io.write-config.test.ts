@@ -313,7 +313,7 @@ describe("config io write", () => {
     });
   });
 
-  it("does not inject include-only $schema into the root config during partial writes", async () => {
+  it("rejects root-include partial writes instead of flattening the root config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const includePath = path.join(home, ".openclaw", "extra.json5");
@@ -328,10 +328,12 @@ describe("config io write", () => {
         `{\n  "$include": "./extra.json5",\n  "gateway": { "mode": "local" }\n}\n`,
         "utf-8",
       );
+      const originalRaw = await fs.readFile(configPath, "utf-8");
 
-      const persisted = await writeGatewayPortAndReadConfig(home, configPath);
-      expect(persisted).not.toHaveProperty("$schema");
-      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+      await expect(writeGatewayPortAndReadConfig(home, configPath)).rejects.toThrow(
+        "Config write would flatten $include-owned config at <root>",
+      );
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
     });
   });
 

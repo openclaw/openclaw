@@ -245,6 +245,9 @@ async function collectInstalledPathErrors(params: {
   if (actualSet !== null && params.unexpectedMessage) {
     const expectedSet = new Set(params.expectedFiles);
     for (const relativePath of params.actualFiles ?? []) {
+      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
+        continue;
+      }
       if (!expectedSet.has(relativePath)) {
         errors.push(params.unexpectedMessage(relativePath));
       }

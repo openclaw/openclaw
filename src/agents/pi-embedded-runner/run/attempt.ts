@@ -1067,7 +1067,7 @@ export async function runEmbeddedAttempt(
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
-      const { customTools } = splitSdkTools({
+      const { builtInTools, customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
@@ -1126,16 +1126,17 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
-      // Pi 0.68.1 uses `tools` as a global allowlist across built-in and
-      // custom tools. Keep the built-in tool list empty, but still pass the
-      // exact registered custom-tool names so our OpenClaw-managed
-      // registrations remain active without widening the session boundary to
-      // raw client-provided names.
+      // Pi only accepts built-in Tool[] at session creation time. After the
+      // session registers custom tools, narrow the active tool names against
+      // the exact OpenClaw-managed registrations so client-provided names do
+      // not broaden the prompt/runtime boundary.
       const sessionToolAllowlist = toSessionToolAllowlist(
         collectRegisteredToolNames(allCustomTools),
       );
 
-      ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
+      const createdSession = await createEmbeddedAgentSessionWithResourceLoader<
+        Awaited<ReturnType<typeof createAgentSession>>
+      >({
         createAgentSession: async (options) =>
           await createAgentSession(options as unknown as Parameters<typeof createAgentSession>[0]),
         options: {
@@ -1145,17 +1146,19 @@ export async function runEmbeddedAttempt(
           modelRegistry: params.modelRegistry,
           model: params.model,
           thinkingLevel: mapThinkingLevel(params.thinkLevel),
-          tools: sessionToolAllowlist,
+          tools: builtInTools,
           customTools: allCustomTools,
           sessionManager,
           settingsManager,
           resourceLoader,
         },
-      }));
+      });
+      session = createdSession.session;
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
+      session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);

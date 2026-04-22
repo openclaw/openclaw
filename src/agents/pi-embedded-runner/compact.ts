@@ -843,14 +843,13 @@ export async function compactEmbeddedPiSessionDirect(
         contextTokenBudget: ctxInfo.tokens,
       });
 
-      const { customTools } = splitSdkTools({
+      const { builtInTools, customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
-      // Pi 0.68.1 uses `tools` as a global allowlist across built-in and
-      // custom tools. Keep the built-in tool list empty, but still pass the
-      // exact registered custom-tool names so our OpenClaw-managed
-      // registrations remain active without broadening the session boundary.
+      // Pi only accepts built-in Tool[] at session creation time. After the
+      // session registers custom tools, narrow the active tool names against
+      // the exact OpenClaw-managed registrations.
       const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
       const providerStreamFn = resolveCompactionProviderStream({
@@ -889,7 +888,7 @@ export async function compactEmbeddedPiSessionDirect(
             modelRegistry,
             model: effectiveModel,
             thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: sessionToolAllowlist,
+            tools: builtInTools,
             customTools,
             sessionManager,
             settingsManager,
@@ -897,6 +896,7 @@ export async function compactEmbeddedPiSessionDirect(
           });
           session = createdSession.session;
           applySystemPromptOverrideToSession(session, buildSystemPromptOverride(thinkLevel)());
+          session.setActiveToolsByName(sessionToolAllowlist);
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
           prepareCompactionSessionAgent({
