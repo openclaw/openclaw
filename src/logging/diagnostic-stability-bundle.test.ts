@@ -269,6 +269,17 @@ describe("diagnostic stability bundles", () => {
         error: "snapshot.events[0].seq",
       },
       {
+        name: "out-of-range-event-timestamp",
+        bundle: {
+          ...baseBundle,
+          snapshot: {
+            ...baseBundle.snapshot,
+            events: [{ seq: 1, ts: 9e15, type: "webhook.received" }],
+          },
+        },
+        error: "snapshot.events[0].ts",
+      },
+      {
         name: "null-summary",
         bundle: {
           ...baseBundle,

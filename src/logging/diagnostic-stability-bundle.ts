@@ -169,6 +169,14 @@ function readNumber(value: unknown, label: string): number {
   return value;
 }
 
+function readTimestampMs(value: unknown, label: string): number {
+  const timestamp = readNumber(value, label);
+  if (Number.isNaN(new Date(timestamp).getTime())) {
+    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
+  }
+  return timestamp;
+}
+
 function readOptionalNumber(value: unknown, label: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -197,7 +205,7 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
   for (const [index, event] of snapshot.events.entries()) {
     const record = readObject(event, `snapshot.events[${index}]`);
     readNumber(record.seq, `snapshot.events[${index}].seq`);
-    readNumber(record.ts, `snapshot.events[${index}].ts`);
+    readTimestampMs(record.ts, `snapshot.events[${index}].ts`);
     readString(record.type, `snapshot.events[${index}].type`);
   }
   const summary = readObject(snapshot.summary, "snapshot.summary");
