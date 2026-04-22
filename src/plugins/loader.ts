@@ -1915,9 +1915,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 (left, right) => left.localeCompare(right),
               ),
             );
-            logger.info(
-              `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
-            );
+            if (shouldActivate) {
+              logger.info(
+                `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
+              );
+            }
           }
           if (path.resolve(installRoot) !== path.resolve(pluginRoot)) {
             registerBundledRuntimeDependencyNodePath(installRoot);

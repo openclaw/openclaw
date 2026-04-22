@@ -192,6 +192,59 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("uses an isolated execution root and copies node_modules back when requested", () => {
+    const installRoot = makeTempDir();
+    const installExecutionRoot = makeTempDir();
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
+        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+      );
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      installExecutionRoot,
+      missingSpecs: ["tokenjuice@0.6.1"],
+      env: {},
+    });
+
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installExecutionRoot, "package.json"), "utf8")),
+    ).toEqual({
+      name: "openclaw-runtime-deps-install",
+      private: true,
+    });
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(installRoot, "node_modules", "tokenjuice", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      name: "tokenjuice",
+      version: "0.6.1",
+    });
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        cwd: installExecutionRoot,
+      }),
+    );
+  });
+
   it("rejects invalid install specs before spawning npm", () => {
     expect(() =>
       createBundledRuntimeDepsInstallArgs(["tokenjuice@https://evil.example/t.tgz"]),
@@ -540,6 +593,9 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot: pluginRoot,
+        installExecutionRoot: expect.stringContaining(
+          path.join(".local", "bundled-plugin-runtime-deps"),
+        ),
         missingSpecs: ["tokenjuice@0.6.1"],
         installSpecs: ["tokenjuice@0.6.1"],
       },

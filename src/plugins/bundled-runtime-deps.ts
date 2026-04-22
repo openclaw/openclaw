@@ -25,6 +25,7 @@ export type RuntimeDepConflict = {
 
 export type BundledRuntimeDepsInstallParams = {
   installRoot: string;
+  installExecutionRoot?: string;
   missingSpecs: string[];
   installSpecs?: string[];
 };
@@ -177,6 +178,15 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
+function resolveSourceCheckoutBundledPluginPackageRoot(pluginRoot: string): string | null {
+  const extensionsDir = path.dirname(path.resolve(pluginRoot));
+  if (path.basename(extensionsDir) !== "extensions") {
+    return null;
+  }
+  const packageRoot = path.dirname(extensionsDir);
+  return isSourceCheckoutRoot(packageRoot) ? packageRoot : null;
+}
+
 function resolveSourceCheckoutDistPackageRoot(pluginRoot: string): string | null {
   const extensionsDir = path.dirname(pluginRoot);
   const buildDir = path.dirname(extensionsDir);
@@ -188,6 +198,13 @@ function resolveSourceCheckoutDistPackageRoot(pluginRoot: string): string | null
   }
   const packageRoot = path.dirname(buildDir);
   return isSourceCheckoutRoot(packageRoot) ? packageRoot : null;
+}
+
+function resolveSourceCheckoutPackageRoot(pluginRoot: string): string | null {
+  return (
+    resolveSourceCheckoutBundledPluginPackageRoot(pluginRoot) ??
+    resolveSourceCheckoutDistPackageRoot(pluginRoot)
+  );
 }
 
 function resolveBundledPluginPackageRoot(pluginRoot: string): string | null {
@@ -290,7 +307,7 @@ function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
   pluginRoot: string;
   installSpecs: readonly string[];
 }): string | null {
-  const packageRoot = resolveSourceCheckoutDistPackageRoot(params.pluginRoot);
+  const packageRoot = resolveSourceCheckoutPackageRoot(params.pluginRoot);
   if (!packageRoot) {
     return null;
   }
@@ -771,17 +788,27 @@ export function createBundledRuntimeDependencyAliasMap(params: {
 
 export function installBundledRuntimeDeps(params: {
   installRoot: string;
+  installExecutionRoot?: string;
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
 }): void {
+  const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
   fs.mkdirSync(params.installRoot, { recursive: true });
+  fs.mkdirSync(installExecutionRoot, { recursive: true });
+  if (path.resolve(installExecutionRoot) !== path.resolve(params.installRoot)) {
+    fs.writeFileSync(
+      path.join(installExecutionRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
+      "utf8",
+    );
+  }
   const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
   const npmRunner = resolveBundledRuntimeDepsNpmRunner({
     env: installEnv,
     npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
   });
   const result = spawnSync(npmRunner.command, npmRunner.args, {
-    cwd: params.installRoot,
+    cwd: installExecutionRoot,
     encoding: "utf8",
     env: npmRunner.env ?? installEnv,
     stdio: "pipe",
@@ -792,6 +819,13 @@ export function installBundledRuntimeDeps(params: {
       .join("\n")
       .trim();
     throw new Error(output || "npm install failed");
+  }
+  if (path.resolve(installExecutionRoot) !== path.resolve(params.installRoot)) {
+    const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
+    if (!fs.existsSync(stagedNodeModulesDir)) {
+      throw new Error("npm install did not produce node_modules");
+    }
+    replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), stagedNodeModulesDir);
   }
 }
 
@@ -846,6 +880,12 @@ export function ensureBundledPluginRuntimeDeps(params: {
     pluginRoot: params.pluginRoot,
     installSpecs,
   });
+  const installExecutionRoot =
+    cacheDir &&
+    path.resolve(installRoot) === path.resolve(params.pluginRoot) &&
+    resolveSourceCheckoutBundledPluginPackageRoot(params.pluginRoot)
+      ? cacheDir
+      : undefined;
   if (
     restoreSourceCheckoutRuntimeDepsFromCache({
       cacheDir,
@@ -861,10 +901,11 @@ export function ensureBundledPluginRuntimeDeps(params: {
     ((installParams) =>
       installBundledRuntimeDeps({
         installRoot: installParams.installRoot,
+        installExecutionRoot: installParams.installExecutionRoot,
         missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
         env: params.env,
       }));
-  install({ installRoot, missingSpecs, installSpecs });
+  install({ installRoot, installExecutionRoot, missingSpecs, installSpecs });
   writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
   storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
   return { installedSpecs: missingSpecs, retainSpecs: installSpecs };

@@ -933,6 +933,78 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
   });
 
+  it("keeps bundled runtime dep install logs off non-activating loads", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "discord",
+      dir: path.join(bundledDir, "discord"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "discord", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          dependencies: {
+            "discord-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discord",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      logger,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(installRoot, "node_modules", "discord-runtime", "package.json"),
+          JSON.stringify({ name: "discord-runtime", version: "1.0.0" }),
+          "utf-8",
+        );
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "[plugins] discord installed bundled runtime deps: discord-runtime@1.0.0",
+    );
+  });
+
   it("does not repair disabled bundled plugin runtime deps", () => {
     const bundledDir = makeTempDir();
     const plugin = writePlugin({
