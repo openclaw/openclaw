@@ -17,7 +17,12 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../user-identity.ts";
-import { CONFIG_PRESETS, detectActivePreset, type ConfigPresetId } from "./config-presets.ts";
+import {
+  CONFIG_PRESETS,
+  detectActivePreset,
+  getPresetById,
+  type ConfigPresetId,
+} from "./config-presets.ts";
 
 // ── Types ──
 
@@ -80,7 +85,15 @@ export type QuickSettingsProps = {
 
   // Presets
   configObject?: Record<string, unknown>;
-  onApplyPreset?: (presetId: ConfigPresetId) => void;
+  savedConfigObject?: Record<string, unknown>;
+  configDirty?: boolean;
+  configSaving?: boolean;
+  configApplying?: boolean;
+  configReady?: boolean;
+  onSelectPreset?: (presetId: ConfigPresetId) => void;
+  onResetConfig?: () => void;
+  onSaveConfig?: () => void;
+  onApplyConfig?: () => void;
 
   // Navigation
   onAdvancedSettings?: () => void;
@@ -168,6 +181,78 @@ function handleLocalUserAvatarFileSelect(e: Event, props: QuickSettingsProps) {
   });
   reader.readAsDataURL(file);
   input.value = "";
+}
+
+type ProfileSettings = {
+  bootstrapMaxChars: number;
+  bootstrapTotalMaxChars: number;
+  contextInjection: "always" | "continuation-skip";
+};
+
+const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
+  bootstrapMaxChars: 12_000,
+  bootstrapTotalMaxChars: 60_000,
+  contextInjection: "always",
+};
+
+function resolveProfileSettings(config?: Record<string, unknown>): ProfileSettings {
+  const agents = config?.agents as Record<string, unknown> | undefined;
+  const defaults = agents?.defaults as Record<string, unknown> | undefined;
+  const bootstrapMaxChars =
+    typeof defaults?.bootstrapMaxChars === "number" && Number.isFinite(defaults.bootstrapMaxChars)
+      ? Math.floor(defaults.bootstrapMaxChars)
+      : DEFAULT_PROFILE_SETTINGS.bootstrapMaxChars;
+  const bootstrapTotalMaxChars =
+    typeof defaults?.bootstrapTotalMaxChars === "number" &&
+    Number.isFinite(defaults.bootstrapTotalMaxChars)
+      ? Math.floor(defaults.bootstrapTotalMaxChars)
+      : DEFAULT_PROFILE_SETTINGS.bootstrapTotalMaxChars;
+  const contextInjection =
+    defaults?.contextInjection === "continuation-skip" ? "continuation-skip" : "always";
+  return { bootstrapMaxChars, bootstrapTotalMaxChars, contextInjection };
+}
+
+function profileSettingsEqual(a: ProfileSettings, b: ProfileSettings): boolean {
+  return (
+    a.bootstrapMaxChars === b.bootstrapMaxChars &&
+    a.bootstrapTotalMaxChars === b.bootstrapTotalMaxChars &&
+    a.contextInjection === b.contextInjection
+  );
+}
+
+function formatCharBudget(value: number): string {
+  return `${value.toLocaleString()} chars`;
+}
+
+function formatContextInjectionLabel(mode: ProfileSettings["contextInjection"]): string {
+  return mode === "always" ? "Every turn" : "Skip safe follow-ups";
+}
+
+function describeContextInjection(mode: ProfileSettings["contextInjection"]): string {
+  return mode === "always"
+    ? "Reinject workspace bootstrap context on every turn."
+    : "Skip bootstrap reinjection after a completed safe follow-up.";
+}
+
+function renderProfileStat(params: {
+  label: string;
+  value: string;
+  previousValue: string;
+  note: string;
+}) {
+  const changed = params.value !== params.previousValue;
+  return html`
+    <div class="qs-profile-stat ${changed ? "qs-profile-stat--changed" : ""}">
+      <div class="qs-profile-stat__header">
+        <span class="qs-profile-stat__label">${params.label}</span>
+        <span class="qs-profile-stat__value">${params.value}</span>
+      </div>
+      <div class="qs-profile-stat__sub">
+        ${changed ? `Was ${params.previousValue}` : "Matches current default"}
+      </div>
+      <div class="qs-profile-stat__note muted">${params.note}</div>
+    </div>
+  `;
 }
 
 // ── Card renderers ──
@@ -486,24 +571,209 @@ function renderPersonalCard(props: QuickSettingsProps) {
 }
 
 function renderPresetsCard(props: QuickSettingsProps) {
-  const activePreset = props.configObject ? detectActivePreset(props.configObject) : "personal";
+  const draftConfig = props.configObject ?? props.savedConfigObject ?? {};
+  const savedConfig = props.savedConfigObject ?? {};
+  const selectedPresetId = detectActivePreset(draftConfig);
+  const savedPresetId = detectActivePreset(savedConfig);
+  const selectedPreset = selectedPresetId ? getPresetById(selectedPresetId) : undefined;
+  const savedPreset = savedPresetId ? getPresetById(savedPresetId) : undefined;
+  const draftSettings = resolveProfileSettings(draftConfig);
+  const savedSettings = resolveProfileSettings(savedConfig);
+  const hasPendingProfileChange = !profileSettingsEqual(draftSettings, savedSettings);
+  const hasPendingConfigChange = props.configDirty === true;
+  const canCommit =
+    props.connected &&
+    props.configReady === true &&
+    props.configSaving !== true &&
+    props.configApplying !== true;
+  const stateBanner = hasPendingProfileChange
+    ? html`
+        <div class="qs-profile-state qs-profile-state--pending" aria-live="polite">
+          <span class="qs-status-dot"></span>
+          <div class="qs-profile-state__text">
+            <span class="qs-profile-state__title"
+              >${selectedPreset?.label ?? "Custom"} is selected but not saved yet.</span
+            >
+            <span class="qs-profile-state__copy"
+              >Save Profile writes it as the default. Apply Now writes it and reloads the current
+              session.</span
+            >
+          </div>
+        </div>
+      `
+    : savedPreset
+      ? html`
+          <div class="qs-profile-state qs-profile-state--ok" aria-live="polite">
+            <span class="qs-status-dot qs-status-dot--ok"></span>
+            <div class="qs-profile-state__text">
+              <span class="qs-profile-state__title"
+                >${savedPreset.label} is your current default.</span
+              >
+              <span class="qs-profile-state__copy"
+                >Profiles only change bootstrap size and follow-up reinjection behavior.</span
+              >
+            </div>
+          </div>
+        `
+      : html`
+          <div class="qs-profile-state" aria-live="polite">
+            <span class="qs-status-dot"></span>
+            <div class="qs-profile-state__text">
+              <span class="qs-profile-state__title">Custom bootstrap settings are active.</span>
+              <span class="qs-profile-state__copy"
+                >Choose a built-in profile to replace the current custom values.</span
+              >
+            </div>
+          </div>
+        `;
+  const panelTitle = selectedPreset?.label ?? "Custom Configuration";
+  const panelDescription =
+    selectedPreset?.detail ?? "This config does not currently match one of the built-in profiles.";
+  const panelImpact =
+    selectedPreset?.impact ??
+    "Pick a profile to stage a focused change to bootstrap size and follow-up behavior.";
+  const commitCopy = hasPendingProfileChange
+    ? "Save Profile writes this as the default. Apply Now writes it and reloads the current session."
+    : "Other staged config edits are pending. Saving here will commit all staged config changes.";
 
   return html`
     <div class="qs-card qs-card--span-all">
-      ${renderCardHeader(icons.zap, "Profile")}
-      <div class="qs-card__body qs-presets-grid">
-        ${CONFIG_PRESETS.map(
-          (preset) => html`
-            <button
-              class="qs-preset ${preset.id === activePreset ? "qs-preset--active" : ""}"
-              @click=${() => props.onApplyPreset?.(preset.id)}
-            >
-              <span class="qs-preset__icon">${preset.icon}</span>
-              <span class="qs-preset__label">${preset.label}</span>
-              <span class="qs-preset__desc muted">${preset.description}</span>
-            </button>
-          `,
-        )}
+      ${renderCardHeader(
+        icons.zap,
+        "Context Profile",
+        hasPendingProfileChange
+          ? html`<span class="qs-badge qs-badge--warn">Pending</span>`
+          : savedPreset
+            ? html`<span class="qs-badge qs-badge--ok">Saved</span>`
+            : html`<span class="qs-badge">Custom</span>`,
+      )}
+      <div class="qs-card__body qs-profiles">
+        <div class="qs-profiles__copy">
+          <div class="qs-profiles__eyebrow">Bootstrap Context</div>
+          <p class="qs-profiles__intro">
+            Choose how much workspace context OpenClaw injects into each run. These profiles do not
+            change your model, tools, channels, or theme.
+          </p>
+          ${stateBanner}
+          <div class="qs-presets-grid">
+            ${CONFIG_PRESETS.map((preset) => {
+              const presetDefaults = ((preset.patch.agents as Record<string, unknown> | undefined)
+                ?.defaults ?? {}) as Record<string, unknown>;
+              const presetContext =
+                presetDefaults.contextInjection === "continuation-skip"
+                  ? "continuation-skip"
+                  : "always";
+              return html`
+                <button
+                  type="button"
+                  class="qs-preset ${preset.id === selectedPresetId ? "qs-preset--active" : ""}"
+                  aria-pressed=${preset.id === selectedPresetId}
+                  @click=${() => props.onSelectPreset?.(preset.id)}
+                >
+                  <div class="qs-preset__head">
+                    <div class="qs-preset__identity">
+                      <span class="qs-preset__icon">${preset.icon}</span>
+                      <div class="qs-preset__identity-copy">
+                        <span class="qs-preset__label">${preset.label}</span>
+                        <span class="qs-preset__desc muted">${preset.description}</span>
+                      </div>
+                    </div>
+                    <div class="qs-preset__badges">
+                      ${preset.id === savedPresetId
+                        ? html`<span class="qs-badge qs-badge--ok">Current</span>`
+                        : nothing}
+                      ${hasPendingProfileChange && preset.id === selectedPresetId
+                        ? html`<span class="qs-badge qs-badge--warn">Selected</span>`
+                        : nothing}
+                    </div>
+                  </div>
+                  <div class="qs-preset__meta">
+                    <span
+                      >${formatCharBudget(Number(presetDefaults.bootstrapMaxChars ?? 0))} per
+                      file</span
+                    >
+                    <span
+                      >${formatCharBudget(Number(presetDefaults.bootstrapTotalMaxChars ?? 0))}
+                      total</span
+                    >
+                    <span>${formatContextInjectionLabel(presetContext)}</span>
+                  </div>
+                </button>
+              `;
+            })}
+          </div>
+        </div>
+
+        <div class="qs-profile-panel">
+          <div class="qs-profile-panel__eyebrow">
+            ${selectedPreset ? "Selected Profile" : "Current Values"}
+          </div>
+          <h4 class="qs-profile-panel__title">${panelTitle}</h4>
+          <p class="qs-profile-panel__copy">${panelDescription}</p>
+          <div class="qs-profile-panel__impact">${panelImpact}</div>
+
+          <div class="qs-profile-panel__stats">
+            ${renderProfileStat({
+              label: "Bootstrap Per File",
+              value: formatCharBudget(draftSettings.bootstrapMaxChars),
+              previousValue: formatCharBudget(savedSettings.bootstrapMaxChars),
+              note: "Maximum context injected from any single bootstrap file.",
+            })}
+            ${renderProfileStat({
+              label: "Bootstrap Total",
+              value: formatCharBudget(draftSettings.bootstrapTotalMaxChars),
+              previousValue: formatCharBudget(savedSettings.bootstrapTotalMaxChars),
+              note: "Total combined context allowed across all bootstrap files.",
+            })}
+            ${renderProfileStat({
+              label: "Follow-up Turns",
+              value: formatContextInjectionLabel(draftSettings.contextInjection),
+              previousValue: formatContextInjectionLabel(savedSettings.contextInjection),
+              note: describeContextInjection(draftSettings.contextInjection),
+            })}
+          </div>
+
+          ${hasPendingConfigChange
+            ? html`
+                <div class="qs-profile-panel__actions">
+                  <div class="qs-profile-panel__actions-copy muted">${commitCopy}</div>
+                  <div class="qs-profile-panel__actions-row">
+                    <button
+                      class="btn btn--sm"
+                      ?disabled=${props.configSaving === true || props.configApplying === true}
+                      @click=${props.onResetConfig}
+                    >
+                      Discard
+                    </button>
+                    <button
+                      class="btn btn--sm primary"
+                      ?disabled=${!canCommit}
+                      @click=${props.onSaveConfig}
+                    >
+                      ${props.configSaving === true
+                        ? "Saving…"
+                        : hasPendingProfileChange
+                          ? "Save Profile"
+                          : "Save Changes"}
+                    </button>
+                    <button
+                      class="btn btn--sm"
+                      ?disabled=${!canCommit}
+                      @click=${props.onApplyConfig}
+                    >
+                      ${props.configApplying === true ? "Applying…" : "Apply Now"}
+                    </button>
+                  </div>
+                </div>
+              `
+            : html`
+                <div class="qs-profile-panel__footer muted" aria-live="polite">
+                  ${savedPreset
+                    ? "Saved and ready. Choose another profile to stage a change."
+                    : "Current values are custom. Choose a profile to stage a change."}
+                </div>
+              `}
+        </div>
       </div>
     </div>
   `;

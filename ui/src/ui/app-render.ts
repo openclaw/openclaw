@@ -40,10 +40,10 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageConfigPreset,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
-import { cloneConfigObject, serializeConfigForm } from "./controllers/config/form-utils.ts";
 import {
   loadCronJobsPage,
   loadCronRuns,
@@ -135,7 +135,11 @@ import {
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { getPresetById, type ConfigPresetId } from "./views/config-presets.ts";
-import { renderQuickSettings, type QuickSettingsChannel } from "./views/config-quick.ts";
+import {
+  renderQuickSettings,
+  type QuickSettingsChannel,
+  type QuickSettingsApiKey,
+} from "./views/config-quick.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
 import {
   renderCronQuickCreate,
@@ -561,35 +565,6 @@ function extractQuickSettingsSecurity(state: AppViewState): {
 
 function resolveQuickSettingsSessionRow(state: AppViewState) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
-}
-
-async function applyQuickSettingsPreset(state: AppViewState, presetId: ConfigPresetId) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const preset = getPresetById(presetId);
-  if (!preset) {
-    return;
-  }
-  state.configApplying = true;
-  state.lastError = null;
-  try {
-    if (!state.configSnapshot?.hash) {
-      await loadConfig(state);
-    }
-    const baseHash = state.configSnapshot?.hash?.trim();
-    if (!baseHash) {
-      throw new Error("Config base hash unavailable. Reload config and retry.");
-    }
-    const baseConfig = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
-    const merged = applyMergePatch(baseConfig, preset.patch) as Record<string, unknown>;
-    await state.client.request("config.patch", { raw: serializeConfigForm(merged), baseHash });
-    await loadConfig(state);
-  } catch (err) {
-    state.lastError = `Failed to apply preset: ${String(err)}`;
-  } finally {
-    state.configApplying = false;
-  }
 }
 
 function renderCronQuickCreateForTab(
@@ -1019,9 +994,23 @@ export function renderApp(state: AppViewState) {
             onUserNameChange: (name) => state.applyLocalUserIdentity?.({ name }),
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             configObject: configObj,
-            onApplyPreset: (presetId) => {
-              void applyQuickSettingsPreset(state, presetId).then(() => requestHostUpdate?.());
+            savedConfigObject:
+              (state.configSnapshot?.config as Record<string, unknown> | null) ?? {},
+            configDirty: state.configFormDirty,
+            configSaving: state.configSaving,
+            configApplying: state.configApplying,
+            configReady: Boolean(state.configSnapshot?.hash),
+            onSelectPreset: (presetId) => {
+              const preset = getPresetById(presetId);
+              if (!preset) {
+                return;
+              }
+              stageConfigPreset(state, preset.patch);
+              requestHostUpdate?.();
             },
+            onResetConfig: () => resetConfigPendingChanges(state),
+            onSaveConfig: () => saveConfig(state),
+            onApplyConfig: () => applyConfig(state),
             onAdvancedSettings: () => {
               state.configSettingsMode = "advanced";
               requestHostUpdate?.();
