@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { resolveBoundaryPathSync } from "../infra/boundary-path.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -619,6 +620,48 @@ function shouldInferBuiltRuntimeEntry(origin: PluginOrigin): boolean {
   return origin === "config" || origin === "global";
 }
 
+function resolveSafePackageEntry(params: {
+  packageDir: string;
+  entryPath: string;
+  sourceLabel: string;
+  diagnostics: PluginDiagnostic[];
+  rejectHardlinks?: boolean;
+}): { relativePath: string; existingSource?: string } | null {
+  const absolutePath = path.resolve(params.packageDir, params.entryPath);
+  if (fs.existsSync(absolutePath)) {
+    const existingSource = resolvePackageEntrySource({
+      packageDir: params.packageDir,
+      entryPath: params.entryPath,
+      sourceLabel: params.sourceLabel,
+      diagnostics: params.diagnostics,
+      rejectHardlinks: params.rejectHardlinks,
+    });
+    if (!existingSource) {
+      return null;
+    }
+    return {
+      relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/"),
+      existingSource,
+    };
+  }
+
+  try {
+    resolveBoundaryPathSync({
+      absolutePath,
+      rootPath: params.packageDir,
+      boundaryLabel: "plugin package directory",
+    });
+  } catch {
+    params.diagnostics.push({
+      level: "error",
+      message: `extension entry escapes package directory: ${params.entryPath}`,
+      source: params.sourceLabel,
+    });
+    return null;
+  }
+  return { relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/") };
+}
+
 function listBuiltRuntimeEntryCandidates(entryPath: string): string[] {
   if (!isTypeScriptPackageEntry(entryPath)) {
     return [];
@@ -671,6 +714,17 @@ function resolvePackageRuntimeEntrySource(params: {
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
 }): string | null {
+  const safeEntry = resolveSafePackageEntry({
+    packageDir: params.packageDir,
+    entryPath: params.entryPath,
+    sourceLabel: params.sourceLabel,
+    diagnostics: params.diagnostics,
+    rejectHardlinks: params.rejectHardlinks,
+  });
+  if (!safeEntry) {
+    return null;
+  }
+
   if (params.runtimeEntryPath) {
     const runtimeSource = resolvePackageEntrySource({
       packageDir: params.packageDir,
@@ -685,7 +739,7 @@ function resolvePackageRuntimeEntrySource(params: {
   }
 
   if (shouldInferBuiltRuntimeEntry(params.origin)) {
-    for (const candidate of listBuiltRuntimeEntryCandidates(params.entryPath)) {
+    for (const candidate of listBuiltRuntimeEntryCandidates(safeEntry.relativePath)) {
       const runtimeSource = resolveExistingPackageEntrySource({
         packageDir: params.packageDir,
         entryPath: candidate,
@@ -697,6 +751,10 @@ function resolvePackageRuntimeEntrySource(params: {
         return runtimeSource;
       }
     }
+  }
+
+  if (safeEntry.existingSource) {
+    return safeEntry.existingSource;
   }
 
   return resolvePackageEntrySource({
