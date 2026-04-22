@@ -12,10 +12,21 @@ describe("checkMutationGate", () => {
   });
 
   describe("plan mode — blocked tools", () => {
+    // Note: `sessions_spawn` was originally blocklisted but moved to
+    // the allowlist for research-subagent flows (see
+    // PLAN_MODE_ALLOWED_TOOLS comment block). Removed from this list
+    // to keep the test in sync with the canonical allowlist.
     const blockedTools = [
-      "apply_patch", "edit", "exec", "gateway", "message",
-      "nodes", "process", "sessions_send", "sessions_spawn",
-      "subagents", "write",
+      "apply_patch",
+      "edit",
+      "exec",
+      "gateway",
+      "message",
+      "nodes",
+      "process",
+      "sessions_send",
+      "subagents",
+      "write",
     ];
 
     for (const tool of blockedTools) {
@@ -34,8 +45,20 @@ describe("checkMutationGate", () => {
 
   describe("plan mode — allowed tools", () => {
     const allowedTools = [
-      "read", "web_search", "web_fetch", "memory_search",
-      "memory_get", "update_plan", "exit_plan_mode", "session_status",
+      "read",
+      "web_search",
+      "web_fetch",
+      "memory_search",
+      "memory_get",
+      "update_plan",
+      "exit_plan_mode",
+      "session_status",
+      // PR #68939 follow-up (allowlist catch-22 audit, 2026-04-22):
+      // verify the three live-blocked tools from Eva Baoyu investigation
+      // now pass through the default-deny gate.
+      "sessions_yield",
+      "lcm_grep",
+      "lcm_expand_query",
     ];
 
     for (const tool of allowedTools) {
@@ -66,10 +89,23 @@ describe("checkMutationGate", () => {
 
   describe("plan mode — exec read-only whitelist", () => {
     const readOnlyCommands = [
-      "ls -la", "cat README.md", "pwd", "git status", "git log --oneline",
-      "git diff HEAD", "git show abc123", "which node", "find . -name '*.ts'",
-      "grep -rn 'TODO'", "rg pattern", "head -20 file.ts", "tail -5 log",
-      "wc -l src/*.ts", "file image.png", "stat package.json", "du -sh .",
+      "ls -la",
+      "cat README.md",
+      "pwd",
+      "git status",
+      "git log --oneline",
+      "git diff HEAD",
+      "git show abc123",
+      "which node",
+      "find . -name '*.ts'",
+      "grep -rn 'TODO'",
+      "rg pattern",
+      "head -20 file.ts",
+      "tail -5 log",
+      "wc -l src/*.ts",
+      "file image.png",
+      "stat package.json",
+      "du -sh .",
       "df -h",
     ];
 
@@ -80,8 +116,12 @@ describe("checkMutationGate", () => {
     }
 
     const mutatingCommands = [
-      "rm -rf node_modules", "git commit -m 'test'", "git push origin main",
-      "npm install", "docker run hello-world", "mkdir -p new-dir",
+      "rm -rf node_modules",
+      "git commit -m 'test'",
+      "git push origin main",
+      "npm install",
+      "docker run hello-world",
+      "mkdir -p new-dir",
     ];
 
     for (const cmd of mutatingCommands) {

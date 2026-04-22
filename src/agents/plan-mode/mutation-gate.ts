@@ -92,6 +92,31 @@ const PLAN_MODE_ALLOWED_TOOLS = new Set([
   // "investigation phase" purpose.
   "image",
   "pdf",
+  // PR #68939 follow-up (allowlist catch-22 audit, 2026-04-22 — Eva
+  // Baoyu investigation): three more read-only tools live-observed
+  // hitting the default-deny gate during plan-mode investigation.
+  //
+  // - `sessions_yield`: agent calls this to suspend itself while
+  //   waiting for spawned subagents to finish. It does NOT mutate
+  //   workspace state — it only signals the runtime to park this
+  //   turn's promise. Without allowlist entry, the agent that
+  //   followed `sessions_spawn` correctly hits a catch-22 ("you
+  //   can spawn but cannot wait"). The error message even says
+  //   "Call exit_plan_mode" but exit_plan_mode is the wrong escape
+  //   here — the agent is mid-investigation, not done.
+  // - `lcm_grep` + `lcm_expand_query`: lossless-claw memory plugin
+  //   read tools (search by literal substring + query expansion to
+  //   surface related memory facts). Pure-read by design — they
+  //   query the memory store and return text matches. Live-blocked
+  //   2026-04-22 01:11 GMT+7 when Eva tried to grep prior memory
+  //   while investigating Baoyu skill install state.
+  //
+  // Excluded from this batch (intentional): `lcm_backfill_*`,
+  // `lcm_rollup`, `lcm_migration_state` — these mutate the memory
+  // store and should NOT be allowed mid-plan-design.
+  "sessions_yield",
+  "lcm_grep",
+  "lcm_expand_query",
 ]);
 
 /**
