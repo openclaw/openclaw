@@ -601,7 +601,7 @@ importers:
         specifier: 10.6.2
         version: 10.6.2
       zod:
-        specifier: 4.3.6
+        specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
