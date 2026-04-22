@@ -579,7 +579,7 @@ describe("handleAgentEnd", () => {
       throw new Error("flush exploded");
     });
 
-    expect(() => handleAgentEnd(ctx)).toThrow("flush exploded");
+    await expect(handleAgentEnd(ctx)).rejects.toThrow("flush exploded");
 
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
