@@ -463,9 +463,9 @@ function handleSessionMessageGatewayEvent(
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   host.eventLogBuffer = [
-    { ts: Date.now(), event: evt.event, payload: evt.payload },
     ...host.eventLogBuffer,
-  ].slice(0, 250);
+    { ts: Date.now(), event: evt.event, payload: evt.payload },
+  ].slice(-250);
   if (host.tab === "debug" || host.tab === "overview") {
     host.eventLog = host.eventLogBuffer;
   }

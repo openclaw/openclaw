@@ -19,6 +19,7 @@ export type DebugProps = {
   onCallParamsChange: (next: string) => void;
   onRefresh: () => void;
   onCall: () => void;
+  onEventLogScroll: (event: Event) => void;
 };
 
 export function renderDebug(props: DebugProps) {
@@ -121,7 +122,11 @@ ${JSON.stringify(props.models ?? [], null, 2)}</pre
       ${props.eventLog.length === 0
         ? html` <div class="muted" style="margin-top: 12px">No events yet.</div> `
         : html`
-            <div class="list debug-event-log" style="margin-top: 12px;">
+            <div
+              class="list debug-event-log"
+              style="margin-top: 12px;"
+              @scroll=${props.onEventLogScroll}
+            >
               ${props.eventLog.map(
                 (evt) => html`
                   <div class="list-item debug-event-log__item">

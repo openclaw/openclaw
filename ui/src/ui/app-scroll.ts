@@ -12,6 +12,8 @@ type ScrollHost = {
   chatNewMessagesBelow: boolean;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
+  debugEventLogScrollFrame: number | null;
+  debugEventLogAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
 };
 
@@ -123,6 +125,29 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   });
 }
 
+export function scheduleDebugEventLogScroll(host: ScrollHost, force = false) {
+  if (host.debugEventLogScrollFrame) {
+    cancelAnimationFrame(host.debugEventLogScrollFrame);
+  }
+  void host.updateComplete.then(() => {
+    host.debugEventLogScrollFrame = requestAnimationFrame(() => {
+      host.debugEventLogScrollFrame = null;
+      const container = queryHost(host, ".debug-event-log") as HTMLElement | null;
+      if (!container) {
+        return;
+      }
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      const shouldStick = force || host.debugEventLogAtBottom || distanceFromBottom < 80;
+      if (!shouldStick) {
+        return;
+      }
+      container.scrollTop = container.scrollHeight;
+      host.debugEventLogAtBottom = true;
+    });
+  });
+}
+
 export function handleChatScroll(host: ScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) {
@@ -143,6 +168,15 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.logsAtBottom = distanceFromBottom < 80;
+}
+
+export function handleDebugEventLogScroll(host: ScrollHost, event: Event) {
+  const container = event.currentTarget as HTMLElement | null;
+  if (!container) {
+    return;
+  }
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+  host.debugEventLogAtBottom = distanceFromBottom < 80;
 }
 
 export function resetChatScroll(host: ScrollHost) {

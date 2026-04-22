@@ -7,7 +7,12 @@ import {
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  observeTopbar,
+  scheduleChatScroll,
+  scheduleDebugEventLogScroll,
+  scheduleLogsScroll,
+} from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   detachThemeListener,
@@ -40,6 +45,8 @@ type LifecycleHost = {
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
+  eventLog: unknown[];
+  debugEventLogAtBottom: boolean;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
@@ -121,5 +128,11 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
         changed.has("tab") || changed.has("logsAutoFollow"),
       );
     }
+  }
+  if (host.tab === "debug" && (changed.has("eventLog") || changed.has("tab"))) {
+    scheduleDebugEventLogScroll(
+      host as unknown as Parameters<typeof scheduleDebugEventLogScroll>[0],
+      changed.has("tab") || host.debugEventLogAtBottom,
+    );
   }
 }

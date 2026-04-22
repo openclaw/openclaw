@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import {
+  handleChatScroll,
+  handleDebugEventLogScroll,
+  resetChatScroll,
+  scheduleChatScroll,
+  scheduleDebugEventLogScroll,
+} from "./app-scroll.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -44,6 +50,8 @@ function createScrollHost(
     chatNewMessagesBelow: false,
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
+    debugEventLogScrollFrame: null as number | null,
+    debugEventLogAtBottom: true,
     topbarObserver: null as ResizeObserver | null,
   };
 
@@ -271,5 +279,70 @@ describe("resetChatScroll", () => {
 
     expect(host.chatHasAutoScrolled).toBe(false);
     expect(host.chatUserNearBottom).toBe(true);
+  });
+});
+
+describe("debug event log scroll behavior", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("does NOT auto-scroll debug event log when user scrolled up", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 400,
+      clientHeight: 400,
+    });
+    host.debugEventLogAtBottom = false;
+    const originalScrollTop = container.scrollTop;
+    host.querySelector = vi
+      .fn()
+      .mockImplementation((selector: string) =>
+        selector === ".debug-event-log" ? container : null,
+      );
+
+    scheduleDebugEventLogScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(originalScrollTop);
+  });
+
+  it("auto-scrolls debug event log when user is at bottom", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.debugEventLogAtBottom = true;
+    host.querySelector = vi
+      .fn()
+      .mockImplementation((selector: string) =>
+        selector === ".debug-event-log" ? container : null,
+      );
+
+    scheduleDebugEventLogScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  it("tracks debug event log bottom-follow state from scroll events", () => {
+    const { host } = createScrollHost({});
+    const event = createScrollEvent(2000, 400, 400);
+    handleDebugEventLogScroll(host, event);
+    expect(host.debugEventLogAtBottom).toBe(false);
+
+    const nearBottomEvent = createScrollEvent(2000, 1550, 400);
+    handleDebugEventLogScroll(host, nearBottomEvent);
+    expect(host.debugEventLogAtBottom).toBe(true);
   });
 });

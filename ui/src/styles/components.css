@@ -1730,6 +1730,12 @@
 }
 
 /* Debug event log payloads should use full width like other debug sections. */
+.debug-event-log {
+  max-height: min(55vh, 680px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .debug-event-log__item {
   grid-template-columns: minmax(0, 1fr);
 }
