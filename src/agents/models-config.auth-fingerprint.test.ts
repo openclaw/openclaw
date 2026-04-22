@@ -101,6 +101,122 @@ describe("models-config auth profiles semantic fingerprint", () => {
     });
   });
 
+  it("invalidates the models-config cache when legacy apiKey changes", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const modelsPath = path.join(agentDir, "models.json");
+      await writeJson(modelsPath, { providers: {} });
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            apiKey: "sk-test-legacy-one",
+          },
+        },
+      });
+      await ensureOpenClawModelsJson({}, agentDir);
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            apiKey: "sk-test-legacy-two",
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("invalidates the models-config cache when legacy key SecretRef identity changes", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const modelsPath = path.join(agentDir, "models.json");
+      await writeJson(modelsPath, { providers: {} });
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: { source: "env", provider: "default", id: "OPENCLAW_TEST_AUTH_KEY_ONE" },
+          },
+        },
+      });
+      await ensureOpenClawModelsJson({}, agentDir);
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: { source: "env", provider: "default", id: "OPENCLAW_TEST_AUTH_KEY_TWO" },
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("fingerprints equivalent normalized and legacy api key aliases identically", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            apiKey: "sk-test-legacy-one",
+          },
+          "env:default": {
+            type: "api_key",
+            provider: "env-provider",
+            key: { source: "env", provider: "default", id: "OPENCLAW_TEST_AUTH_KEY" },
+          },
+        },
+      });
+      const legacy = await buildModelsJsonAuthProfilesFingerprint(agentDir);
+      expect(JSON.stringify(legacy)).not.toContain("sk-test-legacy-one");
+
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-legacy-one",
+          },
+          "env:default": {
+            type: "api_key",
+            provider: "env-provider",
+            keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_AUTH_KEY" },
+          },
+        },
+      });
+      const normalized = await buildModelsJsonAuthProfilesFingerprint(agentDir);
+
+      expect(normalized).toEqual(legacy);
+      expect(JSON.stringify(normalized)).not.toContain("sk-test-legacy-one");
+    });
+  });
+
   it("invalidates the models-config cache when auth profile order changes", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");

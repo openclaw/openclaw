@@ -109,6 +109,32 @@ function fingerprintEnvValue(value: unknown): FingerprintedString {
   return fingerprintStringValue(value);
 }
 
+function hasOwnProperty(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function normalizeApiKeyCredentialInputs(credential: Record<string, unknown>): {
+  key: unknown;
+  keyRef: ReturnType<typeof normalizeSecretRefFingerprint>;
+} {
+  const rawKey = hasOwnProperty(credential, "key")
+    ? credential.key
+    : typeof credential.apiKey === "string"
+      ? credential.apiKey
+      : undefined;
+  const explicitKeyRef = normalizeSecretRefFingerprint(credential.keyRef);
+  if (rawKey == null || typeof rawKey === "string") {
+    return {
+      key: rawKey,
+      keyRef: explicitKeyRef,
+    };
+  }
+  return {
+    key: undefined,
+    keyRef: explicitKeyRef ?? normalizeSecretRefFingerprint(rawKey),
+  };
+}
+
 function normalizeJwtAudience(idAudience: unknown, accessAudience: unknown): unknown {
   const audience = Array.isArray(idAudience)
     ? idAudience
@@ -155,10 +181,10 @@ function buildAuthCredentialFingerprint(credential: unknown) {
   const provider = normalizeOptionalString(credential.provider) ?? null;
   const base = { type, provider };
   if (type === "api_key") {
-    const keyRef = normalizeSecretRefFingerprint(credential.keyRef);
+    const { key, keyRef } = normalizeApiKeyCredentialInputs(credential);
     return {
       ...base,
-      key: fingerprintStringValue(credential.key),
+      key: fingerprintStringValue(key),
       keyRef,
       keyRefEnvValue:
         keyRef?.source === "env" ? fingerprintEnvValue(process.env[keyRef.id]) : undefined,
