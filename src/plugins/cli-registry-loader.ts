@@ -114,7 +114,11 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
       buildPluginCliLoaderParams(
         params.context,
         { primaryCommand: params.primaryCommand },
-        params.loaderOptions,
+        {
+          ...params.loaderOptions,
+          activate: false,
+          cache: false,
+        },
       ),
     ),
   };
