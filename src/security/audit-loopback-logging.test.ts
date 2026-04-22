@@ -5,7 +5,7 @@ import { collectGatewayConfigFindings, collectLoggingFindings } from "./audit.js
 
 function hasGatewayFinding(
   checkId: "gateway.trusted_proxies_missing" | "gateway.loopback_no_auth",
-  severity: "warn" | "critical",
+  severity: "info" | "warn" | "critical",
   findings: ReturnType<typeof collectGatewayConfigFindings>,
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
@@ -32,7 +32,26 @@ describe("security audit loopback and logging findings", () => {
         expect(
           hasGatewayFinding(
             "gateway.trusted_proxies_missing",
-            "warn",
+            "info",
+            collectGatewayConfigFindings(cfg, cfg, process.env),
+          ),
+        ).toBe(true);
+      })(),
+      (async () => {
+        // bind="custom" with a loopback customBindHost is accepted as
+        // loopback-equivalent by validateGatewayTailscaleBind; the audit
+        // check should classify it the same as bind="loopback".
+        const cfg: OpenClawConfig = {
+          gateway: {
+            bind: "custom",
+            customBindHost: "127.0.0.1",
+            controlUi: { enabled: true },
+          },
+        };
+        expect(
+          hasGatewayFinding(
+            "gateway.trusted_proxies_missing",
+            "info",
             collectGatewayConfigFindings(cfg, cfg, process.env),
           ),
         ).toBe(true);
@@ -43,6 +62,25 @@ describe("security audit loopback and logging findings", () => {
             bind: "lan",
             controlUi: { enabled: true },
             auth: { token: "placeholder-for-lan-audit-test" },
+          },
+        };
+        expect(
+          hasGatewayFinding(
+            "gateway.trusted_proxies_missing",
+            "warn",
+            collectGatewayConfigFindings(cfg, cfg, process.env),
+          ),
+        ).toBe(true);
+      })(),
+      (async () => {
+        // bind="custom" with a non-loopback customBindHost is not loopback-
+        // equivalent and must still surface the warn.
+        const cfg: OpenClawConfig = {
+          gateway: {
+            bind: "custom",
+            customBindHost: "192.168.1.10",
+            controlUi: { enabled: true },
+            auth: { token: "placeholder-for-custom-audit-test" },
           },
         };
         expect(

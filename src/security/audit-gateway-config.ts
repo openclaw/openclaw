@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -143,20 +144,37 @@ export function collectGatewayConfigFindings(
   }
 
   if (controlUiEnabled && trustedProxies.length === 0) {
+    const customBindHost = cfg.gateway?.customBindHost;
+    // A `custom` bind with a loopback customBindHost is accepted as
+    // loopback-equivalent elsewhere in the config layer (see
+    // validateGatewayTailscaleBind at src/config/validation.ts:548-557).
+    // Treat it the same here so a local-only deployment using that shape is
+    // not upgraded to `warn`.
+    const isLoopbackEquivalent =
+      bind === "loopback" ||
+      (bind === "custom" &&
+        isCanonicalDottedDecimalIPv4(customBindHost) &&
+        isLoopbackIpAddress(customBindHost));
     const safeBind = bind.replace(/[^a-zA-Z0-9._:-]/g, "?");
     findings.push({
       checkId: "gateway.trusted_proxies_missing",
-      severity: "warn",
-      title: "Trusted proxies not configured",
-      detail:
-        `gateway.bind="${safeBind}" and gateway.trustedProxies is empty. ` +
-        "A loopback bind is often used specifically because a reverse proxy on " +
-        "the same host fronts the Control UI; in that case requests still arrive " +
-        "with remoteAddress=127.0.0.1 and local-client checks may mis-classify " +
-        "external traffic as local without gateway.trustedProxies set.",
-      remediation:
-        "Set gateway.trustedProxies to your reverse proxy IPs (often 127.0.0.1/::1 " +
-        "for same-host) or ensure the Control UI is not fronted by any proxy.",
+      severity: isLoopbackEquivalent ? "info" : "warn",
+      title: isLoopbackEquivalent
+        ? "Trusted proxies not configured on loopback bind"
+        : "Trusted proxies not configured",
+      detail: isLoopbackEquivalent
+        ? `gateway.bind="${safeBind}" is loopback-equivalent and gateway.trustedProxies is empty. ` +
+          "X-Forwarded-For spoofing is not reachable off-host on a loopback-only bind. " +
+          "If a same-host reverse proxy (nginx, Caddy, systemd socket activation) fronts the Control UI, " +
+          "set gateway.trustedProxies so client-IP and local-client checks stay correct."
+        : `gateway.bind="${safeBind}" and gateway.trustedProxies is empty. ` +
+          "A reverse proxy in front of the Control UI can spoof X-Forwarded-For " +
+          "without explicit trusted proxies.",
+      remediation: isLoopbackEquivalent
+        ? "If the Control UI is fronted by a same-host reverse proxy, set " +
+          "gateway.trustedProxies to that proxy's IP (often 127.0.0.1/::1). " +
+          "No action required if the Control UI is only reached directly via loopback."
+        : "Set gateway.trustedProxies to your reverse proxy IP/CIDR(s) or bind to loopback.",
     });
   }
 
