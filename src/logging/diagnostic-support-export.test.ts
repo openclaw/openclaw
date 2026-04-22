@@ -457,6 +457,12 @@ describe("diagnostic support export", () => {
     expect(
       redactSupportString(`failed at ${userProfile}\\Documents\\snapshot-error.txt`, redaction),
     ).toBe("failed at ~\\Documents\\snapshot-error.txt");
+    expect(
+      redactSupportString(
+        "failed at c:\\users\\support-user\\Documents\\snapshot-error.txt",
+        redaction,
+      ),
+    ).toBe("failed at ~\\Documents\\snapshot-error.txt");
 
     const status = sanitizeSupportSnapshotValue(
       {
@@ -468,7 +474,7 @@ describe("diagnostic support export", () => {
               "--config",
               `${stateDir}\\openclaw.json`,
             ],
-            sourcePath: `${userProfile}\\AppData\\Local\\openclaw\\gateway-service.json`,
+            sourcePath: "c:\\users\\support-user\\AppData\\Local\\openclaw\\gateway-service.json",
           },
         },
       },

@@ -43,6 +43,7 @@ type RedactSupportStringOptions = {
 type PathRedactionPrefix = {
   prefix: string;
   label: string;
+  caseInsensitive: boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -89,14 +90,19 @@ function normalizePathPrefix(value: string): string {
   return isWindowsAbsolutePath(value) ? path.win32.resolve(value) : path.resolve(value);
 }
 
-function addPathPrefix(prefixes: Map<string, string>, prefix: string, label: string): void {
+function addPathPrefix(
+  prefixes: Map<string, PathRedactionPrefix>,
+  prefix: string,
+  label: string,
+  caseInsensitive: boolean,
+): void {
   if (!prefixes.has(prefix)) {
-    prefixes.set(prefix, label);
+    prefixes.set(prefix, { prefix, label, caseInsensitive });
   }
 }
 
 function addPathPrefixVariants(
-  prefixes: Map<string, string>,
+  prefixes: Map<string, PathRedactionPrefix>,
   value: string | undefined,
   label: string,
 ): void {
@@ -104,20 +110,19 @@ function addPathPrefixVariants(
     return;
   }
   const normalized = normalizePathPrefix(value);
-  addPathPrefix(prefixes, normalized, label);
+  const caseInsensitive = isWindowsAbsolutePath(normalized);
+  addPathPrefix(prefixes, normalized, label, caseInsensitive);
   if (isWindowsAbsolutePath(normalized)) {
-    addPathPrefix(prefixes, normalized.replaceAll("\\", "/"), label);
+    addPathPrefix(prefixes, normalized.replaceAll("\\", "/"), label, caseInsensitive);
   }
 }
 
 function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionPrefix[] {
-  const prefixes = new Map<string, string>();
+  const prefixes = new Map<string, PathRedactionPrefix>();
   addPathPrefixVariants(prefixes, options.stateDir, "$OPENCLAW_STATE_DIR");
   addPathPrefixVariants(prefixes, options.env.HOME, "~");
   addPathPrefixVariants(prefixes, options.env.USERPROFILE, "~");
-  return [...prefixes.entries()]
-    .map(([prefix, label]) => ({ prefix, label }))
-    .toSorted((a, b) => b.prefix.length - a.prefix.length);
+  return [...prefixes.values()].toSorted((a, b) => b.prefix.length - a.prefix.length);
 }
 
 function pathCandidates(file: string): string[] {
@@ -128,12 +133,21 @@ function pathCandidates(file: string): string[] {
   return [resolved, resolved.replaceAll("\\", "/")];
 }
 
-function matchPathPrefix(file: string, prefix: string): string | undefined {
-  if (file === prefix) {
+function hasPathPrefix(value: string, prefix: PathRedactionPrefix): boolean {
+  return prefix.caseInsensitive
+    ? value.toLowerCase().startsWith(prefix.prefix.toLowerCase())
+    : value.startsWith(prefix.prefix);
+}
+
+function matchPathPrefix(file: string, prefix: PathRedactionPrefix): string | undefined {
+  if (file.length === prefix.prefix.length && hasPathPrefix(file, prefix)) {
     return "";
   }
-  const next = file[prefix.length];
-  return next === "/" || next === "\\" ? file.slice(prefix.length) : undefined;
+  if (!hasPathPrefix(file, prefix)) {
+    return undefined;
+  }
+  const next = file[prefix.prefix.length];
+  return next === "/" || next === "\\" ? file.slice(prefix.prefix.length) : undefined;
 }
 
 function isSupportAbsolutePath(value: string): boolean {
@@ -146,14 +160,32 @@ export function redactPathForSupport(file: string, options: SupportRedactionCont
   }
   const candidates = pathCandidates(file);
   for (const next of candidates) {
-    for (const { prefix, label } of pathRedactionPrefixes(options)) {
+    for (const prefix of pathRedactionPrefixes(options)) {
       const suffix = matchPathPrefix(next, prefix);
       if (suffix !== undefined) {
-        return `${label}${suffix}`;
+        return `${prefix.label}${suffix}`;
       }
     }
   }
   return redactSensitiveTextForSupport(candidates[0] ?? file);
+}
+
+function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): string {
+  const search = prefix.caseInsensitive ? prefix.prefix.toLowerCase() : prefix.prefix;
+  const haystack = prefix.caseInsensitive ? value.toLowerCase() : value;
+  let offset = 0;
+  let next = "";
+  while (offset < value.length) {
+    const index = haystack.indexOf(search, offset);
+    if (index === -1) {
+      next += value.slice(offset);
+      break;
+    }
+    next += value.slice(offset, index);
+    next += prefix.label;
+    offset = index + prefix.prefix.length;
+  }
+  return next;
 }
 
 function redactKnownPathPrefixesForSupport(
@@ -161,8 +193,8 @@ function redactKnownPathPrefixesForSupport(
   redaction: SupportRedactionContext,
 ): string {
   let next = value;
-  for (const { prefix, label } of pathRedactionPrefixes(redaction)) {
-    next = next.split(prefix).join(label);
+  for (const prefix of pathRedactionPrefixes(redaction)) {
+    next = replaceKnownPathPrefix(next, prefix);
   }
   return next;
 }
