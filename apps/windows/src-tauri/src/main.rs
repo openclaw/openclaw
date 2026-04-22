@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::io::{BufReader, BufRead};
 use serde::Serialize;
-use sysinfo::{ProcessRefreshKind, System};
+use sysinfo::System;
 use tauri::{
     AppHandle, Manager, State, SystemTray, SystemTrayEvent, CustomMenuItem, SystemTrayMenu, SystemTrayMenuItem
 };
