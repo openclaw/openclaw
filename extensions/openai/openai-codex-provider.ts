@@ -374,6 +374,12 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
     docsPath: "/providers/models",
+    oauthProfileIdRepairs: [
+      {
+        legacyProfileId: "openai-codex:default",
+        promptLabel: "OpenAI Codex",
+      },
+    ],
     auth: [
       {
         id: "oauth",

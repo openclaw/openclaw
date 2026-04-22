@@ -125,6 +125,17 @@ describe("openai codex provider", () => {
     );
   });
 
+  it("declares the legacy default OAuth profile repair", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(provider.oauthProfileIdRepairs).toEqual([
+      {
+        legacyProfileId: "openai-codex:default",
+        promptLabel: "OpenAI Codex",
+      },
+    ]);
+  });
+
   it("offers OpenAI menu auth methods for browser login and device pairing", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
