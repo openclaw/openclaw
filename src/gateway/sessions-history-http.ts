@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -31,6 +32,8 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
+
+const log = createSubsystemLogger("gateway/sessions-history-sse");
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
@@ -203,14 +206,24 @@ export async function handleSessionHistoryHttpRequest(
 
   let cleanedUp = false;
   let streamQueue = Promise.resolve();
+  // Forward-declared so `cleanup` can reference them without relying on
+  // Temporal-Dead-Zone leniency. A future refactor that wires the close event
+  // listeners before the `setInterval` / `onSessionTranscriptUpdate` calls
+  // would otherwise hit a `ReferenceError` on the first cleanup invocation.
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe: (() => void) | undefined;
 
   const cleanup = () => {
     if (cleanedUp) {
       return;
     }
     cleanedUp = true;
-    clearInterval(heartbeat);
-    unsubscribe();
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    if (unsubscribe) {
+      unsubscribe();
+    }
   };
 
   const closeStream = () => {
@@ -228,7 +241,11 @@ export async function handleSessionHistoryHttpRequest(
         }
         await work();
       })
-      .catch(() => {
+      .catch((error) => {
+        // Surface the underlying error so operators can distinguish transient
+        // infrastructure failures (for example a `loadConfig()` read error
+        // inside the reauth path) from deliberate revocation, then fail closed.
+        log.warn("session history SSE stream work failed; closing stream", { error });
         closeStream();
       });
   };
@@ -250,7 +267,7 @@ export async function handleSessionHistoryHttpRequest(
     return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
   };
 
-  const heartbeat = setInterval(() => {
+  heartbeat = setInterval(() => {
     queueStreamWork(async () => {
       if (!(await isStreamStillAuthorized())) {
         closeStream();
@@ -262,13 +279,21 @@ export async function handleSessionHistoryHttpRequest(
     });
   }, 15_000);
 
-  const unsubscribe = onSessionTranscriptUpdate((update) => {
+  unsubscribe = onSessionTranscriptUpdate((update) => {
+    // Filter to candidate sessions synchronously before enqueueing any async
+    // work. `onSessionTranscriptUpdate` is a global fan-out listener, so every
+    // transcript write in the gateway would otherwise append a Promise-chain
+    // entry capturing `update.message` to every open SSE stream's queue —
+    // O(streams × updates) for busy deployments.
+    if (!entry?.sessionId) {
+      return;
+    }
+    const updatePath = canonicalizePath(update.sessionFile);
+    if (!updatePath || !transcriptCandidates.has(updatePath)) {
+      return;
+    }
     queueStreamWork(async () => {
-      if (res.writableEnded || !entry?.sessionId) {
-        return;
-      }
-      const updatePath = canonicalizePath(update.sessionFile);
-      if (!updatePath || !transcriptCandidates.has(updatePath)) {
+      if (res.writableEnded) {
         return;
       }
       if (!(await isStreamStillAuthorized())) {
