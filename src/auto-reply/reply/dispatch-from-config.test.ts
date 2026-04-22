@@ -713,6 +713,43 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:999",
+      lastAccountId: "acc-1",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "exec-event",
+      Surface: "exec-event",
+      SessionKey: "agent:main:main",
+      AccountId: undefined,
+      OriginatingChannel: undefined,
+      OriginatingTo: undefined,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      }),
+    );
+  });
+
   it("falls back to thread-scoped session key when current ctx has no MessageThreadId", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

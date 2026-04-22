@@ -287,6 +287,18 @@ export async function dispatchReplyFromConfig(
           "",
       ) ?? "off",
   });
+  const isSystemEventTurn =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  const persistedDeliveryContext = sessionStoreEntry.entry?.deliveryContext;
+  const fallbackOriginatingChannel = isSystemEventTurn
+    ? (persistedDeliveryContext?.channel ?? sessionStoreEntry.entry?.lastChannel)
+    : undefined;
+  const fallbackOriginatingTo = isSystemEventTurn
+    ? (persistedDeliveryContext?.to ?? sessionStoreEntry.entry?.lastTo)
+    : undefined;
+  const fallbackOriginatingAccountId = isSystemEventTurn
+    ? (persistedDeliveryContext?.accountId ?? sessionStoreEntry.entry?.lastAccountId)
+    : undefined;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -319,7 +331,10 @@ export async function dispatchReplyFromConfig(
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
-  const normalizedOriginatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
+  const effectiveOriginatingChannel = ctx.OriginatingChannel ?? fallbackOriginatingChannel;
+  const effectiveOriginatingTo = ctx.OriginatingTo ?? fallbackOriginatingTo;
+  const routeAccountId = ctx.AccountId ?? fallbackOriginatingAccountId;
+  const normalizedOriginatingChannel = normalizeMessageChannel(effectiveOriginatingChannel);
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
   const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
   const normalizedCurrentSurface = normalizedProviderChannel ?? normalizedSurfaceChannel;
@@ -331,7 +346,7 @@ export async function dispatchReplyFromConfig(
     !suppressAcpChildUserDelivery &&
     !isInternalWebchatTurn &&
     normalizedOriginatingChannel &&
-    ctx.OriginatingTo &&
+    effectiveOriginatingTo &&
     normalizedOriginatingChannel !== normalizedCurrentSurface,
   );
   const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
@@ -340,12 +355,12 @@ export async function dispatchReplyFromConfig(
       provider: ctx.Provider,
       surface: ctx.Surface,
       explicitDeliverRoute: ctx.ExplicitDeliverRoute,
-      originatingChannel: ctx.OriginatingChannel,
-      originatingTo: ctx.OriginatingTo,
+      originatingChannel: effectiveOriginatingChannel,
+      originatingTo: effectiveOriginatingTo,
       suppressDirectUserDelivery: suppressAcpChildUserDelivery,
       isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
     });
-  const originatingTo = ctx.OriginatingTo;
+  const originatingTo = effectiveOriginatingTo;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
   const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
@@ -353,7 +368,7 @@ export async function dispatchReplyFromConfig(
     sessionKey: acpDispatchSessionKey,
     workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
     messageProvider: ttsChannel,
-    accountId: ctx.AccountId,
+    accountId: routeAccountId,
     groupId,
     groupChannel: ctx.GroupChannel,
     groupSpace: ctx.GroupSpace,
@@ -385,7 +400,7 @@ export async function dispatchReplyFromConfig(
         ctx.CommandSource === "native"
           ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
           : ctx.SessionKey,
-      accountId: ctx.AccountId,
+      accountId: routeAccountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,
       requesterSenderUsername: ctx.SenderUsername,
