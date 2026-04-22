@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin } from "../../plugins/types.js";
 import {
   loadProviderCatalogModelsForList,
   resolveProviderCatalogPluginIdsForFilter,
@@ -24,7 +23,6 @@ const baseParams = {
 
 describe("loadProviderCatalogModelsForList", () => {
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -53,48 +51,6 @@ describe("loadProviderCatalogModelsForList", () => {
     );
   });
 
-  it("skips static catalogs that exceed the display budget", async () => {
-    vi.useFakeTimers();
-    const hungProvider = {
-      id: "hung",
-      label: "Hung",
-      auth: [],
-      staticCatalog: {
-        run: async () => new Promise<never>(() => {}),
-      },
-    } satisfies ProviderPlugin;
-    const healthyProvider = {
-      id: "healthy",
-      label: "Healthy",
-      auth: [],
-      staticCatalog: {
-        run: async () => ({
-          provider: {
-            baseUrl: "https://healthy.example/v1",
-            models: [{ id: "healthy-model", name: "Healthy Model" }],
-          },
-        }),
-      },
-    } satisfies ProviderPlugin;
-    const discovery = await import("../../plugins/provider-discovery.js");
-    vi.spyOn(discovery, "resolvePluginDiscoveryProviders").mockResolvedValue([
-      hungProvider,
-      healthyProvider,
-    ]);
-
-    const rowsPromise = loadProviderCatalogModelsForList({
-      ...baseParams,
-    });
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    await expect(rowsPromise).resolves.toEqual([
-      expect.objectContaining({
-        provider: "healthy",
-        id: "healthy-model",
-      }),
-    ]);
-  });
-
   it("recognizes bundled provider hook aliases before the unknown-provider short-circuit", async () => {
     await expect(
       resolveProviderCatalogPluginIdsForFilter({
@@ -105,47 +61,46 @@ describe("loadProviderCatalogModelsForList", () => {
     ).resolves.toEqual(["openai"]);
   });
 
-  it("recognizes trusted workspace provider aliases before the unknown-provider short-circuit", async () => {
-    const manifestRegistry = await import("../../plugins/manifest-registry.js");
+  it("does not execute workspace provider static catalogs", async () => {
     const providers = await import("../../plugins/providers.js");
     const discovery = await import("../../plugins/provider-discovery.js");
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "workspace-demo",
-          origin: "workspace",
-          providers: ["workspace-demo"],
-          cliBackends: [],
-        },
-      ],
-      diagnostics: [],
-    } as never);
-    vi.spyOn(providers, "resolveDiscoveredProviderPluginIds").mockReturnValue(["workspace-demo"]);
+    const workspaceStaticCatalog = vi.fn(async () => ({
+      provider: { baseUrl: "https://workspace.example/v1", models: [] },
+    }));
+    vi.spyOn(providers, "resolveBundledProviderCompatPluginIds").mockReturnValue(["bundled-demo"]);
     vi.spyOn(discovery, "resolvePluginDiscoveryProviders").mockResolvedValue([
+      {
+        id: "bundled-demo",
+        pluginId: "bundled-demo",
+        label: "Bundled Demo",
+        auth: [],
+        staticCatalog: {
+          run: async () => null,
+        },
+      },
       {
         id: "workspace-demo",
         pluginId: "workspace-demo",
         label: "Workspace Demo",
-        aliases: ["workspace-demo-alias"],
         auth: [],
         staticCatalog: {
-          run: async () => ({
-            provider: {
-              baseUrl: "https://workspace.example/v1",
-              models: [],
-            },
-          }),
+          run: workspaceStaticCatalog,
         },
       },
     ]);
 
-    await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "workspace-demo-alias",
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+    });
+
+    expect(discovery.resolvePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["bundled-demo"],
+        includeUntrustedWorkspacePlugins: false,
       }),
-    ).resolves.toEqual(["workspace-demo"]);
+    );
+    expect(workspaceStaticCatalog).not.toHaveBeenCalled();
+    expect(rows).toEqual([]);
   });
 
   it("keeps unknown provider filters eligible for early empty results", async () => {
