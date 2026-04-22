@@ -1,10 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import * as channelPluginsModule from "../../channels/plugins/index.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import * as agentDeliveryModule from "../../infra/outbound/agent-delivery.js";
+import type { AgentDeliveryPlan } from "../../infra/outbound/agent-delivery.js";
+import * as deliverModule from "../../infra/outbound/deliver.js";
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import * as messageChannelModule from "../../utils/message-channel.js";
 import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -305,6 +313,391 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       durationMs: 1,
       transport: "embedded",
       fallbackFrom: "gateway",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deliveryStatus tracking tests (PR #53961)
+// Uses spyOn approach for delivery mocking - separate from upstream normalize tests.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Spies (vi.mock has module-resolution issues in forks pool when transitive
+// dependencies are pre-loaded by test/setup.ts - vi.spyOn is reliable).
+// ---------------------------------------------------------------------------
+
+const deliverSpy = vi.spyOn(deliverModule, "deliverOutboundPayloads");
+const deliveryPlanSpy = vi.spyOn(agentDeliveryModule, "resolveAgentDeliveryPlan");
+const outboundTargetSpy = vi.spyOn(agentDeliveryModule, "resolveAgentOutboundTarget");
+const channelPluginSpy = vi.spyOn(channelPluginsModule, "getChannelPlugin");
+const isInternalSpy = vi.spyOn(messageChannelModule, "isInternalMessageChannel");
+
+afterAll(() => {
+  vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function createRuntime(): RuntimeEnv & {
+  log: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+  writeJson: ReturnType<typeof vi.fn>;
+} {
+  return { log: vi.fn(), error: vi.fn(), writeJson: vi.fn() } as unknown as RuntimeEnv & {
+    log: ReturnType<typeof vi.fn>;
+    error: ReturnType<typeof vi.fn>;
+    writeJson: ReturnType<typeof vi.fn>;
+  };
+}
+
+/** Set up spies for a standard successful Discord delivery. */
+function setupSuccessfulDelivery() {
+  deliverSpy.mockResolvedValue([
+    { channel: "discord", messageId: "msg-1" } as OutboundDeliveryResult,
+  ]);
+  deliveryPlanSpy.mockReturnValue({
+    baseDelivery: {} as unknown as AgentDeliveryPlan["baseDelivery"],
+    resolvedChannel: "discord",
+    resolvedTo: "channel:123456",
+    resolvedAccountId: "bot-1",
+  });
+  outboundTargetSpy.mockReturnValue({
+    resolvedTarget: {
+      ok: true as const,
+      to: "channel:123456",
+    } as ReturnType<typeof agentDeliveryModule.resolveAgentOutboundTarget>["resolvedTarget"],
+    resolvedTo: "channel:123456",
+    targetMode: "explicit" as const,
+  });
+  channelPluginSpy.mockReturnValue({ name: "discord" } as unknown as ReturnType<
+    typeof channelPluginsModule.getChannelPlugin
+  >);
+  isInternalSpy.mockReturnValue(false);
+}
+
+async function runDelivery(
+  opts: Record<string, unknown>,
+  overrides?: {
+    runtime?: ReturnType<typeof createRuntime>;
+    payloads?: { text: string }[];
+  },
+) {
+  const runtime = overrides?.runtime ?? createRuntime();
+  const payloads = overrides?.payloads ?? [{ text: "hello" }];
+  const result = await deliverAgentCommandResult({
+    cfg: {} as unknown as OpenClawConfig,
+    deps: {} as unknown as CliDeps,
+    runtime,
+    opts: opts as unknown as AgentCommandOpts,
+    outboundSession: { key: "agent:main:discord:direct:12345" },
+    sessionEntry: {
+      lastChannel: "discord",
+      lastTo: "channel:123456",
+    } as unknown as SessionEntry,
+    result: { payloads, meta: { durationMs: 1 } },
+    payloads,
+  });
+  return { runtime, result };
+}
+
+function logMessages(runtime: ReturnType<typeof createRuntime>): string[] {
+  return runtime.log.mock.calls.map((c: unknown[]) => String(c[0]));
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("deliverAgentCommandResult — delivery status tracking", () => {
+  beforeEach(() => {
+    // Clear call counts/results but keep spies attached (vi.restoreAllMocks
+    // would disconnect them from the module exports).
+    deliverSpy.mockReset();
+    deliveryPlanSpy.mockReset();
+    outboundTargetSpy.mockReset();
+    channelPluginSpy.mockReset();
+    isInternalSpy.mockReset();
+    setupSuccessfulDelivery();
+  });
+
+  it("returns deliveryStatus.succeeded=true on successful delivery", async () => {
+    const { result, runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(result.deliveryStatus).toEqual({
+      requested: true,
+      attempted: true,
+      succeeded: true,
+    });
+    // No warning log on success
+    expect(logMessages(runtime).some((msg) => msg.includes("[delivery]"))).toBe(false);
+  });
+
+  it("returns no deliveryStatus when deliver is false", async () => {
+    const { result } = await runDelivery({
+      message: "hello",
+      deliver: false,
+    });
+
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(result.deliveryStatus).toBeUndefined();
+  });
+
+  it("logs warning and returns succeeded=false when delivery target is missing", async () => {
+    outboundTargetSpy.mockReturnValue({
+      resolvedTarget: null,
+      resolvedTo: undefined,
+      targetMode: "implicit" as const,
+    });
+
+    const { result, runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      channel: "discord",
+    });
+
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(result.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
+    });
+    expect(
+      logMessages(runtime).some((msg) =>
+        msg.includes("[delivery] delivery requested but not completed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("logs warning and returns succeeded=false when deliverOutboundPayloads returns empty", async () => {
+    deliverSpy.mockResolvedValue([]);
+
+    const { result, runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(result.deliveryStatus).toEqual({
+      requested: true,
+      attempted: true,
+      succeeded: false,
+    });
+    expect(logMessages(runtime).some((msg) => msg.includes("delivery returned zero results"))).toBe(
+      true,
+    );
+  });
+
+  it("catches thrown error in bestEffort mode without re-throwing", async () => {
+    deliverSpy.mockRejectedValue(new Error("Discord API timeout"));
+
+    const { result, runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    expect(result.deliveryStatus).toEqual({
+      requested: true,
+      attempted: true,
+      succeeded: false,
+      error: true,
+    });
+    // Error should be logged via logDeliveryError -> runtime.error or runtime.log
+    const allOutput = [...runtime.error.mock.calls, ...runtime.log.mock.calls].map((c) =>
+      String(c[0]),
+    );
+    expect(allOutput.some((msg) => msg.includes("Discord API timeout"))).toBe(true);
+    // Structured log should report "threw an error", not "zero results"
+    expect(allOutput.some((msg) => msg.includes("delivery threw an error"))).toBe(true);
+  });
+
+  it("re-throws error when bestEffort is false", async () => {
+    deliverSpy.mockRejectedValue(new Error("Discord API timeout"));
+
+    await expect(
+      runDelivery({
+        message: "hello",
+        deliver: true,
+        bestEffortDeliver: false,
+        channel: "discord",
+        to: "channel:123456",
+      }),
+    ).rejects.toThrow("Discord API timeout");
+  });
+
+  it("logs warning when channel resolves to internal", async () => {
+    isInternalSpy.mockReturnValue(true);
+    deliveryPlanSpy.mockReturnValue({
+      baseDelivery: {} as unknown as AgentDeliveryPlan["baseDelivery"],
+      resolvedChannel: "__internal__",
+      resolvedTo: undefined,
+    });
+
+    const { result, runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      bestEffortDeliver: true,
+    });
+
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(result.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
+    });
+    expect(logMessages(runtime).some((msg) => msg.includes("channel resolved to internal"))).toBe(
+      true,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSON output — deliveryStatus surfacing (#57730)
+// ---------------------------------------------------------------------------
+
+describe("deliverAgentCommandResult — JSON output includes deliveryStatus", () => {
+  beforeEach(() => {
+    deliverSpy.mockReset();
+    deliveryPlanSpy.mockReset();
+    outboundTargetSpy.mockReset();
+    channelPluginSpy.mockReset();
+    isInternalSpy.mockReset();
+    setupSuccessfulDelivery();
+  });
+
+  function parseJsonOutput(runtime: ReturnType<typeof createRuntime>) {
+    const [[jsonValue] = []] = runtime.writeJson.mock.calls;
+    if (jsonValue !== undefined) {
+      return jsonValue;
+    }
+    const jsonLine = logMessages(runtime).find((msg) => msg.startsWith("{"));
+    return jsonLine ? JSON.parse(jsonLine) : null;
+  }
+
+  it("includes deliveryStatus in JSON output on successful delivery", async () => {
+    const { runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      json: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: true,
+      succeeded: true,
+    });
+  });
+
+  it("includes deliveryStatus in JSON output on failed delivery", async () => {
+    deliverSpy.mockResolvedValue([]);
+
+    const { runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      json: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: true,
+      succeeded: false,
+    });
+  });
+
+  it("emits JSON without deliveryStatus when deliver is false", async () => {
+    const { runtime } = await runDelivery({
+      message: "hello",
+      deliver: false,
+      json: true,
+    });
+
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toBeUndefined();
+    expect(envelope.payloads).toBeDefined();
+  });
+
+  it("emits JSON with deliveryStatus on non-bestEffort throw", async () => {
+    deliverSpy.mockRejectedValue(new Error("API timeout"));
+    const runtime = createRuntime();
+
+    await expect(
+      runDelivery(
+        {
+          message: "hello",
+          deliver: true,
+          bestEffortDeliver: false,
+          json: true,
+          channel: "discord",
+          to: "channel:123456",
+        },
+        { runtime },
+      ),
+    ).rejects.toThrow("API timeout");
+
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: true,
+      succeeded: false,
+      error: true,
+    });
+  });
+
+  it("suppresses plain-text warning in JSON mode", async () => {
+    deliverSpy.mockResolvedValue([]);
+
+    const { runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      json: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    expect(logMessages(runtime).some((msg) => msg.includes("[delivery]"))).toBe(false);
+  });
+
+  it("includes deliveryStatus for no-payload runs in JSON+deliver mode", async () => {
+    const { runtime } = await runDelivery(
+      {
+        message: "",
+        deliver: true,
+        json: true,
+        channel: "discord",
+        to: "channel:123456",
+      },
+      { payloads: [] },
+    );
+
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
     });
   });
 });
