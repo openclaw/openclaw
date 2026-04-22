@@ -79,6 +79,8 @@ export type ChatProps = {
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -547,6 +549,7 @@ function renderPinnedSection(
   pinned: PinnedMessages,
   requestUpdate: () => void,
 ): TemplateResult | typeof nothing {
+  const userRoleLabel = props.userName?.trim() || "You";
   const messages = Array.isArray(props.messages) ? props.messages : [];
   const entries: Array<{ index: number; text: string; role: string }> = [];
   for (const idx of pinned.indices) {
@@ -582,7 +585,7 @@ function renderPinnedSection(
                 ({ index, text, role }) => html`
                   <div class="agent-chat__pinned-item">
                     <span class="agent-chat__pinned-role"
-                      >${role === "user" ? "You" : "Assistant"}</span
+                      >${role === "user" ? userRoleLabel : "Assistant"}</span
                     >
                     <span class="agent-chat__pinned-text"
                       >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
@@ -902,6 +905,8 @@ export function renderChat(props: ChatProps) {
                 onRequestUpdate: requestUpdate,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
+                userName: props.userName ?? null,
+                userAvatar: props.userAvatar ?? null,
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                 assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,

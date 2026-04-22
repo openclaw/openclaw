@@ -224,6 +224,64 @@ describe("grouped chat rendering", () => {
     expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
   });
 
+  it("renders the configured local user name in user message footers", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: "hello",
+        timestamp: 1000,
+      },
+      "user",
+      { userName: "Buns" },
+    );
+
+    const sender = container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
+    expect(sender?.textContent).toBe("Buns");
+  });
+
+  it("renders a local user image avatar when provided", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: "hello",
+        timestamp: 1000,
+      },
+      "user",
+      { userName: "Buns", userAvatar: "data:image/png;base64,AAA" },
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute("src")).toBe("data:image/png;base64,AAA");
+    expect(avatar?.getAttribute("alt")).toBe("Buns");
+  });
+
+  it("renders a local user text avatar when provided", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: "hello",
+        timestamp: 1000,
+      },
+      "user",
+      { userAvatar: "🦞" },
+    );
+
+    const avatar = container.querySelector<HTMLElement>(".chat-avatar.user");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.tagName).toBe("DIV");
+    expect(avatar?.textContent).toContain("🦞");
+  });
+
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
     const container = document.createElement("div");
     const message = {

@@ -8,8 +8,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 import type { BorderRadiusStop } from "../storage.ts";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
+import { isRenderableControlUiAvatarUrl } from "./agents-utils.ts";
 import { CONFIG_PRESETS, detectActivePreset, type ConfigPresetId } from "./config-presets.ts";
 
 // ── Types ──
@@ -74,6 +76,10 @@ export type QuickSettingsProps = {
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
+  userName?: string | null;
+  userAvatar?: string | null;
+  onUserNameChange?: (next: string) => void;
+  onUserAvatarChange?: (next: string | null) => void;
 
   // Presets
   configObject?: Record<string, unknown>;
@@ -107,6 +113,51 @@ const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
 ];
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
+
+function renderDefaultUserAvatar() {
+  return html`
+    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M20 21a8 8 0 1 0-16 0" />
+    </svg>
+  `;
+}
+
+function renderLocalUserAvatarPreview(
+  name: string | null | undefined,
+  avatar: string | null | undefined,
+) {
+  const trimmed = normalizeOptionalString(avatar);
+  const label = normalizeOptionalString(name) ?? "You";
+  if (trimmed && isRenderableControlUiAvatarUrl(trimmed)) {
+    return html`<img class="qs-user-avatar" src=${trimmed} alt=${label} />`;
+  }
+  if (trimmed) {
+    return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${label}>
+      ${trimmed}
+    </div>`;
+  }
+  return html`
+    <div class="qs-user-avatar qs-user-avatar--default" aria-label=${label}>
+      ${renderDefaultUserAvatar()}
+    </div>
+  `;
+}
+
+function handleLocalUserAvatarFileSelect(e: Event, props: QuickSettingsProps) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !props.onUserAvatarChange) {
+    input.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    props.onUserAvatarChange?.(typeof reader.result === "string" ? reader.result : null);
+  });
+  reader.readAsDataURL(file);
+  input.value = "";
+}
 
 // ── Card renderers ──
 
@@ -381,6 +432,78 @@ function renderAppearanceCard(props: QuickSettingsProps) {
   `;
 }
 
+function renderPersonalCard(props: QuickSettingsProps) {
+  const avatarText =
+    props.userAvatar && !isRenderableControlUiAvatarUrl(props.userAvatar) ? props.userAvatar : "";
+  return html`
+    <div class="qs-card">
+      ${renderCardHeader(icons.image, "Personal")}
+      <div class="qs-card__body">
+        <div class="qs-personal-preview">
+          ${renderLocalUserAvatarPreview(props.userName, props.userAvatar)}
+          <div class="qs-personal-preview__copy">
+            <div class="qs-personal-preview__title">
+              ${normalizeOptionalString(props.userName) ?? "You"}
+            </div>
+            <div class="muted">This browser only</div>
+          </div>
+        </div>
+        <div class="qs-row">
+          <label class="qs-field">
+            <span class="qs-row__label">Name</span>
+            <input
+              class="qs-field__input"
+              type="text"
+              maxlength="50"
+              .value=${props.userName ?? ""}
+              placeholder="You"
+              @input=${(e: Event) => props.onUserNameChange?.((e.target as HTMLInputElement).value)}
+            />
+          </label>
+        </div>
+        <div class="qs-row">
+          <label class="qs-field">
+            <span class="qs-row__label">Avatar text / emoji</span>
+            <input
+              class="qs-field__input"
+              type="text"
+              maxlength="16"
+              .value=${avatarText}
+              placeholder="JD or 🦞"
+              @input=${(e: Event) => {
+                const value = (e.target as HTMLInputElement).value;
+                props.onUserAvatarChange?.(value.trim() ? value : null);
+              }}
+            />
+          </label>
+        </div>
+        <div class="qs-personal-actions">
+          <label class="btn btn--sm">
+            Choose image
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              @change=${(e: Event) => handleLocalUserAvatarFileSelect(e, props)}
+            />
+          </label>
+          <button
+            type="button"
+            class="btn btn--sm btn--ghost"
+            ?disabled=${!props.userName && !props.userAvatar}
+            @click=${() => {
+              props.onUserNameChange?.("");
+              props.onUserAvatarChange?.(null);
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderPresetsCard(props: QuickSettingsProps) {
   const activePreset = props.configObject ? detectActivePreset(props.configObject) : "personal";
 
@@ -433,7 +556,7 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       <div class="qs-grid">
         ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderApiKeysCard(props)}
         ${renderAutomationsCard(props)} ${renderSecurityCard(props)} ${renderAppearanceCard(props)}
-        ${renderPresetsCard(props)}
+        ${renderPersonalCard(props)} ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}
