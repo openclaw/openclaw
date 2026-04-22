@@ -31,7 +31,13 @@ export function resolveConfiguredReplyToMode(
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   const normalizedChatType = normalizeReplyToModeChatType(chatType);
   const defaultMode: ReplyToMode =
-    normalizedChatType == null ? "all" : normalizedChatType !== "direct" ? "all" : "off";
+    normalizedChatType == null
+      ? "all"
+      : provider === "telegram"
+        ? normalizedChatType !== "direct"
+          ? "all"
+          : "off"
+        : "all";
   if (!provider) {
     return defaultMode;
   }
