@@ -1,5 +1,8 @@
+import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "../../../src/infra/file-identity.js";
 import { writeFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
 import type {
   SandboxFsBridge,
@@ -50,13 +53,16 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    await assertLocalPathSafety({
-      target,
-      root: target.mountHostRoot,
-      allowMissingLeaf: false,
-      allowFinalSymlinkForUnlink: false,
+    const handle = await openPinnedReadableFile({
+      absolutePath: hostPath,
+      rootPath: target.mountHostRoot,
+      containerPath: target.containerPath,
     });
-    return await fsPromises.readFile(hostPath);
+    try {
+      return (await handle.readFile()) as Buffer;
+    } finally {
+      await handle.close();
+    }
   }
 
   async writeFile(params: {
@@ -351,4 +357,124 @@ async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
     missing.unshift(path.basename(cursor));
     cursor = parent;
   }
+}
+
+async function openPinnedReadableFile(params: {
+  absolutePath: string;
+  rootPath: string;
+  containerPath: string;
+}): Promise<FileHandle> {
+  const canonicalRoot = await fsPromises
+    .realpath(params.rootPath)
+    .catch(() => path.resolve(params.rootPath));
+  const literalPath = path.resolve(params.absolutePath);
+  // Cheap string-prefix check on the caller-provided absolute path; no
+  // filesystem state is read here, so there is no TOCTOU window. Deeper
+  // checks run after the fd is pinned.
+  if (!isPathInside(canonicalRoot, literalPath)) {
+    throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`);
+  }
+  const openCloseOnExecFlag = (fs.constants as Record<string, number>).O_CLOEXEC ?? 0;
+  const openReadFlags =
+    fs.constants.O_RDONLY |
+    (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0) |
+    openCloseOnExecFlag;
+  // Open first so every later check runs against an fd that is already pinned
+  // to one specific inode. `O_NOFOLLOW` prevents the final path component from
+  // being a symlink; the ancestor walk below handles parent-directory symlink
+  // swaps on platforms where fd-path readlink is not available.
+  const handle = await fsPromises.open(literalPath, openReadFlags);
+  try {
+    const openedStat = await handle.stat();
+    if (!openedStat.isFile()) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
+    }
+    if (openedStat.nlink > 1) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
+    }
+    const resolvedPath = await resolveOpenedReadablePath(handle.fd);
+    if (resolvedPath !== null) {
+      // Primary guarantee on Linux: the fd's resolved path is derived from the
+      // kernel, so a parent-directory swap cannot make this return a stale path.
+      if (!isPathInside(canonicalRoot, resolvedPath)) {
+        throw new Error(
+          `Sandbox boundary checks failed; cannot read files: ${params.containerPath}`,
+        );
+      }
+      return handle;
+    }
+    // Fallback for platforms where fd-path readlink is unavailable. On macOS,
+    // `/dev/fd/N` is a character device so readlink returns EINVAL; on Windows
+    // there is no `/proc` equivalent. With no kernel-backed path readback we
+    // must prove the pinned fd is in-root without trusting a separate
+    // `realpath` lookup of the caller-provided path (that pair races). Walk
+    // every ancestor between `canonicalRoot` and `literalPath` and reject if
+    // any ancestor is a symlink; then realpath the path and cross-check the
+    // resolved path and file identity against the pinned fd.
+    await assertAncestorChainHasNoSymlinks(canonicalRoot, literalPath, params.containerPath);
+    const currentResolvedPath = await fsPromises.realpath(literalPath);
+    if (!isPathInside(canonicalRoot, currentResolvedPath)) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
+    }
+    const currentLstat = await fsPromises.lstat(currentResolvedPath);
+    if (!sameFileIdentity(currentLstat, openedStat)) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+// Walks each directory between canonicalRoot (exclusive) and
+// targetAbsolutePath (exclusive), `lstat`'ing each segment. Rejects if any
+// intermediate segment is a symlink or a non-directory. The final component
+// is not walked because `O_NOFOLLOW` already protects it on the open call.
+async function assertAncestorChainHasNoSymlinks(
+  canonicalRoot: string,
+  targetAbsolutePath: string,
+  containerPath: string,
+): Promise<void> {
+  const relative = path.relative(canonicalRoot, targetAbsolutePath);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return;
+  }
+  const segments = relative.split(path.sep).filter((segment) => segment.length > 0);
+  let cursor = canonicalRoot;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    cursor = path.join(cursor, segments[i]);
+    const stat = await fsPromises.lstat(cursor).catch(() => null);
+    if (!stat) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
+    }
+  }
+}
+
+// Resolves the absolute path associated with an open fd via the kernel-backed
+// `/proc/self/fd/<fd>` (Linux) or `/dev/fd/<fd>` (some BSDs). Returns null
+// when no fd-path endpoint is available. Note: on macOS `/dev/fd/N` is a
+// character device rather than a symlink, so `readlink` fails with EINVAL
+// there and the caller must use the ancestor-walk fallback instead.
+async function resolveOpenedReadablePath(fd: number): Promise<string | null> {
+  for (const fdPath of [`/proc/self/fd/${fd}`, `/dev/fd/${fd}`]) {
+    try {
+      const openedPath = await fsPromises.readlink(fdPath);
+      return normalizeOpenedReadablePath(openedPath);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function normalizeOpenedReadablePath(openedPath: string): string {
+  const deletedSuffix = " (deleted)";
+  const withoutDeletedSuffix = openedPath.endsWith(deletedSuffix)
+    ? openedPath.slice(0, -deletedSuffix.length)
+    : openedPath;
+  return path.resolve(withoutDeletedSuffix);
 }
