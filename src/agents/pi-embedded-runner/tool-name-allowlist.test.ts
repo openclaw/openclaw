@@ -26,4 +26,23 @@ describe("tool name allowlists", () => {
 
     expect(allowlist).toEqual(["edit", "read", "write"]);
   });
+
+  it("builds a stable Pi session allowlist from collected OpenClaw tool names", () => {
+    const allowlist = toSessionToolAllowlist(
+      collectAllowedToolNames({
+        tools: [createStubTool("exec"), createStubTool("read"), createStubTool("exec")],
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "image_generate",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(allowlist).toEqual(["exec", "image_generate", "read"]);
+  });
 });

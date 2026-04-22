@@ -132,7 +132,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
-import { collectAllowedToolNames } from "./tool-name-allowlist.js";
+import { collectAllowedToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -839,12 +839,15 @@ export async function compactEmbeddedPiSessionDirect(
         contextTokenBudget: ctxInfo.tokens,
       });
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
-      // OpenClaw registers filtered tools through `customTools`; keep Pi's
-      // built-in tool list empty so the SDK does not re-enable defaults.
+      // Pi 0.68.1 uses `tools` as a global allowlist across built-in and
+      // custom tools. Keep the built-in tool list empty, but still pass the
+      // exact filtered tool names so our custom registrations remain active
+      // without re-enabling Pi defaults.
+      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
@@ -882,7 +885,7 @@ export async function compactEmbeddedPiSessionDirect(
             modelRegistry,
             model: effectiveModel,
             thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: builtInTools,
+            tools: sessionToolAllowlist,
             customTools,
             sessionManager,
             settingsManager,

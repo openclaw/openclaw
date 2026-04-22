@@ -167,7 +167,7 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
-import { collectAllowedToolNames } from "../tool-name-allowlist.js";
+import { collectAllowedToolNames, toSessionToolAllowlist } from "../tool-name-allowlist.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -1062,7 +1062,7 @@ export async function runEmbeddedAttempt(
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
@@ -1121,8 +1121,11 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
-      // OpenClaw registers filtered tools through `customTools`; keep Pi's
-      // built-in tool list empty so the SDK does not re-enable defaults.
+      // Pi 0.68.1 uses `tools` as a global allowlist across built-in and
+      // custom tools. Keep the built-in tool list empty, but still pass the
+      // exact filtered tool names so our custom registrations remain active
+      // without re-enabling Pi defaults.
+      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
 
       ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
         createAgentSession: async (options) =>
@@ -1134,7 +1137,7 @@ export async function runEmbeddedAttempt(
           modelRegistry: params.modelRegistry,
           model: params.model,
           thinkingLevel: mapThinkingLevel(params.thinkLevel),
-          tools: builtInTools,
+          tools: sessionToolAllowlist,
           customTools: allCustomTools,
           sessionManager,
           settingsManager,
@@ -1315,10 +1318,9 @@ export async function runEmbeddedAttempt(
       }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
-      const promptCacheToolNames = collectPromptCacheToolNames([
-        ...builtInTools,
-        ...allCustomTools,
-      ] as Array<{ name?: string }>);
+      const promptCacheToolNames = collectPromptCacheToolNames(
+        allCustomTools as Array<{ name?: string }>,
+      );
       let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
 
       if (cacheTrace) {
