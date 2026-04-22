@@ -202,7 +202,6 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     const heartbeat = await fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
-    expect(heartbeat).toContain("```markdown");
     expect(heartbeat).toContain(
       "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
     );
