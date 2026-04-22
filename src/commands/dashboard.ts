@@ -46,7 +46,7 @@ export async function dashboardCommand(
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
 
-  runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  runtime.log(`Dashboard URL: ${links.httpUrl}`);
   if (resolvedToken.secretRefConfigured && token) {
     runtime.log(
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
@@ -73,7 +73,6 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: includeTokenInUrl ? token || undefined : undefined,
       });
     }
   } else {

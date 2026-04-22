@@ -89,11 +89,16 @@ describe("dashboardCommand", () => {
       customBindHost: undefined,
       basePath: undefined,
     });
+    // clipboard and browser still get the full authenticated URL
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
     );
+    // token must never appear in any logged line
+    for (const call of runtime.log.mock.calls) {
+      expect(String(call[0])).not.toContain("abc123");
+    }
   });
 
   it("prints SSH hint when browser cannot open", async () => {
@@ -108,7 +113,16 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(openUrlMock).not.toHaveBeenCalled();
+    // SSH hint must not receive the token
+    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({ port: 18789, basePath: undefined });
+    expect(formatControlUiSshHintMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ token: expect.anything() }),
+    );
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
+    // token must never appear in any logged line
+    for (const call of runtime.log.mock.calls) {
+      expect(String(call[0])).not.toContain("shhhh");
+    }
   });
 
   it("respects --no-open and skips browser attempts", async () => {
