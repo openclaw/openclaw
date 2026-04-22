@@ -1,4 +1,7 @@
-import { getBundledChannelSetupPlugin } from "../../../channels/plugins/bundled.js";
+import {
+  getBundledChannelPlugin,
+  getBundledChannelSetupPlugin,
+} from "../../../channels/plugins/bundled.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
 import { getLoadedChannelPlugin } from "../../../channels/plugins/registry.js";
 import type {
@@ -47,6 +50,14 @@ function safeGetBundledChannelSetupPlugin(id: string) {
   }
 }
 
+function safeGetBundledChannelPlugin(id: string) {
+  try {
+    return getBundledChannelPlugin(id);
+  } catch {
+    return undefined;
+  }
+}
+
 function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
   try {
     return resolveReadOnlyChannelPluginsForConfig(context.cfg, {
@@ -71,7 +82,7 @@ function listChannelDoctorEntries(
     readOnlyPlugins.filter((plugin) => plugin.doctor).map((plugin) => plugin.id),
   );
   const plugins = [
-    ...readOnlyPlugins,
+    ...readOnlyPlugins.filter((plugin) => plugin.doctor),
     ...channelIds.flatMap((id) => {
       if (readOnlyDoctorPluginIds.has(id)) {
         return [];
@@ -81,7 +92,11 @@ function listChannelDoctorEntries(
         return [loadedPlugin];
       }
       const bundledSetupPlugin = safeGetBundledChannelSetupPlugin(id);
-      return bundledSetupPlugin ? [bundledSetupPlugin] : [];
+      if (bundledSetupPlugin?.doctor) {
+        return [bundledSetupPlugin];
+      }
+      const bundledPlugin = safeGetBundledChannelPlugin(id);
+      return bundledPlugin?.doctor ? [bundledPlugin] : [];
     }),
   ];
   for (const plugin of plugins) {

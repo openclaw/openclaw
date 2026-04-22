@@ -6,6 +6,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getLoadedChannelPlugin: vi.fn(),
+  getBundledChannelPlugin: vi.fn(),
   getBundledChannelSetupPlugin: vi.fn(),
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
@@ -16,6 +17,8 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
 }));
 
 vi.mock("../../../channels/plugins/bundled.js", () => ({
+  getBundledChannelPlugin: (...args: Parameters<typeof mocks.getBundledChannelPlugin>) =>
+    mocks.getBundledChannelPlugin(...args),
   getBundledChannelSetupPlugin: (...args: Parameters<typeof mocks.getBundledChannelSetupPlugin>) =>
     mocks.getBundledChannelSetupPlugin(...args),
 }));
@@ -29,9 +32,11 @@ vi.mock("../../../channels/plugins/read-only.js", () => ({
 describe("channel doctor compatibility mutations", () => {
   beforeEach(() => {
     mocks.getLoadedChannelPlugin.mockReset();
+    mocks.getBundledChannelPlugin.mockReset();
     mocks.getBundledChannelSetupPlugin.mockReset();
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReset();
     mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
+    mocks.getBundledChannelPlugin.mockReturnValue(undefined);
     mocks.getBundledChannelSetupPlugin.mockReturnValue(undefined);
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({ plugins: [] });
   });
@@ -74,6 +79,7 @@ describe("channel doctor compatibility mutations", () => {
     });
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalledWith("matrix");
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("matrix");
+    expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalledWith("matrix");
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
   });
 
@@ -115,6 +121,52 @@ describe("channel doctor compatibility mutations", () => {
     });
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("matrix");
     expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("matrix");
+    expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalledWith("matrix");
+  });
+
+  it("falls back to bundled runtime doctor adapters when setup adapters lack doctor hooks", () => {
+    const normalizeCompatibilityConfig = vi.fn(({ cfg }: { cfg: unknown }) => ({
+      config: cfg,
+      changes: ["matrix"],
+    }));
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "matrix",
+        },
+      ],
+    });
+    mocks.getBundledChannelSetupPlugin.mockImplementation((id: string) =>
+      id === "matrix"
+        ? {
+            id: "matrix",
+          }
+        : undefined,
+    );
+    mocks.getBundledChannelPlugin.mockImplementation((id: string) =>
+      id === "matrix"
+        ? {
+            id: "matrix",
+            doctor: { normalizeCompatibilityConfig },
+          }
+        : undefined,
+    );
+
+    const cfg = {
+      channels: {
+        matrix: {
+          enabled: true,
+        },
+      },
+    };
+
+    const result = collectChannelDoctorCompatibilityMutations(cfg as never);
+
+    expect(result).toHaveLength(1);
+    expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("matrix");
+    expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("matrix");
+    expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("matrix");
   });
 
   it("passes explicit env into read-only channel plugin discovery", () => {
@@ -157,6 +209,7 @@ describe("channel doctor compatibility mutations", () => {
     expect(result).toEqual([]);
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("discord");
+    expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");
   });
 
   it("routes config through empty allowlist extra warning discovery", () => {
