@@ -4,6 +4,7 @@ import path from "node:path";
 export type QueuedFileWriter = {
   filePath: string;
   write: (line: string) => void;
+  flush: () => Promise<void>;
 };
 
 export function getQueuedFileWriter(
@@ -26,6 +27,9 @@ export function getQueuedFileWriter(
         .then(() => ready)
         .then(() => fs.appendFile(filePath, line, "utf8"))
         .catch(() => undefined);
+    },
+    flush: async () => {
+      await queue;
     },
   };
 

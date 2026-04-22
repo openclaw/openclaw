@@ -47,6 +47,11 @@ import {
   buildTurnStartParams,
   startOrResumeThread,
 } from "./thread-lifecycle.js";
+import {
+  createCodexTrajectoryRecorder,
+  recordCodexTrajectoryCompletion,
+  recordCodexTrajectoryContext,
+} from "./trajectory.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 let clientFactory = defaultCodexAppServerClientFactory;
@@ -90,6 +95,7 @@ export async function runCodexAppServerAttempt(
   let yieldDetected = false;
   const startupBinding = await readCodexAppServerBinding(params.sessionFile);
   const startupAuthProfileId = params.authProfileId ?? startupBinding?.authProfileId;
+  const developerInstructions = buildDeveloperInstructions(params);
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -129,8 +135,15 @@ export async function runCodexAppServerAttempt(
     messages: historyMessages,
     ctx: hookContext,
   });
+  const trajectoryRecorder = createCodexTrajectoryRecorder({
+    attempt: params,
+    cwd: effectiveWorkspace,
+    developerInstructions,
+    tools: toolBridge.specs,
+  });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
+  let trajectoryEndRecorded = false;
   try {
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
@@ -154,6 +167,19 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
+  trajectoryRecorder?.recordEvent("session.started", {
+    sessionFile: params.sessionFile,
+    threadId: thread.threadId,
+    authProfileId: startupAuthProfileId,
+    workspaceDir: effectiveWorkspace,
+    toolCount: toolBridge.specs.length,
+  });
+  recordCodexTrajectoryContext(trajectoryRecorder, {
+    attempt: params,
+    cwd: effectiveWorkspace,
+    developerInstructions,
+    tools: toolBridge.specs,
+  });
 
   let projector: CodexAppServerEventProjector | undefined;
   let turnId: string | undefined;
@@ -230,7 +256,23 @@ export async function runCodexAppServerAttempt(
     if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
       return undefined;
     }
-    return toolBridge.handleToolCall(call) as Promise<JsonValue>;
+    trajectoryRecorder?.recordEvent("tool.call", {
+      threadId: call.threadId,
+      turnId: call.turnId,
+      toolCallId: call.callId,
+      name: call.tool,
+      arguments: call.arguments,
+    });
+    const response = await toolBridge.handleToolCall(call);
+    trajectoryRecorder?.recordEvent("tool.result", {
+      threadId: call.threadId,
+      turnId: call.turnId,
+      toolCallId: call.callId,
+      name: call.tool,
+      success: response.success,
+      contentItems: response.contentItems,
+    });
+    return response as JsonValue;
   });
 
   const llmInputEvent = {
@@ -293,6 +335,12 @@ export async function runCodexAppServerAttempt(
     throw error;
   }
   turnId = turn.turn.id;
+  trajectoryRecorder?.recordEvent("prompt.submitted", {
+    threadId: thread.threadId,
+    turnId,
+    prompt: params.prompt,
+    imagesCount: params.images?.length ?? 0,
+  });
   projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);
   const activeTurnId = turnId;
   const activeProjector = projector;
@@ -353,6 +401,26 @@ export async function runCodexAppServerAttempt(
     const finalAborted = result.aborted || runAbortController.signal.aborted;
     const finalPromptError = timedOut ? "codex app-server attempt timed out" : result.promptError;
     const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt: params,
+      result,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      timedOut,
+      yieldDetected,
+    });
+    trajectoryRecorder?.recordEvent("session.ended", {
+      status: finalPromptError ? "error" : finalAborted || timedOut ? "interrupted" : "success",
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      timedOut,
+      yieldDetected,
+      promptError:
+        typeof finalPromptError === "string"
+          ? finalPromptError
+          : String(finalPromptError ?? ""),
+    });
+    trajectoryEndRecorded = true;
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
@@ -390,6 +458,16 @@ export async function runCodexAppServerAttempt(
       promptErrorSource: finalPromptErrorSource,
     };
   } finally {
+    if (trajectoryRecorder && !trajectoryEndRecorded) {
+      trajectoryRecorder.recordEvent("session.ended", {
+        status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        timedOut,
+        aborted: runAbortController.signal.aborted,
+      });
+    }
+    await trajectoryRecorder?.flush();
     clearTimeout(timeout);
     notificationCleanup();
     requestCleanup();

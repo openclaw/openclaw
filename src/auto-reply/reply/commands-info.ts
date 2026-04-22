@@ -12,6 +12,7 @@ import {
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
+import { buildExportTrajectoryReply } from "./commands-export-trajectory.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
@@ -233,4 +234,26 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
     return { shouldContinue: false };
   }
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
+};
+
+export const handleExportTrajectoryCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (
+    normalized !== "/export-trajectory" &&
+    !normalized.startsWith("/export-trajectory ") &&
+    normalized !== "/trajectory" &&
+    !normalized.startsWith("/trajectory ")
+  ) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /export-trajectory from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  return { shouldContinue: false, reply: await buildExportTrajectoryReply(params) };
 };
