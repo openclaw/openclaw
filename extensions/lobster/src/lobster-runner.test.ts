@@ -9,9 +9,13 @@ describe("resolveLobsterCwd", () => {
     expect(resolveLobsterCwd(undefined)).toBe(process.cwd());
   });
 
-  it("keeps relative paths inside the repo root", () => {
-    expect(resolveLobsterCwd("extensions/lobster")).toBe(
-      path.resolve(process.cwd(), "extensions/lobster"),
+  it("prefers an explicit base directory", () => {
+    expect(resolveLobsterCwd(undefined, "/tmp/workspace")).toBe("/tmp/workspace");
+  });
+
+  it("keeps relative paths inside the chosen base directory", () => {
+    expect(resolveLobsterCwd("extensions/lobster", "/tmp/workspace")).toBe(
+      path.resolve("/tmp/workspace", "extensions/lobster"),
     );
   });
 });
@@ -133,6 +137,30 @@ describe("createEmbeddedLobsterRunner", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("fails clearly when a workflow-like path is not resolvable", async () => {
+    const runtime = {
+      runToolRequest: vi.fn(),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    await expect(
+      runner.run({
+        action: "run",
+        pipeline: "missing-workflow.lobster",
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      }),
+    ).rejects.toThrow(
+      "Workflow file not found or not resolvable from cwd: missing-workflow.lobster",
+    );
+    expect(runtime.runToolRequest).not.toHaveBeenCalled();
   });
 
   it("throws when the embedded runtime returns an error envelope", async () => {

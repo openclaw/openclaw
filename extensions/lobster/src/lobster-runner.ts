@@ -102,18 +102,20 @@ function normalizeForCwdSandbox(p: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-export function resolveLobsterCwd(cwdRaw: unknown): string {
+export function resolveLobsterCwd(cwdRaw: unknown, baseDirRaw?: unknown): string {
+  const baseDir =
+    typeof baseDirRaw === "string" && baseDirRaw.trim() ? baseDirRaw.trim() : process.cwd();
+
   if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
-    return process.cwd();
+    return baseDir;
   }
   const cwd = cwdRaw.trim();
   if (path.isAbsolute(cwd)) {
     throw new Error("cwd must be a relative path");
   }
-  const base = process.cwd();
-  const resolved = path.resolve(base, cwd);
+  const resolved = path.resolve(baseDir, cwd);
 
-  const rel = path.relative(normalizeForCwdSandbox(base), normalizeForCwdSandbox(resolved));
+  const rel = path.relative(normalizeForCwdSandbox(baseDir), normalizeForCwdSandbox(resolved));
   if (rel === "" || rel === ".") {
     return resolved;
   }
@@ -228,6 +230,14 @@ function createEmbeddedToolContext(
   };
 }
 
+function shouldPreferWorkflowFile(candidate: string): boolean {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return [".lobster", ".yaml", ".yml", ".json"].includes(path.extname(trimmed).toLowerCase());
+}
+
 async function withTimeout<T>(
   timeoutMs: number,
   fn: (signal?: AbortSignal) => Promise<T>,
@@ -294,6 +304,10 @@ export function createEmbeddedLobsterRunner(options?: {
             return throwOnErrorEnvelope(
               normalizeEnvelope(await runtime.runToolRequest({ filePath, args, ctx })),
             );
+          }
+
+          if (shouldPreferWorkflowFile(pipeline)) {
+            throw new Error(`Workflow file not found or not resolvable from cwd: ${pipeline}`);
           }
 
           return throwOnErrorEnvelope(
