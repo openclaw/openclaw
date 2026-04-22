@@ -223,16 +223,6 @@ export async function runCodexAppServerAttempt(
     return toolBridge.handleToolCall(call) as Promise<JsonValue>;
   });
 
-  const hookContext = {
-    runId: params.runId,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    messageProvider: params.messageProvider ?? undefined,
-    trigger: params.trigger,
-    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-  };
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
