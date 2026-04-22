@@ -717,7 +717,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
     const cron = resolveCronServiceFromStartupSource(startupCronSource);
     const configKey = runtimeConfigKey(config);
-    if (!cron && config.enabled && !unavailableCronWarningEmitted && params.reason !== "startup") {
+    if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // The gateway emits `gateway:startup` via a deferred setTimeout, and
       // `deps.cron` may not be attached to the event context yet when memory-core's
       // startup hook fires (see issue #69939). Avoid logging a confusing warning on
