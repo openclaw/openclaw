@@ -23,6 +23,27 @@ const DDG_SAFE_SEARCH_PARAM: Record<DdgSafeSearch, string> = {
   off: "-2",
 };
 
+// How long to suppress new requests after bot-detection or rate-limiting.
+// DuckDuckGo uses sliding-window IP blocks; 60 s is a conservative minimum
+// that stops the agent from hammering DDG and making the block worse.
+const DDG_COOLDOWN_BOT_CHALLENGE_MS = 60_000;
+const DDG_COOLDOWN_RATE_LIMIT_MS = 30_000;
+
+let ddgCooldownUntil = 0;
+
+function activateCooldown(ms: number): void {
+  ddgCooldownUntil = Math.max(ddgCooldownUntil, Date.now() + ms);
+}
+
+function getCooldownError(): Error | null {
+  const remaining = ddgCooldownUntil - Date.now();
+  if (remaining <= 0) return null;
+  const secs = Math.ceil(remaining / 1000);
+  return new Error(
+    `DuckDuckGo rate-limit cooldown active — try again in ${secs}s.`,
+  );
+}
+
 const DDG_SEARCH_CACHE = new Map<
   string,
   { value: Record<string, unknown>; insertedAt: number; expiresAt: number }
@@ -145,27 +166,47 @@ export async function runDuckDuckGoSearch(params: {
     return { ...cached.value, cached: true };
   }
 
-  const url = new URL(DDG_HTML_ENDPOINT);
-  url.searchParams.set("q", params.query);
-  if (region) {
-    url.searchParams.set("kl", region);
-  }
-  url.searchParams.set("kp", DDG_SAFE_SEARCH_PARAM[safeSearch]);
+  const cooldownError = getCooldownError();
+  if (cooldownError) throw cooldownError;
+
+  // DDG's html endpoint expects POST with form-encoded body, not a GET with
+  // query params. Using GET reliably triggers bot-detection; POST mimics a
+  // real browser form submission and avoids the challenge page.
+  const formBody = new URLSearchParams();
+  formBody.set("q", params.query);
+  if (region) formBody.set("kl", region);
+  formBody.set("kp", DDG_SAFE_SEARCH_PARAM[safeSearch]);
 
   const startedAt = Date.now();
   const results = await withTrustedWebSearchEndpoint(
     {
-      url: url.toString(),
+      url: DDG_HTML_ENDPOINT,
       timeoutSeconds,
       init: {
-        method: "GET",
+        method: "POST",
         headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
           "User-Agent":
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Site": "same-origin",
+          Referer: "https://duckduckgo.com/",
         },
+        body: formBody.toString(),
       },
     },
     async (response) => {
+      // HTTP 202 is DDG's non-standard rate-limit signal (not 429).
+      if (response.status === 202) {
+        activateCooldown(DDG_COOLDOWN_RATE_LIMIT_MS);
+        throw new Error(
+          `DuckDuckGo rate limit (HTTP 202) — retry in ${DDG_COOLDOWN_RATE_LIMIT_MS / 1000}s.`,
+        );
+      }
       if (!response.ok) {
         const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
         throw new Error(
@@ -175,7 +216,10 @@ export async function runDuckDuckGoSearch(params: {
 
       const html = await response.text();
       if (isBotChallenge(html)) {
-        throw new Error("DuckDuckGo returned a bot-detection challenge.");
+        activateCooldown(DDG_COOLDOWN_BOT_CHALLENGE_MS);
+        throw new Error(
+          `DuckDuckGo bot-detection challenge — retry in ${DDG_COOLDOWN_BOT_CHALLENGE_MS / 1000}s.`,
+        );
       }
       return parseDuckDuckGoHtml(html).slice(0, count);
     },
@@ -209,4 +253,9 @@ export const __testing = {
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
+  getCooldownError,
+  resetCooldown: () => {
+    ddgCooldownUntil = 0;
+  },
+  activateCooldown,
 };
