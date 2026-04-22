@@ -132,17 +132,23 @@ type ConfigExport = {
   sanitized?: unknown;
 };
 
-type SanitizedLogTail = {
-  status: "included" | "failed";
+type IncludedSanitizedLogTail = {
+  status: "included";
   file: string;
   cursor: number;
   size: number;
   lineCount: number;
   truncated: boolean;
   reset: boolean;
-  error?: string;
   lines: Array<Record<string, unknown>>;
 };
+
+type FailedSanitizedLogTail = Omit<IncludedSanitizedLogTail, "status"> & {
+  status: "failed";
+  error: string;
+};
+
+type SanitizedLogTail = IncludedSanitizedLogTail | FailedSanitizedLogTail;
 
 type SupportSnapshotStatus =
   | {
