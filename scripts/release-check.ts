@@ -222,6 +222,26 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
   });
 }
 
+export function collectInstalledBundledPluginRuntimeDepErrors(packageRoot: string): string[] {
+  return collectBuiltBundledPluginStagedRuntimeDependencyErrors({
+    bundledPluginsDir: join(packageRoot, "dist", "extensions"),
+  });
+}
+
+function assertInstalledBundledPluginRuntimeDepsResolved(packageRoot: string): void {
+  const errors = collectInstalledBundledPluginRuntimeDepErrors(packageRoot);
+  if (errors.length === 0) {
+    return;
+  }
+  console.error("release-check: packed install is missing bundled plugin runtime dependencies:");
+  for (const error of errors) {
+    console.error(`  - ${error}`);
+  }
+  throw new Error(
+    "release-check: bundled plugin runtime dependencies were not installed after packed postinstall.",
+  );
+}
+
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
@@ -235,6 +255,7 @@ function runPackedBundledChannelEntrySmoke(): void {
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
     runPackedBundledPluginPostinstall(packageRoot);
+    assertInstalledBundledPluginRuntimeDepsResolved(packageRoot);
     execFileSync(
       process.execPath,
       [

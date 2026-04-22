@@ -10,6 +10,7 @@ import {
   collectBundledExtensionManifestErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectForbiddenPackContentPaths,
+  collectInstalledBundledPluginRuntimeDepErrors,
   collectRootDistBundledRuntimeMirrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
@@ -472,5 +473,70 @@ describe("createPackedBundledPluginPostinstallEnv", () => {
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
     });
+  });
+});
+
+describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
+  function createPackageRoot(): string {
+    const packageRoot = mkdtempSync(join(tmpdir(), "release-check-installed-bundled-"));
+    mkdirSync(join(packageRoot, "dist", "extensions"), { recursive: true });
+    return packageRoot;
+  }
+
+  function writeBundledPluginPackageJson(
+    packageRoot: string,
+    pluginId: string,
+    packageJson: Record<string, unknown>,
+  ): string {
+    const pluginRoot = join(packageRoot, "dist", "extensions", pluginId);
+    mkdirSync(pluginRoot, { recursive: true });
+    writeFileSync(join(pluginRoot, "package.json"), JSON.stringify(packageJson, null, 2));
+    return pluginRoot;
+  }
+
+  function stagePluginRuntimeDependency(
+    pluginRoot: string,
+    dependencyName: string,
+    version: string,
+  ): void {
+    const dependencyRoot = join(pluginRoot, "node_modules", ...dependencyName.split("/"));
+    mkdirSync(dependencyRoot, { recursive: true });
+    writeFileSync(
+      join(dependencyRoot, "package.json"),
+      JSON.stringify({ name: dependencyName, version }, null, 2),
+    );
+  }
+
+  it("returns no errors when declared runtime deps are staged under the installed plugin", () => {
+    const packageRoot = createPackageRoot();
+    try {
+      const pluginRoot = writeBundledPluginPackageJson(packageRoot, "whatsapp", {
+        name: "@openclaw/whatsapp",
+        dependencies: { "@whiskeysockets/baileys": "7.0.0-rc.9" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      });
+      stagePluginRuntimeDependency(pluginRoot, "@whiskeysockets/baileys", "7.0.0-rc.9");
+
+      expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces an error naming the plugin and missing dependency", () => {
+    const packageRoot = createPackageRoot();
+    try {
+      writeBundledPluginPackageJson(packageRoot, "whatsapp", {
+        name: "@openclaw/whatsapp",
+        dependencies: { "@whiskeysockets/baileys": "7.0.0-rc.9" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      });
+
+      expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([
+        "built bundled plugin 'whatsapp' is missing staged runtime dependency '@whiskeysockets/baileys: 7.0.0-rc.9' under dist/extensions/whatsapp/node_modules.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 });
