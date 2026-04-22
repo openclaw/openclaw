@@ -135,5 +135,8 @@
         }
       }
     }
+  },
+  "activation": {
+    "onCommands": ["wiki"]
   }
 }
