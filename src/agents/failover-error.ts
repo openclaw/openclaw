@@ -1,6 +1,7 @@
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
+  inferSignalStatus,
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
@@ -345,7 +346,7 @@ function resolveFailoverClassificationFromErrorInternal(
   }
   const signal = normalizeErrorSignal(err);
   const hasExplicitFailoverMetadata =
-    typeof signal.status === "number" || typeof signal.code === "string";
+    typeof inferSignalStatus(signal) === "number" || typeof signal.code === "string";
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);
 

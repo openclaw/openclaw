@@ -397,6 +397,17 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
+  it("keeps inferred HTTP failover metadata authoritative over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 429: upstream quota pressure",
+        cause: new Error(
+          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
+        ),
+      }),
+    ).toBe("rate_limit");
+  });
+
   it("classifies provider-scoped generic upstream errors for failover", () => {
     expect(
       resolveFailoverReasonFromError({
