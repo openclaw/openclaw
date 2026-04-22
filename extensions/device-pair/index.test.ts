@@ -251,7 +251,7 @@ describe("device-pair /pair qr", () => {
         gatewayClientScopes: ["operator.write", "operator.pairing"],
       }),
     );
-    const payload = result as { text?: string; mediaUrl?: string };
+    const payload = result as { text?: string; mediaUrl?: string; sensitiveMedia?: boolean };
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
@@ -263,6 +263,7 @@ describe("device-pair /pair qr", () => {
     });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(payload.mediaUrl).toBe("data:image/png;base64,ZmFrZXBuZw==");
+    expect(payload.sensitiveMedia).toBe(true);
     expect(text).toContain("- Security: single-use bootstrap token");
     expect(text).toContain("**Important:** Run `/pair cleanup` after pairing finishes.");
     expect(text).toContain("If this QR code leaks, run `/pair cleanup` immediately.");

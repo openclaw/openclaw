@@ -734,6 +734,7 @@ export default definePluginEntry({
                 }),
               ].join("\n"),
               mediaUrl: qrDataUrl,
+              sensitiveMedia: true,
             };
           }
 

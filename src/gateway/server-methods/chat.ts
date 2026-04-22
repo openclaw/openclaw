@@ -29,6 +29,7 @@ import {
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
+  sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -218,8 +219,9 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
     .map((payload) => {
       const parts = resolveSendableOutboundReplyParts(payload);
       const lines: string[] = [];
-      if (typeof payload.replyToId === "string" && payload.replyToId.trim()) {
-        lines.push(`[[reply_to:${payload.replyToId.trim()}]]`);
+      const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
+      if (replyToId) {
+        lines.push(`[[reply_to:${replyToId}]]`);
       } else if (payload.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
@@ -228,6 +230,9 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
         lines.push(text);
       }
       for (const mediaUrl of parts.mediaUrls) {
+        if (payload.sensitiveMedia === true) {
+          continue;
+        }
         const trimmed = mediaUrl.trim();
         if (trimmed) {
           lines.push(`MEDIA:${trimmed}`);
@@ -240,6 +245,10 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
     })
     .filter(Boolean);
   return chunks.join("\n\n").trim();
+}
+
+function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
+  return payloads.some((payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload));
 }
 
 function resolveChatSendOriginatingRoute(params: {
@@ -2108,7 +2117,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
         const appended = appendAssistantTranscriptMessage({
           message: mediaMessage.transcriptText,
-          content: mediaMessage.content,
+          ...(payload.sensitiveMedia === true ? {} : { content: mediaMessage.content }),
           sessionId,
           storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile,
@@ -2234,6 +2243,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
                 },
               });
+              const hasSensitiveMedia = hasSensitiveMediaPayload(finalPayloads);
               let message: Record<string, unknown> | undefined;
               if (mediaMessage || combinedReply) {
                 const { storePath: latestStorePath, entry: latestEntry } =
@@ -2241,7 +2251,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
                 const appended = appendAssistantTranscriptMessage({
                   message: mediaMessage?.transcriptText ?? combinedReply,
-                  ...(mediaMessage ? { content: mediaMessage.content } : {}),
+                  ...(mediaMessage && !hasSensitiveMedia ? { content: mediaMessage.content } : {}),
                   sessionId,
                   storePath: latestStorePath,
                   sessionFile: latestEntry?.sessionFile,
@@ -2249,7 +2259,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                   createIfMissing: true,
                 });
                 if (appended.ok) {
-                  message = appended.message;
+                  if (hasSensitiveMedia && mediaMessage) {
+                    message = {
+                      ...appended.message,
+                      content: mediaMessage.content,
+                    };
+                  } else {
+                    message = appended.message;
+                  }
                 } else {
                   context.logGateway.warn(
                     `webchat transcript append failed: ${appended.error ?? "unknown error"}`,

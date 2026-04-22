@@ -6,10 +6,22 @@ import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/loca
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 
 /** Cap embedded audio size to avoid multi‑MB payloads on the chat WebSocket. */
 const MAX_WEBCHAT_AUDIO_BYTES = 15 * 1024 * 1024;
+const MAX_WEBCHAT_IMAGE_DATA_URL_CHARS = 2_000_000;
+const MAX_WEBCHAT_IMAGE_DATA_BYTES = 1_500_000;
+const ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES = new Set([
+  "image/apng",
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 const MIME_BY_EXT: Record<string, string> = {
   ".aac": "audio/aac",
@@ -65,9 +77,13 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
 
 /** Returns a readable local file path when it is a regular file and within the size cap (single stat before read). */
 async function resolveLocalAudioFileForEmbedding(
+  payload: ReplyPayload,
   raw: string,
   options: WebchatAudioEmbeddingOptions | undefined,
 ): Promise<string | null> {
+  if (payload.trustedLocalMedia !== true) {
+    return null;
+  }
   const resolved = resolveLocalMediaPathForEmbedding(raw);
   if (!resolved) {
     return null;
@@ -95,20 +111,40 @@ function mimeTypeForPath(filePath: string): string {
   return MIME_BY_EXT[ext] ?? "audio/mpeg";
 }
 
-function isEmbeddableImageUrl(url: string): boolean {
+function estimateBase64DecodedBytes(base64: string): number {
+  const sanitized = base64.replace(/\s+/g, "");
+  const padding =
+    sanitized.endsWith("==") ? 2 : sanitized.endsWith("=") ? 1 : 0;
+  return Math.floor((sanitized.length * 3) / 4) - padding;
+}
+
+function resolveEmbeddableImageUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!trimmed) {
-    return false;
+    return null;
   }
-  if (/^data:image\//i.test(trimmed)) {
-    return true;
+  if (trimmed.length > MAX_WEBCHAT_IMAGE_DATA_URL_CHARS) {
+    return null;
   }
-  return /^https?:\/\/.+\.(apng|avif|bmp|gif|jpe?g|png|svg|webp)(?:[?#].*)?$/i.test(trimmed);
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const mediaType = normalizeLowercaseStringOrEmpty(match[1]);
+  const base64Data = match[2];
+  if (!ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES.has(mediaType)) {
+    return null;
+  }
+  if (estimateBase64DecodedBytes(base64Data) > MAX_WEBCHAT_IMAGE_DATA_BYTES) {
+    return null;
+  }
+  return trimmed;
 }
 
 function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
-  if (typeof payload.replyToId === "string" && payload.replyToId.trim()) {
-    return `[[reply_to:${payload.replyToId.trim()}]]`;
+  const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
+  if (replyToId) {
+    return `[[reply_to:${replyToId}]]`;
   }
   if (payload.replyToCurrent) {
     return "[[reply_to_current]]";
@@ -133,7 +169,7 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
       if (!url) {
         continue;
       }
-      const resolved = await resolveLocalAudioFileForEmbedding(url, options);
+      const resolved = await resolveLocalAudioFileForEmbedding(payload, url, options);
       if (!resolved || seen.has(resolved)) {
         continue;
       }
@@ -172,7 +208,7 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       if (!url) {
         continue;
       }
-      const resolvedAudioPath = await resolveLocalAudioFileForEmbedding(url, options);
+      const resolvedAudioPath = await resolveLocalAudioFileForEmbedding(payload, url, options);
       if (resolvedAudioPath) {
         if (seenAudio.has(resolvedAudioPath)) {
           continue;
@@ -186,11 +222,12 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
         }
         continue;
       }
-      if (!isEmbeddableImageUrl(url) || seenImages.has(url)) {
+      const imageUrl = resolveEmbeddableImageUrl(url);
+      if (!imageUrl || seenImages.has(imageUrl)) {
         continue;
       }
-      seenImages.add(url);
-      payloadMediaBlocks.push({ type: "input_image", image_url: url });
+      seenImages.add(imageUrl);
+      payloadMediaBlocks.push({ type: "input_image", image_url: imageUrl });
       hasImage = true;
       payloadHasImage = true;
     }

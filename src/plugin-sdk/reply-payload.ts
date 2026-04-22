@@ -9,6 +9,8 @@ export type OutboundReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  trustedLocalMedia?: boolean;
+  sensitiveMedia?: boolean;
   replyToId?: string;
 };
 
@@ -72,11 +74,15 @@ export function normalizeOutboundReplyPayload(
       )
     : undefined;
   const mediaUrl = readStringValue(payload.mediaUrl);
+  const trustedLocalMedia = payload.trustedLocalMedia === true ? true : undefined;
+  const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
   const replyToId = readStringValue(payload.replyToId);
   return {
     text,
     mediaUrls,
     mediaUrl,
+    trustedLocalMedia,
+    sensitiveMedia,
     replyToId,
   };
 }

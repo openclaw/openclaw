@@ -8,6 +8,10 @@ export type ReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  /** Allow the gateway webchat path to read/embed local media files for this payload. */
+  trustedLocalMedia?: boolean;
+  /** Treat media as live-only content and avoid persisting the underlying media reference. */
+  sensitiveMedia?: boolean;
   /** Channel-agnostic rich presentation. Core degrades or asks the channel renderer to map it. */
   presentation?: MessagePresentation;
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */

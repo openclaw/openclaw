@@ -43,6 +43,7 @@ export function createTtsTool(opts?: {
             provider: result.provider,
             media: {
               mediaUrl: result.audioPath,
+              trustedLocalMedia: true,
               ...(result.voiceCompatible ? { audioAsVoice: true } : {}),
             },
           },
