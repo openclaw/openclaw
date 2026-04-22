@@ -44,6 +44,7 @@ import {
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { incrementGeneration } from "./run-generation.js";
 
 export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 export {
@@ -289,6 +290,11 @@ export async function tryFastAbortFromMessage(params: {
       }
     }
     const sessionId = replyRunRegistry.resolveSessionId(resolvedTargetKey) ?? entry?.sessionId;
+    // Bump generation up-front so any late side effects from the run being
+    // aborted are fenced off, even if neither registry.abort nor
+    // abortEmbeddedPiRun reports an active run (race between end-of-run and
+    // the user's /stop message).
+    incrementGeneration(resolvedTargetKey);
     const aborted =
       replyRunRegistry.abort(resolvedTargetKey) ||
       (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);

@@ -222,6 +222,8 @@ function createMockReplyOperation(): {
       resetTriggered: false,
       phase: "running",
       result: null,
+      runGeneration: 0,
+      isCurrent: vi.fn().mockReturnValue(true),
       setPhase: vi.fn(),
       updateSessionId: vi.fn(),
       attachBackend: vi.fn(),
