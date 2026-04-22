@@ -68,7 +68,7 @@ import {
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
-import { buildCommandsPaginationKeyboard } from "./command-ui.js";
+import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -1509,7 +1509,7 @@ export const registerTelegramHandlers = ({
             id: p,
             count: byProvider.get(p)?.size ?? 0,
           }));
-          const buttons = buildProviderKeyboard(providerInfos);
+          const buttons = buildTelegramModelsMenuButtons({ providers: providerInfos });
           try {
             await editMessageWithButtons("Select a provider:", buttons);
           } catch (err) {
@@ -1527,7 +1527,7 @@ export const registerTelegramHandlers = ({
               id: p,
               count: byProvider.get(p)?.size ?? 0,
             }));
-            const buttons = buildProviderKeyboard(providerInfos);
+            const buttons = buildTelegramModelsMenuButtons({ providers: providerInfos });
             try {
               await editMessageWithButtons(
                 `Unknown provider: ${provider}\n\nSelect a provider:`,
@@ -1580,7 +1580,7 @@ export const registerTelegramHandlers = ({
               id: p,
               count: byProvider.get(p)?.size ?? 0,
             }));
-            const buttons = buildProviderKeyboard(providerInfos);
+            const buttons = buildTelegramModelsMenuButtons({ providers: providerInfos });
             try {
               await editMessageWithButtons(
                 `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
