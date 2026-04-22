@@ -149,6 +149,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Pi: honor explicit `strict-agentic` execution contracts for incomplete-turn retry guards across providers, so manually opted-in local or compatible models get the same retry behavior without relying on OpenAI model inference. (#66750) Thanks @ziomancer.
 - OpenShell/sandbox: pin verified file reads to an already-opened descriptor, walk the ancestor chain for symlinked parents on platforms without fd-path readlink, and re-check file identity so parent symlink swaps cannot redirect in-sandbox reads to host files outside the allowed mount root. (#69798) Thanks @drobison00.
 - Gateway/Control UI: require authenticated Control UI read access before serving `/__openclaw/control-ui-config.json` when `gateway.auth` is enabled, so unauthenticated callers can no longer read bootstrap metadata. (#70247) Thanks @drobison00.
+- Gateway/restart: default session-scoped restart sentinels to a one-shot agent continuation, so chat-initiated Gateway restarts acknowledge successful boot automatically. (#70269) Thanks @obviyus.
 
 ## 2026.4.21
 
