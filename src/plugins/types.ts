@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ExtensionFactory, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -2007,6 +2007,8 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
+  /** Register a Pi embedded extension factory for OpenClaw embedded runs. */
+  registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

@@ -35,6 +35,7 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import { registerEmbeddedExtensionFactory } from "./embedded-extension-factory.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
@@ -1270,6 +1271,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerCompactionProvider(provider, { ownerPluginId: record.id });
+              },
+              registerEmbeddedExtensionFactory: (factory) => {
+                registerEmbeddedExtensionFactory(factory, { ownerPluginId: record.id });
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

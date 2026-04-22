@@ -343,21 +343,28 @@ methods:
 
 ### Infrastructure
 
-| Method                                         | What it registers                       |
-| ---------------------------------------------- | --------------------------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook                              |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
-| `api.registerService(service)`                 | Background service                      |
-| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
-| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
-| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
+| Method                                          | What it registers                       |
+| ----------------------------------------------- | --------------------------------------- |
+| `api.registerHook(events, handler, opts?)`      | Event hook                              |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                   |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                      |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                          |
+| `api.registerService(service)`                  | Background service                      |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                     |
+| `api.registerEmbeddedExtensionFactory(factory)` | Pi embedded-runner extension factory    |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
 
 Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
 `update.*`) always stay `operator.admin`, even if a plugin tries to assign a
 narrower gateway method scope. Prefer plugin-specific prefixes for
 plugin-owned methods.
+
+Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
+event timing during OpenClaw embedded runs, for example async `tool_result`
+rewrites that must happen before the final tool-result message is emitted.
+Keep normal OpenClaw plugin hooks for everything that does not require that
+lower-level seam.
 
 ### CLI registration metadata
 
