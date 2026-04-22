@@ -223,7 +223,7 @@ export function resetConfigPendingChanges(state: ConfigState) {
     state.configFormOriginal ?? state.configSnapshot?.config ?? {},
   );
   state.configRaw =
-    state.configRawOriginal ||
+    state.configRawOriginal ??
     serializeConfigForm(state.configFormOriginal ?? state.configSnapshot?.config ?? {});
   state.configFormDirty = false;
 }

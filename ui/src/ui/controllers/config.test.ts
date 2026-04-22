@@ -185,6 +185,27 @@ describe("resetConfigPendingChanges", () => {
     expect(state.configForm).toEqual({ gateway: { mode: "local" } });
     expect(state.configRaw).toBe('{\n  "gateway": { "mode": "local" }\n}\n');
   });
+
+  it("preserves an intentionally empty original raw config", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "",
+    };
+    state.configFormOriginal = {};
+    state.configRawOriginal = "";
+    state.configForm = { gateway: { mode: "remote" } };
+    state.configRaw = '{\n  "gateway": { "mode": "remote" }\n}\n';
+    state.configFormDirty = true;
+
+    resetConfigPendingChanges(state);
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({});
+    expect(state.configRaw).toBe("");
+  });
 });
 
 describe("agent config helpers", () => {
