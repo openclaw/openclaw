@@ -263,12 +263,23 @@ function writeRetainedRuntimeDepsManifest(installRoot: string, specs: readonly s
   );
 }
 
-function isWritableDirectory(dir: string): boolean {
+export function isWritableDirectory(dir: string): boolean {
+  let probeDir: string | null = null;
   try {
-    fs.accessSync(dir, fs.constants.W_OK);
+    probeDir = fs.mkdtempSync(path.join(dir, ".openclaw-write-probe-"));
+    fs.writeFileSync(path.join(probeDir, "probe"), "", "utf8");
     return true;
   } catch {
     return false;
+  } finally {
+    if (probeDir) {
+      try {
+        fs.rmSync(probeDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup. A failed cleanup should not turn a writable
+        // probe into a hard runtime-dependency failure.
+      }
+    }
   }
 }
 

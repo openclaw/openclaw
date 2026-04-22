@@ -286,6 +286,37 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves parsed source config when snapshot validation throws", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+        channels: { feishu: { enabled: true } },
+      };
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      mockLoadPluginManifestRegistry.mockImplementationOnce(() => {
+        throw new Error("manifest registry unavailable");
+      });
+
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.raw).toBe(originalRaw);
+      expect(snapshot.parsed).toEqual(original);
+      expect(snapshot.sourceConfig).toEqual(original);
+      expect(snapshot.config).toEqual(original);
+      expect(snapshot.issues[0]?.message).toContain("manifest registry unavailable");
+    });
+  });
+
   it("does not inject include-only $schema into the root config during partial writes", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

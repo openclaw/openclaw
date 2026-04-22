@@ -20,6 +20,10 @@ type ThreadOwnershipMessageSendingResult = { cancel: true } | undefined;
 const mentionedThreads = new Map<string, number>();
 const MENTION_TTL_MS = 5 * 60 * 1000;
 
+function resolveThreadToken(value: unknown): string {
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+}
+
 function cleanExpiredMentions(): void {
   const now = Date.now();
   for (const [key, ts] of mentionedThreads) {
@@ -72,7 +76,10 @@ export default definePluginEntry({
       }
 
       const text = event.content ?? "";
-      const threadTs = (event.metadata?.threadTs as string) ?? "";
+      const threadTs =
+        resolveThreadToken(event.threadId) ||
+        resolveThreadToken(event.metadata?.threadId) ||
+        resolveThreadToken(event.metadata?.threadTs);
       const channelId = (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
       if (!threadTs || !channelId) {
         return;
@@ -92,7 +99,11 @@ export default definePluginEntry({
         return undefined;
       }
 
-      const threadTs = (event.metadata?.threadTs as string) ?? "";
+      const threadTs =
+        resolveThreadToken(event.replyToId) ||
+        resolveThreadToken(event.threadId) ||
+        resolveThreadToken(event.metadata?.threadId) ||
+        resolveThreadToken(event.metadata?.threadTs);
       const channelId = (event.metadata?.channelId as string) ?? event.to;
       if (!threadTs) {
         return undefined;

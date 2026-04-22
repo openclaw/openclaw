@@ -96,4 +96,38 @@ describe("createDiscordVoiceCommand", () => {
       ephemeral: true,
     });
   });
+
+  it("vc status tolerates partial thread channels with throwing getters", async () => {
+    const statusSpy = vi.fn(() => []);
+    const manager = {
+      status: statusSpy,
+    } as unknown as DiscordVoiceManager;
+    const { status } = createVoiceCommandHarness(manager);
+    const partialChannel = { id: "123456789012345678" };
+    Object.defineProperties(partialChannel, {
+      name: {
+        get() {
+          throw new Error("Cannot access rawData on partial Channel");
+        },
+      },
+      parentId: {
+        get() {
+          throw new Error("Cannot access rawData on partial Channel");
+        },
+      },
+    });
+    const { interaction, reply } = createInteraction({
+      channel: partialChannel as CommandInteraction["channel"],
+      client: { fetchChannel: vi.fn(async () => null) } as unknown as CommandInteraction["client"],
+      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+    });
+
+    await expect(status.run(interaction)).resolves.toBeUndefined();
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "No active voice sessions.",
+      ephemeral: true,
+    });
+  });
 });

@@ -436,6 +436,27 @@ describe("bundled plugin postinstall", () => {
     ).toThrow("unsafe dist entry: dist/escape");
   });
 
+  it("ignores staged bundled plugin node_modules when pruning packaged dist", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-runtime-deps-");
+    const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
+    const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
+    const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    await fs.mkdir(path.dirname(staleFile), { recursive: true });
+    await fs.mkdir(path.dirname(packageJson), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(staleFile, "export {};\n");
+    await fs.writeFile(packageJson, "{}\n");
+    await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        expectedFiles: new Set(["dist/extensions/slack/package.json"]),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/stale-runtime.js"]);
+  });
+
   it("unlinks stale files instead of recursive pruning them", () => {
     const unlinkSync = vi.fn();
 

@@ -9,6 +9,7 @@ import {
   createBundledRuntimeDepsInstallEnv,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
+  isWritableDirectory,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
   type BundledRuntimeDepsInstallParams,
@@ -145,6 +146,21 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
 });
 
 describe("installBundledRuntimeDeps", () => {
+  it("uses a real write probe for runtime dependency roots", () => {
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    const mkdirSpy = vi.spyOn(fs, "mkdtempSync").mockImplementation(() => {
+      const error = new Error("read-only file system") as NodeJS.ErrnoException;
+      error.code = "EROFS";
+      throw error;
+    });
+
+    expect(isWritableDirectory("/usr/lib/node_modules/openclaw")).toBe(false);
+    expect(accessSpy).not.toHaveBeenCalled();
+    expect(mkdirSpy).toHaveBeenCalledWith(
+      path.join("/usr/lib/node_modules/openclaw", ".openclaw-write-probe-"),
+    );
+  });
+
   it("uses the npm cmd shim on Windows", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(fs, "existsSync").mockImplementation(

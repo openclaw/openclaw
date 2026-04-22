@@ -183,6 +183,12 @@ function assertSafeInstalledDistPath(relativePath, params) {
   return candidatePath;
 }
 
+function isStagedRuntimeNodeModulesPath(relativePath) {
+  return /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u.test(
+    normalizeRelativePath(relativePath),
+  );
+}
+
 function listInstalledDistFiles(params = {}) {
   const readDir = params.readdirSync ?? readdirSync;
   const distRoot = resolveInstalledDistRoot(params);
@@ -195,6 +201,10 @@ function listInstalledDistFiles(params = {}) {
   while (pending.length > 0) {
     const currentDir = pending.pop();
     if (!currentDir) {
+      continue;
+    }
+    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
+    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
       continue;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -232,6 +242,10 @@ function pruneEmptyDistDirectories(params = {}) {
   const pathLstat = params.lstatSync ?? lstatSync;
 
   function prune(currentDir) {
+    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
+    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
+      return;
+    }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) {
         throw new Error(

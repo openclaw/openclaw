@@ -11,44 +11,6 @@ import { formatHelpExamples } from "./help-format.js";
 
 type ChannelsCommandsModule = typeof import("../commands/channels.js");
 
-const optionNamesAdd = [
-  "channel",
-  "account",
-  "name",
-  "token",
-  "privateKey",
-  "tokenFile",
-  "botToken",
-  "appToken",
-  "signalNumber",
-  "cliPath",
-  "dbPath",
-  "service",
-  "region",
-  "authDir",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "webhookPath",
-  "webhookUrl",
-  "audienceType",
-  "audience",
-  "useEnv",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceName",
-  "initialSyncLimit",
-  "ship",
-  "url",
-  "relayUrls",
-  "code",
-  "groupChannels",
-  "dmAllowlist",
-  "autoDiscoverChannels",
-] as const;
-
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 
 let channelsCommandsPromise: Promise<ChannelsCommandsModule> | undefined;
@@ -67,6 +29,10 @@ function runChannelsCommandWithDanger(action: () => Promise<void>, label: string
     defaultRuntime.error(danger(`${label}: ${String(err)}`));
     defaultRuntime.exit(1);
   });
+}
+
+function getOptionNames(command: Command): string[] {
+  return command.options.map((option) => option.attributeName());
 }
 
 export function registerChannelsCli(program: Command) {
@@ -210,7 +176,7 @@ export function registerChannelsCli(program: Command) {
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsAddCommand } = await loadChannelsCommands();
-        const hasFlags = hasExplicitOptions(command, optionNamesAdd);
+        const hasFlags = hasExplicitOptions(command, getOptionNames(command));
         await channelsAddCommand(opts, defaultRuntime, { hasFlags });
       });
     });

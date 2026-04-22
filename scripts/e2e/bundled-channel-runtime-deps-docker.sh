@@ -714,6 +714,10 @@ config.channels = {
     botToken: "xoxb-bundled-channel-update-token",
     appToken: "xapp-bundled-channel-update-token",
   },
+  feishu: {
+    ...(config.channels?.feishu || {}),
+    enabled: mode === "feishu",
+  },
 };
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -841,6 +845,7 @@ npm install -g "openclaw@$BASELINE_VERSION" --omit=optional --no-fund --no-audit
 command -v openclaw >/dev/null
 baseline_root="$(package_root)"
 test -d "$baseline_root/dist/extensions/telegram"
+test -d "$baseline_root/dist/extensions/feishu"
 
 echo "Replicating configured Telegram missing-runtime state..."
 write_config telegram
@@ -888,6 +893,15 @@ run_update_and_capture slack /tmp/openclaw-update-slack.json
 cat /tmp/openclaw-update-slack.json
 assert_update_ok /tmp/openclaw-update-slack.json "$candidate_version"
 assert_dep_available slack @slack/web-api
+
+echo "Mutating config to Feishu and rerunning same-version update path..."
+write_config feishu
+remove_runtime_dep feishu @larksuiteoapi/node-sdk
+assert_no_dep_available feishu @larksuiteoapi/node-sdk
+run_update_and_capture feishu /tmp/openclaw-update-feishu.json
+cat /tmp/openclaw-update-feishu.json
+assert_update_ok /tmp/openclaw-update-feishu.json "$candidate_version"
+assert_dep_available feishu @larksuiteoapi/node-sdk
 
 echo "bundled channel runtime deps Docker update E2E passed"
 EOF

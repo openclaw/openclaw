@@ -14,6 +14,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
+import {
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentIdSafe,
+} from "../monitor/channel-access.js";
 import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
@@ -62,13 +66,8 @@ async function authorizeVoiceCommand(
   }
 
   const channelId = channelOverride?.id ?? channel?.id ?? "";
-  const rawChannelName =
-    channelOverride?.name ?? (channel && "name" in channel ? (channel.name as string) : undefined);
-  const rawParentId =
-    channelOverride?.parentId ??
-    ("parentId" in (channel ?? {})
-      ? ((channel as { parentId?: string }).parentId ?? undefined)
-      : undefined);
+  const rawChannelName = channelOverride?.name ?? resolveDiscordChannelNameSafe(channel);
+  const rawParentId = channelOverride?.parentId ?? resolveDiscordChannelParentIdSafe(channel);
   const channelInfo = channelId
     ? await resolveDiscordChannelInfo(interaction.client, channelId)
     : null;
@@ -200,11 +199,8 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
       const access = await authorizeVoiceCommand(interaction, params, {
         channelOverride: {
           id: channel.id,
-          name: "name" in channel ? (channel.name as string) : undefined,
-          parentId:
-            "parentId" in channel
-              ? ((channel as { parentId?: string }).parentId ?? undefined)
-              : undefined,
+          name: resolveDiscordChannelNameSafe(channel),
+          parentId: resolveDiscordChannelParentIdSafe(channel),
         },
       });
       if (!access.ok) {

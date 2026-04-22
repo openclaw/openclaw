@@ -1268,13 +1268,22 @@ module.exports = {
     const bundledDir = path.join(packageRoot, "dist-runtime", "extensions");
     const pluginRoot = path.join(bundledDir, "acpx");
     const canonicalPluginRoot = path.join(packageRoot, "dist", "extensions", "acpx");
+    const canonicalEntryImport = path.posix.join(
+      "..",
+      "..",
+      "..",
+      "dist",
+      "extensions",
+      "acpx",
+      "index.js",
+    );
     fs.mkdirSync(pluginRoot, { recursive: true });
     fs.mkdirSync(canonicalPluginRoot, { recursive: true });
     fs.writeFileSync(
       path.join(pluginRoot, "index.js"),
       [
-        `export * from "../../../dist/extensions/acpx/index.js";`,
-        `import defaultModule from "../../../dist/extensions/acpx/index.js";`,
+        `export * from ${JSON.stringify(canonicalEntryImport)};`,
+        `import defaultModule from ${JSON.stringify(canonicalEntryImport)};`,
         `export default defaultModule;`,
         "",
       ].join("\n"),
@@ -3529,6 +3538,31 @@ module.exports = { id: "throws-after-import", register() {} };`,
             'plugin id mismatch (config uses "manifest-id", export uses "export-id")',
       ),
     ).toBe(true);
+  });
+
+  it("can include plugin export shape when register is missing", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "missing-register-shape",
+      filename: "missing-register-shape.cjs",
+      body: `module.exports = { default: { default: { id: "missing-register-shape" } } };`,
+    });
+
+    const registry = withEnv({ OPENCLAW_PLUGIN_LOAD_DEBUG: "1" }, () =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["missing-register-shape"],
+        },
+      }),
+    );
+
+    const loaded = registry.plugins.find((entry) => entry.id === "missing-register-shape");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("plugin export missing register/activate");
+    expect(loaded?.error).toContain("module shape:");
+    expect(loaded?.error).toContain("export:object keys=default");
+    expect(loaded?.error).toContain("export.default:object keys=default");
   });
 
   it("handles single-plugin channel, context engine, and cli validation", () => {

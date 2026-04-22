@@ -46,14 +46,14 @@ describe("thread-ownership plugin", () => {
 
     async function sendSlackThreadMessage() {
       return await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        { content: "hello", replyToId: "1234.5678", metadata: { channelId: "C123" }, to: "C123" },
         { channelId: "slack", conversationId: "C123" },
       );
     }
 
     it("allows non-slack channels", async () => {
       const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        { content: "hello", replyToId: "1234.5678", metadata: { channelId: "C123" }, to: "C123" },
         { channelId: "discord", conversationId: "C123" },
       );
 
@@ -119,13 +119,17 @@ describe("thread-ownership plugin", () => {
     it("tracks @-mentions and skips ownership check for mentioned threads", async () => {
       // Simulate receiving a message that @-mentions the agent.
       await hooks.message_received(
-        { content: "Hey @TestBot help me", metadata: { threadTs: "9999.0001", channelId: "C456" } },
+        {
+          content: "Hey @TestBot help me",
+          threadId: "9999.0001",
+          metadata: { channelId: "C456" },
+        },
         { channelId: "slack", conversationId: "C456" },
       );
 
       // Now send in the same thread -- should skip the ownership HTTP call.
       const result = await hooks.message_sending(
-        { content: "Sure!", metadata: { threadTs: "9999.0001", channelId: "C456" }, to: "C456" },
+        { content: "Sure!", replyToId: "9999.0001", metadata: { channelId: "C456" }, to: "C456" },
         { channelId: "slack", conversationId: "C456" },
       );
 
@@ -136,7 +140,7 @@ describe("thread-ownership plugin", () => {
     it("ignores @-mentions on non-slack channels", async () => {
       // Use a unique thread key so module-level state from other tests doesn't interfere.
       await hooks.message_received(
-        { content: "Hey @TestBot", metadata: { threadTs: "7777.0001", channelId: "C999" } },
+        { content: "Hey @TestBot", threadId: "7777.0001", metadata: { channelId: "C999" } },
         { channelId: "discord", conversationId: "C999" },
       );
 
@@ -146,7 +150,7 @@ describe("thread-ownership plugin", () => {
       );
 
       await hooks.message_sending(
-        { content: "Sure!", metadata: { threadTs: "7777.0001", channelId: "C999" }, to: "C999" },
+        { content: "Sure!", replyToId: "7777.0001", metadata: { channelId: "C999" }, to: "C999" },
         { channelId: "slack", conversationId: "C999" },
       );
 
@@ -155,12 +159,16 @@ describe("thread-ownership plugin", () => {
 
     it("tracks bot user ID mentions via <@U999> syntax", async () => {
       await hooks.message_received(
-        { content: "Hey <@U999> help", metadata: { threadTs: "8888.0001", channelId: "C789" } },
+        {
+          content: "Hey <@U999> help",
+          threadId: "8888.0001",
+          metadata: { channelId: "C789" },
+        },
         { channelId: "slack", conversationId: "C789" },
       );
 
       const result = await hooks.message_sending(
-        { content: "On it!", metadata: { threadTs: "8888.0001", channelId: "C789" }, to: "C789" },
+        { content: "On it!", replyToId: "8888.0001", metadata: { channelId: "C789" }, to: "C789" },
         { channelId: "slack", conversationId: "C789" },
       );
 
