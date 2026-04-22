@@ -136,6 +136,7 @@ Built-in commands available today:
 - `/bash <command>` runs a host shell command. Text-only. Alias: `! <command>`. Requires `commands.bash: true` plus `tools.elevated` allowlists.
 - `!poll [sessionId]` checks a background bash job.
 - `!stop [sessionId]` stops a background bash job.
+- `/plan on|off|status|view|auto|accept|revise|answer|restate` toggles plan mode and resolves plan-mode approvals. Universal across all channels (web, Telegram, Discord, Slack, etc.). See [/concepts/plan-mode](/concepts/plan-mode).
 
 ### Generated dock commands
 
