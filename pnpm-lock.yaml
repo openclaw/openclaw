@@ -146,6 +146,9 @@ importers:
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      semver:
+        specifier: 7.7.4
+        version: 7.7.4
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
@@ -222,9 +225,6 @@ importers:
       oxlint-tsgolint:
         specifier: ^0.21.1
         version: 0.21.1
-      semver:
-        specifier: 7.7.4
-        version: 7.7.4
       signal-utils:
         specifier: 0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
@@ -1215,6 +1215,10 @@ importers:
       tokenjuice:
         specifier: 0.6.1
         version: 0.6.1
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
 
   extensions/together:
     devDependencies:

@@ -3,13 +3,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { satisfies, valid as validSemver, validRange } from "semver";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { satisfies, validRange, validSemver } from "./semver.runtime.js";
 
 export type RuntimeDepEntry = {
   name: string;
@@ -194,6 +194,7 @@ function readRetainedRuntimeDepsManifest(installRoot: string): string[] {
 }
 
 function writeRetainedRuntimeDepsManifest(installRoot: string, specs: readonly string[]): void {
+  fs.mkdirSync(installRoot, { recursive: true });
   fs.writeFileSync(
     path.join(installRoot, RETAINED_RUNTIME_DEPS_MANIFEST),
     `${JSON.stringify({ specs: [...specs].toSorted((left, right) => left.localeCompare(right)) }, null, 2)}\n`,
@@ -678,6 +679,7 @@ export function resolveBundledRuntimeDependencyInstallRoot(
   const env = options.env ?? process.env;
   if (
     options.forceExternal ||
+    resolveSourceCheckoutBundledPluginPackageRoot(pluginRoot) ||
     env.OPENCLAW_PLUGIN_STAGE_DIR?.trim() ||
     env.STATE_DIRECTORY?.trim()
   ) {

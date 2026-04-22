@@ -459,6 +459,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
   it("installs missing runtime deps for source-checkout bundled plugins", () => {
     const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
     fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
@@ -474,7 +475,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
     const calls: BundledRuntimeDepsInstallParams[] = [];
     const result = ensureBundledPluginRuntimeDeps({
-      env: {},
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
       installDeps: (params) => {
         calls.push(params);
       },
@@ -486,13 +487,18 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       installedSpecs: ["tokenjuice@0.6.1"],
       retainSpecs: ["tokenjuice@0.6.1"],
     });
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
     expect(calls).toEqual([
       {
-        installRoot: pluginRoot,
+        installRoot,
         missingSpecs: ["tokenjuice@0.6.1"],
         installSpecs: ["tokenjuice@0.6.1"],
       },
     ]);
+    expect(installRoot).toContain(stageDir);
+    expect(installRoot).not.toBe(pluginRoot);
   });
 
   it("reuses package-root runtime deps for source-checkout bundled plugins", () => {
@@ -531,6 +537,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
   it("does not reuse mismatched package-root runtime deps for source-checkout bundled plugins", () => {
     const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
     fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
@@ -553,7 +560,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
     const calls: BundledRuntimeDepsInstallParams[] = [];
     const result = ensureBundledPluginRuntimeDeps({
-      env: {},
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
       installDeps: (params) => {
         calls.push(params);
       },
@@ -565,13 +572,18 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       installedSpecs: ["tokenjuice@0.6.1"],
       retainSpecs: ["tokenjuice@0.6.1"],
     });
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
     expect(calls).toEqual([
       {
-        installRoot: pluginRoot,
+        installRoot,
         missingSpecs: ["tokenjuice@0.6.1"],
         installSpecs: ["tokenjuice@0.6.1"],
       },
     ]);
+    expect(installRoot).toContain(stageDir);
+    expect(installRoot).not.toBe(pluginRoot);
   });
 
   it("skips install when staged plugin-local runtime deps are present", () => {

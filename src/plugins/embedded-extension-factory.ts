@@ -4,5 +4,5 @@ import { getActivePluginRegistry } from "./runtime.js";
 export const PI_EMBEDDED_EXTENSION_RUNTIME_ID = "pi";
 
 export function listEmbeddedExtensionFactories(): ExtensionFactory[] {
-  return getActivePluginRegistry()?.embeddedExtensionFactories.map((entry) => entry.factory) ?? [];
+  return getActivePluginRegistry()?.embeddedExtensionFactories?.map((entry) => entry.factory) ?? [];
 }

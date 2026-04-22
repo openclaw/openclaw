@@ -6,6 +6,9 @@
   "dependencies": {
     "tokenjuice": "0.6.1"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
