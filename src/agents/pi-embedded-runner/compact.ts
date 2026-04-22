@@ -843,6 +843,8 @@ export async function compactEmbeddedPiSessionDirect(
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
+      // OpenClaw registers filtered tools through `customTools`; keep Pi's
+      // built-in tool list empty so the SDK does not re-enable defaults.
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
@@ -853,6 +855,7 @@ export async function compactEmbeddedPiSessionDirect(
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider,
         modelApi: effectiveModel.api,
+        modelBaseUrl: effectiveModel.baseUrl,
       });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({

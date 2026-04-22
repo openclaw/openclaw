@@ -65,8 +65,15 @@ function createAutoReplyReplySplitShards() {
     }
   }
 
+  const shardCounts = {
+    "auto-reply-reply-agent-runner": 1,
+    "auto-reply-reply-commands": 2,
+    "auto-reply-reply-dispatch": 1,
+    "auto-reply-reply-state-routing": 1,
+  };
+
   return Object.entries(groups).flatMap(([groupName, includePatterns]) => {
-    const shardCount = groupName === "auto-reply-reply-commands" ? 4 : 2;
+    const shardCount = shardCounts[groupName] ?? 1;
     return Array.from({ length: shardCount }, (_, index) => ({
       shardName: `${groupName}-${String.fromCharCode(97 + index)}`,
       configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],

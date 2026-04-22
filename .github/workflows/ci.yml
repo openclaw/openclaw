@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-{1}', github.workflow, github.ref) || format('{0}-{1}-{2}', github.workflow, github.ref, github.sha)) }}
+  group: ${{ github.event_name == 'pull_request' && format('{0}-v2-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v2-{1}', github.workflow, github.ref) || format('{0}-v2-{1}-{2}', github.workflow, github.ref, github.sha)) }}
   cancel-in-progress: true
 
 env:
@@ -305,7 +305,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -396,7 +396,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -419,8 +419,8 @@ jobs:
   security-fast:
     permissions: {}
     needs: [security-scm-fast, security-dependency-audit]
-    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify fast security jobs
@@ -453,7 +453,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -550,7 +550,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -638,7 +638,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -721,8 +721,8 @@ jobs:
       contents: read
     name: checks-fast-contracts-channels
     needs: [preflight, checks-fast-channel-contracts-shard]
-    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify channel contract shards
@@ -744,7 +744,7 @@ jobs:
     name: "checks-fast-protocol"
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -809,7 +809,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -878,8 +878,8 @@ jobs:
       contents: read
     name: checks-node-extensions
     needs: [preflight, checks-node-extensions-shard]
-    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify extension shards
@@ -896,8 +896,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1012,7 +1012,7 @@ jobs:
     name: checks-node-compat-node22
     needs: [preflight]
     if: needs.preflight.outputs.run_node == 'true' && github.event_name == 'push'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -1089,7 +1089,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1212,8 +1212,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_checks_node_core_dist == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_core_dist == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1356,8 +1356,8 @@ jobs:
       contents: read
     name: checks-node-core
     needs: [preflight, checks-node-core-test-nondist-shard, checks-node-core-test-dist-shard]
-    if: always() && needs.preflight.outputs.run_checks == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify node test shards
@@ -1382,7 +1382,7 @@ jobs:
     name: "extension-fast"
     needs: [preflight]
     if: needs.preflight.outputs.run_extension_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1452,8 +1452,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: always() && needs.preflight.outputs.run_check == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && matrix.runner || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1461,16 +1461,22 @@ jobs:
         include:
           - check_name: check-preflight-guards
             task: preflight-guards
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
+            runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-strict-smoke
             task: strict-smoke
+            runner: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Checkout
         shell: bash
@@ -1567,8 +1573,8 @@ jobs:
       contents: read
     name: "check"
     needs: [preflight, check-shard]
-    if: always() && needs.preflight.outputs.run_check == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify check shards
@@ -1585,8 +1591,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: always() && needs.preflight.outputs.run_check_additional == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1787,8 +1793,8 @@ jobs:
       contents: read
     name: "check-additional"
     needs: [preflight, check-additional-shard]
-    if: always() && needs.preflight.outputs.run_check_additional == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify additional check shards
@@ -1805,8 +1811,8 @@ jobs:
       contents: read
     name: "build-smoke"
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success') }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1902,7 +1908,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1966,7 +1972,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1997,11 +2003,11 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-32vcpu-windows-2025' || 'windows-2025' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025' }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=6144
-      # Keep total concurrency predictable on the 32 vCPU runner.
+      # Keep total concurrency predictable on the smaller Windows runner.
       OPENCLAW_VITEST_MAX_WORKERS: 1
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
@@ -2099,8 +2105,8 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-latest' || 'macos-latest' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-latest' || 'macos-latest' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2251,7 +2257,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

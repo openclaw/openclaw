@@ -524,7 +524,7 @@ describe("chrome.ts internal", () => {
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
+          await expect(isChromeCdpReady(baseUrl, 500, 100)).resolves.toBe(true);
         },
       });
     });

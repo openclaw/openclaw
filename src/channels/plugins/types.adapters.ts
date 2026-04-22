@@ -172,9 +172,6 @@ export type ChannelGroupAdapter = {
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
-  skipStaleSocketHealthCheck?: boolean;
-  /** Runtime `mode` values where `lastEventAt` can prove connected socket liveness. */
-  staleSocketHealthCheckModes?: readonly string[];
   buildChannelSummary?: BivariantCallback<
     (params: {
       account: ResolvedAccount;

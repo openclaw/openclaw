@@ -1121,6 +1121,8 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
+      // OpenClaw registers filtered tools through `customTools`; keep Pi's
+      // built-in tool list empty so the SDK does not re-enable defaults.
 
       ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
         createAgentSession: async (options) =>
@@ -1232,6 +1234,7 @@ export async function runEmbeddedAttempt(
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider: params.provider,
         modelApi: params.model.api,
+        modelBaseUrl: params.model.baseUrl,
       });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({

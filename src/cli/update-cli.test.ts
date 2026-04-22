@@ -545,6 +545,109 @@ describe("update-cli", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("uses a fail-closed integrity policy for post-core plugin updates", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    const updateCall = updateNpmInstalledPlugins.mock.calls[0]?.[0] as
+      | {
+          onIntegrityDrift?: (drift: {
+            pluginId: string;
+            spec: string;
+            expectedIntegrity: string;
+            actualIntegrity: string;
+            resolvedSpec?: string;
+          }) => Promise<boolean>;
+        }
+      | undefined;
+    const onIntegrityDrift = updateCall?.onIntegrityDrift;
+    expect(onIntegrityDrift).toBeTypeOf("function");
+    if (!onIntegrityDrift) {
+      throw new Error("missing integrity drift handler");
+    }
+
+    vi.mocked(runtimeCapture.log).mockClear();
+    await expect(
+      onIntegrityDrift({
+        pluginId: "demo",
+        spec: "@openclaw/demo@1.0.0",
+        resolvedSpec: "@openclaw/demo@1.0.0",
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+      }),
+    ).resolves.toBe(false);
+    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("Plugin update aborted");
+  });
+
+  it("includes plugin integrity drift details in update json output", async () => {
+    updateNpmInstalledPlugins.mockImplementationOnce(
+      async (params: {
+        config: OpenClawConfig;
+        onIntegrityDrift?: (drift: {
+          pluginId: string;
+          spec: string;
+          resolvedSpec?: string;
+          resolvedVersion?: string;
+          expectedIntegrity: string;
+          actualIntegrity: string;
+          dryRun: boolean;
+        }) => Promise<boolean>;
+      }) => {
+        const proceed = await params.onIntegrityDrift?.({
+          pluginId: "demo",
+          spec: "@openclaw/demo@1.0.0",
+          resolvedSpec: "@openclaw/demo@1.0.0",
+          resolvedVersion: "1.0.0",
+          expectedIntegrity: "sha512-old",
+          actualIntegrity: "sha512-new",
+          dryRun: false,
+        });
+        return {
+          changed: false,
+          config: params.config,
+          outcomes: [
+            {
+              pluginId: "demo",
+              status: "error",
+              message:
+                proceed === false
+                  ? "Failed to update demo: aborted: npm package integrity drift detected for @openclaw/demo@1.0.0"
+                  : "unexpected drift continuation",
+            },
+          ],
+        };
+      },
+    );
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ json: true, restart: false });
+
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.postUpdate?.plugins?.integrityDrifts).toEqual([
+      {
+        pluginId: "demo",
+        spec: "@openclaw/demo@1.0.0",
+        resolvedSpec: "@openclaw/demo@1.0.0",
+        resolvedVersion: "1.0.0",
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+        action: "aborted",
+      },
+    ]);
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.status).toBe("error");
+  });
+
   it.each([
     {
       name: "preview mode",
