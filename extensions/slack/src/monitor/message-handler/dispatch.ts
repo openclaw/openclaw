@@ -443,6 +443,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
     await deliverReplies({
+      cfg: ctx.cfg,
       replies: [params.payload],
       target: prepared.replyTarget,
       token: ctx.botToken,
@@ -677,6 +678,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const draftStream = shouldUseDraftStream
     ? createSlackDraftStream({
         target: prepared.replyTarget,
+        cfg,
         token: ctx.botToken,
         accountId: account.accountId,
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),

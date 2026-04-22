@@ -975,6 +975,7 @@ export type OpenClawPackageStartup = {
 };
 
 export type OpenClawPackageSetupFeatures = {
+  configPromotion?: boolean;
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };

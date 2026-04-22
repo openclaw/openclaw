@@ -57,7 +57,7 @@ export function createOpenClawTools(
     agentSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
-    /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
+    /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
     agentThreadId?: string | number;
@@ -69,13 +69,13 @@ export function createOpenClawTools(
     sandboxed?: boolean;
     config?: OpenClawConfig;
     pluginToolAllowlist?: string[];
-    /** Current channel ID for auto-threading (Slack). */
+    /** Current channel ID for auto-threading. */
     currentChannelId?: string;
-    /** Current thread timestamp for auto-threading (Slack). */
+    /** Current thread timestamp for auto-threading. */
     currentThreadTs?: string;
-    /** Current inbound message id for action fallbacks (e.g. Telegram react). */
+    /** Current inbound message id for action fallbacks. */
     currentMessageId?: string | number;
-    /** Reply-to mode for Slack auto-threading. */
+    /** Reply-to mode for auto-threading. */
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
     hasRepliedRef?: { value: boolean };

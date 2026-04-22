@@ -348,8 +348,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         idLabel: "signalNumber",
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
-        notify: async ({ id, message }) => {
-          await (await loadSignalSendRuntime()).sendMessageSignal(id, message);
+        notify: async ({ cfg, id, message }) => {
+          await (
+            await loadSignalSendRuntime()
+          ).sendMessageSignal(id, message, {
+            cfg,
+          });
         },
       },
     },

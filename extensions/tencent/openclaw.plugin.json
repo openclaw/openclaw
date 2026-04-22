@@ -1,10 +1,9 @@
 {
   "id": "tencent",
   "enabledByDefault": true,
-  "providers": ["tencent-tokenhub", "tencent-token-plan"],
+  "providers": ["tencent-tokenhub"],
   "providerAuthEnvVars": {
-    "tencent-tokenhub": ["TOKENHUB_API_KEY"],
-    "tencent-token-plan": ["LKEAP_API_KEY"]
+    "tencent-tokenhub": ["TOKENHUB_API_KEY"]
   },
   "providerAuthChoices": [
     {
@@ -14,24 +13,11 @@
       "choiceLabel": "Tencent TokenHub",
       "groupId": "tencent",
       "groupLabel": "Tencent Cloud",
-      "groupHint": "TokenHub + Token Plan",
+      "groupHint": "Tencent TokenHub",
       "optionKey": "tokenhubApiKey",
       "cliFlag": "--tokenhub-api-key",
       "cliOption": "--tokenhub-api-key <key>",
       "cliDescription": "Tencent TokenHub API key"
-    },
-    {
-      "provider": "tencent-token-plan",
-      "method": "api-key",
-      "choiceId": "tencent-token-plan-api-key",
-      "choiceLabel": "Tencent Token Plan",
-      "groupId": "tencent",
-      "groupLabel": "Tencent Cloud",
-      "groupHint": "TokenHub + Token Plan",
-      "optionKey": "tencentTokenPlanApiKey",
-      "cliFlag": "--tencent-token-plan-api-key",
-      "cliOption": "--tencent-token-plan-api-key <key>",
-      "cliDescription": "Tencent Token Plan API key"
     }
   ],
   "configSchema": {
