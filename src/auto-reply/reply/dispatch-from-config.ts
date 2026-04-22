@@ -120,6 +120,33 @@ function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimePromise;
 }
 
+/**
+ * Drop duplicate exec-approval chat copy when the channel already delivered native
+ * approval UI (e.g. QQ inline keyboard). Mirrors {@link resolveToolDeliveryPayload}
+ * behaviour for block/final assistant text.
+ */
+function suppressExecApprovalDuplicateBlockOrFinalPayload(params: {
+  payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  surfaceOrProvider: string | undefined;
+}): ReplyPayload | null {
+  if (
+    !shouldSuppressLocalExecApprovalPrompt({
+      channel: normalizeMessageChannel(params.surfaceOrProvider),
+      cfg: params.cfg,
+      accountId: params.accountId,
+      payload: params.payload,
+    })
+  ) {
+    return params.payload;
+  }
+  if (resolveSendableOutboundReplyParts(params.payload).hasMedia) {
+    return { ...params.payload, text: undefined };
+  }
+  return null;
+}
+
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
@@ -776,7 +803,16 @@ export async function dispatchReplyFromConfig(
         accountId: replyRoute.accountId,
       });
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-      const result = await routeReplyToOriginating(normalizedPayload);
+      const finalPayload = suppressExecApprovalDuplicateBlockOrFinalPayload({
+        payload: normalizedPayload,
+        cfg,
+        accountId: ctx.AccountId,
+        surfaceOrProvider: ctx.Surface ?? ctx.Provider,
+      });
+      if (!finalPayload) {
+        return { queuedFinal: false, routedFinalCount: 0 };
+      }
+      const result = await routeReplyToOriginating(finalPayload);
       if (result) {
         if (!result.ok) {
           logVerbose(
@@ -790,7 +826,7 @@ export async function dispatchReplyFromConfig(
       }
       markInboundDedupeReplayUnsafe();
       return {
-        queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
+        queuedFinal: dispatcher.sendFinalReply(finalPayload),
         routedFinalCount: 0,
       };
     };
@@ -1193,11 +1229,31 @@ export async function dispatchReplyFromConfig(
               accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+            const blockPayload = suppressExecApprovalDuplicateBlockOrFinalPayload({
+              payload: normalizedPayload,
+              cfg,
+              accountId: ctx.AccountId,
+              surfaceOrProvider: ctx.Surface ?? ctx.Provider,
+            });
+            if (!blockPayload) {
+              return;
+            }
+            // Accumulate block text for TTS generation after streaming.
+            // Exclude compaction status notices — they are informational UI
+            // signals and must not be synthesised into the spoken reply.
+            // Use post-suppression text so duplicate approval prompts are not spoken.
+            if (blockPayload.text && !payload.isCompactionNotice) {
+              if (accumulatedBlockText.length > 0) {
+                accumulatedBlockText += "\n";
+              }
+              accumulatedBlockText += blockPayload.text;
+              blockCount++;
+            }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
+              await sendPayloadAsync(blockPayload, context?.abortSignal, false);
             } else {
               markInboundDedupeReplayUnsafe();
-              dispatcher.sendBlockReply(normalizedPayload);
+              dispatcher.sendBlockReply(blockPayload);
             }
           };
           return run();

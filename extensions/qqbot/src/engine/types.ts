@@ -158,23 +158,37 @@ export interface UploadPrepareHashes {
 
 // ============ Stream Message Types ============
 
-/** Stream message input state. */
-export enum StreamInputState {
-  GENERATING = "1",
-  DONE = "10",
-}
+/** Stream message input mode (C2C stream_messages API). */
+export const StreamInputMode = {
+  /** Each chunk replaces full message content. */
+  REPLACE: "replace",
+} as const;
+export type StreamInputMode = (typeof StreamInputMode)[keyof typeof StreamInputMode];
 
-/** Stream message request body. */
+/** Stream message input state (numeric per QQ Open Platform). */
+export const StreamInputState = {
+  GENERATING: 1,
+  DONE: 10,
+} as const;
+export type StreamInputState = (typeof StreamInputState)[keyof typeof StreamInputState];
+
+/** Stream message content type. */
+export const StreamContentType = {
+  MARKDOWN: "markdown",
+} as const;
+export type StreamContentType = (typeof StreamContentType)[keyof typeof StreamContentType];
+
+/** Stream message request body for `/v2/users/{openid}/stream_messages`. */
 export interface StreamMessageRequest {
-  input_mode: string;
-  input_state: string;
-  content_type: string;
+  input_mode: StreamInputMode;
+  input_state: StreamInputState;
+  content_type: StreamContentType;
   content_raw: string;
-  event_id?: string;
-  msg_id?: string;
-  msg_seq?: number;
-  index?: number;
+  event_id: string;
+  msg_id: string;
   stream_msg_id?: string;
+  msg_seq: number;
+  index: number;
 }
 
 // ============ Inline Keyboard Types ============
@@ -260,7 +274,13 @@ export interface GatewayAccount {
     groupAllowFrom?: Array<string | number>;
     dmPolicy?: "open" | "allowlist" | "disabled";
     groupPolicy?: "open" | "allowlist" | "disabled";
-    streaming?: { mode?: string };
+    streaming?:
+      | boolean
+      | {
+          mode?: string;
+          /** When true, use QQ C2C `stream_messages` API for DMs (requires model partial streaming). */
+          c2cStreamApi?: boolean;
+        };
     audioFormatPolicy?: {
       uploadDirectFormats?: string[];
       transcodeEnabled?: boolean;

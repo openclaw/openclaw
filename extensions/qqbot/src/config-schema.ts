@@ -31,6 +31,8 @@ const QQBotStreamingSchema = z
       .object({
         /** "partial" (default) enables block streaming; "off" disables it. */
         mode: z.enum(["off", "partial"]).default("partial"),
+        /** Use QQ C2C official stream_messages API (single-message updates). */
+        c2cStreamApi: z.boolean().optional(),
       })
       .passthrough(),
   ])

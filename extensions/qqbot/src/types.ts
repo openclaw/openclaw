@@ -104,13 +104,17 @@ export interface QQBotAccountConfig {
    */
   upgradeMode?: "doc" | "hot-reload";
   /**
-   * Block streaming configuration.
+   * Block streaming + optional QQ C2C official stream API.
    * - mode "partial" (default): enable block streaming for incremental delivery.
    * - mode "off": buffer the full response before sending.
+   * - c2cStreamApi: when true, use QQ `/stream_messages` for C2C only (single bubble updates).
    */
-  streaming?: {
-    mode?: "off" | "partial";
-  };
+  streaming?:
+    | boolean
+    | {
+        mode?: "off" | "partial";
+        c2cStreamApi?: boolean;
+      };
 }
 
 /** Audio format policy controlling which formats can skip transcoding. */

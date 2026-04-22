@@ -258,6 +258,8 @@ export interface MediaTargetContext {
   targetId: string;
   account: GatewayAccount;
   replyToId?: string;
+  /** Optional log prefix for diagnostics (e.g. streaming media sends). */
+  logPrefix?: string;
 }
 
 /** Build a media target from a normal outbound context. */
