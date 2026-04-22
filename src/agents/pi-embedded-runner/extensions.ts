@@ -60,6 +60,11 @@ function buildContextPruningFactory(params: {
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
     dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks,
+    thinkingBlockEstimateStrategy: transcriptPolicy.dropThinkingBlocks
+      ? params.provider === "github-copilot"
+        ? "github-copilot"
+        : "generic"
+      : undefined,
     lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager, {
       provider: params.provider,
       modelId: params.modelId,

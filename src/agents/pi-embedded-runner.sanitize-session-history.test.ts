@@ -894,24 +894,17 @@ describe("sanitizeSessionHistory", () => {
     expect(toolResult.isError).toBe(true);
   });
 
-  it("preserves latest assistant thinking blocks for github-copilot models", async () => {
+  it("drops latest assistant thinking blocks for github-copilot claude models", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages("reasoning_text");
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "internal",
-        thinkingSignature: "reasoning_text",
-      },
-      { type: "text", text: "hi" },
-    ]);
+    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
   });
 
-  it("preserves latest assistant turn when all content is thinking blocks (github-copilot)", async () => {
+  it("preserves the latest assistant turn when github-copilot content is all thinking", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -930,16 +923,10 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toHaveLength(3);
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "some reasoning",
-        thinkingSignature: "reasoning_text",
-      },
-    ]);
+    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
 
-  it("preserves thinking blocks alongside tool_use blocks in latest assistant message (github-copilot)", async () => {
+  it("preserves tool_use and text blocks while dropping latest github-copilot thinking", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -957,7 +944,7 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const types = getAssistantContentTypes(result);
-    expect(types).toContain("thinking");
+    expect(types).not.toContain("thinking");
     expect(types).toContain("toolCall");
     expect(types).toContain("text");
   });
@@ -1167,7 +1154,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("keeps mutable thinking turns outside exact anthropic replay", async () => {
+  it("drops mutable thinking turns for github-copilot even with tool calls", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1184,12 +1171,9 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const assistant = getAssistantMessage(result);
+    // Copilot Claude rejects replayed plain thinking blocks, so they must be
+    // stripped — only the toolCall should survive.
     expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "I should use the read tool",
-        thinkingSignature: "reasoning_text",
-      },
       { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
     ]);
   });

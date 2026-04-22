@@ -40,7 +40,7 @@ import {
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropGithubCopilotThinkingBlocks, dropThinkingBlocks } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -477,7 +477,14 @@ export async function sanitizeSessionHistory(params: {
     },
   );
   const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
+    ? params.provider === "github-copilot"
+      ? // Copilot Claude is stricter than the generic Anthropic/native replay path:
+        // it rejects plain `thinking` blocks even when they survive in the latest
+        // assistant turn, so use the Copilot-specific helper here.
+        dropGithubCopilotThinkingBlocks(sanitizedImages)
+      : // Non-Copilot providers keep the generic helper, which preserves the
+        // latest assistant turn for Anthropic-native signed/redacted replay.
+        dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,

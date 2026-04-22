@@ -27,6 +27,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
       isToolPrunable: runtime.isToolPrunable,
       contextWindowTokensOverride: runtime.contextWindowTokens ?? undefined,
       dropThinkingBlocksForEstimate: runtime.dropThinkingBlocks,
+      thinkingBlockEstimateStrategy: runtime.thinkingBlockEstimateStrategy,
     });
 
     if (next === event.messages) {
