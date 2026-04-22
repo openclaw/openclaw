@@ -143,9 +143,14 @@ export function collectGatewayConfigFindings(
   }
 
   if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+    // On loopback-only bind, X-Forwarded-For spoofing requires local-host
+    // access, so the risk is latent rather than active. Report as info to
+    // avoid a permanent warn for single-operator installs that follow the
+    // recommended local-only config. Non-loopback binds keep warn via a
+    // parallel check below. (#70357)
     findings.push({
       checkId: "gateway.trusted_proxies_missing",
-      severity: "warn",
+      severity: "info",
       title: "Reverse proxy headers are not trusted",
       detail:
         "gateway.bind is loopback and gateway.trustedProxies is empty. " +
@@ -153,6 +158,21 @@ export function collectGatewayConfigFindings(
         "so local-client checks cannot be spoofed.",
       remediation:
         "Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.",
+    });
+  }
+  if (bind !== "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+    // Non-loopback bind exposes the Control UI beyond the host, so an empty
+    // trustedProxies allowlist is an active (not latent) spoofing risk.
+    findings.push({
+      checkId: "gateway.trusted_proxies_missing",
+      severity: "warn",
+      title: "Reverse proxy headers are not trusted",
+      detail:
+        `gateway.bind is ${bind} and gateway.trustedProxies is empty. ` +
+        "Local-client checks can be spoofed via X-Forwarded-For when the Control UI is " +
+        "reachable off-host without a vetted reverse-proxy allowlist.",
+      remediation:
+        "Set gateway.trustedProxies to your proxy IPs or switch gateway.bind to loopback.",
     });
   }
 
