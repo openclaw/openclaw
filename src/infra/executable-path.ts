@@ -123,3 +123,58 @@ export function resolveExecutablePath(
     options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
   return resolveExecutableFromPathEnv(candidate, envPath, options?.env);
 }
+
+export function resolveShellFromPath(name: string): string | undefined {
+  const envPath = process.env.PATH ?? "";
+  if (!envPath) {
+    return undefined;
+  }
+  const entries = envPath.split(path.delimiter).filter(Boolean);
+  for (const entry of entries) {
+    const candidate = path.join(entry, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // ignore missing or non-executable entries
+    }
+  }
+  return undefined;
+}
+
+export function resolvePowerShellPath(): string {
+  // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
+  const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
+  const pwsh7 = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
+  if (fs.existsSync(pwsh7)) {
+    return pwsh7;
+  }
+
+  const programW6432 = process.env.ProgramW6432;
+  if (programW6432 && programW6432 !== programFiles) {
+    const pwsh7Alt = path.join(programW6432, "PowerShell", "7", "pwsh.exe");
+    if (fs.existsSync(pwsh7Alt)) {
+      return pwsh7Alt;
+    }
+  }
+
+  const pwshInPath = resolveShellFromPath("pwsh");
+  if (pwshInPath) {
+    return pwshInPath;
+  }
+
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR;
+  if (systemRoot) {
+    const candidate = path.join(
+      systemRoot,
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return "powershell.exe";
+}

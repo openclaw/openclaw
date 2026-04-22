@@ -40,6 +40,7 @@ import {
   POWERSHELL_WRAPPERS,
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
+import { resolvePowerShellPath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
 
@@ -407,6 +408,42 @@ function resolveShellWrapperScriptArgv(params: {
   return [params.shellScriptCandidatePath, ...scriptArgs];
 }
 
+function isBareName(name: string): boolean {
+  return !name.includes("/") && !name.includes("\\");
+}
+
+function resolveWindowsCmdletAllowlistFallback(params: {
+  executableMatch: ExecAllowlistEntry | null;
+  resolution: ExecutableResolution | null;
+  effectiveArgv: string[];
+  context: ExecAllowlistContext;
+}): ExecAllowlistEntry | null {
+  if (params.executableMatch) {
+    return null;
+  }
+  if (!isWindowsPlatform(params.context.platform)) {
+    return null;
+  }
+  const rawExecutable = params.resolution?.rawExecutable?.trim();
+  if (!rawExecutable || !isBareName(rawExecutable) || params.resolution?.resolvedPath) {
+    return null;
+  }
+  const psPath = resolvePowerShellPath();
+  const syntheticResolution: ExecutableResolution = {
+    rawExecutable: psPath,
+    resolvedPath: psPath,
+    executableName: path.basename(psPath),
+  };
+  // Prepend PowerShell path so the cmdlet name lands in argv[1:] for argPattern matching.
+  const syntheticArgv = [psPath, ...params.effectiveArgv];
+  return matchAllowlist(
+    params.context.allowlist,
+    syntheticResolution,
+    syntheticArgv,
+    params.context.platform,
+  );
+}
+
 function resolveSegmentAllowlistMatch(params: {
   segment: ExecCommandSegment;
   context: ExecAllowlistContext;
@@ -483,10 +520,20 @@ function resolveSegmentAllowlistMatch(params: {
           params.context.platform,
         )
       : null;
+  // Windows cmdlet fallback: bare commands (Get-ChildItem, etc.) don't resolve to
+  // filesystem paths because they're PowerShell builtins.  Since all Windows exec runs
+  // through PowerShell, match against the PowerShell executable path with a synthetic
+  // argv that includes the cmdlet name for argPattern verification.
+  const windowsCmdletMatch = resolveWindowsCmdletAllowlistFallback({
+    executableMatch,
+    resolution: executableResolution,
+    effectiveArgv,
+    context: params.context,
+  });
   return {
     effectiveArgv,
     inlineCommand,
-    match: executableMatch ?? shellPositionalArgvMatch ?? shellScriptMatch,
+    match: executableMatch ?? windowsCmdletMatch ?? shellPositionalArgvMatch ?? shellScriptMatch,
   };
 }
 
@@ -960,6 +1007,17 @@ function collectAllowAlwaysPatterns(params: {
 
   const candidatePath = resolveExecutionTargetCandidatePath(segment.resolution, params.cwd);
   if (!candidatePath) {
+    // Windows cmdlet fallback: bare commands that don't resolve to a path are treated
+    // as PowerShell cmdlets.  Generate an allow-always entry against the PowerShell
+    // executable with an argPattern that includes the cmdlet name.
+    const execution = resolveExecutionTargetResolution(segment.resolution);
+    const rawExe = execution?.rawExecutable?.trim();
+    if (isWindowsPlatform(params.platform) && rawExe && isBareName(rawExe)) {
+      const psPath = resolvePowerShellPath();
+      const syntheticArgv = [psPath, ...segment.argv];
+      const argPattern = buildArgPatternFromArgv(syntheticArgv, params.platform);
+      addAllowAlwaysPattern(params.out, psPath, argPattern);
+    }
     return;
   }
   if (isInterpreterLikeAllowlistPattern(candidatePath)) {
