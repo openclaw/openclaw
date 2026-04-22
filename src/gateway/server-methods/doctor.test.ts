@@ -59,8 +59,6 @@ const invokeDoctorMemoryStatus = async (
     vi.fn(async () => {
       return [];
     });
-  const cfg = context?.deps?.cfg ?? loadConfig();
-  console.error("DBG invokeDoctorMemoryStatus cfg", JSON.stringify(cfg));
   await doctorHandlers["doctor.memory.status"]({
     req: {} as never,
     params: {} as never,
@@ -70,7 +68,7 @@ const invokeDoctorMemoryStatus = async (
         list: cronList,
       },
       deps: {
-        cfg,
+        cfg: context?.deps?.cfg ?? loadConfig(),
       },
     } as never,
     client: null,
