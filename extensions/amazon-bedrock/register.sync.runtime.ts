@@ -63,15 +63,10 @@ function createGuardrailWrapStreamFn(
 }
 
 /**
- * Mirrors pi-ai's internal `supportsPromptCaching` check. Returns true when
- * pi-ai would inject cache points on its own (so we don't need to).
- *
- * This is intentionally a conservative subset — if pi-ai adds new models we
- * haven't mirrored yet, `needsCachePointInjection` returns true and the
- * `hasCachePoint` guard in `injectBedrockCachePoints` prevents double injection.
- * The only cost is a lightweight wrapper on those requests.
+ * Mirrors the shipped pi-ai Bedrock `supportsPromptCaching` matcher.
+ * Keep this in sync with node_modules/@mariozechner/pi-ai/dist/providers/amazon-bedrock.js.
  */
-function piAiWouldInjectCachePoints(modelId: string): boolean {
+function matchesPiAiPromptCachingModelId(modelId: string): boolean {
   const id = modelId.toLowerCase();
   if (!id.includes("claude")) {
     return false;
@@ -89,6 +84,10 @@ function piAiWouldInjectCachePoints(modelId: string): boolean {
     return true;
   }
   return false;
+}
+
+function piAiWouldInjectCachePoints(modelId: string): boolean {
+  return matchesPiAiPromptCachingModelId(modelId);
 }
 
 /**
@@ -139,25 +138,11 @@ function extractRegionFromArn(arn: string): string | undefined {
 }
 
 /**
- * Check if a foundation model ARN supports prompt caching.
- * Uses the same patterns as piAiWouldInjectCachePoints but against the
- * resolved model ARN rather than the profile ARN.
+ * Check if a resolved foundation model ARN supports prompt caching using the
+ * same matcher pi-ai uses for direct model IDs.
  */
 function resolvedModelSupportsCaching(modelArn: string): boolean {
-  const id = modelArn.toLowerCase();
-  if (!id.includes("claude")) {
-    return false;
-  }
-  if (id.includes("-4-") || id.includes("-4.")) {
-    return true;
-  }
-  if (id.includes("claude-3-7-sonnet")) {
-    return true;
-  }
-  if (id.includes("claude-3-5-haiku")) {
-    return true;
-  }
-  return false;
+  return matchesPiAiPromptCachingModelId(modelArn);
 }
 
 /**
@@ -185,7 +170,9 @@ async function resolveAppProfileCacheEligible(
       new GetInferenceProfileCommand({ inferenceProfileIdentifier: modelId }),
     );
     const models = resp.models ?? [];
-    const eligible = models.some((m: { modelArn?: string }) =>
+    const eligible =
+      models.length > 0 &&
+      models.every((m: { modelArn?: string }) =>
       resolvedModelSupportsCaching(m.modelArn ?? ""),
     );
     appProfileCacheEligibleCache.set(modelId, eligible);
