@@ -629,11 +629,13 @@ export const telegramPlugin = createChatChannelPlugin({
           conversationId,
           threadId: threadId ?? undefined,
         }),
-      buildBoundReplyChannelData: ({ operation, conversation }) => {
+      buildBoundReplyPayload: ({ operation, conversation }) => {
         if (operation !== "acp-spawn") {
           return null;
         }
-        return conversation.conversationId.includes(":topic:") ? { telegram: { pin: true } } : null;
+        return conversation.conversationId.includes(":topic:")
+          ? { delivery: { pin: { enabled: true, notify: false } } }
+          : null;
       },
       shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
       createManager: ({ accountId }) =>
