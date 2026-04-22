@@ -22,6 +22,10 @@ import { normalizeHostname } from "../../infra/net/hostname.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildRemoteBaseUrlPolicy } from "../../memory-host-sdk/host/remote-http.js";
 import {
+  createLazyFacadeValue,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "../../plugin-sdk/facade-runtime.js";
+import {
   fetchLmstudioModels,
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
@@ -29,11 +33,6 @@ import {
   resolveLmstudioInferenceBase,
   resolveLmstudioRequestContext,
 } from "../../plugin-sdk/lmstudio-runtime.js";
-import {
-  buildOllamaModelDefinition,
-  OLLAMA_DEFAULT_BASE_URL,
-  queryOllamaModelShowInfo,
-} from "../../plugin-sdk/ollama-runtime.js";
 import { isLoopbackIpAddress } from "../../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -62,7 +61,36 @@ type AddModelOutcome = {
   warnings: string[];
 };
 
+type OllamaModelShowInfo = {
+  contextWindow?: number;
+  capabilities?: string[];
+};
+
+type OllamaApiFacade = {
+  buildOllamaModelDefinition: (
+    modelId: string,
+    contextWindow?: number,
+    capabilities?: string[],
+  ) => ModelDefinitionConfig;
+  queryOllamaModelShowInfo: (apiBase: string, modelName: string) => Promise<OllamaModelShowInfo>;
+};
+
 const log = createSubsystemLogger("models-add");
+const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
+
+function loadOllamaApiFacade(): OllamaApiFacade {
+  return loadBundledPluginPublicSurfaceModuleSync<OllamaApiFacade>({
+    dirName: "ollama",
+    artifactBasename: "api.js",
+  });
+}
+
+const buildOllamaModelDefinition: OllamaApiFacade["buildOllamaModelDefinition"] =
+  createLazyFacadeValue(loadOllamaApiFacade, "buildOllamaModelDefinition");
+const queryOllamaModelShowInfo: OllamaApiFacade["queryOllamaModelShowInfo"] = createLazyFacadeValue(
+  loadOllamaApiFacade,
+  "queryOllamaModelShowInfo",
+);
 
 function sanitizeUrlForLogs(raw: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(raw);

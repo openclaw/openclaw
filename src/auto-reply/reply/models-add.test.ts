@@ -17,6 +17,10 @@ const configMocks = vi.hoisted(() => ({
   validateConfigObjectWithPlugins: vi.fn(),
 }));
 
+const facadeRuntimeMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicSurfaceModuleSync: vi.fn(),
+}));
+
 const ollamaMocks = vi.hoisted(() => ({
   buildOllamaModelDefinition: vi.fn(
     (modelId: string, contextWindow?: number, capabilities?: string[]) => ({
@@ -64,11 +68,14 @@ vi.mock("../../config/config.js", () => ({
   validateConfigObjectWithPlugins: configMocks.validateConfigObjectWithPlugins,
 }));
 
-vi.mock("../../plugin-sdk/ollama-runtime.js", () => {
+vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
+    "../../plugin-sdk/facade-runtime.js",
+  );
   return {
-    OLLAMA_DEFAULT_BASE_URL: "http://127.0.0.1:11434",
-    buildOllamaModelDefinition: ollamaMocks.buildOllamaModelDefinition,
-    queryOllamaModelShowInfo: ollamaMocks.queryOllamaModelShowInfo,
+    ...actual,
+    loadBundledPluginPublicSurfaceModuleSync:
+      facadeRuntimeMocks.loadBundledPluginPublicSurfaceModuleSync,
   };
 });
 
@@ -88,6 +95,23 @@ describe("models-add", () => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
     configMocks.validateConfigObjectWithPlugins.mockReset();
+    facadeRuntimeMocks.loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    facadeRuntimeMocks.loadBundledPluginPublicSurfaceModuleSync.mockImplementation((params) => {
+      if (
+        params &&
+        typeof params === "object" &&
+        "dirName" in params &&
+        params.dirName === "ollama" &&
+        "artifactBasename" in params &&
+        params.artifactBasename === "api.js"
+      ) {
+        return {
+          buildOllamaModelDefinition: ollamaMocks.buildOllamaModelDefinition,
+          queryOllamaModelShowInfo: ollamaMocks.queryOllamaModelShowInfo,
+        };
+      }
+      throw new Error(`Unexpected facade load: ${JSON.stringify(params)}`);
+    });
     ollamaMocks.buildOllamaModelDefinition.mockClear();
     ollamaMocks.queryOllamaModelShowInfo.mockReset();
     ollamaMocks.queryOllamaModelShowInfo.mockResolvedValue({});
