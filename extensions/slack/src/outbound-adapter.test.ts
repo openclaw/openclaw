@@ -1,18 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
-const hasHooksMock = vi.hoisted(() => vi.fn());
-const runMessageSendingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
-}));
-
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
-  getGlobalHookRunner: () => ({
-    hasHooks: (...args: unknown[]) => hasHooksMock(...args),
-    runMessageSending: (...args: unknown[]) => runMessageSendingMock(...args),
-  }),
 }));
 
 let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
@@ -30,9 +21,6 @@ describe("slackOutbound", () => {
 
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
-    hasHooksMock.mockReset();
-    runMessageSendingMock.mockReset();
-    hasHooksMock.mockReturnValue(false);
   });
 
   it("sends payload media first, then finalizes with blocks", async () => {
@@ -127,9 +115,8 @@ describe("slackOutbound", () => {
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
   });
-  it("cancels sendMedia when message_sending hooks block it", async () => {
-    hasHooksMock.mockReturnValue(true);
-    runMessageSendingMock.mockResolvedValue({ cancel: true });
+  it("sends media with a normalized threadTs", async () => {
+    sendMessageSlackMock.mockResolvedValue({ messageId: "m-media" });
 
     const result = await slackOutbound.sendMedia!({
       cfg,
@@ -140,24 +127,16 @@ describe("slackOutbound", () => {
       replyToId: "1712000000.000001",
     });
 
-    expect(runMessageSendingMock).toHaveBeenCalledWith(
-      {
-        to: "C123",
-        content: "caption",
-        metadata: {
-          threadTs: "1712000000.000001",
-          channelId: "C123",
-          mediaUrl: "https://example.com/image.png",
-        },
-      },
-      { channelId: "slack", accountId: "default" },
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "caption",
+      expect.objectContaining({
+        cfg,
+        mediaUrl: "https://example.com/image.png",
+        threadTs: "1712000000.000001",
+      }),
     );
-    expect(sendMessageSlackMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      channel: "slack",
-      messageId: "cancelled-by-hook",
-      meta: { cancelled: true },
-    });
+    expect(result).toEqual({ channel: "slack", messageId: "m-media" });
   });
 
   it("ignores non-Slack replyToId on sendPayload when threadId is available", async () => {

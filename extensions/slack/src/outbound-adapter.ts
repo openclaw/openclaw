@@ -12,14 +12,12 @@ import {
   resolveOutboundSendDep,
   type OutboundIdentity,
 } from "openclaw/plugin-sdk/outbound-runtime";
-import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { resolveSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
@@ -65,40 +63,6 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   return { username, iconUrl, iconEmoji };
 }
 
-async function applySlackMessageSendingHooks(params: {
-  cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
-  to: string;
-  text: string;
-  threadTs?: string;
-  accountId?: string;
-  mediaUrl?: string;
-}): Promise<{ cancelled: boolean; text: string }> {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("message_sending")) {
-    return { cancelled: false, text: params.text };
-  }
-  const account = resolveSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const hookResult = await hookRunner.runMessageSending(
-    {
-      to: params.to,
-      content: params.text,
-      metadata: {
-        threadTs: params.threadTs,
-        channelId: params.to,
-        ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
-      },
-    },
-    { channelId: "slack", accountId: account.accountId },
-  );
-  if (hookResult?.cancel) {
-    return { cancelled: true, text: params.text };
-  }
-  return { cancelled: false, text: hookResult?.content ?? params.text };
-}
-
 async function sendSlackOutboundMessage(params: {
   cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
   to: string;
@@ -124,23 +88,8 @@ async function sendSlackOutboundMessage(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
   });
-  const hookResult = await applySlackMessageSendingHooks({
-    cfg: params.cfg,
-    to: params.to,
-    text: params.text,
-    threadTs,
-    mediaUrl: params.mediaUrl,
-    accountId: params.accountId ?? undefined,
-  });
-  if (hookResult.cancelled) {
-    return {
-      messageId: "cancelled-by-hook",
-      channelId: params.to,
-      meta: { cancelled: true },
-    };
-  }
   const slackIdentity = resolveSlackSendIdentity(params.identity);
-  const result = await send(params.to, hookResult.text, {
+  const result = await send(params.to, params.text, {
     cfg: params.cfg,
     threadTs,
     accountId: params.accountId ?? undefined,
