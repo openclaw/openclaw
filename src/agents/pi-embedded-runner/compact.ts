@@ -4,7 +4,6 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
-  estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -48,6 +47,7 @@ import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
+import { estimateMessageTokensCjkAware } from "../compaction.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -276,7 +276,7 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     contributors.push({ role, chars, tool: resolveMessageToolLabel(msg) });
     if (!tokenEstimationFailed) {
       try {
-        estTokens += estimateTokens(msg);
+        estTokens += estimateMessageTokensCjkAware(msg);
       } catch {
         tokenEstimationFailed = true;
       }
@@ -958,7 +958,7 @@ export async function compactEmbeddedPiSessionDirect(
             originalMessages,
             currentMessages: session.messages,
             observedTokenCount,
-            estimateTokensFn: estimateTokens,
+            estimateTokensFn: estimateMessageTokensCjkAware,
           });
           const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
             hookRunner,
@@ -1008,7 +1008,10 @@ export async function compactEmbeddedPiSessionDirect(
           // history subset, not the full session.
           let fullSessionTokensBefore = 0;
           try {
-            fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+            fullSessionTokensBefore = limited.reduce(
+              (sum, msg) => sum + estimateMessageTokensCjkAware(msg),
+              0,
+            );
           } catch {
             // If token estimation throws on a malformed message, fall back to 0 so
             // the sanity check below becomes a no-op instead of crashing compaction.
@@ -1059,7 +1062,7 @@ export async function compactEmbeddedPiSessionDirect(
             messagesAfter: session.messages,
             observedTokenCount,
             fullSessionTokensBefore,
-            estimateTokensFn: estimateTokens,
+            estimateTokensFn: estimateMessageTokensCjkAware,
           });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);

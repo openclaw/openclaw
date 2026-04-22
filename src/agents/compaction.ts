@@ -1,14 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import {
-  estimateTokens,
-  generateSummary as piGenerateSummary,
-} from "@mariozechner/pi-coding-agent";
+import { generateSummary as piGenerateSummary } from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -100,10 +98,97 @@ export function buildCompactionSummarizationInstructions(
   return `${identifierPreservation}\n\nAdditional focus:\n${custom}`;
 }
 
+/**
+ * CJK-aware token estimation for a single {@link AgentMessage}.
+ *
+ * This mirrors the upstream `estimateTokens` logic from `@mariozechner/pi-coding-agent`
+ * but uses {@link estimateStringChars} for text measurement so that CJK characters
+ * (Chinese, Japanese, Korean) are weighted correctly (~1 token/char instead of
+ * the ~0.25 tokens/char that `text.length / 4` would yield).
+ *
+ * See: https://github.com/OpenClaw/openclaw/issues/70052
+ */
+export function estimateMessageTokensCjkAware(message: AgentMessage): number {
+  let chars = 0;
+  const IMAGE_CHARS = 4800; // Same as upstream: images ≈ 1200 tokens
+
+  switch (message.role) {
+    case "user": {
+      const content = (message as { content: string | Array<{ type: string; text?: string }> })
+        .content;
+      if (typeof content === "string") {
+        chars = estimateStringChars(content);
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "text" && block.text) {
+            chars += estimateStringChars(block.text);
+          }
+        }
+      }
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+    }
+    case "assistant": {
+      const assistant = message as {
+        content: Array<{
+          type: string;
+          text?: string;
+          thinking?: string;
+          name?: string;
+          arguments?: unknown;
+        }>;
+      };
+      for (const block of assistant.content) {
+        if (block.type === "text" && block.text !== undefined) {
+          chars += estimateStringChars(block.text);
+        } else if (block.type === "thinking" && block.thinking !== undefined) {
+          chars += estimateStringChars(block.thinking);
+        } else if (block.type === "toolCall") {
+          // Tool names and JSON arguments are typically ASCII, but apply
+          // CJK-awareness defensively.
+          chars += estimateStringChars(block.name ?? "");
+          chars += estimateStringChars(JSON.stringify(block.arguments ?? ""));
+        }
+      }
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+    }
+    case "custom":
+    case "toolResult": {
+      const content = (message as { content: string | Array<{ type: string; text?: string }> })
+        .content;
+      if (typeof content === "string") {
+        chars = estimateStringChars(content);
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "text" && block.text) {
+            chars += estimateStringChars(block.text);
+          }
+          if (block.type === "image") {
+            chars += IMAGE_CHARS;
+          }
+        }
+      }
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+    }
+    case "bashExecution": {
+      const bash = message as { command: string; output: string };
+      chars = estimateStringChars(bash.command) + estimateStringChars(bash.output);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+    }
+    case "branchSummary":
+    case "compactionSummary": {
+      const summary = (message as { summary: string }).summary;
+      chars = estimateStringChars(summary);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+    }
+    default:
+      return 0;
+  }
+}
+
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
-  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+  return safe.reduce((sum, message) => sum + estimateMessageTokensCjkAware(message), 0);
 }
 
 function estimateCompactionMessageTokens(message: AgentMessage): number {
