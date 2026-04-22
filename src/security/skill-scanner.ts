@@ -121,6 +121,232 @@ export function clearSkillScanCacheForTest(): void {
   DIR_ENTRY_CACHE.clear();
 }
 
+function normalizeSourceForContextScan(source: string): string {
+  // Keep indexes aligned with string indexing, which is UTF-16 code-unit based.
+  const normalized = source.split("");
+
+  const blank = (index: number) => {
+    if (normalized[index] !== "\n") {
+      normalized[index] = " ";
+    }
+  };
+
+  const scanString = (start: number, quote: '"' | "'") => {
+    let index = start;
+    blank(index);
+    index += 1;
+    while (index < source.length) {
+      const ch = source[index];
+      blank(index);
+      index += 1;
+      if (ch === "\\") {
+        if (index < source.length) {
+          blank(index);
+          index += 1;
+        }
+        continue;
+      }
+      if (ch === quote) {
+        break;
+      }
+    }
+    return index;
+  };
+
+  const scanLineComment = (start: number) => {
+    let index = start;
+    blank(index);
+    blank(index + 1);
+    index += 2;
+    while (index < source.length && source[index] !== "\n") {
+      blank(index);
+      index += 1;
+    }
+    return index;
+  };
+
+  const scanBlockComment = (start: number) => {
+    let index = start;
+    blank(index);
+    blank(index + 1);
+    index += 2;
+    while (index < source.length) {
+      blank(index);
+      if (source[index] === "*" && source[index + 1] === "/") {
+        blank(index + 1);
+        return index + 2;
+      }
+      index += 1;
+    }
+    return index;
+  };
+
+  const isRegexLiteralStart = (start: number): boolean => {
+    let index = start - 1;
+    while (index >= 0) {
+      const ch = source[index];
+      if (/\s/.test(ch)) {
+        index -= 1;
+        continue;
+      }
+      if (/[=([{,:;!?&|^~<>+\-*%]/.test(ch)) {
+        return true;
+      }
+      if (!/[A-Za-z_$]/.test(ch)) {
+        return false;
+      }
+      let tokenStart = index;
+      while (tokenStart > 0 && /[A-Za-z_$]/.test(source[tokenStart - 1])) {
+        tokenStart -= 1;
+      }
+      const token = source.slice(tokenStart, index + 1);
+      return /^(?:return|throw|yield|case|typeof|void|delete|await)$/.test(token);
+    }
+    return true;
+  };
+
+  const scanRegexLiteral = (start: number): number => {
+    let index = start;
+    let inCharClass = false;
+    blank(index);
+    index += 1;
+    while (index < source.length) {
+      const ch = source[index];
+      blank(index);
+      index += 1;
+      if (ch === "\\") {
+        if (index < source.length) {
+          blank(index);
+          index += 1;
+        }
+        continue;
+      }
+      if (ch === "[" && !inCharClass) {
+        inCharClass = true;
+        continue;
+      }
+      if (ch === "]" && inCharClass) {
+        inCharClass = false;
+        continue;
+      }
+      if (ch === "/" && !inCharClass) {
+        while (index < source.length && /[a-z]/i.test(source[index])) {
+          blank(index);
+          index += 1;
+        }
+        return index;
+      }
+    }
+    return index;
+  };
+
+  const scanTemplateExpression = (start: number): number => {
+    let index = start;
+    let depth = 0;
+    while (index < source.length) {
+      const ch = source[index];
+      const next = source[index + 1];
+      if (ch === '"' || ch === "'") {
+        index = scanString(index, ch);
+        continue;
+      }
+      if (ch === "`") {
+        index = scanTemplate(index);
+        continue;
+      }
+      if (ch === "/" && next === "/") {
+        index = scanLineComment(index);
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        index = scanBlockComment(index);
+        continue;
+      }
+      if (ch === "/" && isRegexLiteralStart(index)) {
+        index = scanRegexLiteral(index);
+        continue;
+      }
+      if (ch === "{") {
+        depth += 1;
+        index += 1;
+        continue;
+      }
+      if (ch === "}") {
+        if (depth === 0) {
+          blank(index);
+          return index + 1;
+        }
+        depth -= 1;
+        index += 1;
+        continue;
+      }
+      index += 1;
+    }
+    return index;
+  };
+
+  const scanTemplate = (start: number): number => {
+    let index = start;
+    blank(index);
+    index += 1;
+    while (index < source.length) {
+      const ch = source[index];
+      const next = source[index + 1];
+      if (ch === "\\") {
+        blank(index);
+        index += 1;
+        if (index < source.length) {
+          blank(index);
+          index += 1;
+        }
+        continue;
+      }
+      if (ch === "`") {
+        blank(index);
+        return index + 1;
+      }
+      if (ch === "$" && next === "{") {
+        blank(index);
+        blank(index + 1);
+        index = scanTemplateExpression(index + 2);
+        continue;
+      }
+      blank(index);
+      index += 1;
+    }
+    return index;
+  };
+
+  let index = 0;
+  while (index < source.length) {
+    const ch = source[index];
+    const next = source[index + 1];
+    if (ch === '"' || ch === "'") {
+      index = scanString(index, ch);
+      continue;
+    }
+    if (ch === "`") {
+      index = scanTemplate(index);
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      index = scanLineComment(index);
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      index = scanBlockComment(index);
+      continue;
+    }
+    if (ch === "/" && isRegexLiteralStart(index)) {
+      index = scanRegexLiteral(index);
+      continue;
+    }
+    index += 1;
+  }
+
+  return normalized.join("");
+}
+
 // ---------------------------------------------------------------------------
 // Rule definitions
 // ---------------------------------------------------------------------------
@@ -173,7 +399,8 @@ const LINE_RULES: LineRule[] = [
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
-const NETWORK_SEND_CONTEXT_PATTERN = /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|http\.request\s*\(/i;
+const NETWORK_SEND_CONTEXT_PATTERN =
+  /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|http\.request\s*\(/i;
 
 const SOURCE_RULES: SourceRule[] = [
   {
@@ -219,7 +446,11 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
+  const contextSource = normalizeSourceForContextScan(source);
   const matchedLineRules = new Set<string>();
+
+  const matchesContext = (pattern: RegExp): boolean =>
+    pattern.test(pattern === NETWORK_SEND_CONTEXT_PATTERN ? contextSource : source);
 
   // --- Line rules ---
   for (const rule of LINE_RULES) {
@@ -228,7 +459,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     }
 
     // Skip rule entirely if context requirement not met
-    if (rule.requiresContext && !rule.requiresContext.test(source)) {
+    if (rule.requiresContext && !matchesContext(rule.requiresContext)) {
       continue;
     }
 
@@ -273,7 +504,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     if (!rule.pattern.test(source)) {
       continue;
     }
-    if (rule.requiresContext && !rule.requiresContext.test(source)) {
+    if (rule.requiresContext && !matchesContext(rule.requiresContext)) {
       continue;
     }
 
