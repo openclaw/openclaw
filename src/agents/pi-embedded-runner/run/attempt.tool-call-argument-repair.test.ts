@@ -28,4 +28,13 @@ describe("shouldRepairMalformedToolCallArguments", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps kimi providers off on non-anthropic non-openai-completions transports", () => {
+    expect(
+      shouldRepairMalformedToolCallArguments({
+        provider: "kimi-coding",
+        modelApi: "openai-responses",
+      }),
+    ).toBe(false);
+  });
 });

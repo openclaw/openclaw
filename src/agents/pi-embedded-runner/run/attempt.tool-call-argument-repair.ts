@@ -299,7 +299,8 @@ export function shouldRepairMalformedToolCallArguments(params: {
   modelApi?: string | null;
 }): boolean {
   return (
-    normalizeProviderId(params.provider ?? "") === "kimi" ||
+    (normalizeProviderId(params.provider ?? "") === "kimi" &&
+      params.modelApi === "anthropic-messages") ||
     params.modelApi === "openai-completions"
   );
 }
