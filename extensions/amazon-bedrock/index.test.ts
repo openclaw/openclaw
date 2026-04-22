@@ -269,7 +269,7 @@ describe("amazon-bedrock provider plugin", () => {
       });
       const result = callWrappedStream(provider, ANTHROPIC_MODEL, ANTHROPIC_MODEL_DESCRIPTOR);
 
-      // Anthropic models should get guardrailConfig
+      // Anthropic models get guardrailConfig + default anthropic_beta flags.
       expect(result._capturedPayload).toEqual({
         guardrailConfig: {
           guardrailIdentifier: "guardrail-anthropic",
@@ -277,9 +277,29 @@ describe("amazon-bedrock provider plugin", () => {
           streamProcessingMode: "async",
           trace: "disabled",
         },
+        additionalModelRequestFields: {
+          anthropic_beta: [
+            "fine-grained-tool-streaming-2025-05-14",
+            "interleaved-thinking-2025-05-14",
+          ],
+        },
       });
       // Anthropic models should NOT get cacheRetention: "none"
       expect(result).not.toHaveProperty("cacheRetention", "none");
+    });
+
+    it("injects default anthropic_beta flags for Anthropic Bedrock models without guardrail", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = callWrappedStream(provider, ANTHROPIC_MODEL, ANTHROPIC_MODEL_DESCRIPTOR);
+
+      expect(result._capturedPayload).toEqual({
+        additionalModelRequestFields: {
+          anthropic_beta: [
+            "fine-grained-tool-streaming-2025-05-14",
+            "interleaved-thinking-2025-05-14",
+          ],
+        },
+      });
     });
 
     it("injects guardrailConfig for non-Anthropic models with cacheRetention: none", async () => {
