@@ -195,19 +195,6 @@ export function collectRootDistBundledRuntimeMirrors(params) {
 
 export function collectBundledPluginRootRuntimeMirrorErrors(params) {
   const errors = [];
-  const rootRuntimeDependencies = new Set([
-    ...Object.keys(params.rootPackageJson?.dependencies ?? {}),
-    ...Object.keys(params.rootPackageJson?.optionalDependencies ?? {}),
-  ]);
-
-  for (const [dependencyName, record] of params.requiredRootMirrors ?? []) {
-    if (rootRuntimeDependencies.has(dependencyName)) {
-      continue;
-    }
-    errors.push(
-      `bundled runtime dependency '${dependencyName}: ${record.spec}' is imported by ${[...record.importers].toSorted((left, right) => left.localeCompare(right)).join(", ")} but missing from the root package dependencies.`,
-    );
-  }
 
   for (const [dependencyName, record] of params.bundledRuntimeDependencySpecs) {
     for (const conflict of record.conflicts) {

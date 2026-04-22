@@ -194,7 +194,7 @@ describe("bundled plugin root runtime mirrors", () => {
     }
   });
 
-  it("flags missing root mirrors for plugin deps imported by built runtime surfaces", () => {
+  it("does not require root mirrors for plugin deps imported by root dist", () => {
     expect(
       collectBundledPluginRootRuntimeMirrorErrors({
         bundledRuntimeDependencySpecs: makeBundledSpecs(),
@@ -210,9 +210,7 @@ describe("bundled plugin root runtime mirrors", () => {
         ]),
         rootPackageJson: { dependencies: {} },
       }),
-    ).toEqual([
-      "bundled runtime dependency '@larksuiteoapi/node-sdk: ^1.60.0' is imported by probe-Cz2PiFtC.js but missing from the root package dependencies.",
-    ]);
+    ).toEqual([]);
   });
 
   it("does not compare root mirror versions for plugin manifest deps", () => {
