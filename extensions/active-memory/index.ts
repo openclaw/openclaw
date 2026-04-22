@@ -1961,6 +1961,7 @@ export default definePluginEntry({
 
     api.on("before_prompt_build", async (event, ctx) => {
       try {
+        refreshLiveConfigFromRuntime();
         const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
         const resolvedSessionKey =
           ctx.sessionKey?.trim() ||

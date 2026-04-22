@@ -24,7 +24,7 @@ import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-p
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 6;
+export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 5;
 const EXTENSION_TEST_COST_MULTIPLIERS = {
   "test/vitest/vitest.extension-feishu.config.ts": 1.6,
   "test/vitest/vitest.extension-msteams.config.ts": 1.6,
