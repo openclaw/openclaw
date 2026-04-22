@@ -413,6 +413,28 @@ describe("gateway hooks helpers", () => {
     );
   });
 
+  test("resolveHooksConfig requires prefixes for templated wake mapping session keys", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowRequestSessionKey: true,
+          mappings: [
+            {
+              match: { path: "github" },
+              action: "wake",
+              textTemplate: "CI: {{payload.conclusion}}",
+              sessionKey: "hook:github:{{payload.runId}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).toThrow(
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
+    );
+  });
+
   test("resolveHooksConfig allows a static explicit mapping to shadow the templated gmail preset", () => {
     expect(() =>
       resolveHooksConfig({
@@ -458,7 +480,7 @@ describe("gateway hooks helpers", () => {
     ).not.toThrow();
   });
 
-  test("resolveHooksConfig ignores templated session keys on wake mappings", () => {
+  test("resolveHooksConfig enforces templated session keys on wake mappings", () => {
     expect(() =>
       resolveHooksConfig({
         hooks: {
@@ -474,7 +496,9 @@ describe("gateway hooks helpers", () => {
           ],
         },
       } as OpenClawConfig),
-    ).not.toThrow();
+    ).toThrow(
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
+    );
   });
 
   test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {

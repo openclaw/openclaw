@@ -197,17 +197,29 @@ export function normalizeHookHeaders(req: IncomingMessage) {
   return headers;
 }
 
-export function normalizeWakePayload(
-  payload: Record<string, unknown>,
-):
-  | { ok: true; value: { text: string; mode: "now" | "next-heartbeat" } }
+export function normalizeWakePayload(payload: Record<string, unknown>):
+  | {
+      ok: true;
+      value: {
+        text: string;
+        mode: "now" | "next-heartbeat";
+        sessionKey?: string;
+      };
+    }
   | { ok: false; error: string } {
   const normalizedText = normalizeOptionalString(payload.text) ?? "";
   if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
   const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-  return { ok: true, value: { text: normalizedText, mode } };
+  return {
+    ok: true,
+    value: {
+      text: normalizedText,
+      mode,
+      sessionKey: resolveSessionKey(normalizeOptionalString(payload.sessionKey)),
+    },
+  };
 }
 
 export type HookAgentPayload = {
@@ -361,7 +373,7 @@ function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolve
       continue;
     }
     effectiveMappings.push(mapping);
-    if (mapping.action === "agent" && hasTemplatedHookSessionKey(mapping.sessionKey)) {
+    if (hasTemplatedHookSessionKey(mapping.sessionKey)) {
       return true;
     }
   }

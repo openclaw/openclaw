@@ -23,11 +23,15 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
-    const sessionKey = resolveMainSessionKeyFromConfig();
+  const dispatchWakeHook = (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    sessionKey?: string;
+  }) => {
+    const sessionKey = value.sessionKey || resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
-      requestHeartbeatNow({ reason: "hook:wake" });
+      requestHeartbeatNow({ reason: "hook:wake", sessionKey });
     }
   };
 

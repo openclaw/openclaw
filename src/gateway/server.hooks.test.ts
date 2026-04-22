@@ -319,6 +319,59 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("routes wake hooks to explicit sessions and mapped agent main sessions", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+      mappings: [
+        {
+          match: { path: "mapped-wake-agent" },
+          action: "wake",
+          agentId: "hooks",
+          textTemplate: "Mapped agent wake: {{payload.subject}}",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      const directSessionKey = "hook:wake:custom";
+      const direct = await postHook(port, "/hooks/wake", {
+        text: "Direct custom wake",
+        sessionKey: directSessionKey,
+      });
+      expect(direct.status).toBe(200);
+      await expect
+        .poll(() => peekSystemEventEntries(directSessionKey), { timeout: 5_000, interval: 10 })
+        .toEqual([
+          expect.objectContaining({
+            text: "Direct custom wake",
+            trusted: false,
+          }),
+        ]);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      drainSystemEvents(directSessionKey);
+
+      const mapped = await postHook(port, "/hooks/mapped-wake-agent", { subject: "Email" });
+      expect(mapped.status).toBe(200);
+      await expect
+        .poll(() => peekSystemEventEntries("agent:hooks:main"), {
+          timeout: 5_000,
+          interval: 10,
+        })
+        .toEqual([
+          expect.objectContaining({
+            text: "Mapped agent wake: Email",
+            trusted: false,
+          }),
+        ]);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      drainSystemEvents("agent:hooks:main");
+    });
+  });
+
   test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
@@ -329,6 +382,14 @@ describe("gateway server hooks", () => {
       expect(denied.status).toBe(400);
       const deniedBody = (await denied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowRequestSessionKey");
+
+      const deniedWake = await postHook(port, "/hooks/wake", {
+        text: "Nope",
+        sessionKey: "hook:blocked",
+      });
+      expect(deniedWake.status).toBe(400);
+      const deniedWakeBody = (await deniedWake.json()) as { error?: string };
+      expect(deniedWakeBody.error).toContain("hooks.allowRequestSessionKey");
     });
   });
 
