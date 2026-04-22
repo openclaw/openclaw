@@ -825,8 +825,9 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    // deleteWebhook should be called twice: once on initial cleanup, once after 409 reset
-    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    // deleteWebhook should be called once on initial cleanup; subsequent 409 resets
+    // trust the existing cleared state to avoid redundant calls in degraded environments.
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(1);
     expect(pollingCycle).toBe(2);
     expect(runSpy).toHaveBeenCalledTimes(2);
     expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
