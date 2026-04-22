@@ -513,7 +513,7 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
-  it("defaults OpenAI Responses reasoning effort to high when unset", () => {
+  it("does not infer high reasoning when Pi passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -535,8 +535,8 @@ describe("openai transport stream", () => {
       undefined,
     ) as { reasoning?: unknown; include?: string[] };
 
-    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
-    expect(params.include).toEqual(["reasoning.encrypted_content"]);
+    expect(params.reasoning).toEqual({ effort: "none" });
+    expect(params).not.toHaveProperty("include");
   });
 
   it("uses shared stream reasoning as OpenAI Responses effort", () => {

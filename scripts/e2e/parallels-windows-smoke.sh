@@ -41,7 +41,7 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_GIT_SETUP_S=1200
 TIMEOUT_INSTALL_S=420
-TIMEOUT_UPDATE_S=300
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S:-1800}"
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=600
@@ -937,10 +937,11 @@ EOF
 }
 
 ensure_mingit_zip() {
-  local mingit_name mingit_url
-  mapfile -t mingit_meta < <(resolve_mingit_download)
-  mingit_name="${mingit_meta[0]}"
-  mingit_url="${mingit_meta[1]}"
+  local mingit_name mingit_url mingit_meta
+  mingit_meta="$(resolve_mingit_download)"
+  mingit_name="${mingit_meta%%$'\n'*}"
+  mingit_url="${mingit_meta#*$'\n'}"
+  [[ "$mingit_name" != "$mingit_url" ]] || die "failed to resolve MinGit download metadata"
   MINGIT_ZIP_NAME="$mingit_name"
   MINGIT_ZIP_PATH="$MAIN_TGZ_DIR/$mingit_name"
   if [[ ! -f "$MINGIT_ZIP_PATH" ]]; then

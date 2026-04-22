@@ -141,10 +141,12 @@ describe("openai plugin", () => {
     const authStore = { version: 1, profiles: {} };
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "draw a cat",
       cfg: {},
       authStore,
+      count: 2,
+      size: "2048x2048",
     });
 
     expect(resolveApiKeySpy).toHaveBeenCalledWith(
@@ -157,10 +159,10 @@ describe("openai plugin", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/generations",
         body: {
-          model: "gpt-image-1",
+          model: "gpt-image-2",
           prompt: "draw a cat",
-          n: 1,
-          size: "1024x1024",
+          n: 2,
+          size: "2048x2048",
         },
       }),
     );
@@ -178,7 +180,7 @@ describe("openai plugin", () => {
           revisedPrompt: "revised",
         },
       ],
-      model: "gpt-image-1",
+      model: "gpt-image-2",
     });
   });
 
@@ -193,10 +195,12 @@ describe("openai plugin", () => {
 
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Edit this image",
       cfg: {},
       authStore,
+      count: 2,
+      size: "1536x1024",
       inputImages: [
         { buffer: Buffer.from("x"), mimeType: "image/png" },
         { buffer: Buffer.from("y"), mimeType: "image/jpeg", fileName: "ref.jpg" },
@@ -213,10 +217,10 @@ describe("openai plugin", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/edits",
         body: {
-          model: "gpt-image-1",
+          model: "gpt-image-2",
           prompt: "Edit this image",
-          n: 1,
-          size: "1024x1024",
+          n: 2,
+          size: "1536x1024",
           images: [
             {
               image_url: "data:image/png;base64,eA==",
@@ -236,7 +240,7 @@ describe("openai plugin", () => {
           fileName: "image-1.png",
         },
       ],
-      model: "gpt-image-1",
+      model: "gpt-image-2",
     });
   });
 
@@ -253,7 +257,7 @@ describe("openai plugin", () => {
     await expect(
       provider.generateImage({
         provider: "openai",
-        model: "gpt-image-1",
+        model: "gpt-image-2",
         prompt: "draw a cat",
         cfg: {
           models: {
@@ -487,20 +491,23 @@ describe("openai plugin", () => {
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<gpt_tool_discipline>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<parallel_tool_calling>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completeness_contract>");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<verification_loop>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<execution_policy>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<tool_discipline>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<output_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completion_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "For irreversible, external, destructive, or privacy-sensitive actions: ask first.",
+    );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
       "Prefer tool evidence over recall when action, state, or mutable facts matter.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "If more tool work would likely change the answer, do it before final.",
-    );
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Final only when each item is handled or marked [blocked] with the missing input.",
+      "If more tool work would likely change the answer, do it before replying.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Return requested sections/order only.");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "Treat the task as incomplete until every requested item is handled",
+    );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("/approve");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");
   });

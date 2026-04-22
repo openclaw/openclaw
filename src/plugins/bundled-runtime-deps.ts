@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizePluginsConfig } from "./config-state.js";
 
@@ -30,7 +33,13 @@ export type BundledRuntimeDepsEnsureResult = {
   retainSpecs: string[];
 };
 
+export type BundledRuntimeDepsInstallRoot = {
+  installRoot: string;
+  external: boolean;
+};
+
 type JsonObject = Record<string, unknown>;
+const RETAINED_RUNTIME_DEPS_MANIFEST = ".openclaw-runtime-deps.json";
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -62,6 +71,17 @@ function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
   };
 }
 
+function normalizeInstallableRuntimeDepVersion(rawVersion: unknown): string | null {
+  if (typeof rawVersion !== "string") {
+    return null;
+  }
+  const version = rawVersion.trim();
+  if (version === "" || version.toLowerCase().startsWith("workspace:")) {
+    return null;
+  }
+  return version;
+}
+
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
     fs.existsSync(path.join(packageRoot, ".git")) &&
@@ -91,6 +111,38 @@ function resolveSourceCheckoutDistPackageRoot(pluginRoot: string): string | null
   return isSourceCheckoutRoot(packageRoot) ? packageRoot : null;
 }
 
+function resolveBundledRuntimeDependencySearchRoots(params: {
+  installRoot: string;
+  pluginRoot: string;
+}): string[] {
+  const roots = new Set<string>([params.installRoot]);
+  const pluginRoot = path.resolve(params.pluginRoot);
+  const extensionsDir = path.dirname(pluginRoot);
+  const buildDir = path.dirname(extensionsDir);
+  if (
+    path.basename(extensionsDir) !== "extensions" ||
+    (path.basename(buildDir) !== "dist" && path.basename(buildDir) !== "dist-runtime")
+  ) {
+    return [...roots];
+  }
+  roots.add(extensionsDir);
+  roots.add(buildDir);
+  roots.add(path.dirname(buildDir));
+  return [...roots];
+}
+
+function resolveBundledPluginPackageRoot(pluginRoot: string): string | null {
+  const extensionsDir = path.dirname(path.resolve(pluginRoot));
+  const buildDir = path.dirname(extensionsDir);
+  if (
+    path.basename(extensionsDir) !== "extensions" ||
+    (path.basename(buildDir) !== "dist" && path.basename(buildDir) !== "dist-runtime")
+  ) {
+    return null;
+  }
+  return path.dirname(buildDir);
+}
+
 function createRuntimeDepsCacheKey(pluginId: string, specs: readonly string[]): string {
   return createHash("sha256")
     .update(pluginId)
@@ -98,6 +150,79 @@ function createRuntimeDepsCacheKey(pluginId: string, specs: readonly string[]): 
     .update(specs.join("\0"))
     .digest("hex")
     .slice(0, 16);
+}
+
+function createPathHash(value: string): string {
+  return createHash("sha256").update(path.resolve(value)).digest("hex").slice(0, 12);
+}
+
+function sanitizePathSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+}
+
+function readPackageVersion(packageRoot: string): string {
+  const parsed = readJsonObject(path.join(packageRoot, "package.json"));
+  const version = parsed && typeof parsed.version === "string" ? parsed.version.trim() : "";
+  return version || "unknown";
+}
+
+function readRetainedRuntimeDepsManifest(installRoot: string): string[] {
+  const parsed = readJsonObject(path.join(installRoot, RETAINED_RUNTIME_DEPS_MANIFEST));
+  const specs = parsed?.specs;
+  if (!Array.isArray(specs)) {
+    return [];
+  }
+  return specs
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function writeRetainedRuntimeDepsManifest(installRoot: string, specs: readonly string[]): void {
+  fs.writeFileSync(
+    path.join(installRoot, RETAINED_RUNTIME_DEPS_MANIFEST),
+    `${JSON.stringify({ specs: [...specs].toSorted((left, right) => left.localeCompare(right)) }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function isWritableDirectory(dir: string): boolean {
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveSystemdStateDirectory(env: NodeJS.ProcessEnv): string | null {
+  const raw = env.STATE_DIRECTORY?.trim();
+  if (!raw) {
+    return null;
+  }
+  const first = raw.split(path.delimiter).find((entry) => entry.trim().length > 0);
+  return first ? path.resolve(first) : null;
+}
+
+function resolveBundledRuntimeDepsExternalBaseDir(env: NodeJS.ProcessEnv): string {
+  const explicit = env.OPENCLAW_PLUGIN_STAGE_DIR?.trim();
+  if (explicit) {
+    return resolveHomeRelativePath(explicit, { env, homedir: os.homedir });
+  }
+  const systemdStateDir = resolveSystemdStateDirectory(env);
+  if (systemdStateDir) {
+    return path.join(systemdStateDir, "plugin-runtime-deps");
+  }
+  return path.join(resolveStateDir(env, os.homedir), "plugin-runtime-deps");
+}
+
+function resolveExternalBundledRuntimeDepsInstallRoot(params: {
+  pluginRoot: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const packageRoot = resolveBundledPluginPackageRoot(params.pluginRoot) ?? params.pluginRoot;
+  const version = sanitizePathSegment(readPackageVersion(packageRoot));
+  const packageKey = `openclaw-${version}-${createPathHash(packageRoot)}`;
+  return path.join(resolveBundledRuntimeDepsExternalBaseDir(params.env), packageKey);
 }
 
 function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
@@ -119,6 +244,12 @@ function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
 
 function hasAllDependencySentinels(rootDir: string, deps: readonly { name: string }[]): boolean {
   return deps.every((dep) => fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))));
+}
+
+function hasDependencySentinel(searchRoots: readonly string[], dep: { name: string }): boolean {
+  return searchRoots.some((rootDir) =>
+    fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))),
+  );
 }
 
 function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
@@ -187,11 +318,29 @@ function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return nextEnv;
 }
 
+export function createBundledRuntimeDepsInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...createNestedNpmInstallEnv(env),
+    npm_config_legacy_peer_deps: "true",
+    npm_config_package_lock: "false",
+    npm_config_save: "false",
+  };
+}
+
+export function createBundledRuntimeDepsInstallArgs(missingSpecs: readonly string[]): string[] {
+  return ["install", "--ignore-scripts", ...missingSpecs];
+}
+
 function resolvePathEnvKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
   if (platform !== "win32") {
     return "PATH";
   }
   return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path";
+}
+
+function isNpmCliPath(candidate: string): boolean {
+  const normalized = candidate.replaceAll("\\", "/").toLowerCase();
+  return normalized.endsWith("/npm-cli.js") || normalized.endsWith("/npm/bin/npm-cli.js");
 }
 
 export function resolveBundledRuntimeDepsNpmRunner(params: {
@@ -207,9 +356,10 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
   const platform = params.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const nodeDir = pathImpl.dirname(execPath);
-  const npmExecPath = normalizeOptionalLowercaseString(env.npm_execpath)
+  const rawNpmExecPath = normalizeOptionalLowercaseString(env.npm_execpath)
     ? env.npm_execpath
     : undefined;
+  const npmExecPath = rawNpmExecPath && isNpmCliPath(rawNpmExecPath) ? rawNpmExecPath : undefined;
 
   const npmCliCandidates = [
     npmExecPath,
@@ -272,6 +422,7 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   config: OpenClawConfig;
   pluginId: string;
   pluginDir: string;
+  includeConfiguredChannels?: boolean;
 }): boolean {
   const plugins = normalizePluginsConfig(params.config.plugins);
   if (!plugins.enabled) {
@@ -299,7 +450,8 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
       channelConfig &&
       typeof channelConfig === "object" &&
       !Array.isArray(channelConfig) &&
-      (channelConfig as { enabled?: unknown }).enabled === true
+      (params.includeConfiguredChannels ||
+        (channelConfig as { enabled?: unknown }).enabled === true)
     ) {
       return true;
     }
@@ -312,6 +464,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   pluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
+  includeConfiguredChannels?: boolean;
 }): boolean {
   if (params.pluginIds && !params.pluginIds.has(params.pluginId)) {
     return false;
@@ -323,6 +476,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
     config: params.config,
     pluginId: params.pluginId,
     pluginDir: params.pluginDir,
+    includeConfiguredChannels: params.includeConfiguredChannels,
   });
 }
 
@@ -330,6 +484,7 @@ function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   pluginIds?: ReadonlySet<string>;
+  includeConfiguredChannels?: boolean;
 }): {
   deps: RuntimeDepEntry[];
   conflicts: RuntimeDepConflict[];
@@ -348,6 +503,7 @@ function collectBundledPluginRuntimeDeps(params: {
         pluginIds: params.pluginIds,
         pluginId,
         pluginDir,
+        includeConfiguredChannels: params.includeConfiguredChannels,
       })
     ) {
       continue;
@@ -357,10 +513,10 @@ function collectBundledPluginRuntimeDeps(params: {
       continue;
     }
     for (const [name, rawVersion] of Object.entries(collectRuntimeDeps(packageJson))) {
-      if (typeof rawVersion !== "string" || rawVersion.trim() === "") {
+      const version = normalizeInstallableRuntimeDepVersion(rawVersion);
+      if (!version) {
         continue;
       }
-      const version = rawVersion.trim();
       const byVersion = versionMap.get(name) ?? new Map<string, Set<string>>();
       const pluginIds = byVersion.get(version) ?? new Set<string>();
       pluginIds.add(pluginId);
@@ -420,36 +576,116 @@ export function scanBundledPluginRuntimeDeps(params: {
   packageRoot: string;
   config?: OpenClawConfig;
   pluginIds?: readonly string[];
+  includeConfiguredChannels?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): {
+  deps: RuntimeDepEntry[];
   missing: RuntimeDepEntry[];
   conflicts: RuntimeDepConflict[];
 } {
   if (isSourceCheckoutRoot(params.packageRoot)) {
-    return { missing: [], conflicts: [] };
+    return { deps: [], missing: [], conflicts: [] };
   }
   const extensionsDir = path.join(params.packageRoot, "dist", "extensions");
   if (!fs.existsSync(extensionsDir)) {
-    return { missing: [], conflicts: [] };
+    return { deps: [], missing: [], conflicts: [] };
   }
   const { deps, conflicts } = collectBundledPluginRuntimeDeps({
     extensionsDir,
     config: params.config,
     pluginIds: normalizePluginIdSet(params.pluginIds),
+    includeConfiguredChannels: params.includeConfiguredChannels,
   });
+  const packageInstallRoot = resolveBundledRuntimeDependencyPackageInstallRoot(params.packageRoot, {
+    env: params.env,
+  });
+  const packageSearchRoots = [packageInstallRoot, params.packageRoot, extensionsDir];
   const missing = deps.filter(
     (dep) =>
-      !fs.existsSync(path.join(params.packageRoot, dependencySentinelPath(dep.name))) &&
-      !fs.existsSync(path.join(extensionsDir, dependencySentinelPath(dep.name))) &&
-      dep.pluginIds.every(
-        (pluginId) =>
-          !fs.existsSync(path.join(extensionsDir, pluginId, dependencySentinelPath(dep.name))),
-      ),
+      !hasDependencySentinel(packageSearchRoots, dep) &&
+      dep.pluginIds.every((pluginId) => {
+        const pluginRoot = path.join(extensionsDir, pluginId);
+        const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
+          env: params.env,
+        });
+        return !hasDependencySentinel([installRoot, pluginRoot], dep);
+      }),
   );
-  return { missing, conflicts };
+  return { deps, missing, conflicts };
 }
 
-export function resolveBundledRuntimeDependencyInstallRoot(pluginRoot: string): string {
-  return pluginRoot;
+export function resolveBundledRuntimeDependencyPackageInstallRoot(
+  packageRoot: string,
+  options: { env?: NodeJS.ProcessEnv; forceExternal?: boolean } = {},
+): string {
+  const env = options.env ?? process.env;
+  if (
+    options.forceExternal ||
+    env.OPENCLAW_PLUGIN_STAGE_DIR?.trim() ||
+    env.STATE_DIRECTORY?.trim()
+  ) {
+    return resolveExternalBundledRuntimeDepsInstallRoot({
+      pluginRoot: path.join(packageRoot, "dist", "extensions", "__package__"),
+      env,
+    });
+  }
+  return isWritableDirectory(packageRoot)
+    ? packageRoot
+    : resolveExternalBundledRuntimeDepsInstallRoot({
+        pluginRoot: path.join(packageRoot, "dist", "extensions", "__package__"),
+        env,
+      });
+}
+
+export function resolveBundledRuntimeDependencyInstallRoot(
+  pluginRoot: string,
+  options: { env?: NodeJS.ProcessEnv; forceExternal?: boolean } = {},
+): string {
+  const env = options.env ?? process.env;
+  if (
+    options.forceExternal ||
+    env.OPENCLAW_PLUGIN_STAGE_DIR?.trim() ||
+    env.STATE_DIRECTORY?.trim()
+  ) {
+    return resolveExternalBundledRuntimeDepsInstallRoot({ pluginRoot, env });
+  }
+  return isWritableDirectory(pluginRoot)
+    ? pluginRoot
+    : resolveExternalBundledRuntimeDepsInstallRoot({ pluginRoot, env });
+}
+
+export function resolveBundledRuntimeDependencyInstallRootInfo(
+  pluginRoot: string,
+  options: { env?: NodeJS.ProcessEnv; forceExternal?: boolean } = {},
+): BundledRuntimeDepsInstallRoot {
+  const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, options);
+  return {
+    installRoot,
+    external: path.resolve(installRoot) !== path.resolve(pluginRoot),
+  };
+}
+
+export function createBundledRuntimeDependencyAliasMap(params: {
+  pluginRoot: string;
+  installRoot: string;
+}): Record<string, string> {
+  if (path.resolve(params.installRoot) === path.resolve(params.pluginRoot)) {
+    return {};
+  }
+  const packageJson = readJsonObject(path.join(params.pluginRoot, "package.json"));
+  if (!packageJson) {
+    return {};
+  }
+  const aliases: Record<string, string> = {};
+  for (const name of Object.keys(collectRuntimeDeps(packageJson)).toSorted((a, b) =>
+    a.localeCompare(b),
+  )) {
+    const target = path.join(params.installRoot, "node_modules", ...name.split("/"));
+    if (fs.existsSync(path.join(target, "package.json"))) {
+      aliases[name] = target;
+    }
+  }
+  return aliases;
 }
 
 export function installBundledRuntimeDeps(params: {
@@ -457,24 +693,16 @@ export function installBundledRuntimeDeps(params: {
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
 }): void {
+  fs.mkdirSync(params.installRoot, { recursive: true });
+  const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
   const npmRunner = resolveBundledRuntimeDepsNpmRunner({
-    env: params.env,
-    npmArgs: [
-      "install",
-      "--prefix",
-      params.installRoot,
-      "--omit=dev",
-      "--no-save",
-      "--package-lock=false",
-      "--ignore-scripts",
-      "--legacy-peer-deps",
-      ...params.missingSpecs,
-    ],
+    env: installEnv,
+    npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
   });
   const result = spawnSync(npmRunner.command, npmRunner.args, {
     cwd: params.installRoot,
     encoding: "utf8",
-    env: createNestedNpmInstallEnv(npmRunner.env ?? params.env),
+    env: npmRunner.env ?? installEnv,
     stdio: "pipe",
     shell: npmRunner.shell ?? false,
   });
@@ -513,30 +741,36 @@ export function ensureBundledPluginRuntimeDeps(params: {
     return { installedSpecs: [], retainSpecs: [] };
   }
   const deps = Object.entries(collectRuntimeDeps(packageJson))
-    .map(([name, rawVersion]) =>
-      typeof rawVersion === "string" && rawVersion.trim() !== ""
-        ? { name, version: rawVersion.trim() }
-        : null,
-    )
+    .map(([name, rawVersion]) => {
+      const version = normalizeInstallableRuntimeDepVersion(rawVersion);
+      return version ? { name, version } : null;
+    })
     .filter((entry): entry is { name: string; version: string } => Boolean(entry));
   if (deps.length === 0) {
     return { installedSpecs: [], retainSpecs: [] };
   }
 
-  const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot);
+  const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot, {
+    env: params.env,
+  });
+  const dependencySearchRoots = resolveBundledRuntimeDependencySearchRoots({
+    installRoot,
+    pluginRoot: params.pluginRoot,
+  });
   const dependencySpecs = deps
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
   const missingSpecs = deps
-    .filter((dep) => !fs.existsSync(path.join(installRoot, dependencySentinelPath(dep.name))))
+    .filter((dep) => !hasDependencySentinel(dependencySearchRoots, dep))
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
   if (missingSpecs.length === 0) {
     return { installedSpecs: [], retainSpecs: [] };
   }
-  const installSpecs = [...new Set([...(params.retainSpecs ?? []), ...dependencySpecs])].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const retainedManifestSpecs = readRetainedRuntimeDepsManifest(installRoot);
+  const installSpecs = [
+    ...new Set([...(params.retainSpecs ?? []), ...retainedManifestSpecs, ...dependencySpecs]),
+  ].toSorted((left, right) => left.localeCompare(right));
   const cacheDir = resolveSourceCheckoutRuntimeDepsCacheDir({
     pluginId: params.pluginId,
     pluginRoot: params.pluginRoot,
@@ -561,6 +795,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
         env: params.env,
       }));
   install({ installRoot, missingSpecs, installSpecs });
+  writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
   storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
   return { installedSpecs: missingSpecs, retainSpecs: installSpecs };
 }

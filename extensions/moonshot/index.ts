@@ -52,12 +52,20 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildMoonshotProvider,
+      buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     ...MOONSHOT_THINKING_STREAM_HOOKS,
+    resolveThinkingProfile: () => ({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    }),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

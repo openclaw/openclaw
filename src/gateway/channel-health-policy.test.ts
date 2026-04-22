@@ -136,7 +136,7 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
 
-  it("flags stale sockets for telegram polling channels", () => {
+  it("flags stale sockets for channels with an allowed health-check mode", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -148,16 +148,17 @@ describe("evaluateChannelHealth", () => {
         mode: "polling",
       },
       {
-        channelId: "telegram",
+        channelId: "example",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
+        staleSocketHealthCheckModes: ["polling"],
       },
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
 
-  it("skips stale-socket detection for telegram accounts without explicit polling mode", () => {
+  it("skips stale-socket detection when an allowlisted health-check mode is missing", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -168,16 +169,17 @@ describe("evaluateChannelHealth", () => {
         lastEventAt: 0,
       },
       {
-        channelId: "telegram",
+        channelId: "example",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
+        staleSocketHealthCheckModes: ["polling"],
       },
     );
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
-  it("skips stale-socket detection for telegram accounts with malformed mode", () => {
+  it("skips stale-socket detection when the health-check mode is malformed", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -189,10 +191,11 @@ describe("evaluateChannelHealth", () => {
         mode: { polling: true } as unknown as string,
       },
       {
-        channelId: "telegram",
+        channelId: "example",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
+        staleSocketHealthCheckModes: ["polling"],
       },
     );
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
