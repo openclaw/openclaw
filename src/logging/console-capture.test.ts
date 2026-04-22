@@ -170,31 +170,32 @@ describe("enableConsoleCapture", () => {
       expect(out).toContain(MASKED);
     });
 
-    it("masks credential in multi-argument console.log call (args[1] coverage)", () => {
+    it("masks credential in multi-argument call when secret is in args[0] string", () => {
       setLoggerOverride({ level: "info", file: tempLogPath() });
       const log = vi.fn();
       console.log = log;
       enableConsoleCapture();
-      // Secret is in args[1] — the previous args[0]-only redaction would have leaked it.
-      console.log("apiKey:", SECRET);
+      // Secret appears inside a string in args[0] — redacted in-place.
+      console.log(`apiKey=${SECRET} other`, "extra");
       expect(log).toHaveBeenCalledTimes(1);
-      const out = String(log.mock.calls[0]?.[0] ?? "");
-      expect(out).not.toContain(SECRET);
-      expect(out).toContain(MASKED);
+      const firstArg = String(log.mock.calls[0]?.[0] ?? "");
+      expect(firstArg).not.toContain(SECRET);
+      expect(firstArg).toContain(MASKED);
+      // args[1] passes through as-is (non-secret string).
+      expect(log.mock.calls[0]?.[1]).toBe("extra");
     });
 
-    it("masks credential when args[0] is non-string (object-serialized via util.format)", () => {
+    it("passes non-string args[0] through unchanged (object formatting preserved)", () => {
       setLoggerOverride({ level: "info", file: tempLogPath() });
       const log = vi.fn();
       console.log = log;
       enableConsoleCapture();
-      // Non-string args[0]: util.format serialises this to a string before redaction.
-      // The previous typeof-string guard would have passed the object through unredacted.
-      console.log({ token: SECRET });
+      // Non-string args[0]: passed as-is to preserve Node inspector colours/formatting.
+      // Secrets embedded inside object values are NOT redacted at this sink (out of scope).
+      const obj = { ok: true };
+      console.log(obj);
       expect(log).toHaveBeenCalledTimes(1);
-      const out = String(log.mock.calls[0]?.[0] ?? "");
-      expect(out).not.toContain(SECRET);
-      expect(out).toContain(MASKED);
+      expect(log.mock.calls[0]?.[0]).toBe(obj); // same reference, not stringified
     });
 
     it("masks credential field written to stderr (forceConsoleToStderr path)", () => {

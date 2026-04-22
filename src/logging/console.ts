@@ -273,16 +273,26 @@ export function enableConsoleCapture(): void {
         }
       } else {
         try {
+          // Redact string-typed args in-place; non-string args (objects, Errors, …) are
+          // passed through as-is so Node's inspector formatting and terminal colours are
+          // preserved. Note: secrets embedded in object values are NOT redacted here —
+          // that requires deep structural traversal and is out of scope for this sink.
+          const redactedArgs = args.map((a) =>
+            typeof a === "string" ? redactSensitiveText(a) : a,
+          );
           if (!timestamp) {
-            orig.call(console, redactSensitiveText(formatted));
+            orig.apply(console, redactedArgs as []);
             return;
           }
           if (args.length === 0) {
             orig.call(console, timestamp);
             return;
           }
-          orig.call(console, `${timestamp} ${redactSensitiveText(formatted)}`);
-          return;
+          if (typeof redactedArgs[0] === "string") {
+            orig.call(console, `${timestamp} ${redactedArgs[0]}`, ...redactedArgs.slice(1));
+          } else {
+            orig.call(console, timestamp, ...redactedArgs);
+          }
         } catch (err) {
           if (isEpipeError(err)) {
             return;
