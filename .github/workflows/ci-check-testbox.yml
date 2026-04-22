@@ -21,8 +21,8 @@ jobs:
     permissions:
       contents: read
     name: "check"
-    runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 30
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
     steps:
       - name: Begin Testbox
         uses: useblacksmith/begin-testbox@v2

@@ -43,7 +43,10 @@ export function ensurePiCompactionReserveTokens(params: {
 
 function resolveCompactionConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   if (params.cfg && params.agentId) {
-    return resolveAgentConfig(params.cfg, params.agentId)?.compaction;
+    return (
+      resolveAgentConfig(params.cfg, params.agentId)?.compaction ??
+      params.cfg?.agents?.defaults?.compaction
+    );
   }
   return params.cfg?.agents?.defaults?.compaction;
 }

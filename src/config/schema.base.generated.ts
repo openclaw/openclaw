@@ -4630,12 +4630,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
                   },
-                  modelFallbacks: {
-                    type: "array",
-                    items: {
-                      type: "string",
-                    },
-                  },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -6470,12 +6464,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     model: {
                       type: "string",
-                    },
-                    modelFallbacks: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                      },
                     },
                     timeoutSeconds: {
                       type: "integer",

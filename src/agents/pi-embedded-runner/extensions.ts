@@ -91,7 +91,8 @@ export function buildEmbeddedExtensionFactories(params: {
   const factories: ExtensionFactory[] = [];
   const compactionCfg =
     params.cfg && params.agentId
-      ? resolveAgentConfig(params.cfg, params.agentId)?.compaction
+      ? (resolveAgentConfig(params.cfg, params.agentId)?.compaction ??
+        params.cfg?.agents?.defaults?.compaction)
       : params.cfg?.agents?.defaults?.compaction;
   if (resolveCompactionMode(compactionCfg) === "safeguard") {
     const qualityGuardCfg = compactionCfg?.qualityGuard;
