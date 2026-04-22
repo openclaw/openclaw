@@ -64,6 +64,7 @@ Common commands
 - Tasks done: `gog tasks done <tasklistId> <taskId>`
 - Tasks undo: `gog tasks undo <tasklistId> <taskId>`
 - Tasks delete: `gog tasks delete <tasklistId> <taskId>`
+- Tasks clear done: `gog tasks clear <tasklistId>`
 
 Calendar Colors
 
