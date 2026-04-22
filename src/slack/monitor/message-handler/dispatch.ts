@@ -1,4 +1,5 @@
 import { resolveHumanDelayConfig } from "../../../agents/identity.js";
+import { getLlm } from "../../../agents/models.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
@@ -11,6 +12,7 @@ import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
+import { fetchSlackThreadHistory } from "../../history.js";
 import {
   applyAppendOnlyStreamUpdate,
   buildStatusFinalPreviewText,
@@ -347,8 +349,35 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     hasStreamedMessage = true;
   };
 
+  let messageTextForDispatch = prepared.ctxPayload.text;
+  if (account.config.triage?.enabled) {
+    try {
+      const history = await fetchSlackThreadHistory({
+        client: ctx.app.client,
+        channel: message.channel,
+        threadTs: message.thread_ts ?? message.ts,
+        limit: 10,
+      });
+
+      const triageModel = account.config.triage.model || "google/gemini-2.5-flash";
+      const llm = getLlm({ cfg, modelId: triageModel });
+
+      if (llm) {
+        const historyText = history.map((h) => `${h.user}: ${h.text}`).join("\n");
+        const triagePrompt = `You are a triage assistant. Based on the latest message and the recent conversation history, what is the user's immediate intent or question? Summarize the minimum necessary context from the history needed to answer it. Be concise.\n\nHistory:\n${historyText}\n\nLatest Message:\n${prepared.ctxPayload.text}`;
+
+        const { text: triagedText } = await llm.completion({ prompt: triagePrompt });
+        if (triagedText) {
+          messageTextForDispatch = triagedText;
+        }
+      }
+    } catch (err) {
+      runtime.error?.(danger(`slack: triage failed: ${String(err)}`));
+    }
+  }
+
   const { queuedFinal, counts } = await dispatchInboundMessage({
-    ctx: prepared.ctxPayload,
+    ctx: { ...prepared.ctxPayload, text: messageTextForDispatch },
     cfg,
     dispatcher,
     replyOptions: {

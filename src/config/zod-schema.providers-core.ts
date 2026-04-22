@@ -584,6 +584,13 @@ export const SlackAccountSchema = z
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    triage: z
+      .object({
+        enabled: z.boolean().optional(),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
   })
