@@ -144,10 +144,15 @@ async fn start_gateway(app: AppHandle, state: State<'_, GatewayState>) -> Result
 
 #[tauri::command]
 async fn stop_gateway(state: State<'_, GatewayState>) -> Result<String, String> {
-    state.watchdog_session.fetch_add(1, Ordering::SeqCst);
-    if let Some(mut child) = state.process.lock().map_err(|e| e.to_string())?.take() {
+    let mut process_guard = state.process.lock().map_err(|e| e.to_string())?;
+    
+    if let Some(child) = process_guard.as_mut() {
         match child.kill() {
-            Ok(_) => Ok("Gateway stopped".to_string()),
+            Ok(_) => {
+                state.watchdog_session.fetch_add(1, Ordering::SeqCst);
+                process_guard.take();
+                Ok("Gateway stopped".to_string())
+            },
             Err(e) => Err(format!("Stop error: {}", e)),
         }
     } else {
@@ -239,7 +244,7 @@ fn is_autostart_enabled() -> bool {
         .output();
     
     match output {
-        Ok(o) => o.status.success(),
+        Ok(o) => o.status.success() && !o.stdout.is_empty(),
         Err(_) => false,
     }
 }
