@@ -3,6 +3,9 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sleep } from "../utils.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -27,6 +30,8 @@ import {
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+
+const log = createSubsystemLogger("model-fallback");
 
 type ModelCandidate = {
   provider: string;
@@ -164,6 +169,145 @@ async function runFallbackAttempt<T>(params: {
   }
   return { error: runResult.error };
 }
+
+/**
+ * Delays (ms) applied between retries of the same model candidate after
+ * transient LLM call errors. One entry per retry, so `[1000, 3000, 5000]`
+ * means the same provider/model is attempted up to 4 times before the
+ * fallback loop moves on.
+ */
+const TRANSIENT_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 5_000];
+
+// Narrow on purpose: codes that indicate a connection was established and then
+// died mid-flight (or the request was aborted on a live socket). These are
+// worth retrying the same provider for, because the next attempt typically
+// finds the connection healthy again.
+//
+// Codes that indicate "can't reach the provider at all" (ECONNREFUSED,
+// ENETUNREACH, EHOSTUNREACH, EAI_AGAIN, ENETRESET, ETIMEDOUT) are explicitly
+// *not* in this set — they classify as `reason: "timeout"` already, so the
+// fallback chain picks a different provider rather than burning retry budget.
+const TRANSIENT_NETWORK_CODE_RE =
+  /^(?:ECONNRESET|ECONNABORTED|EPIPE|UND_ERR_(?:SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT))$/;
+
+const TRANSIENT_NETWORK_MESSAGE_RE =
+  /\b(?:socket hang up|connection (?:reset|closed) by peer|other side closed|read ECONNRESET)\b/i;
+
+const MAX_CAUSE_CHAIN_DEPTH = 8;
+
+function readErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" && code ? code : undefined;
+}
+
+function hasNarrowTransientCode(err: unknown): boolean {
+  const seen = new WeakSet<object>();
+  let current: unknown = err;
+  for (let depth = 0; depth <= MAX_CAUSE_CHAIN_DEPTH; depth += 1) {
+    if (!current || typeof current !== "object") {
+      return false;
+    }
+    if (seen.has(current)) {
+      return false;
+    }
+    seen.add(current);
+    const code = readErrorCode(current);
+    if (code && TRANSIENT_NETWORK_CODE_RE.test(code)) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Classifies an error as a transient LLM call failure that warrants retrying
+ * the same provider/model before falling back. Only in-flight connection
+ * drops (ECONNRESET, socket hang up, undici socket errors) qualify — every
+ * other failure mode (structured API errors, provider-unreachable codes,
+ * request-level timeouts) goes straight to the fallback chain.
+ */
+function isTransientLlmCallError(err: unknown): boolean {
+  if (hasNarrowTransientCode(err)) {
+    return true;
+  }
+  const message = formatErrorMessage(err);
+  return Boolean(message && TRANSIENT_NETWORK_MESSAGE_RE.test(message));
+}
+
+type TransientRetryInfo = {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  err: unknown;
+  provider: string;
+  model: string;
+};
+
+/**
+ * Wraps {@link runFallbackAttempt} with in-place retries on transient network
+ * errors. The fallback chain is otherwise unchanged: structured API errors
+ * still skip to the next candidate without burning the retry budget.
+ */
+async function runFallbackAttemptWithTransientRetry<T>(params: {
+  run: (provider: string, model: string) => Promise<T>;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+  delaysMs?: readonly number[];
+  onTransientRetry?: (info: TransientRetryInfo) => void;
+}): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
+  const delays = params.delaysMs ?? TRANSIENT_RETRY_DELAYS_MS;
+  const maxAttempts = delays.length + 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await runFallbackAttempt({
+      run: params.run,
+      provider: params.provider,
+      model: params.model,
+      attempts: params.attempts,
+    });
+    if ("success" in result) {
+      return result;
+    }
+    if (attempt >= maxAttempts) {
+      return result;
+    }
+    if (!isTransientLlmCallError(result.error)) {
+      return result;
+    }
+    const delayMs = delays[attempt - 1] ?? 0;
+    const info: TransientRetryInfo = {
+      attempt,
+      maxAttempts,
+      delayMs,
+      err: result.error,
+      provider: params.provider,
+      model: params.model,
+    };
+    if (params.onTransientRetry) {
+      params.onTransientRetry(info);
+    } else {
+      log.warn(
+        `transient LLM error for ${info.provider}/${info.model}, retry ${info.attempt}/${info.maxAttempts - 1} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+      );
+    }
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+  }
+  // Unreachable — the loop above always returns within `maxAttempts`.
+  throw new Error("runFallbackAttemptWithTransientRetry exhausted without returning");
+}
+
+/** @internal – exposed for unit tests only */
+export const _transientRetryInternals = {
+  DEFAULT_DELAYS_MS: TRANSIENT_RETRY_DELAYS_MS,
+  isTransientLlmCallError,
+  runFallbackAttemptWithTransientRetry,
+} as const;
 
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
@@ -500,7 +644,11 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttemptWithTransientRetry({
+      run: params.run,
+      ...candidate,
+      attempts,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }
@@ -582,7 +730,11 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttemptWithTransientRetry({
+      run: params.run,
+      ...candidate,
+      attempts,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }
