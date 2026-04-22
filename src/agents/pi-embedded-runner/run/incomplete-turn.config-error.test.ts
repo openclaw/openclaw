@@ -186,6 +186,52 @@ describe("buildConfigErrorDiagnosticText", () => {
     expect(text).not.toContain("Model:");
     expect(text).toContain("Run `openclaw doctor`");
   });
+
+  // Regression test for the empty-identity formatting bug: when both provider
+  // and model are absent, we previously emitted a leading blank line followed
+  // by an empty identity block followed by another blank line, rendering as
+  // two consecutive blank lines between the header and the "Common causes:"
+  // section.
+  it("does not produce consecutive blank lines when identity block is empty", () => {
+    const text = buildConfigErrorDiagnosticText({
+      assistant: undefined,
+      hadPotentialSideEffects: false,
+    });
+    expect(text).not.toMatch(/\n\n\n/);
+  });
+
+  // The OpenRouter URL hint is only useful when the failing call was actually
+  // routed through OpenRouter — surfacing it for OpenAI / Groq / self-hosted
+  // providers would point operators at the wrong place.
+  it("omits the OpenRouter URL hint for non-openrouter providers", () => {
+    const text = buildConfigErrorDiagnosticText({
+      assistant: { provider: "openai", model: "gpt-5.4" },
+      hadPotentialSideEffects: false,
+    });
+    expect(text).toContain("Provider: openai");
+    expect(text).not.toContain("openrouter.ai/api/v1");
+    expect(text).not.toContain("OpenRouter uses");
+    expect(text).not.toMatch(/\n\n\n/);
+  });
+
+  it("includes the OpenRouter URL hint for openrouter providers", () => {
+    const text = buildConfigErrorDiagnosticText({
+      assistant: { provider: "openrouter", model: "z-ai/glm-5.1" },
+      hadPotentialSideEffects: false,
+    });
+    expect(text).toContain("OpenRouter uses https://openrouter.ai/api/v1");
+  });
+
+  // Defensive: when we can't identify the provider at all, still surface the
+  // hint — OpenRouter is the most common cause of this failure mode in
+  // practice and the hint reads as advice rather than a definitive claim.
+  it("includes the OpenRouter URL hint when provider is unknown", () => {
+    const text = buildConfigErrorDiagnosticText({
+      assistant: undefined,
+      hadPotentialSideEffects: false,
+    });
+    expect(text).toContain("OpenRouter uses https://openrouter.ai/api/v1");
+  });
 });
 
 describe("resolveIncompleteTurnPayloadText — config-error path", () => {

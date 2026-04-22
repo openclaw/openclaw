@@ -310,19 +310,33 @@ export function buildConfigErrorDiagnosticText(params: {
   const modelId = normalizeOptionalIdentifier(params.assistant?.model);
   const providerLine = provider ? `  Provider: ${provider}\n` : "";
   const modelLine = modelId ? `  Model:    ${modelId}\n` : "";
+  // Only render the leading blank line + identity block when we actually have
+  // an identity to print. Without this guard, an absent provider AND model
+  // collapse into two consecutive blank lines between the header and "Common
+  // causes:", which reads like a formatting bug.
+  const identityBlock = providerLine || modelLine ? `\n${providerLine}${modelLine}` : "";
+  // The OpenRouter URL example is only useful when the failing call was
+  // routed through OpenRouter (the documented case where `/v1` silently
+  // serves HTML and `/api/v1` is required). For other providers it would
+  // send operators looking at the wrong place. When the provider is unknown
+  // we still surface the hint, since OpenRouter is the most common cause of
+  // this failure mode in practice.
+  const isOpenRouterProvider = !provider || provider.toLowerCase().includes("openrouter");
+  const baseUrlHint = isOpenRouterProvider
+    ? "\n     (OpenRouter uses https://openrouter.ai/api/v1, not /v1)"
+    : "";
   const sideEffectsNote = params.hadPotentialSideEffects
     ? "\n⚠️ Some tool actions may have already been executed — please verify before retrying."
     : "";
   return (
     "⚠️ Provider returned an empty stream (0 content, 0 tokens).\n" +
     "This usually indicates a configuration error, not a model issue.\n" +
-    "\n" +
-    providerLine +
-    modelLine +
+    identityBlock +
     "\n" +
     "Common causes:\n" +
-    "  1. Wrong baseUrl — check agents/<id>/agent/models.json\n" +
-    "     (OpenRouter uses https://openrouter.ai/api/v1, not /v1)\n" +
+    "  1. Wrong baseUrl — check agents/<id>/agent/models.json" +
+    baseUrlHint +
+    "\n" +
     "  2. Invalid or expired API key for the provider\n" +
     "  3. Model id not recognized by the selected provider\n" +
     "  4. Network path returning HTML (e.g., captive portal, proxy)\n" +
