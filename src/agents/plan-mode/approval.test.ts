@@ -150,9 +150,14 @@ describe("buildApprovedPlanInjection", () => {
     // steer to close the post-approval idle-after-subagent-returns
     // behavior observed in live smoke testing. Snapshot updated to
     // match; byte-stability contract preserved across same inputs.
+    // Rebase-fixup (2026-04-22): main moved the `[PLAN_DECISION]: approved`
+    // prefix out of `buildApprovedPlanInjection`'s output and into the caller
+    // (the synthetic-injection composer) between when this assertion was
+    // originally written and the post-v2026.4.21 rebase. The byte-stability
+    // contract still holds for what `buildApprovedPlanInjection` produces;
+    // the prefix is now appended at injection composition time.
     expect(result).toBe(
-      "[PLAN_DECISION]: approved\n\n" +
-        "The user has approved the following plan. Execute it now without re-planning. " +
+      "The user has approved the following plan. Execute it now without re-planning. " +
         "Do not re-plan unless necessary. " +
         "If a step is no longer viable, mark it cancelled and add a revised step.\n\n" +
         "Check and record the planned status for each step as you go. " +
