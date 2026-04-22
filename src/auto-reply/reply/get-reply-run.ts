@@ -305,6 +305,18 @@ export async function runPreparedReply(
       fullAccessBlockedReason: fullAccessState.blockedReason,
     }),
   ].filter(Boolean);
+  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
+  const extraSystemPromptStaticParts = [
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+    buildExecOverridePromptHint({
+      execOverrides,
+      elevatedLevel: resolvedElevatedLevel,
+      fullAccessAvailable: fullAccessState.available,
+      fullAccessBlockedReason: fullAccessState.blockedReason,
+    }),
+  ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -734,6 +746,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {

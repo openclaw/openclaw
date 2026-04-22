@@ -8,9 +8,11 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { clearPluginLoaderCache } from "../plugins/loader.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -503,6 +505,8 @@ describeLive("gateway live (ACP bind)", () => {
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
       clearConfigCache();
       clearRuntimeConfigSnapshot();
+      clearPluginLoaderCache();
+      resetPluginRuntimeStateForTest();
 
       logLiveStep(`starting gateway on port ${String(port)}`);
       const server = await startGatewayServer(port, {

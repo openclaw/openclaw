@@ -34,20 +34,7 @@ const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
-const LEGACY_UPDATE_COMPAT_SIDECARS = [
-  {
-    path: "dist/extensions/qa-channel/runtime-api.js",
-    removedPrefix: "dist/extensions/qa-channel/",
-    content:
-      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
-  },
-  {
-    path: "dist/extensions/qa-lab/runtime-api.js",
-    removedPrefix: "dist/extensions/qa-lab/",
-    content:
-      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
-  },
-];
+const LEGACY_UPDATE_COMPAT_SIDECARS = [];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -183,6 +170,12 @@ function assertSafeInstalledDistPath(relativePath, params) {
   return candidatePath;
 }
 
+function isStagedRuntimeNodeModulesPath(relativePath) {
+  return /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u.test(
+    normalizeRelativePath(relativePath),
+  );
+}
+
 function listInstalledDistFiles(params = {}) {
   const readDir = params.readdirSync ?? readdirSync;
   const distRoot = resolveInstalledDistRoot(params);
@@ -195,6 +188,10 @@ function listInstalledDistFiles(params = {}) {
   while (pending.length > 0) {
     const currentDir = pending.pop();
     if (!currentDir) {
+      continue;
+    }
+    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
+    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
       continue;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -232,6 +229,10 @@ function pruneEmptyDistDirectories(params = {}) {
   const pathLstat = params.lstatSync ?? lstatSync;
 
   function prune(currentDir) {
+    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
+    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
+      return;
+    }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) {
         throw new Error(
@@ -636,7 +637,8 @@ function applyBundledPluginRuntimeHotfixes(params = {}) {
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   return (
-    pathExists(join(params.packageRoot, ".git")) &&
+    (pathExists(join(params.packageRoot, ".git")) ||
+      pathExists(join(params.packageRoot, "pnpm-workspace.yaml"))) &&
     pathExists(join(params.packageRoot, "src")) &&
     pathExists(join(params.packageRoot, "extensions"))
   );

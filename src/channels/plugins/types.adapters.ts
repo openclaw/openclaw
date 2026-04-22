@@ -464,8 +464,14 @@ export type ChannelCommandAdapter = {
     totalPages: number;
     agentId?: string;
   }) => ReplyPayload["channelData"] | null;
+  buildModelsMenuChannelData?: (params: {
+    providers: Array<{ id: string; count: number }>;
+  }) => ReplyPayload["channelData"] | null;
   buildModelsProviderChannelData?: (params: {
     providers: Array<{ id: string; count: number }>;
+  }) => ReplyPayload["channelData"] | null;
+  buildModelsAddProviderChannelData?: (params: {
+    providers: Array<{ id: string }>;
   }) => ReplyPayload["channelData"] | null;
   buildModelsListChannelData?: (params: {
     provider: string;

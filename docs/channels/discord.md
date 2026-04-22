@@ -61,15 +61,18 @@ You will need to create a new application with a bot, add the bot to your server
     - `bot`
     - `applications.commands`
 
-    A **Bot Permissions** section will appear below. Enable:
+    A **Bot Permissions** section will appear below. Enable at least:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Copy the generated URL at the bottom, paste it into your browser, select your server, and click **Continue** to connect. You should now see your bot in the Discord server.
 
   </Step>
@@ -304,7 +307,7 @@ By default, components are single use. Set `components.reusable=true` to allow b
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. Unless `commands.modelsWrite=false`, `/models add` also supports adding a new provider/model entry from chat, and newly added models show up without restarting the gateway. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 
@@ -520,13 +523,16 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
     Typical baseline permissions:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Avoid `Administrator` unless explicitly needed.
 
   </Accordion>

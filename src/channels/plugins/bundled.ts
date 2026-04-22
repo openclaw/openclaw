@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -12,9 +11,9 @@ import {
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
 import {
-  ensureBundledPluginRuntimeDeps,
-  resolveBundledRuntimeDependencyInstallRoot,
-} from "../../plugins/bundled-runtime-deps.js";
+  isBuiltBundledPluginRuntimeRoot,
+  prepareBundledPluginRuntimeRoot,
+} from "../../plugins/bundled-runtime-root.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
@@ -78,7 +77,6 @@ type BundledChannelCacheContext = {
 };
 
 const log = createSubsystemLogger("channels");
-const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, readonly string[]>();
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
@@ -193,11 +191,17 @@ function loadGeneratedBundledChannelModule(params: {
     metadata: params.metadata,
     modulePath,
   });
-  if (isBuiltBundledChannelPluginRoot(boundaryRoot)) {
-    const prepared = prepareBundledChannelRuntimeRoot({
+  if (isBuiltBundledPluginRuntimeRoot(boundaryRoot)) {
+    const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: params.metadata.manifest.id,
       pluginRoot: boundaryRoot,
       modulePath,
+      env: process.env,
+      logInstalled: (installedSpecs) => {
+        log.debug(
+          `[channels] ${params.metadata.manifest.id} installed bundled runtime deps: ${installedSpecs.join(", ")}`,
+        );
+      },
     });
     modulePath = prepared.modulePath;
     boundaryRoot = prepared.pluginRoot;
@@ -209,166 +213,6 @@ function loadGeneratedBundledChannelModule(params: {
     shouldTryNativeRequire: (safePath) =>
       safePath.includes(`${path.sep}dist${path.sep}`) && isJavaScriptModulePath(safePath),
   });
-}
-
-function isBuiltBundledChannelPluginRoot(pluginRoot: string): boolean {
-  const extensionsDir = path.dirname(pluginRoot);
-  const buildDir = path.dirname(extensionsDir);
-  return (
-    path.basename(extensionsDir) === "extensions" &&
-    (path.basename(buildDir) === "dist" || path.basename(buildDir) === "dist-runtime")
-  );
-}
-
-function prepareBundledChannelRuntimeRoot(params: {
-  pluginId: string;
-  pluginRoot: string;
-  modulePath: string;
-}): { pluginRoot: string; modulePath: string } {
-  const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot, {
-    env: process.env,
-  });
-  const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
-  const depsInstallResult = ensureBundledPluginRuntimeDeps({
-    pluginId: params.pluginId,
-    pluginRoot: params.pluginRoot,
-    env: process.env,
-    retainSpecs,
-  });
-  if (depsInstallResult.installedSpecs.length > 0) {
-    bundledRuntimeDepsRetainSpecsByInstallRoot.set(
-      installRoot,
-      [...new Set([...retainSpecs, ...depsInstallResult.retainSpecs])].toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
-    );
-    log.info(
-      `[channels] ${params.pluginId} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
-    );
-  }
-  if (path.resolve(installRoot) === path.resolve(params.pluginRoot)) {
-    return { pluginRoot: params.pluginRoot, modulePath: params.modulePath };
-  }
-  const mirrorRoot = mirrorBundledChannelRuntimeRoot({
-    pluginId: params.pluginId,
-    pluginRoot: params.pluginRoot,
-    installRoot,
-  });
-  return {
-    pluginRoot: mirrorRoot,
-    modulePath: remapBundledChannelRuntimePath({
-      source: params.modulePath,
-      pluginRoot: params.pluginRoot,
-      mirroredRoot: mirrorRoot,
-    }),
-  };
-}
-
-function mirrorBundledChannelRuntimeRoot(params: {
-  pluginId: string;
-  pluginRoot: string;
-  installRoot: string;
-}): string {
-  const mirrorParent = prepareBundledChannelRuntimeDistMirror({
-    installRoot: params.installRoot,
-    pluginRoot: params.pluginRoot,
-  });
-  const mirrorRoot = path.join(mirrorParent, params.pluginId);
-  fs.mkdirSync(params.installRoot, { recursive: true });
-  try {
-    fs.chmodSync(params.installRoot, 0o755);
-  } catch {
-    // Best-effort only: staged roots may live on filesystems that reject chmod.
-  }
-  fs.mkdirSync(mirrorParent, { recursive: true });
-  try {
-    fs.chmodSync(mirrorParent, 0o755);
-  } catch {
-    // Best-effort only: the access check below will surface non-writable dirs.
-  }
-  fs.accessSync(mirrorParent, fs.constants.W_OK);
-  const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.channel-plugin-${params.pluginId}-`));
-  const stagedRoot = path.join(tempDir, "plugin");
-  try {
-    copyBundledChannelRuntimeRoot(params.pluginRoot, stagedRoot);
-    fs.rmSync(mirrorRoot, { recursive: true, force: true });
-    fs.renameSync(stagedRoot, mirrorRoot);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-  return mirrorRoot;
-}
-
-function prepareBundledChannelRuntimeDistMirror(params: {
-  installRoot: string;
-  pluginRoot: string;
-}): string {
-  const sourceExtensionsRoot = path.dirname(params.pluginRoot);
-  const sourceDistRoot = path.dirname(sourceExtensionsRoot);
-  const mirrorDistRoot = path.join(params.installRoot, "dist");
-  const mirrorExtensionsRoot = path.join(mirrorDistRoot, "extensions");
-  fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
-  for (const entry of fs.readdirSync(sourceDistRoot, { withFileTypes: true })) {
-    if (entry.name === "extensions") {
-      continue;
-    }
-    const sourcePath = path.join(sourceDistRoot, entry.name);
-    const targetPath = path.join(mirrorDistRoot, entry.name);
-    if (fs.existsSync(targetPath)) {
-      continue;
-    }
-    try {
-      fs.symlinkSync(sourcePath, targetPath, entry.isDirectory() ? "junction" : "file");
-    } catch {
-      if (entry.isDirectory()) {
-        copyBundledChannelRuntimeRoot(sourcePath, targetPath);
-      } else if (entry.isFile()) {
-        fs.copyFileSync(sourcePath, targetPath);
-      }
-    }
-  }
-  return mirrorExtensionsRoot;
-}
-
-function copyBundledChannelRuntimeRoot(sourceRoot: string, targetRoot: string): void {
-  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
-  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (entry.name === "node_modules") {
-      continue;
-    }
-    const sourcePath = path.join(sourceRoot, entry.name);
-    const targetPath = path.join(targetRoot, entry.name);
-    if (entry.isDirectory()) {
-      copyBundledChannelRuntimeRoot(sourcePath, targetPath);
-      continue;
-    }
-    if (entry.isSymbolicLink()) {
-      fs.symlinkSync(fs.readlinkSync(sourcePath), targetPath);
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    fs.copyFileSync(sourcePath, targetPath);
-    try {
-      const sourceMode = fs.statSync(sourcePath).mode;
-      fs.chmodSync(targetPath, sourceMode | 0o600);
-    } catch {
-      // Readable copied files are enough for plugin loading.
-    }
-  }
-}
-
-function remapBundledChannelRuntimePath(params: {
-  source: string;
-  pluginRoot: string;
-  mirroredRoot: string;
-}): string {
-  const relative = path.relative(params.pluginRoot, params.source);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return params.source;
-  }
-  return path.join(params.mirroredRoot, relative);
 }
 
 function loadGeneratedBundledChannelEntry(params: {

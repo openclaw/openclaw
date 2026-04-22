@@ -111,6 +111,7 @@ function buildPreparedCliRunContext(params: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    authEpochVersion: 2,
   };
 }
 
@@ -170,6 +171,7 @@ describe("runCliAgent spawn path", () => {
       systemPrompt: "You are a helpful assistant.",
       systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
       bootstrapPromptWarningLines: [],
+      authEpochVersion: 2,
     };
     await executePreparedCliRun(context);
 
@@ -416,6 +418,22 @@ describe("runCliAgent spawn path", () => {
     });
 
     expect(params.senderIsOwner).toBe(false);
+  });
+
+  it("forwards static extra system prompt through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      timeoutMs: 1_000,
+      runId: "run-claude-static-prompt-wrapper",
+      extraSystemPrompt: "dynamic\n\nstatic",
+      extraSystemPromptStatic: "static",
+    });
+
+    expect(params.extraSystemPrompt).toBe("dynamic\n\nstatic");
+    expect(params.extraSystemPromptStatic).toBe("static");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {

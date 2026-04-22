@@ -1047,6 +1047,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        thread: {
+          type: "object",
+          properties: {
+            inheritParent: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
         dmPolicy: {
           type: "string",
           enum: ["pairing", "allowlist", "open", "disabled"],
@@ -2211,6 +2220,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              thread: {
+                type: "object",
+                properties: {
+                  inheritParent: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
               dmPolicy: {
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
@@ -3082,6 +3100,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       maxLinesPerMessage: {
         label: "Discord Max Lines Per Message",
         help: "Soft max line count per Discord message (default: 17).",
+      },
+      "thread.inheritParent": {
+        label: "Discord Thread Parent Inheritance",
+        help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
       "inboundWorker.runTimeoutMs": {
         label: "Discord Inbound Worker Timeout (ms)",

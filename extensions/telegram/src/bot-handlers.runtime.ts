@@ -6,6 +6,10 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
+import {
+  resolveCommandAuthorization,
+  resolveCommandAuthorizedFromAuthorizers,
+} from "openclaw/plugin-sdk/command-auth-native";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -13,7 +17,7 @@ import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "openclaw/plugin-sdk/config-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -60,6 +64,7 @@ import {
 import { resolveMedia } from "./bot/delivery.js";
 import {
   getTelegramTextParts,
+  buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumFlag,
@@ -68,7 +73,7 @@ import {
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
-import { buildCommandsPaginationKeyboard } from "./command-ui.js";
+import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -783,6 +788,76 @@ export const registerTelegramHandlers = ({
     return { allowed: true };
   };
 
+  const isTelegramModelCallbackAuthorized = (params: {
+    chatId: number;
+    isGroup: boolean;
+    senderId: string;
+    senderUsername: string;
+    context: TelegramEventAuthorizationContext;
+    cfg: OpenClawConfig;
+  }): boolean => {
+    const { chatId, isGroup, senderId, senderUsername, context, cfg } = params;
+    const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+    const dmAllowFrom = context.groupAllowOverride ?? allowFrom;
+    const commandsAllowFrom = cfg.commands?.allowFrom;
+    const commandsAllowFromConfigured =
+      commandsAllowFrom != null &&
+      typeof commandsAllowFrom === "object" &&
+      (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]));
+    if (commandsAllowFromConfigured) {
+      return resolveCommandAuthorization({
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          AccountId: accountId,
+          ChatType: isGroup ? "group" : "direct",
+          From: isGroup
+            ? buildTelegramGroupFrom(chatId, context.resolvedThreadId)
+            : `telegram:${chatId}`,
+          SenderId: senderId || undefined,
+          SenderUsername: senderUsername || undefined,
+        },
+        cfg,
+        commandAuthorized: false,
+      }).isAuthorizedSender;
+    }
+
+    const dmAllow = normalizeDmAllowFromWithStore({
+      allowFrom: dmAllowFrom,
+      storeAllowFrom: isGroup ? [] : context.storeAllowFrom,
+      dmPolicy: context.dmPolicy,
+    });
+    const senderAllowed = isSenderAllowed({
+      allow: dmAllow,
+      senderId,
+      senderUsername,
+    });
+    const groupSenderAllowed = isGroup
+      ? isSenderAllowed({
+          allow: context.effectiveGroupAllow,
+          senderId,
+          senderUsername,
+        })
+      : false;
+
+    return resolveCommandAuthorizedFromAuthorizers({
+      useAccessGroups,
+      authorizers: [
+        { configured: dmAllow.hasEntries, allowed: senderAllowed },
+        ...(isGroup
+          ? [
+              {
+                configured: context.effectiveGroupAllow.hasEntries,
+                allowed: groupSenderAllowed,
+              },
+            ]
+          : []),
+      ],
+      modeWhenAccessGroupsOff: "configured",
+    });
+  };
+
   // Handle emoji reactions to messages.
   bot.on("message_reaction", async (ctx) => {
     try {
@@ -1453,6 +1528,21 @@ export const registerTelegramHandlers = ({
       // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
       const modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
+        if (
+          !isTelegramModelCallbackAuthorized({
+            chatId,
+            isGroup,
+            senderId,
+            senderUsername,
+            context: eventAuthContext,
+            cfg: runtimeCfg,
+          })
+        ) {
+          logVerbose(
+            `Blocked telegram model callback from ${senderId || "unknown"} (not authorized for /models)`,
+          );
+          return;
+        }
         let sessionState: ReturnType<typeof resolveTelegramSessionState>;
         let modelData: Awaited<ReturnType<typeof telegramDeps.buildModelsProviderData>>;
         try {
@@ -1509,7 +1599,7 @@ export const registerTelegramHandlers = ({
             id: p,
             count: byProvider.get(p)?.size ?? 0,
           }));
-          const buttons = buildProviderKeyboard(providerInfos);
+          const buttons = buildTelegramModelsMenuButtons({ providers: providerInfos });
           try {
             await editMessageWithButtons("Select a provider:", buttons);
           } catch (err) {
@@ -1527,7 +1617,7 @@ export const registerTelegramHandlers = ({
               id: p,
               count: byProvider.get(p)?.size ?? 0,
             }));
-            const buttons = buildProviderKeyboard(providerInfos);
+            const buttons = buildTelegramModelsMenuButtons({ providers: providerInfos });
             try {
               await editMessageWithButtons(
                 `Unknown provider: ${provider}\n\nSelect a provider:`,
@@ -1580,7 +1670,7 @@ export const registerTelegramHandlers = ({
               id: p,
               count: byProvider.get(p)?.size ?? 0,
             }));
-            const buttons = buildProviderKeyboard(providerInfos);
+            const buttons = buildTelegramModelsMenuButtons({ providers: providerInfos });
             try {
               await editMessageWithButtons(
                 `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
