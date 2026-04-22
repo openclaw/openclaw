@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import { __testing, formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const report: HookStatusReport = {
@@ -84,5 +84,12 @@ describe("hooks cli formatting", () => {
     const output = formatHookInfo(pluginReport, "plugin-hook", {});
     expect(output).toContain("voice-call");
     expect(output).toContain("Managed by plugin");
+  });
+
+  it("force-exits one-shot hook inspection commands outside tests", () => {
+    expect(__testing.shouldForceExitAfterHooksInspection({} as NodeJS.ProcessEnv)).toBe(true);
+    expect(
+      __testing.shouldForceExitAfterHooksInspection({ VITEST: "true" } as NodeJS.ProcessEnv),
+    ).toBe(false);
   });
 });
