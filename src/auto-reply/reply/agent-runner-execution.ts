@@ -954,6 +954,7 @@ export async function runAgentTurnWithFallback(params: {
                     sessionStore: params.activeSessionStore,
                     storePath: params.storePath,
                     sessionAgentId: params.followupRun.run.agentId,
+                    threadId: params.followupRun.originatingThreadId,
                     sessionCwd: params.followupRun.run.workspaceDir,
                   });
                   if (persistedEntry && params.activeSessionStore && params.sessionKey) {

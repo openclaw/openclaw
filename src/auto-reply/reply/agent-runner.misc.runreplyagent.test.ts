@@ -1472,7 +1472,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
 });
 
 describe("runReplyAgent claude-cli routing", () => {
-  function createRun() {
+  function createRun(overrides: { originatingThreadId?: string | number } = {}) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "webchat",
@@ -1485,6 +1485,7 @@ describe("runReplyAgent claude-cli routing", () => {
       prompt: "hello",
       summaryLine: "hello",
       enqueuedAt: Date.now(),
+      originatingThreadId: overrides.originatingThreadId,
       run: {
         sessionId: "session",
         sessionKey: "main",
@@ -1589,6 +1590,24 @@ describe("runReplyAgent claude-cli routing", () => {
 
     expect(persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("forwards originatingThreadId to the CLI transcript persist call", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    await createRun({ originatingThreadId: "1739142736.000100" });
+
+    expect(persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    const [persistArgs] = persistCliTurnTranscriptMock.mock.calls[0];
+    expect(persistArgs).toMatchObject({ threadId: "1739142736.000100" });
   });
 });
 
