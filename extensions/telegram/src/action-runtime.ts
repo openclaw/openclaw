@@ -213,6 +213,7 @@ export async function handleTelegramAction(
   options?: {
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    gatewayClientScopes?: readonly string[];
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -364,6 +365,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
       mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
       mediaReadFile: options?.mediaReadFile,
@@ -449,6 +451,7 @@ export async function handleTelegramAction(
         cfg,
         token,
         accountId: accountId ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
         replyToMessageId: replyToMessageId ?? undefined,
         messageThreadId: messageThreadId ?? undefined,
         isAnonymous: isAnonymous ?? undefined,
@@ -482,6 +485,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
     });
     return jsonResult({ ok: true, deleted: true });
   }
@@ -524,6 +528,7 @@ export async function handleTelegramAction(
         cfg,
         token,
         accountId: accountId ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
         buttons,
       },
     );
@@ -559,6 +564,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
     });
@@ -613,6 +619,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
       iconColor,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
     });
@@ -648,6 +655,7 @@ export async function handleTelegramAction(
         cfg,
         token,
         accountId: accountId ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
         name: name ?? undefined,
         iconCustomEmojiId: iconCustomEmojiId ?? undefined,
       },

@@ -60,6 +60,33 @@ describe("telegramMessageActions", () => {
     );
   });
 
+  it("forwards gateway client scopes into the Telegram action runtime", async () => {
+    await telegramMessageActions.handleAction!({
+      action: "send",
+      params: {
+        to: "@legacy-target",
+        message: "hi",
+      },
+      cfg: {} as never,
+      accountId: "default",
+      mediaLocalRoots: [],
+      gatewayClientScopes: ["operator.write"],
+    } as never);
+
+    expect(handleTelegramActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "@legacy-target",
+        accountId: "default",
+      }),
+      expect.anything(),
+      expect.objectContaining({
+        mediaLocalRoots: [],
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+  });
+
   it("computes poll/topic action availability from config gates", () => {
     const cases = [
       {

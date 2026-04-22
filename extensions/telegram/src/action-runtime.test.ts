@@ -345,11 +345,16 @@ describe("handleTelegramAction", () => {
         content: "Hello, Telegram!",
       },
       telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
     );
     expect(sendMessageTelegram).toHaveBeenCalledWith(
       "@testchannel",
       "Hello, Telegram!",
-      expect.objectContaining({ token: "tok", mediaUrl: undefined }),
+      expect.objectContaining({
+        token: "tok",
+        mediaUrl: undefined,
+        gatewayClientScopes: ["operator.write"],
+      }),
     );
     expect(result.content).toContainEqual({
       type: "text",
@@ -390,6 +395,7 @@ describe("handleTelegramAction", () => {
         silent: true,
       },
       telegramConfig(),
+      { gatewayClientScopes: ["operator.admin"] },
     );
     expect(sendPollTelegram).toHaveBeenCalledWith(
       "@testchannel",
@@ -404,6 +410,7 @@ describe("handleTelegramAction", () => {
         token: "tok",
         isAnonymous: false,
         silent: true,
+        gatewayClientScopes: ["operator.admin"],
       }),
     );
     expect(result.details).toMatchObject({

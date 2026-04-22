@@ -1087,6 +1087,60 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("forwards gateway client scopes into plugin-owned message actions", async () => {
+    const capture = { gatewayClientScopes: undefined as readonly string[] | undefined };
+    const reactPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram message action scope forwarding test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async ({ gatewayClientScopes }) => {
+          capture.gatewayClientScopes = gatewayClientScopes;
+          return jsonResult({ ok: true });
+        },
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: reactPlugin,
+        },
+      ]),
+      "send-test-message-action-scopes",
+    );
+
+    await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "@legacy-target",
+          message: "hi",
+        },
+        idempotencyKey: "idem-message-action-scopes",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(capture.gatewayClientScopes).toEqual(["operator.write"]);
+  });
+
   it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {
     const capture = { senderIsOwner: undefined as boolean | undefined };
     const reactPlugin: ChannelPlugin = {

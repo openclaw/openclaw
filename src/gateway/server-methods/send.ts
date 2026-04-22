@@ -351,6 +351,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,
+          gatewayClientScopes: callerScopes,
           toolContext: request.toolContext,
           dryRun: false,
         });

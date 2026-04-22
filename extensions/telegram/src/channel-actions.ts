@@ -176,7 +176,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    mediaLocalRoots,
+    gatewayClientScopes,
+    toolContext,
+  }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
       throw new Error(`Unsupported Telegram action: ${action}`);
@@ -193,7 +201,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           : {}),
       },
       cfg,
-      { mediaLocalRoots },
+      { mediaLocalRoots, gatewayClientScopes },
     );
   },
 };

@@ -634,6 +634,7 @@ export type ChannelMessageActionContext = {
   sessionKey?: string | null;
   sessionId?: string | null;
   agentId?: string | null;
+  gatewayClientScopes?: readonly string[];
   gateway?: {
     url?: string;
     token?: string;
