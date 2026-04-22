@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { registerPendingSpawnedChildrenQuery } from "../infra/outbound/pending-spawn-query.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -924,3 +925,15 @@ export function getLatestSubagentRunByChildSessionKey(
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
+
+// Let the shared outbound plan treat bare silent replies as dropped (instead
+// of rewriting them to visible fallback text) when the parent session has at
+// least one pending spawned child whose completion will deliver the real
+// reply. Runtime-enforced, so it does not rely on agent prompt compliance.
+registerPendingSpawnedChildrenQuery((sessionKey) => {
+  const key = sessionKey?.trim();
+  if (!key) {
+    return false;
+  }
+  return countActiveRunsForSession(key) > 0;
+});
