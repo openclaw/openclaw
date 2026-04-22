@@ -52,6 +52,7 @@ export type ConfigProps = {
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
   onReload: () => void;
+  onReset: () => void;
   onSave: () => void;
   onApply: () => void;
   onUpdate: () => void;
@@ -724,12 +725,13 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__"]);
-  const visibleCategories = SECTION_CATEGORIES.map((cat) => ({
-    ...cat,
-    sections: cat.sections.filter(
-      (s) => (includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps,
-    ),
-  })).filter((cat) => cat.sections.length > 0);
+  const visibleCategories = SECTION_CATEGORIES.map((cat) =>
+    Object.assign({}, cat, {
+      sections: cat.sections.filter(
+        (s) => (includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps,
+      ),
+    }),
+  ).filter((cat) => cat.sections.length > 0);
 
   // Catch any schema keys not in our categories
   const extraSections = Object.keys(schemaProps)
@@ -767,6 +769,24 @@ export function renderConfig(props: ConfigProps) {
   const settingsLayout = props.settingsLayout ?? "tabs";
   const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
 
+  const resetContentScroll = (target: EventTarget | null) => {
+    queueMicrotask(() => {
+      const origin = target instanceof Element ? target : null;
+      const content = origin
+        ?.closest(".config-main")
+        ?.querySelector<HTMLElement>(".config-content");
+      if (!content) {
+        return;
+      }
+      if (typeof content.scrollTo === "function") {
+        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        return;
+      }
+      content.scrollTop = 0;
+      content.scrollLeft = 0;
+    });
+  };
+
   function renderAccordionNav() {
     return html`
       <div class="config-accordion-nav">
@@ -795,12 +815,13 @@ export function renderConfig(props: ConfigProps) {
                 cat.sections.some((s) => s.key === props.activeSection)
                   ? "config-accordion-group__header--active"
                   : ""}"
-                @click=${() => {
+                @click=${(e: Event) => {
                   const firstKey = cat.sections[0]?.key ?? null;
                   const isCurrentlyInGroup = cat.sections.some(
                     (s) => s.key === props.activeSection,
                   );
                   props.onSectionChange(isCurrentlyInGroup ? null : firstKey);
+                  resetContentScroll(e.currentTarget);
                 }}
               >
                 <span class="config-accordion-group__icon">
@@ -832,7 +853,10 @@ export function renderConfig(props: ConfigProps) {
                             class="config-accordion-group__item ${props.activeSection === s.key
                               ? "config-accordion-group__item--active"
                               : ""}"
-                            @click=${() => props.onSectionChange(s.key)}
+                            @click=${(e: Event) => {
+                              props.onSectionChange(s.key);
+                              resetContentScroll(e.currentTarget);
+                            }}
                           >
                             <span class="config-accordion-group__item-icon">
                               ${getSectionIcon(s.key)}
@@ -936,6 +960,9 @@ export function renderConfig(props: ConfigProps) {
             <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
               ${props.loading ? t("common.loading") : t("common.reload")}
             </button>
+            <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
+              Clear pending updates
+            </button>
             <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
               ${props.saving ? "Saving…" : "Save"}
             </button>
@@ -1004,7 +1031,10 @@ export function renderConfig(props: ConfigProps) {
                           : ""}"
                         role="tab"
                         aria-selected=${props.activeSection === tab.key}
-                        @click=${() => props.onSectionChange(tab.key)}
+                        @click=${(e: Event) => {
+                          props.onSectionChange(tab.key);
+                          resetContentScroll(e.currentTarget);
+                        }}
                         title=${tab.label}
                       >
                         ${tab.label}

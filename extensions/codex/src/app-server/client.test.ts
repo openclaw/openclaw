@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { PassThrough, Writable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -9,41 +9,22 @@ import {
   readCodexVersionFromUserAgent,
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
-
-function createClientHarness() {
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const writes: string[] = [];
-  const stdin = new Writable({
-    write(chunk, _encoding, callback) {
-      writes.push(chunk.toString());
-      callback();
-    },
-  });
-  const process = Object.assign(new EventEmitter(), {
-    stdin,
-    stdout,
-    stderr,
-    killed: false,
-    kill: vi.fn(() => {
-      process.killed = true;
-    }),
-  });
-  // fromTransportForTests speaks the same newline-delimited JSON-RPC as the
-  // spawned app-server, but keeps the process lifecycle fully observable.
-  const client = CodexAppServerClient.fromTransportForTests(process);
-  return {
-    client,
-    process,
-    writes,
-    send(message: unknown) {
-      stdout.write(`${JSON.stringify(message)}\n`);
-    },
-  };
-}
+import { createClientHarness } from "./test-support.js";
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
+
+  function startInitialize() {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const initializing = harness.client.initialize();
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as {
+      id?: number;
+      method?: string;
+      params?: { clientInfo?: { name?: string; title?: string; version?: string } };
+    };
+    return { harness, initializing, outbound };
+  }
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
@@ -115,15 +96,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("initializes with the required client version", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-
-    const initializing = harness.client.initialize();
-    const outbound = JSON.parse(harness.writes[0] ?? "{}") as {
-      id?: number;
-      method?: string;
-      params?: { clientInfo?: { name?: string; title?: string; version?: string } };
-    };
+    const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
       result: { userAgent: "openclaw/0.118.0 (macOS; test)" },
@@ -145,11 +118,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("blocks unsupported app-server versions during initialize", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-
-    const initializing = harness.client.initialize();
-    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
       result: { userAgent: "openclaw/0.117.9 (macOS; test)" },
@@ -162,11 +131,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("blocks app-server initialize responses without a version", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-
-    const initializing = harness.client.initialize();
-    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const { harness, initializing, outbound } = startInitialize();
     harness.send({ id: outbound.id, result: {} });
 
     await expect(initializing).rejects.toThrow(
@@ -199,6 +164,39 @@ describe("CodexAppServerClient", () => {
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     expect(process.unref).toHaveBeenCalledTimes(1);
   });
+  it("handles stdin write errors without crashing the process", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    // Start a pending request so we can verify it gets properly rejected.
+    const pending = harness.client.request("test/method");
+
+    // Simulate the child process closing its pipe — a write to the now-dead
+    // stdin emits an asynchronous EPIPE error on the stream.
+    harness.process.stdin.destroy(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+
+    // The pending request must be rejected with the pipe error rather than
+    // an unhandled exception tearing down the gateway.
+    await expect(pending).rejects.toThrow("write EPIPE");
+
+    // Subsequent requests are rejected immediately (client is closed).
+    await expect(harness.client.request("another/method")).rejects.toThrow(
+      "codex app-server client is closed",
+    );
+  });
+
+  it("does not write to stdin after the child process exits", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    // Simulate the child process exiting.
+    harness.process.emit("exit", 1, null);
+
+    // A notification after exit must not attempt a write.
+    harness.client.notify("late/event", { data: "ignored" });
+    expect(harness.writes).toHaveLength(0);
+  });
+
   it("reads the Codex version from the app-server user agent", () => {
     expect(readCodexVersionFromUserAgent("Codex Desktop/0.118.0")).toBe("0.118.0");
     expect(readCodexVersionFromUserAgent("openclaw/0.118.0 (macOS; test)")).toBe("0.118.0");

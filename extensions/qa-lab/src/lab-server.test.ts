@@ -3,12 +3,127 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { startQaLabServer } from "./lab-server.js";
+
+vi.mock("openclaw/plugin-sdk/qa-channel", async () => await import("../../qa-channel/api.js"));
+
+const captureMock = vi.hoisted(() => {
+  const sessions: Array<Record<string, unknown>> = [];
+  const events: Array<Record<string, unknown>> = [];
+
+  const readMeta = (event: Record<string, unknown>) => {
+    try {
+      return typeof event.metaJson === "string"
+        ? (JSON.parse(event.metaJson) as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  };
+  const countValues = (values: Array<string | undefined>) =>
+    Object.entries(
+      values.reduce<Record<string, number>>((acc, value) => {
+        if (value) {
+          acc[value] = (acc[value] ?? 0) + 1;
+        }
+        return acc;
+      }, {}),
+    ).map(([value, count]) => ({ value, count }));
+
+  const store = {
+    upsertSession(session: Record<string, unknown>) {
+      sessions.push({ ...session });
+    },
+    recordEvent(event: Record<string, unknown>) {
+      events.push({ ...event });
+    },
+    listSessions(limit: number) {
+      return sessions.slice(0, limit).map((session) =>
+        Object.assign({}, session, {
+          eventCount: events.filter((event) => event.sessionId === session.id).length,
+        }),
+      );
+    },
+    getSessionEvents(sessionId: string, limit: number) {
+      return events.filter((event) => event.sessionId === sessionId).slice(0, limit);
+    },
+    summarizeSessionCoverage(sessionId: string) {
+      const selected = events.filter((event) => event.sessionId === sessionId);
+      const metas = selected.map(readMeta);
+      return {
+        sessionId,
+        totalEvents: selected.length,
+        unlabeledEventCount: metas.filter((meta) => !meta.provider && !meta.model).length,
+        providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
+        apis: countValues(metas.map((meta) => meta.api as string | undefined)),
+        models: countValues(metas.map((meta) => meta.model as string | undefined)),
+        hosts: countValues(selected.map((event) => event.host as string | undefined)),
+        localPeers: countValues(
+          selected
+            .map((event) => event.host as string | undefined)
+            .filter((host) => host?.startsWith("127.0.0.1:")),
+        ),
+      };
+    },
+    queryPreset(preset: string, sessionId?: string) {
+      if (preset !== "double-sends") {
+        return [];
+      }
+      const selected = events.filter((event) => !sessionId || event.sessionId === sessionId);
+      const counts = selected.reduce<Record<string, number>>((acc, event) => {
+        const host = typeof event.host === "string" ? event.host : "";
+        if (host) {
+          acc[host] = (acc[host] ?? 0) + 1;
+        }
+        return acc;
+      }, {});
+      return Object.entries(counts)
+        .filter(([, duplicateCount]) => duplicateCount > 1)
+        .map(([host, duplicateCount]) => ({ host, duplicateCount }));
+    },
+    readBlob() {
+      return null;
+    },
+    deleteSessions(sessionIds: string[]) {
+      const ids = new Set(sessionIds);
+      for (let index = sessions.length - 1; index >= 0; index -= 1) {
+        if (ids.has(String(sessions[index]?.id))) {
+          sessions.splice(index, 1);
+        }
+      }
+      return { deleted: sessionIds.length };
+    },
+    purgeAll() {
+      sessions.splice(0);
+      events.splice(0);
+      return { deletedSessions: 0, deletedEvents: 0 };
+    },
+  };
+
+  return {
+    store,
+    reset() {
+      sessions.splice(0);
+      events.splice(0);
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  getDebugProxyCaptureStore: () => captureMock.store,
+  resolveDebugProxySettings: () => ({
+    dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH ?? "",
+    blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR ?? "",
+    proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
+    sessionId: "qa-lab-test",
+  }),
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  captureMock.reset();
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
@@ -40,7 +155,7 @@ async function fetchWithRetry(input: string, init?: RequestInit, attempts = 3) {
       if (attempt === attempts) {
         throw error;
       }
-      await sleep(50);
+      await sleep(10);
     }
   }
   throw lastError;
@@ -59,7 +174,7 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
     if (bootstrap.runnerCatalog.status !== "loading") {
       return bootstrap.runnerCatalog;
     }
-    await sleep(50);
+    await sleep(10);
   }
   throw new Error("runner catalog stayed loading");
 }
@@ -73,10 +188,47 @@ async function waitForFile(filePath: string, timeoutMs = 5_000) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      await sleep(50);
+      await sleep(10);
     }
   }
   throw new Error(`file did not appear: ${filePath}`);
+}
+
+async function createQaLabRepoRootFixture(params?: {
+  uiHtml?: string;
+  models?: Array<{
+    key: string;
+    name: string;
+    input?: string;
+    available?: boolean;
+    missing?: boolean;
+  }>;
+}) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
+  cleanups.push(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+  await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+  await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+  const models =
+    params?.models?.map((model) => ({
+      key: model.key,
+      name: model.name,
+      input: model.input ?? model.key,
+      available: model.available ?? true,
+      missing: model.missing ?? false,
+    })) ?? [];
+  await writeFile(
+    path.join(repoRoot, "dist/index.js"),
+    `process.stdout.write(${JSON.stringify(JSON.stringify({ models }))});\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
+    params?.uiHtml ?? "<!doctype html><html><body>qa lab fixture</body></html>",
+    "utf8",
+  );
+  return repoRoot;
 }
 
 describe("qa-lab server", () => {
@@ -86,11 +238,13 @@ describe("qa-lab server", () => {
       await rm(tempDir, { recursive: true, force: true });
     });
     const outputPath = path.join(tempDir, "self-check.md");
+    const repoRoot = await createQaLabRepoRootFixture();
 
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
       outputPath,
+      repoRoot,
       controlUiUrl: "http://127.0.0.1:18789/",
       controlUiToken: "qa-token",
     });
@@ -299,32 +453,16 @@ describe("qa-lab server", () => {
   });
 
   it("uses the explicit repo root for ui assets and runner model discovery", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
+    const repoRoot = await createQaLabRepoRootFixture({
+      models: [
+        {
+          key: "anthropic/qa-temp-model",
+          name: "QA Temp Model",
+        },
+      ],
+      uiHtml:
+        "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
     });
-    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "dist/index.js"),
-      [
-        "process.stdout.write(JSON.stringify({",
-        "  models: [{",
-        '    key: "anthropic/qa-temp-model",',
-        '    name: "QA Temp Model",',
-        '    input: "anthropic/qa-temp-model",',
-        "    available: true,",
-        "    missing: false,",
-        "  }],",
-        "}));",
-      ].join("\n"),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
-      "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
-      "utf8",
-    );
 
     const lab = await startQaLabServer({
       host: "127.0.0.1",
@@ -392,7 +530,7 @@ describe("qa-lab server", () => {
       await lab.stop();
     });
 
-    await sleep(150);
+    await sleep(25);
     await expect(readFile(markerPath, "utf8")).rejects.toThrow();
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
@@ -476,7 +614,6 @@ describe("qa-lab server", () => {
       }),
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 800));
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
@@ -559,12 +696,7 @@ describe("qa-lab server", () => {
     });
     process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
     process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
-    const { getDebugProxyCaptureStore } =
-      await import("../../../src/proxy-capture/store.sqlite.js");
-    const store = getDebugProxyCaptureStore(
-      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
-      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
-    );
+    const store = captureMock.store;
     store.upsertSession({
       id: "qa-capture-session",
       startedAt: Date.now(),

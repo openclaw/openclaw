@@ -1,6 +1,83 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/line/runtime-api.js");
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import type { Action } from "./line-surface.js";
+export type {
+  Action,
+  CardAction,
+  LineChannelData,
+  LineConfig,
+  LineGroupConfig,
+  LineProbeResult,
+  LineThreadBindingsConfig,
+  ListItem,
+  ResolvedLineAccount,
+} from "./line-surface.js";
+
+export type FlexBox = Record<string, unknown>;
+export type FlexBubble = Record<string, unknown>;
+export type FlexButton = Record<string, unknown>;
+export type FlexCarousel = Record<string, unknown>;
+export type FlexComponent = Record<string, unknown>;
+export type FlexContainer = Record<string, unknown>;
+export type FlexImage = Record<string, unknown>;
+export type FlexText = Record<string, unknown>;
+
+type FacadeFunction = (...args: unknown[]) => unknown;
+type FacadeModule = Record<
+  | "buildTemplateMessageFromPayload"
+  | "cancelDefaultRichMenu"
+  | "createActionCard"
+  | "createAgendaCard"
+  | "createAppleTvRemoteCard"
+  | "createCarousel"
+  | "createDefaultMenuConfig"
+  | "createDeviceControlCard"
+  | "createEventCard"
+  | "createGridLayout"
+  | "createImageCard"
+  | "createInfoCard"
+  | "createListCard"
+  | "createMediaPlayerCard"
+  | "createNotificationBubble"
+  | "createQuickReplyItems"
+  | "createReceiptCard"
+  | "createRichMenu"
+  | "createRichMenuAlias"
+  | "datetimePickerAction"
+  | "deleteRichMenu"
+  | "deleteRichMenuAlias"
+  | "downloadLineMedia"
+  | "firstDefined"
+  | "getDefaultRichMenuId"
+  | "getRichMenu"
+  | "getRichMenuIdOfUser"
+  | "getRichMenuList"
+  | "hasLineDirectives"
+  | "isSenderAllowed"
+  | "linkRichMenuToUser"
+  | "linkRichMenuToUsers"
+  | "messageAction"
+  | "monitorLineProvider"
+  | "normalizeAllowFrom"
+  | "normalizeDmAllowFromWithStore"
+  | "parseLineDirectives"
+  | "postbackAction"
+  | "probeLineBot"
+  | "pushFlexMessage"
+  | "pushLocationMessage"
+  | "pushMessageLine"
+  | "pushMessagesLine"
+  | "pushTemplateMessage"
+  | "pushTextMessageWithQuickReplies"
+  | "sendMessageLine"
+  | "setDefaultRichMenu"
+  | "toFlexMessage"
+  | "unlinkRichMenuFromUser"
+  | "unlinkRichMenuFromUsers"
+  | "uploadRichMenuImage"
+  | "uriAction",
+  FacadeFunction
+>;
 
 function loadFacadeModule(): FacadeModule {
   return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
@@ -134,24 +211,30 @@ export const uploadRichMenuImage: FacadeModule["uploadRichMenuImage"] = ((...arg
   loadFacadeModule()["uploadRichMenuImage"](...args)) as FacadeModule["uploadRichMenuImage"];
 export const uriAction: FacadeModule["uriAction"] = ((...args) =>
   loadFacadeModule()["uriAction"](...args)) as FacadeModule["uriAction"];
-export type Action = import("@openclaw/line/runtime-api.js").Action;
-export type CardAction = import("@openclaw/line/runtime-api.js").CardAction;
-export type CreateRichMenuParams = import("@openclaw/line/runtime-api.js").CreateRichMenuParams;
-export type FlexBox = import("@openclaw/line/runtime-api.js").FlexBox;
-export type FlexBubble = import("@openclaw/line/runtime-api.js").FlexBubble;
-export type FlexButton = import("@openclaw/line/runtime-api.js").FlexButton;
-export type FlexCarousel = import("@openclaw/line/runtime-api.js").FlexCarousel;
-export type FlexComponent = import("@openclaw/line/runtime-api.js").FlexComponent;
-export type FlexContainer = import("@openclaw/line/runtime-api.js").FlexContainer;
-export type FlexImage = import("@openclaw/line/runtime-api.js").FlexImage;
-export type FlexText = import("@openclaw/line/runtime-api.js").FlexText;
-export type LineChannelData = import("@openclaw/line/runtime-api.js").LineChannelData;
-export type LineConfig = import("@openclaw/line/runtime-api.js").LineConfig;
-export type LineProbeResult = import("@openclaw/line/runtime-api.js").LineProbeResult;
-export type ListItem = import("@openclaw/line/runtime-api.js").ListItem;
-export type ResolvedLineAccount = import("@openclaw/line/runtime-api.js").ResolvedLineAccount;
-export type RichMenuArea = import("@openclaw/line/runtime-api.js").RichMenuArea;
-export type RichMenuAreaRequest = import("@openclaw/line/runtime-api.js").RichMenuAreaRequest;
-export type RichMenuRequest = import("@openclaw/line/runtime-api.js").RichMenuRequest;
-export type RichMenuResponse = import("@openclaw/line/runtime-api.js").RichMenuResponse;
-export type RichMenuSize = import("@openclaw/line/runtime-api.js").RichMenuSize;
+
+export interface RichMenuSize {
+  width: 2500;
+  height: 1686 | 843;
+}
+
+export interface RichMenuAreaRequest {
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  action: Action;
+}
+
+export interface CreateRichMenuParams {
+  size: RichMenuSize;
+  selected?: boolean;
+  name: string;
+  chatBarText: string;
+  areas: RichMenuAreaRequest[];
+}
+
+export type RichMenuArea = RichMenuAreaRequest;
+export type RichMenuRequest = Record<string, unknown>;
+export type RichMenuResponse = Record<string, unknown>;
