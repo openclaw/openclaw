@@ -126,8 +126,12 @@ export function toInboundMessage(payload: KudosityWebhookPayload): InboundMessag
     return null;
   }
 
-  const timestamp = data.created_at || payload.timestamp;
-  if (!timestamp) {
+  // Prefer `data.created_at` and fall back to `payload.timestamp`, but only
+  // accept either when it is a non-empty string. A malformed or spoofed
+  // webhook body can carry an object/number here, and downstream consumers
+  // (serialization, date parsing, audit logs) treat `timestamp` as a string.
+  const timestamp = pickStringTimestamp(data.created_at, payload.timestamp);
+  if (timestamp === null) {
     return null;
   }
 
@@ -139,6 +143,15 @@ export function toInboundMessage(payload: KudosityWebhookPayload): InboundMessag
     messageId: data.id,
     timestamp,
   };
+}
+
+function pickStringTimestamp(...candidates: unknown[]): string | null {
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return null;
 }
 
 /**

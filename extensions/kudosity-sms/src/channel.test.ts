@@ -87,8 +87,15 @@ describe("kudositySmsPlugin", () => {
       expect(kudositySmsPlugin.meta.docsLabel).toBe("kudosity-sms");
     });
 
-    it("should declare direct chat type", () => {
+    it("should declare a stable selection order", () => {
+      expect(kudositySmsPlugin.meta.order).toBe(90);
+    });
+
+    it("should declare direct chat type and SMS-appropriate capabilities", () => {
       expect(kudositySmsPlugin.capabilities.chatTypes).toEqual(["direct"]);
+      expect(kudositySmsPlugin.capabilities.media).toBe(false);
+      expect(kudositySmsPlugin.capabilities.reactions).toBe(false);
+      expect(kudositySmsPlugin.capabilities.blockStreaming).toBe(true);
     });
   });
 
@@ -292,6 +299,50 @@ describe("kudositySmsPlugin", () => {
 
     it("should have deliveryMode 'direct'", () => {
       expect(kudositySmsPlugin.outbound!.deliveryMode).toBe("direct");
+    });
+
+    it("should set textChunkLimit to 1600 (10 concat SMS segments)", () => {
+      expect(kudositySmsPlugin.outbound!.textChunkLimit).toBe(1600);
+    });
+
+    describe("resolveTarget", () => {
+      it("should normalize a clean E.164 number", () => {
+        const result = kudositySmsPlugin.outbound!.resolveTarget!({
+          to: "+61478038915",
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.to).toBe("+61478038915");
+        }
+      });
+
+      it("should strip formatting before validating", () => {
+        const result = kudositySmsPlugin.outbound!.resolveTarget!({
+          to: " +61 (478) 038-915 ",
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.to).toBe("+61478038915");
+        }
+      });
+
+      it("should reject empty input with an actionable error", () => {
+        const result = kudositySmsPlugin.outbound!.resolveTarget!({ to: "" });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.message).toContain("--to <phone_number_e164>");
+        }
+      });
+
+      it("should reject non-E.164 input", () => {
+        const result = kudositySmsPlugin.outbound!.resolveTarget!({
+          to: "not-a-number",
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.message).toContain("invalid phone number format");
+        }
+      });
     });
 
     describe("sendText", () => {

@@ -241,6 +241,53 @@ describe("toInboundMessage", () => {
     })!;
     expect(toInboundMessage(payload)).toBeNull();
   });
+
+  it("should return null when created_at is a non-string value", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      data: {
+        id: "msg-123",
+        sender: "+61478038915",
+        recipient: "+61400000000",
+        message: "Hello",
+        created_at: { malformed: true },
+      },
+      // no payload.timestamp either
+    })!;
+    expect(toInboundMessage(payload)).toBeNull();
+  });
+
+  it("should fall through to payload.timestamp when created_at is non-string", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      data: {
+        id: "msg-123",
+        sender: "+61478038915",
+        recipient: "+61400000000",
+        message: "Hello",
+        created_at: 1709366400000,
+      },
+      timestamp: "2026-03-02T07:00:00Z",
+    })!;
+    const message = toInboundMessage(payload);
+    expect(message).not.toBeNull();
+    expect(message!.timestamp).toBe("2026-03-02T07:00:00Z");
+  });
+
+  it("should return null when created_at is empty/whitespace string and payload.timestamp is missing", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      data: {
+        id: "msg-123",
+        sender: "+61478038915",
+        recipient: "+61400000000",
+        message: "Hello",
+        created_at: "   ",
+      },
+      // no payload.timestamp
+    })!;
+    expect(toInboundMessage(payload)).toBeNull();
+  });
 });
 
 describe("handleWebhookRequest", () => {

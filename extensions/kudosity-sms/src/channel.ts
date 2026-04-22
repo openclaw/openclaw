@@ -141,12 +141,23 @@ const meta: ChannelMeta = {
   blurb:
     "cloud SMS via the Kudosity API — works on any phone, no app needed. https://developers.kudosity.com",
   systemImage: "phone.badge.waveform",
+  order: 90,
 };
 
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
 const capabilities: ChannelCapabilities = {
+  // SMS is 1:1 messaging only — no group chats, threads, or presence channels.
   chatTypes: ["direct"],
+  // Media degrades to caption-only text (see sendMedia below). We advertise
+  // `media: false` so the agent pipeline routes attachment payloads through
+  // text summaries rather than MMS delivery attempts.
+  media: false,
+  reactions: false,
+  // Streaming partials are a bad fit for SMS: every update would become a new
+  // billable SMS segment. The router coalesces deltas into a single final
+  // message when this flag is set.
+  blockStreaming: true,
 };
 
 // ─── Config Schema ───────────────────────────────────────────────────────────
@@ -190,6 +201,35 @@ const configSchema = {
  */
 const outbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+
+  // Kudosity allows up to 10 concatenated SMS segments per message, so 1600
+  // characters (10 × 160) is a conservative practical upper bound for a single
+  // outbound call. The router will chunk anything longer across separate sends.
+  textChunkLimit: 1600,
+
+  /**
+   * Normalize and validate the destination phone number once, before the
+   * gateway dispatches to sendText/sendMedia. Returning a typed Result here
+   * surfaces a clean error at the routing layer instead of failing deeper in
+   * the Kudosity API call with a less actionable message.
+   */
+  resolveTarget: ({ to }) => {
+    const raw = to?.trim();
+    if (!raw) {
+      return {
+        ok: false,
+        error: new Error("Kudosity SMS requires --to <phone_number_e164>"),
+      };
+    }
+    try {
+      return { ok: true, to: cleanPhoneNumber(raw) };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err : new Error(String(err)),
+      };
+    }
+  },
 
   /**
    * Send a text message via SMS.
