@@ -140,6 +140,18 @@ Use `notion_delete_page`:
 notion_delete_page(pageId: "page_id_here")
 ```
 
+**Delete a data source (move to trash):**
+
+Use `notion_update_data_source` with `inTrash: true`:
+```
+notion_update_data_source(
+  dataSourceId: "data_source_id_here",
+  inTrash: true
+)
+```
+
+> **Note:** In API 2026-03-11, deletion uses `in_trash: true` instead of the old `archived: true`. The old method returns 404 "Object not found".
+
 ### Important Notes
 
 - **Parent types:** Use `type: "page"` for page parents and `type: "data_source"` for data source parents
