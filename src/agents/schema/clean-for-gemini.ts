@@ -30,7 +30,10 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
 
   // JSON Schema composition keywords not supported by OpenAPI 3.0 subset.
   // `const` is handled separately (converted to enum) in the cleaning loop,
-  // but `not` has no safe equivalent and must be stripped.
+  // but conditionals and `not` have no safe equivalent and must be stripped.
+  "if",
+  "then",
+  "else",
   "not",
 ]);
 
