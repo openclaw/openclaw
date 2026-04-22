@@ -50,20 +50,6 @@ describe("isChannelConfigured (kudosity-sms)", () => {
     expect(isChannelConfigured(cfg, "kudosity-sms", {})).toBe(true);
   });
 
-  it("returns true when credentials are set on a named account", () => {
-    const cfg = makeCfg({
-      "kudosity-sms": {
-        accounts: {
-          primary: {
-            apiKey: "acct-key", // pragma: allowlist secret
-            sender: "+61400000000",
-          },
-        },
-      },
-    });
-    expect(isChannelConfigured(cfg, "kudosity-sms", {})).toBe(true);
-  });
-
   it("returns false when the channels entry is empty and env is empty", () => {
     const cfg = makeCfg({});
     expect(isChannelConfigured(cfg, "kudosity-sms", {})).toBe(false);

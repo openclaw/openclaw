@@ -73,7 +73,14 @@ const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpe
   "kudosity-sms": {
     envAll: ["KUDOSITY_API_KEY", "KUDOSITY_SENDER"],
     stringKeys: ["apiKey", "sender"],
-    accountStringKeys: ["apiKey", "sender"],
+    // Intentionally no `accountStringKeys`: kudositySmsPlugin.config is a
+    // single-account adapter that only reads top-level `channels.kudosity-sms.
+    // {apiKey,sender}` or the KUDOSITY_* env vars (see resolveAccount in
+    // extensions/kudosity-sms/src/channel.ts). If we also matched nested
+    // `accounts.*` credentials here, plugin-auto-enable would flip the
+    // channel on for configs the runtime can't actually resolve, so outbound
+    // sends would fail with missing credentials. Revisit this entry if
+    // kudosity-sms grows multi-account resolution.
   },
 };
 
