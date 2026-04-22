@@ -42,6 +42,10 @@ export function resolveDiscordChannelTopicSafe(channel: unknown): string | undef
   return resolveDiscordChannelStringPropertySafe(channel, "topic");
 }
 
+export function resolveDiscordChannelParentIdSafe(channel: unknown): string | undefined {
+  return resolveDiscordChannelStringPropertySafe(channel, "parentId");
+}
+
 export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {
   const parent = readDiscordChannelPropertySafe(channel, "parent");
   return {

@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Mattermost: suppress reasoning-only payloads even when they arrive as blockquoted `> Reasoning:` text, preventing `/reasoning on` from leaking thinking into channel posts. (#69927) Thanks @lawrence3699.
+- Discord: read `channel.parentId` through a safe accessor in the slash-command, reaction, and model-picker paths so partial `GuildThreadChannel` prototype getters no longer throw `Cannot access rawData on partial Channel` when commands like `/new` run from inside a thread. Fixes #69861. (#69908) Thanks @neeravmakwana.
 - Browser/Chrome MCP: reset cached existing-session control sessions when a `navigate_page` call times out, so one stuck navigation no longer poisons the browser profile until a gateway restart. (#69733) Thanks @ayeshakhalid192007-dev.
 - Browser/Chrome MCP: propagate click timeouts and abort signals to existing-session actions so a stuck click fails fast and reconnects instead of poisoning the browser tool until gateway restart. (#63524) Thanks @dongseok0.
 - OpenCode Go: canonicalize stale bundled `opencode-go` base URLs from `/go` or `/go/v1` to `/zen/go` or `/zen/go/v1`, so older generated model metadata stops hitting the 404 HTML endpoint. (#69898)
