@@ -276,6 +276,44 @@ describe("createTelegramBot", () => {
     },
   );
 
+  it("routes busy media-only Telegram messages onto a session control lane", () => {
+    loadConfig.mockReturnValue({
+      messages: {
+        queue: {
+          mode: "interrupt",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const baseCtx = makeForumGroupMessageCtx({
+      threadId: 99,
+      text: "",
+    }) as unknown as TelegramSequentialKeyContext;
+    const ctx = {
+      ...baseCtx,
+      message: {
+        ...baseCtx.message,
+        text: undefined,
+        voice: { file_id: "voice-1" },
+      },
+    } as unknown as TelegramSequentialKeyContext;
+    isReplyRunActiveForSessionKeySpy.mockReturnValue(true);
+
+    const key = harness.sequentializeKey?.(ctx);
+
+    expect(key).toMatch(/^telegram:session-control:/);
+    expect(key).not.toBe(getTelegramSequentialKey(ctx));
+    expect(isReplyRunActiveForSessionKeySpy).toHaveBeenCalledOnce();
+  });
+
   it("keeps busy collect-mode Telegram messages on the ordinary topic lane", () => {
     loadConfig.mockReturnValue({
       messages: {

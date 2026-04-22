@@ -9,6 +9,11 @@ import type { loadSessionStore as loadSessionStoreRuntime } from "openclaw/plugi
 import type { resolveStorePath as resolveStorePathRuntime } from "openclaw/plugin-sdk/config-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  extractTelegramLocation,
+  getTelegramTextParts,
+  resolveTelegramPrimaryMedia,
+} from "./bot/body-helpers.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import {
   resolveTelegramConversationBaseSessionKey,
@@ -117,12 +122,17 @@ function resolveBusySessionControlLane(
   if (msg.chat?.type === "channel") {
     return undefined;
   }
-  const rawText = msg.text ?? msg.caption;
-  if (!rawText?.trim()) {
+  const rawText = getTelegramTextParts(msg).text.trim();
+  const hasTurnContent =
+    Boolean(rawText) ||
+    Boolean(extractTelegramLocation(msg)) ||
+    Boolean(resolveTelegramPrimaryMedia(msg));
+  if (!hasTurnContent) {
     return undefined;
   }
   const cfg = params.loadRuntimeConfig();
   if (
+    rawText &&
     hasControlCommand(rawText, cfg, ctx.me?.username ? { botUsername: ctx.me.username } : undefined)
   ) {
     return undefined;
