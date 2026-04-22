@@ -223,7 +223,11 @@ describe("withReplyDispatcher", () => {
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
     await dispatchInboundMessageWithDispatcher({
-      ctx: buildTestCtx(),
+      ctx: buildTestCtx({
+        From: "whatsapp:+15551234567",
+        To: "whatsapp:+15557654321",
+        OriginatingTo: "whatsapp:+15551234567",
+      }),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
         deliver: async () => undefined,
@@ -241,13 +245,42 @@ describe("withReplyDispatcher", () => {
 
     expect(payload).toEqual({ text: "sanitized reply" });
     expect(runMessageSending).toHaveBeenCalledWith(
-      { content: "original reply", to: "thread:1" },
+      { content: "original reply", to: "whatsapp:+15551234567" },
       {
         channelId: "threads",
         accountId: "acct-1",
         conversationId: "conv-1",
       },
     );
+  });
+
+  it("reconciles queuedFinal and counts after dispatcher-side cancellation", async () => {
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => true,
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getCancelledCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      markComplete: () => undefined,
+      waitForIdle: async () => undefined,
+    } satisfies ReplyDispatcher;
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    const result = await dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
   });
 
   it("uses CommandTargetSessionKey for silent-reply policy on native command turns", async () => {
