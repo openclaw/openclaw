@@ -399,7 +399,7 @@ function shouldUseDiscoveredAnthropicOpus47ContextWindow(modelId: string): boole
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   const slash = normalized.indexOf("/");
   if (slash < 0) {
-    return true;
+    return false;
   }
   const provider = normalizeProviderId(normalized.slice(0, slash));
   return provider === "claude-cli";

@@ -90,6 +90,16 @@ describe("applyDiscoveredContextWindows", () => {
 
     expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(200_000);
   });
+
+  it("does not upgrade bare opus 4.7 discovery ids without verified ownership", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [{ id: "claude-opus-4.7", contextWindow: 128_000 }],
+    });
+
+    expect(cache.get("claude-opus-4.7")).toBe(128_000);
+  });
 });
 
 describe("applyConfiguredContextWindows", () => {
