@@ -14,7 +14,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
-import { resolveDiscordChannelParentIdSafe } from "../monitor/channel-access.js";
+import {
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentIdSafe,
+} from "../monitor/channel-access.js";
 import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
@@ -201,7 +204,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
       const access = await authorizeVoiceCommand(interaction, params, {
         channelOverride: {
           id: channel.id,
-          name: "name" in channel ? (channel.name as string) : undefined,
+          name: resolveDiscordChannelNameSafe(channel),
           parentId: resolveDiscordChannelParentIdSafe(channel),
         },
       });
