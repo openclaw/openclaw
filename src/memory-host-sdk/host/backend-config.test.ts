@@ -81,7 +81,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(names.has("memory-dir-main")).toBe(true);
   });
 
-  it("allows direct and channel sessions in the default qmd scope", () => {
+  it("limits the default qmd scope to direct sessions", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
       memory: {
@@ -93,7 +93,7 @@ describe("resolveMemoryBackendConfig", () => {
 
     expect(isQmdScopeAllowed(resolved.qmd?.scope, "agent:main:discord:direct:user-123")).toBe(true);
     expect(isQmdScopeAllowed(resolved.qmd?.scope, "agent:main:discord:channel:chan-123")).toBe(
-      true,
+      false,
     );
     expect(isQmdScopeAllowed(resolved.qmd?.scope, "agent:main:discord:group:group-123")).toBe(
       false,
