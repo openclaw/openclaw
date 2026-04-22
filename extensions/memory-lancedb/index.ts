@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -150,6 +151,27 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async get(id: string): Promise<MemoryEntry | null> {
+    await this.ensureInitialized();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return null;
+    }
+    const rows = await this.table!.query().where(`id = '${id}'`).limit(1).toArray();
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id as string,
+      text: row.text as string,
+      vector: row.vector as number[],
+      importance: row.importance as number,
+      category: row.category as MemoryEntry["category"],
+      createdAt: row.createdAt as number,
+    };
+  }
 }
 
 // ============================================================================
@@ -282,6 +304,25 @@ export function detectCategory(text: string): MemoryCategory {
   return "other";
 }
 
+function resolveMemoryProviderLabel(params: { baseUrl?: string; model: string }) {
+  if (params.baseUrl && params.baseUrl.trim().length > 0) {
+    return "openai-compatible";
+  }
+  const lowerModel = normalizeLowercaseStringOrEmpty(params.model);
+  if (lowerModel.startsWith("text-embedding-")) {
+    return "openai";
+  }
+  return "remote";
+}
+
+function extractMemoryIdFromPath(relPath: string): string | null {
+  const normalized = relPath.trim().replace(/\\/g, "/");
+  const match = normalized.match(
+    /(?:^|\/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.md)?$/i,
+  );
+  return match?.[1] ?? null;
+}
+
 // ============================================================================
 // Plugin Definition
 // ============================================================================
@@ -302,8 +343,88 @@ export default definePluginEntry({
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
     const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const providerLabel = resolveMemoryProviderLabel({ baseUrl, model });
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+
+    const memoryRuntime: MemoryPluginRuntime = {
+      async getMemorySearchManager() {
+        return {
+          manager: {
+            async search(query, opts) {
+              const vector = await embeddings.embed(query);
+              const results = await db.search(vector, opts?.maxResults ?? 5, opts?.minScore ?? 0.1);
+              return results.map((result) => ({
+                path: `memories/${result.entry.id}.md`,
+                startLine: 1,
+                endLine: 1,
+                score: result.score,
+                snippet: result.entry.text,
+                source: "memory" as const,
+                citation: result.entry.category,
+              }));
+            },
+            async readFile(params) {
+              const memoryId = extractMemoryIdFromPath(params.relPath);
+              if (!memoryId) {
+                throw new Error(`memory-lancedb: unknown memory path: ${params.relPath}`);
+              }
+              const entry = await db.get(memoryId);
+              if (!entry) {
+                throw new Error(`memory-lancedb: memory not found: ${params.relPath}`);
+              }
+              return {
+                path: `memories/${entry.id}.md`,
+                text: entry.text,
+              };
+            },
+            status() {
+              return {
+                backend: "builtin" as const,
+                provider: providerLabel,
+                model,
+                dbPath: resolvedDbPath,
+                custom: {
+                  pluginId: "memory-lancedb",
+                  vectorDim,
+                },
+              };
+            },
+            async probeEmbeddingAvailability() {
+              // Keep doctor/status probes lightweight: this only confirms that an
+              // embedding credential is configured. Real search/embed operations
+              // still validate the key and endpoint when they execute.
+              return {
+                ok: typeof apiKey === "string" && apiKey.trim().length > 0,
+                error:
+                  typeof apiKey === "string" && apiKey.trim().length > 0
+                    ? undefined
+                    : "memory-lancedb embedding apiKey missing",
+              };
+            },
+            async probeVectorAvailability() {
+              try {
+                await db.count();
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            async close() {},
+          },
+        };
+      },
+      resolveMemoryBackendConfig() {
+        return {
+          backend: "builtin" as const,
+        };
+      },
+      async closeAllMemorySearchManagers() {},
+    };
+
+    api.registerMemoryCapability({
+      runtime: memoryRuntime,
+    });
 
     // ========================================================================
     // Tools

@@ -165,6 +165,112 @@ describe("memory plugin e2e", () => {
     expect(config?.autoRecall).toBe(true);
   });
 
+  test("registers a memory capability runtime so doctor/status can see the active backend", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const countRows = vi.fn(async () => 2);
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const where = vi.fn(() => ({ limit }));
+    const query = vi.fn(() => ({ where }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          query,
+          vectorSearch,
+          countRows,
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      let memoryCapability: any = null;
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        registerMemoryCapability: (capability: any) => {
+          memoryCapability = capability;
+        },
+        registerTool: vi.fn(),
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      memoryPlugin.register(mockApi as any);
+
+      expect(memoryCapability?.runtime).toBeTruthy();
+      expect(
+        memoryCapability.runtime.resolveMemoryBackendConfig({ cfg: {}, agentId: "main" }),
+      ).toEqual({
+        backend: "builtin",
+      });
+
+      const result = await memoryCapability.runtime.getMemorySearchManager({
+        cfg: {},
+        agentId: "main",
+        purpose: "status",
+      });
+
+      expect(result.manager).toBeTruthy();
+      expect(result.manager.status()).toEqual(
+        expect.objectContaining({
+          backend: "builtin",
+          provider: "openai",
+          model: "text-embedding-3-small",
+          dbPath: getDbPath(),
+        }),
+      );
+      await expect(result.manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+      expect(embeddingsCreate).not.toHaveBeenCalled();
+      await expect(result.manager.probeVectorAvailability()).resolves.toBe(true);
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   test("passes configured dimensions to OpenAI embeddings API", async () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
@@ -223,6 +329,7 @@ describe("memory plugin e2e", () => {
           error: vi.fn(),
           debug: vi.fn(),
         },
+        registerMemoryCapability: vi.fn(),
         registerTool: (tool: any, opts: any) => {
           registeredTools.push({ tool, opts });
         },
