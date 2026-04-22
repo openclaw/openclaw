@@ -767,6 +767,35 @@ describe("discoverOpenClawPlugins", () => {
       },
     },
     {
+      name: "blocks parent-segment TypeScript entries before built runtime inference",
+      expectedDiagnostic: "escapes" as const,
+      setup: (stateDir: string) => {
+        const globalExt = path.join(stateDir, "extensions", "escape-pack");
+        mkdirSafe(path.join(globalExt, "src"));
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/escape-pack",
+          extensions: ["../src/index.ts"],
+        });
+        fs.writeFileSync(path.join(globalExt, "src", "index.js"), "export default {}", "utf-8");
+      },
+    },
+    {
+      name: "blocks escaping source entries before explicit runtime entries",
+      expectedDiagnostic: "escapes" as const,
+      setup: (stateDir: string) => {
+        const globalExt = path.join(stateDir, "extensions", "escape-pack");
+        mkdirSafe(path.join(globalExt, "dist"));
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/escape-pack",
+          extensions: ["../src/index.ts"],
+          runtimeExtensions: ["./dist/index.js"],
+        });
+        fs.writeFileSync(path.join(globalExt, "dist", "index.js"), "export default {}", "utf-8");
+      },
+    },
+    {
       name: "skips missing package extension entries without escape diagnostics",
       expectedDiagnostic: "none" as const,
       setup: (stateDir: string) => {
@@ -835,6 +864,38 @@ describe("discoverOpenClawPlugins", () => {
         return true;
       },
     },
+    {
+      name: "rejects hardlinked TypeScript entries before built runtime inference",
+      expectedDiagnostic: "escapes" as const,
+      expectedId: "pack",
+      setup: (stateDir: string) => {
+        if (process.platform === "win32") {
+          return false;
+        }
+        const globalExt = path.join(stateDir, "extensions", "pack");
+        const outsideDir = path.join(stateDir, "outside");
+        const outsideFile = path.join(outsideDir, "escape.ts");
+        const linkedFile = path.join(globalExt, "escape.ts");
+        mkdirSafe(path.join(globalExt, "dist"));
+        mkdirSafe(outsideDir);
+        fs.writeFileSync(outsideFile, "export default {}", "utf-8");
+        fs.writeFileSync(path.join(globalExt, "dist", "escape.js"), "export default {}", "utf-8");
+        try {
+          fs.linkSync(outsideFile, linkedFile);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return false;
+          }
+          throw err;
+        }
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/pack",
+          extensions: ["./escape.ts"],
+        });
+        return true;
+      },
+    },
   ] as const)("$name", async ({ setup, expectedDiagnostic, expectedId }) => {
     const stateDir = makeTempDir();
     await expectRejectedPackageExtensionEntry({
@@ -843,6 +904,28 @@ describe("discoverOpenClawPlugins", () => {
       expectedDiagnostic,
       ...(expectedId ? { expectedId } : {}),
     });
+  });
+
+  it("blocks escaping setup entries before explicit runtime setup entries", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "escape-pack");
+    mkdirSafe(path.join(globalExt, "dist"));
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclaw/escape-pack",
+      extensions: ["./dist/index.js"],
+      setupEntry: "../src/setup-entry.ts",
+      runtimeSetupEntry: "./dist/setup-entry.js",
+    });
+    fs.writeFileSync(path.join(globalExt, "dist", "index.js"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "dist", "setup-entry.js"), "export default {}", "utf-8");
+
+    const result = await discoverWithStateDir(stateDir, {});
+    const candidate = findCandidateById(result.candidates, "escape-pack");
+
+    expect(candidate).toBeDefined();
+    expect(candidate?.setupSource).toBeUndefined();
+    expectEscapesPackageDiagnostic(result.diagnostics);
   });
 
   it("ignores package manifests that are hardlinked aliases", async () => {
