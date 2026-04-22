@@ -469,8 +469,9 @@ understanding continue to use the matching provider/model settings such as
 **Codex does not appear in `/model`:** enable `plugins.entries.codex.enabled`,
 set a `codex/*` model ref, or check whether `plugins.allow` excludes `codex`.
 
-**OpenClaw falls back to PI:** set `embeddedHarness.fallback: "none"` or
-`OPENCLAW_AGENT_HARNESS_FALLBACK=none` while testing.
+**OpenClaw uses PI instead of Codex:** set `embeddedHarness.runtime: "codex"` or
+`embeddedHarness.fallback: "none"` while testing. Codex app-server failures
+surface directly instead of replaying the turn through PI.
 
 **The app-server is rejected:** upgrade Codex so the app-server handshake
 reports version `0.118.0` or newer.
