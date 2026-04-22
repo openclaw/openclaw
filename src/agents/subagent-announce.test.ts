@@ -363,6 +363,43 @@ describe("subagent announce seam flow", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
+  it("does not wait on an active child session when frozen reply text is already available", async () => {
+    loadSessionStoreMock.mockImplementation(() => ({
+      "agent:main:subagent:test": {
+        sessionId: "child-session-active",
+        updatedAt: Date.now(),
+      },
+    }));
+    isEmbeddedPiRunActiveMock.mockReturnValue(true);
+    waitForEmbeddedPiRunEndMock.mockResolvedValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-frozen-reply-active-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver frozen reply",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "frozen final answer",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(waitForEmbeddedPiRunEndMock).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({ sessionKey: "agent:main:main" }),
+      }),
+    );
+  });
+
   it("keeps completion direct announce session-only when requester origin is webchat", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:webchat",

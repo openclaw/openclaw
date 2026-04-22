@@ -16,6 +16,7 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import {
@@ -645,9 +646,15 @@ export function createSubagentRegistryLifecycleController(params: {
     scheduleResumeSubagentRun(runId, entry, deferredDecision.resumeDelayMs);
   };
 
-  const startSubagentAnnounceCleanupFlow = (runId: string, entry: SubagentRunRecord): boolean => {
+  const startSubagentAnnounceCleanupFlow = (
+    runId: string,
+    entry: SubagentRunRecord,
+    options?: { skipBeginCleanup?: boolean },
+  ): boolean => {
+    const ensureCleanupLease = () =>
+      options?.skipBeginCleanup === true ? true : beginSubagentCleanup(runId);
     if (typeof entry.completionAnnouncedAt === "number") {
-      if (!beginSubagentCleanup(runId)) {
+      if (!ensureCleanupLease()) {
         return false;
       }
       void finalizeSubagentCleanup(runId, entry.cleanup, true, {
@@ -663,7 +670,7 @@ export function createSubagentRegistryLifecycleController(params: {
       });
       return true;
     }
-    if (!beginSubagentCleanup(runId)) {
+    if (!ensureCleanupLease()) {
       return false;
     }
     if (entry.expectsCompletionMessage === false) {
@@ -778,6 +785,16 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     let mutated = false;
+    let preclaimedCleanup = false;
+    if (
+      completeParams.triggerCleanup &&
+      !entry.cleanupCompletedAt &&
+      entry.cleanupHandled !== true
+    ) {
+      entry.cleanupHandled = true;
+      preclaimedCleanup = true;
+      mutated = true;
+    }
     if (
       completeParams.reason === SUBAGENT_ENDED_REASON_COMPLETE &&
       entry.suppressAnnounceReason === "killed" &&
@@ -796,16 +813,33 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.endedAt = endedAt;
       mutated = true;
     }
-    const outcome = withSubagentOutcomeTiming(completeParams.outcome, {
+    const incomingOutcome = withSubagentOutcomeTiming(completeParams.outcome, {
       startedAt: entry.startedAt,
       endedAt,
     });
+    const priorErrorEndedAt = entry.outcome?.status === "error" ? entry.outcome.endedAt : undefined;
+    const restartedAfterTerminalError =
+      typeof priorErrorEndedAt === "number" &&
+      typeof entry.startedAt === "number" &&
+      entry.startedAt > priorErrorEndedAt;
+    const priorEndedReason = entry.endedReason as SubagentLifecycleEndedReason | undefined;
+    const priorTerminalError =
+      priorEndedReason === SUBAGENT_ENDED_REASON_ERROR || entry.outcome?.status === "error";
+    const preserveTerminalError =
+      completeParams.reason === SUBAGENT_ENDED_REASON_COMPLETE &&
+      incomingOutcome.status === "ok" &&
+      !restartedAfterTerminalError &&
+      priorTerminalError;
+    const outcome = preserveTerminalError ? (entry.outcome ?? incomingOutcome) : incomingOutcome;
+    const reason = preserveTerminalError
+      ? (priorEndedReason ?? SUBAGENT_ENDED_REASON_ERROR)
+      : completeParams.reason;
     if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
       entry.outcome = outcome;
       mutated = true;
     }
-    if (entry.endedReason !== completeParams.reason) {
-      entry.endedReason = completeParams.reason;
+    if (entry.endedReason !== reason) {
+      entry.endedReason = reason;
       mutated = true;
     }
     if (entry.pauseReason !== undefined) {
@@ -848,7 +882,7 @@ export function createSubagentRegistryLifecycleController(params: {
       !suppressedForSteerRestart &&
       params.shouldEmitEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason,
       });
     const shouldDeferEndedHook =
       shouldEmitEndedHook &&
@@ -858,22 +892,22 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!shouldDeferEndedHook && shouldEmitEndedHook) {
       await params.emitSubagentEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason,
         sendFarewell: completeParams.sendFarewell,
         accountId: completeParams.accountId,
       });
     }
 
     if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
+      if (preclaimedCleanup) {
+        entry.cleanupHandled = false;
+        params.persist();
+      }
       return;
     }
 
-    const cleanupBrowserSessions =
-      params.cleanupBrowserSessionsForLifecycleEnd ??
-      (await loadCleanupBrowserSessionsForLifecycleEnd());
-    await cleanupBrowserSessions({
-      sessionKeys: [entry.childSessionKey],
-      onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+    startSubagentAnnounceCleanupFlow(completeParams.runId, entry, {
+      skipBeginCleanup: preclaimedCleanup,
     });
 
     await retireRunModeBundleMcpRuntime({
@@ -882,7 +916,23 @@ export function createSubagentRegistryLifecycleController(params: {
       reason: "subagent-run-complete",
     });
 
-    startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
+    void (async () => {
+      try {
+        const cleanupBrowserSessions =
+          params.cleanupBrowserSessionsForLifecycleEnd ??
+          (await loadCleanupBrowserSessionsForLifecycleEnd());
+        await cleanupBrowserSessions({
+          sessionKeys: [entry.childSessionKey],
+          onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+        });
+      } catch (err) {
+        params.warn("failed browser cleanup during subagent lifecycle end", {
+          err,
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      }
+    })();
   };
 
   return {
