@@ -178,6 +178,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   resolveAttemptWorkspaceBootstrapRouting,
@@ -1108,18 +1109,22 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
-      ({ session } = await createAgentSession({
-        cwd: resolvedWorkspace,
-        agentDir,
-        authStorage: params.authStorage,
-        modelRegistry: params.modelRegistry,
-        model: params.model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
-        tools: builtInTools,
-        customTools: allCustomTools,
-        sessionManager,
-        settingsManager,
-        resourceLoader,
+      ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
+        createAgentSession: async (options) =>
+          await createAgentSession(options as Parameters<typeof createAgentSession>[0]),
+        options: {
+          cwd: resolvedWorkspace,
+          agentDir,
+          authStorage: params.authStorage,
+          modelRegistry: params.modelRegistry,
+          model: params.model,
+          thinkingLevel: mapThinkingLevel(params.thinkLevel),
+          tools: builtInTools,
+          customTools: allCustomTools,
+          sessionManager,
+          settingsManager,
+          resourceLoader,
+        },
       }));
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
