@@ -24,11 +24,11 @@ export function createCodexAppServerToolResultExtensionRunner(
       }
     },
   };
-  const initPromise = Promise.all(
-    factories.map(async (factory) => {
+  const initPromise = (async () => {
+    for (const factory of factories) {
       await factory(runtime);
-    }),
-  );
+    }
+  })();
 
   return {
     async applyToolResultExtensions(

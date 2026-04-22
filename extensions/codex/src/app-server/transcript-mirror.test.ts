@@ -25,6 +25,56 @@ async function createTempSessionFile() {
 }
 
 describe("mirrorCodexAppServerTranscript", () => {
+  it("mirrors user and assistant messages into the Pi transcript", async () => {
+    const sessionFile = await createTempSessionFile();
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [
+        { role: "user", content: "hello", timestamp: Date.now() },
+        { role: "assistant", content: "hi there", timestamp: Date.now() + 1 },
+      ],
+      idempotencyScope: "scope-1",
+    });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    expect(raw).toContain('"role":"user"');
+    expect(raw).toContain('"content":"hello"');
+    expect(raw).toContain('"role":"assistant"');
+    expect(raw).toContain('"content":"hi there"');
+    expect(raw).toContain('"idempotencyKey":"scope-1:user:0"');
+    expect(raw).toContain('"idempotencyKey":"scope-1:assistant:1"');
+  });
+
+  it("deduplicates app-server turn mirrors by idempotency scope", async () => {
+    const sessionFile = await createTempSessionFile();
+    const messages = [
+      { role: "user", content: "hello", timestamp: Date.now() },
+      { role: "assistant", content: "hi there", timestamp: Date.now() + 1 },
+    ] as const;
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [...messages],
+      idempotencyScope: "scope-1",
+    });
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [...messages],
+      idempotencyScope: "scope-1",
+    });
+
+    const records = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+    expect(records.slice(1)).toHaveLength(2);
+  });
+
   it("runs before_message_write before appending mirrored transcript messages", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -47,6 +97,7 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     const raw = await fs.readFile(sessionFile, "utf8");
     expect(raw).toContain('"content":"hello [hooked]"');
+    expect(raw).toContain('"idempotencyKey":"scope-1:assistant:0"');
   });
 
   it("respects before_message_write blocking decisions", async () => {

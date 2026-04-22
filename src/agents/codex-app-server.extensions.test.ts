@@ -107,7 +107,7 @@ describe("Codex app-server extension factories", () => {
       toolCallId: "call-1",
       toolName: "exec",
       args: { command: "git status" },
-      result: { content: [{ type: "text", text: "raw" }] },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
     });
 
     expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
@@ -224,5 +224,40 @@ describe("Codex app-server extension factories", () => {
       }),
     );
     expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
+  });
+
+  it("initializes async Codex app-server extension factories in registration order", async () => {
+    const steps: string[] = [];
+    const runner = createCodexAppServerToolResultExtensionRunner({}, [
+      async (codex) => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        codex.on("tool_result", async ({ result }) => {
+          steps.push("first");
+          return {
+            result: {
+              ...result,
+              content: [{ type: "text", text: `${result.content[0]?.type}:${steps.length}` }],
+            },
+          };
+        });
+      },
+      async (codex) => {
+        codex.on("tool_result", async ({ result }) => {
+          steps.push("second");
+          return { result };
+        });
+      },
+    ]);
+
+    await runner.applyToolResultExtensions({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(steps).toEqual(["first", "second"]);
   });
 });
