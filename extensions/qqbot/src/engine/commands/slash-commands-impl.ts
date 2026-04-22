@@ -159,7 +159,7 @@ registerCommand({
   ].join("\n"),
   handler: (ctx) => {
     // Exclude c2c-only commands from group listings.
-    const GROUP_EXCLUDED = new Set(["bot-upgrade", "bot-clear-storage"]);
+    const GROUP_EXCLUDED = new Set(["bot-upgrade", "bot-clear-storage", "bot-streaming"]);
     const isGroup = ctx.type === "group";
 
     const lines = [`### QQBot 内置命令`, ``];
@@ -705,6 +705,148 @@ registerCommand({
       ``,
       `已删除 ${deletedCount} 个文件（${formatBytes(deletedSize)}），${failedCount} 个文件删除失败。`,
     ].join("\n");
+  },
+});
+
+// ============ /bot-streaming 流式消息开关 ============
+
+/** `streaming: true` or object config that keeps incremental / C2C streaming on. */
+function isStreamingConfigEnabled(streaming: unknown): boolean {
+  if (streaming === true) {
+    return true;
+  }
+  if (streaming === false || streaming === undefined || streaming === null) {
+    return false;
+  }
+  if (typeof streaming === "object") {
+    const o = streaming as Record<string, unknown>;
+    if (o.c2cStreamApi === true) {
+      return true;
+    }
+    if (o.mode === "off") {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+const STREAMING_ON_OBJECT: Record<string, unknown> = { mode: "partial", c2cStreamApi: true };
+
+/**
+ * /bot-streaming on|off — 一键开关流式消息
+ *
+ * 直接修改当前账户的 streaming 配置项并持久化到 openclaw.json。
+ * 修改后即时生效（下一条消息起按新配置处理）。
+ */
+registerCommand({
+  name: "bot-streaming",
+  description: "一键开关流式消息",
+  usage: [
+    `/bot-streaming on     开启流式消息`,
+    `/bot-streaming off    关闭流式消息`,
+    `/bot-streaming        查看当前流式消息状态`,
+    ``,
+    `开启后，AI 的回复会以流式形式逐步显示（打字机效果）。`,
+    `注意：仅 C2C（私聊）支持流式消息。`,
+  ].join("\n"),
+  handler: async (ctx) => {
+    if (ctx.type !== "c2c") {
+      return `❌ 流式消息仅支持私聊场景，请在私聊中使用 /bot-streaming 指令`;
+    }
+
+    const arg = ctx.args.trim().toLowerCase();
+    const currentOn = isStreamingConfigEnabled(ctx.accountConfig?.streaming);
+
+    if (!arg) {
+      return [
+        `📡 流式消息状态：${currentOn ? "✅ 已开启" : "❌ 已关闭"}`,
+        ``,
+        `使用 <qqbot-cmd-input text="/bot-streaming on" show="/bot-streaming on"/> 开启`,
+        `使用 <qqbot-cmd-input text="/bot-streaming off" show="/bot-streaming off"/> 关闭`,
+      ].join("\n");
+    }
+
+    if (arg !== "on" && arg !== "off") {
+      return `❌ 参数错误，请使用 on 或 off\n\n示例：/bot-streaming on`;
+    }
+
+    const wantOn = arg === "on";
+    if (wantOn === currentOn) {
+      return `📡 流式消息已经是${wantOn ? "开启" : "关闭"}状态，无需操作`;
+    }
+
+    let runtime: ReturnType<NonNullable<typeof _approveRuntimeGetter>>;
+    try {
+      if (!_approveRuntimeGetter) {
+        throw new Error("runtime not available");
+      }
+      runtime = _approveRuntimeGetter();
+    } catch {
+      const fwVer = resolveRuntimeServiceVersion();
+      return [
+        `❌ 当前版本不支持该指令`,
+        ``,
+        `🦞框架版本：${fwVer}`,
+        `🤖QQBot 插件版本：v${PLUGIN_VERSION}`,
+        ``,
+        `可通过以下命令手动开启流式消息：`,
+        ``,
+        `\`\`\`shell`,
+        `# 1. 开启流式消息`,
+        `openclaw config set channels.qqbot.streaming true`,
+        ``,
+        `# 2. 重启网关使配置生效`,
+        `openclaw gateway restart`,
+        `\`\`\``,
+      ].join("\n");
+    }
+
+    try {
+      const configApi = runtime.config;
+      const currentCfg = structuredClone(configApi.loadConfig()) as Record<string, unknown>;
+      const qqbot = ((currentCfg.channels ?? {}) as Record<string, unknown>).qqbot as
+        | Record<string, unknown>
+        | undefined;
+
+      if (!qqbot) {
+        return `❌ 配置文件中未找到 qqbot 通道配置`;
+      }
+
+      const accountId = ctx.accountId;
+      const newVal: unknown = wantOn ? { ...STREAMING_ON_OBJECT } : false;
+
+      if (accountId !== "default") {
+        const prevAccounts =
+          (qqbot.accounts as Record<string, Record<string, unknown>> | undefined) ?? {};
+        const nextAccounts = { ...prevAccounts };
+        const acct = { ...(nextAccounts[accountId] ?? {}) };
+        acct.streaming = newVal;
+        nextAccounts[accountId] = acct;
+        qqbot.accounts = nextAccounts;
+      } else {
+        // Default account merges `channels.qqbot` with `accounts.default` (latter wins on
+        // duplicate keys). Writing only `qqbot.streaming` leaves a stale `accounts.default.streaming`.
+        qqbot.streaming = newVal;
+        const accs = qqbot.accounts as Record<string, Record<string, unknown>> | undefined;
+        if (accs?.default && typeof accs.default === "object") {
+          const nextAccs = { ...accs };
+          const def = { ...accs.default, streaming: newVal };
+          nextAccs.default = def;
+          qqbot.accounts = nextAccs;
+        }
+      }
+
+      await configApi.writeConfigFile(currentCfg);
+
+      return [
+        `✅ 流式消息已${wantOn ? "开启" : "关闭"}`,
+        ``,
+        wantOn ? `AI 的回复将以流式形式逐步显示（仅私聊生效）。` : `AI 的回复将恢复为完整发送。`,
+      ].join("\n");
+    } catch (err: unknown) {
+      return `❌ 配置写入失败: ${err instanceof Error ? err.message : String(err)}`;
+    }
   },
 });
 
