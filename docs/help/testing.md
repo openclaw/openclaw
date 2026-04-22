@@ -82,6 +82,10 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Verifies the first Gateway restart installs each bundled channel plugin's
     runtime dependencies on demand, and a second restart does not reinstall
     dependencies that were already activated.
+  - Also installs a known older npm baseline, enables Telegram before running
+    `openclaw update --tag <candidate>`, and verifies the candidate's
+    post-update doctor repairs bundled channel runtime dependencies without a
+    harness-side postinstall repair.
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
