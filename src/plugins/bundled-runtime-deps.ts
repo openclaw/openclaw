@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { satisfies, valid as validSemver, validRange } from "semver";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -50,6 +51,12 @@ export type BundledRuntimeDepsNpmRunner = {
 
 function dependencySentinelPath(depName: string): string {
   return path.join("node_modules", ...depName.split("/"), "package.json");
+}
+
+function readInstalledDependencyVersion(rootDir: string, depName: string): string | null {
+  const parsed = readJsonObject(path.join(rootDir, dependencySentinelPath(depName)));
+  const version = parsed && typeof parsed.version === "string" ? parsed.version.trim() : "";
+  return version || null;
 }
 
 function readJsonObject(filePath: string): JsonObject | null {
@@ -255,10 +262,28 @@ function hasAllDependencySentinels(rootDir: string, deps: readonly { name: strin
   return deps.every((dep) => fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))));
 }
 
-function hasDependencySentinel(searchRoots: readonly string[], dep: { name: string }): boolean {
-  return searchRoots.some((rootDir) =>
-    fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))),
-  );
+function isInstalledDependencyVersionSatisfied(installedVersion: string, spec: string): boolean {
+  const normalizedInstalledVersion = validSemver(installedVersion);
+  const normalizedRange = validRange(spec);
+  if (normalizedInstalledVersion && normalizedRange) {
+    return satisfies(normalizedInstalledVersion, normalizedRange, {
+      includePrerelease: true,
+    });
+  }
+  return installedVersion === spec;
+}
+
+function hasDependencySentinel(
+  searchRoots: readonly string[],
+  dep: { name: string; version: string },
+): boolean {
+  return searchRoots.some((rootDir) => {
+    const installedVersion = readInstalledDependencyVersion(rootDir, dep.name);
+    return (
+      typeof installedVersion === "string" &&
+      isInstalledDependencyVersionSatisfied(installedVersion, dep.version)
+    );
+  });
 }
 
 function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
