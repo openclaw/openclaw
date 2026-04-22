@@ -44,17 +44,18 @@ const defaultCliRunnerDeps = {
     params: Parameters<
       typeof import("./pi-embedded-runner/session-manager-init.js").prepareSessionManagerForRun
     >[0],
-  ) => (await import("./pi-embedded-runner/session-manager-init.js")).prepareSessionManagerForRun(params),
-  resolveContextEngine: async (
-    cfg: NonNullable<RunCliAgentParams["config"]>,
-  ) => (await import("../context-engine/registry.js")).resolveContextEngine(cfg),
+  ) =>
+    (await import("./pi-embedded-runner/session-manager-init.js")).prepareSessionManagerForRun(
+      params,
+    ),
+  resolveContextEngine: async (cfg: NonNullable<RunCliAgentParams["config"]>) =>
+    (await import("../context-engine/registry.js")).resolveContextEngine(cfg),
   createPreparedEmbeddedPiSettingsManager: async (params: {
     cwd: string;
     agentDir: string;
     cfg?: RunCliAgentParams["config"];
     contextTokenBudget?: number;
-  }) =>
-    (await import("./pi-project-settings.js")).createPreparedEmbeddedPiSettingsManager(params),
+  }) => (await import("./pi-project-settings.js")).createPreparedEmbeddedPiSettingsManager(params),
   applyPiAutoCompactionGuard: async (params: {
     settingsManager: SettingsManagerLike;
     contextEngineInfo?: Awaited<
@@ -66,17 +67,17 @@ const defaultCliRunnerDeps = {
       typeof import("./pi-embedded-runner/run/preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt
     >[0],
   ) =>
-    (await import("./pi-embedded-runner/run/preemptive-compaction.js")).shouldPreemptivelyCompactBeforePrompt(
-      params,
-    ),
+    (
+      await import("./pi-embedded-runner/run/preemptive-compaction.js")
+    ).shouldPreemptivelyCompactBeforePrompt(params),
   runContextEngineMaintenance: async (
     params: Parameters<
       typeof import("./pi-embedded-runner/context-engine-maintenance.js").runContextEngineMaintenance
     >[0],
   ) =>
-    (await import("./pi-embedded-runner/context-engine-maintenance.js")).runContextEngineMaintenance(
-      params,
-    ),
+    (
+      await import("./pi-embedded-runner/context-engine-maintenance.js")
+    ).runContextEngineMaintenance(params),
   resolveLiveToolResultMaxChars: async (params: {
     contextWindowTokens: number;
     cfg?: RunCliAgentParams["config"];
@@ -93,9 +94,7 @@ const defaultCliRunnerDeps = {
 };
 const cliRunnerDeps = { ...defaultCliRunnerDeps };
 
-export function setCliRunnerCompactionTestDeps(
-  overrides: Partial<typeof cliRunnerDeps>,
-): void {
+export function setCliRunnerCompactionTestDeps(overrides: Partial<typeof cliRunnerDeps>): void {
   Object.assign(cliRunnerDeps, overrides);
 }
 
@@ -106,10 +105,12 @@ export function resetCliRunnerCompactionTestDeps(): void {
 function getSessionBranchMessages(
   sessionManager: ReturnType<typeof SessionManager.open>,
 ): AgentMessage[] {
-  const branch = sessionManager.getBranch() as SessionBranchEntry[];
+  const branch = sessionManager.getBranch();
   return branch
     .filter((entry): entry is SessionBranchEntry & { type: "message"; message: AgentMessage } => {
-      return entry.type === "message" && typeof entry.message === "object" && entry.message !== null;
+      return (
+        entry.type === "message" && typeof entry.message === "object" && entry.message !== null
+      );
     })
     .map((entry) => entry.message);
 }
@@ -139,7 +140,8 @@ function buildCliHistoryReseedPrompt(params: {
 }): string {
   const renderedHistory = params.messages
     .flatMap((message) => {
-      const role = message.role === "assistant" ? "Assistant" : message.role === "user" ? "User" : "";
+      const role =
+        message.role === "assistant" ? "Assistant" : message.role === "user" ? "User" : "";
       if (!role) {
         return [];
       }
@@ -171,8 +173,39 @@ function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
 }
 
-function encodeClaudeProjectPath(cwd: string): string {
+/**
+ * Encode a workspace path into the directory name Claude Code uses to store
+ * its per-project session JSONL files under `~/.claude/projects/<encoded>/`.
+ *
+ * Observed in Claude Code CLI v2.1.x (captured against v2.1.114 as of 2026-04):
+ * every character that is not `[A-Za-z0-9]` is replaced with a single `-`, with
+ * no collapsing of consecutive replacements and no length limit. This mirrors
+ * the behavior seen across macOS and Linux installs.
+ *
+ * Because this mirrors an undocumented CLI implementation detail, it can drift
+ * when Claude Code changes its session storage layout. If session-continuity on
+ * the `claude-cli` rotation path starts silently falling back to a prompt
+ * reseed, re-observe the real directory name Claude CLI writes for the same
+ * workspace (for example, `ls ~/.claude/projects/`) and update this helper —
+ * then bump the version note above and `readClaudeSeedMetadata` covers the
+ * on-disk format expectations.
+ */
+export function encodeClaudeProjectPath(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
+}
+
+/**
+ * Claude CLI session ids are UUIDs. We validate before interpolating into
+ * `~/.claude/projects/<dir>/<sessionId>.jsonl` so a malformed or attacker-
+ * influenced id can never escape that directory via `/`, `..`, or other path
+ * metacharacters. Accept only canonical UUIDs (case-insensitive) to keep the
+ * check tight; any non-UUID input is treated as "no reusable session".
+ */
+const CLAUDE_CLI_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isSafeClaudeCliSessionId(value: string): boolean {
+  return CLAUDE_CLI_SESSION_ID_PATTERN.test(value);
 }
 
 function buildClaudeSeededSessionEntries(params: {
@@ -265,7 +298,7 @@ async function readClaudeSeedMetadata(params: {
     permissionMode: "bypassPermissions",
   };
   const sessionId = params.existingSessionId?.trim();
-  if (!sessionId) {
+  if (!sessionId || !isSafeClaudeCliSessionId(sessionId)) {
     return defaultMetadata;
   }
 
@@ -289,7 +322,8 @@ async function readClaudeSeedMetadata(params: {
       return {
         cwd: parsed.cwd,
         version: parsed.version,
-        gitBranch: typeof parsed.gitBranch === "string" ? parsed.gitBranch : defaultMetadata.gitBranch,
+        gitBranch:
+          typeof parsed.gitBranch === "string" ? parsed.gitBranch : defaultMetadata.gitBranch,
         entrypoint:
           typeof parsed.entrypoint === "string" ? parsed.entrypoint : defaultMetadata.entrypoint,
         userType: typeof parsed.userType === "string" ? parsed.userType : defaultMetadata.userType,
@@ -332,9 +366,7 @@ async function createClaudeSeededSession(params: {
   return sessionId;
 }
 
-async function runCliPreTurnCompactionMaintenance(
-  context: PreparedCliRunContext,
-): Promise<void> {
+async function runCliPreTurnCompactionMaintenance(context: PreparedCliRunContext): Promise<void> {
   const { params } = context;
   const contextTokenBudget =
     typeof context.contextTokenBudget === "number" && Number.isFinite(context.contextTokenBudget)

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  encodeClaudeProjectPath,
+  isSafeClaudeCliSessionId,
   resetCliRunnerCompactionTestDeps,
   runPreparedCliAgent,
   setCliRunnerCompactionTestDeps,
@@ -235,8 +237,47 @@ describe("CLI runner compaction parity", () => {
       forceFreshSession: false,
       reseedPrompt: undefined,
     });
-    expect(executePreparedCliRunMock.mock.calls[0]?.[1]).toMatch(
-      /^[0-9a-f-]{36}$/i,
-    );
+    expect(executePreparedCliRunMock.mock.calls[0]?.[1]).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+});
+
+describe("encodeClaudeProjectPath", () => {
+  it("replaces every non-alphanumeric char with a single dash, matching Claude CLI v2.1.x", () => {
+    expect(encodeClaudeProjectPath("/Users/jane/src/openclaw")).toBe("-Users-jane-src-openclaw");
+    expect(encodeClaudeProjectPath("/tmp/a b.c_d")).toBe("-tmp-a-b-c-d");
+  });
+
+  it("preserves case and digits", () => {
+    expect(encodeClaudeProjectPath("/Repo-42/MixedCase")).toBe("-Repo-42-MixedCase");
+  });
+
+  it("does not collapse consecutive separators (observed CLI behavior)", () => {
+    expect(encodeClaudeProjectPath("/a//b")).toBe("-a--b");
+  });
+
+  it("is stable across repeated calls (roundtrip-equivalent on the encoded form)", () => {
+    const encoded = encodeClaudeProjectPath("/Users/jane/src/openclaw");
+    expect(encodeClaudeProjectPath(encoded)).toBe(encoded);
+  });
+});
+
+describe("isSafeClaudeCliSessionId", () => {
+  it("accepts canonical UUIDs", () => {
+    expect(isSafeClaudeCliSessionId("0f2c9a7e-3b4d-4d21-9a11-1b2c3d4e5f6a")).toBe(true);
+    expect(isSafeClaudeCliSessionId("0F2C9A7E-3B4D-4D21-9A11-1B2C3D4E5F6A")).toBe(true);
+  });
+
+  it("rejects path-traversal and separator characters", () => {
+    expect(isSafeClaudeCliSessionId("../evil")).toBe(false);
+    expect(isSafeClaudeCliSessionId("a/b")).toBe(false);
+    expect(isSafeClaudeCliSessionId("a\\b")).toBe(false);
+    expect(isSafeClaudeCliSessionId("../../etc/passwd")).toBe(false);
+  });
+
+  it("rejects empty or non-UUID shapes", () => {
+    expect(isSafeClaudeCliSessionId("")).toBe(false);
+    expect(isSafeClaudeCliSessionId("not-a-uuid")).toBe(false);
+    expect(isSafeClaudeCliSessionId("0f2c9a7e-3b4d-4d21-9a11")).toBe(false);
+    expect(isSafeClaudeCliSessionId("zzzzzzzz-3b4d-4d21-9a11-1b2c3d4e5f6a")).toBe(false);
   });
 });
