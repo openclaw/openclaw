@@ -43,6 +43,27 @@ describe("bundled channel gateway auth bypass fast path", () => {
     });
   });
 
+  it("falls back to bundled channel source resolvers when the public artifact is unavailable", () => {
+    loadBundledPluginPublicArtifactModuleSyncMock.mockImplementationOnce(
+      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+        throw new Error(
+          `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+        );
+      },
+    );
+
+    expect(
+      resolveBundledChannelGatewayAuthBypassPaths({
+        channelId: "mattermost",
+        cfg: {
+          channels: {
+            mattermost: { commands: { callbackPath: "/api/channels/mattermost/custom" } },
+          },
+        },
+      }),
+    ).toEqual(["/api/channels/mattermost/custom"]);
+  });
+
   it("treats missing gateway auth artifacts as no bypass paths", () => {
     expect(
       resolveBundledChannelGatewayAuthBypassPaths({

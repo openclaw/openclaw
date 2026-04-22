@@ -11,6 +11,7 @@ import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
+  cleanupUnusedManagedImagePreviewBlobUrls,
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
@@ -109,7 +110,9 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onMediaLoad?: () => void;
   basePath?: string;
+  authHeader?: string;
 };
 
 // Persistent instances keyed by session
@@ -732,6 +735,9 @@ function renderSlashMenu(
 }
 
 export function renderChat(props: ChatProps) {
+  if (typeof document !== "undefined") {
+    cleanupUnusedManagedImagePreviewBlobUrls(document);
+  }
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -908,6 +914,9 @@ export function renderChat(props: ChatProps) {
                 canvasHostUrl: props.canvasHostUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                authHeader: props.authHeader,
+                requesterSessionKey: activeSession?.key ?? undefined,
+                onMediaLoad: props.onMediaLoad,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
                 onDelete: () => {

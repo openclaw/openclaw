@@ -134,6 +134,19 @@ describe("local media roots", () => {
     expect(roots.map(normalizeHostPath)).toEqual([normalizeHostPath("/tmp/base")]);
   });
 
+  it("resolves relative local media sources to absolute filesystem paths", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp");
+    try {
+      const roots = appendLocalMediaParentRoots(["/tmp/base"], ["nested/photo.png"]);
+
+      expect(roots.map(normalizeHostPath)).toEqual(
+        expect.arrayContaining([normalizeHostPath("/tmp/base"), normalizeHostPath("/tmp/nested")]),
+      );
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "widens agent media roots for concrete local sources when workspaceOnly is disabled",

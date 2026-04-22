@@ -504,6 +504,31 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-message-image")).toBeNull();
   });
 
+  it("deduplicates repeated legacy MediaPath and MediaPaths image entries", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-legacy-media-paths-dedupe",
+        role: "assistant",
+        content: [{ type: "text", text: "duplicate legacy paths" }],
+        MediaPath: "/media/legacy-shared.png",
+        MediaPaths: ["/media/legacy-shared.png", "/media/legacy-other.png"],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    const images = Array.from(
+      container.querySelectorAll<HTMLImageElement>(".chat-message-images img"),
+    );
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "http://localhost:3000/media/legacy-shared.png",
+      "http://localhost:3000/media/legacy-other.png",
+    ]);
+  });
+
   it("renders legacy input_image image_url blocks", () => {
     const container = document.createElement("div");
 
@@ -570,14 +595,14 @@ describe("grouped chat rendering", () => {
       openSpy.mockClear();
       renderAssistantImage("javascript:alert(1)");
       image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image).not.toBeNull();
-      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(image).toBeNull();
+      expect(container.querySelector(".chat-message-image-unavailable")).not.toBeNull();
       expect(openSpy).not.toHaveBeenCalled();
 
       renderAssistantImage("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />");
       image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image).not.toBeNull();
-      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(image).toBeNull();
+      expect(container.querySelector(".chat-message-image-unavailable")).not.toBeNull();
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();

@@ -638,8 +638,9 @@ export const telegramPlugin = createChatChannelPlugin({
           : null;
       },
       shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
-      createManager: ({ accountId }) =>
+      createManager: ({ cfg, accountId }) =>
         createTelegramThreadBindingManager({
+          cfg,
           accountId: accountId ?? undefined,
           persist: false,
           enableSweeper: false,

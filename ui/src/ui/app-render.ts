@@ -118,6 +118,7 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import { resolveGatewayHttpAuthHeader } from "./gateway-http-auth.ts";
 import { icons } from "./icons.ts";
 import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -2240,6 +2241,7 @@ export function renderApp(state: AppViewState) {
                 });
               },
               onChatScroll: (event) => state.handleChatScroll(event),
+              onMediaLoad: () => requestHostUpdate?.(),
               getDraft: () => state.chatMessage,
               onDraftChange: (next) => (state.chatMessage = next),
               onRequestUpdate: requestHostUpdate,
@@ -2298,6 +2300,12 @@ export function renderApp(state: AppViewState) {
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,
               assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
               basePath: state.basePath ?? "",
+              authHeader:
+                resolveGatewayHttpAuthHeader({
+                  password: state.password,
+                  settings: state.settings,
+                  hello: state.hello,
+                }) ?? undefined,
             })
           : nothing}
         ${renderConfigTabForActiveTab()}

@@ -71,7 +71,7 @@ export function getAgentScopedMediaLocalRoots(
   return roots;
 }
 
-function resolveLocalMediaPath(source: string): string | undefined {
+export function resolveLocalMediaPath(source: string): string | undefined {
   const trimmed = source.trim();
   if (!trimmed || isPassThroughRemoteMediaSource(trimmed) || DATA_URL_RE.test(trimmed)) {
     return undefined;
@@ -89,7 +89,7 @@ function resolveLocalMediaPath(source: string): string | undefined {
   if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
     return path.resolve(trimmed);
   }
-  return undefined;
+  return path.resolve(trimmed);
 }
 
 export function appendLocalMediaParentRoots(

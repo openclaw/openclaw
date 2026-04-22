@@ -1,3 +1,4 @@
+import { resolveMattermostGatewayAuthBypassPaths } from "../../../extensions/mattermost/src/gateway-auth-bypass.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 
@@ -7,6 +8,12 @@ type GatewayAuthBypassApi = {
 
 const GATEWAY_AUTH_API_ARTIFACT_BASENAME = "gateway-auth-api.js";
 const MISSING_PUBLIC_SURFACE_PREFIX = "Unable to resolve bundled plugin public surface ";
+const bundledChannelGatewayAuthBypassFallbacks: Record<
+  string,
+  (params: { cfg: OpenClawConfig }) => readonly unknown[]
+> = {
+  mattermost: ({ cfg }) => resolveMattermostGatewayAuthBypassPaths(cfg),
+};
 
 function loadBundledChannelGatewayAuthApi(channelId: string): GatewayAuthBypassApi | undefined {
   try {
@@ -27,6 +34,9 @@ export function resolveBundledChannelGatewayAuthBypassPaths(params: {
   cfg: OpenClawConfig;
 }): string[] {
   const api = loadBundledChannelGatewayAuthApi(params.channelId);
-  const paths = api?.resolveGatewayAuthBypassPaths?.({ cfg: params.cfg }) ?? [];
+  const paths =
+    api?.resolveGatewayAuthBypassPaths?.({ cfg: params.cfg }) ??
+    bundledChannelGatewayAuthBypassFallbacks[params.channelId]?.({ cfg: params.cfg }) ??
+    [];
   return paths.flatMap((path) => (typeof path === "string" && path.trim() ? [path.trim()] : []));
 }
