@@ -24,6 +24,7 @@ typedef struct {
 } ShellSectionDisplayEntry;
 
 gboolean shell_sections_is_embedded(AppSection section);
+gboolean shell_sections_is_visible(AppSection section);
 const ShellSectionMeta* shell_sections_meta(AppSection section);
 const char* shell_sections_group_heading(ShellSectionGroup group);
 const SectionController* shell_sections_controller(AppSection section);

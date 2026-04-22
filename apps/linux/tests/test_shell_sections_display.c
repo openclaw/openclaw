@@ -4,7 +4,25 @@
 #include "../src/section_controller.h"
 #include "../src/shell_sections.h"
 
-static const SectionController dummy_controller = {0};
+static GtkWidget* dummy_build(void) {
+    return NULL;
+}
+
+static void dummy_refresh(void) {
+}
+
+static void dummy_destroy(void) {
+}
+
+static void dummy_invalidate(void) {
+}
+
+static const SectionController dummy_controller = {
+    .build = dummy_build,
+    .refresh = dummy_refresh,
+    .destroy = dummy_destroy,
+    .invalidate = dummy_invalidate,
+};
 
 #define DEFINE_SECTION_GETTER(name) \
     const SectionController* name(void) { return &dummy_controller; }
@@ -95,7 +113,8 @@ static void test_display_entries_have_controllers(void) {
     for (gsize i = 0; i < shell_sections_display_count(); i++) {
         const ShellSectionDisplayEntry *entry = shell_sections_display_at(i);
         g_assert_nonnull(entry);
-        g_assert_nonnull(shell_sections_controller(entry->section));
+        g_assert_true(section_controller_has_required_callbacks(
+            shell_sections_controller(entry->section)));
     }
 }
 

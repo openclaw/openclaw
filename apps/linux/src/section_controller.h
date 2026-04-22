@@ -34,6 +34,36 @@ typedef struct {
     void (*invalidate)(void);
 } SectionController;
 
+static inline gboolean section_controller_has_required_callbacks(const SectionController *controller) {
+    return controller
+        && controller->build
+        && controller->refresh
+        && controller->destroy
+        && controller->invalidate;
+}
+
+static inline GtkWidget* section_controller_build_safe(const SectionController *controller) {
+    return (controller && controller->build) ? controller->build() : NULL;
+}
+
+static inline void section_controller_refresh_safe(const SectionController *controller) {
+    if (controller && controller->refresh) {
+        controller->refresh();
+    }
+}
+
+static inline void section_controller_destroy_safe(const SectionController *controller) {
+    if (controller && controller->destroy) {
+        controller->destroy();
+    }
+}
+
+static inline void section_controller_invalidate_safe(const SectionController *controller) {
+    if (controller && controller->invalidate) {
+        controller->invalidate();
+    }
+}
+
 /* ── Shared freshness helpers ────────────────────────────────────── */
 
 static inline gboolean section_is_stale(gint64 *last_fetch_us) {
