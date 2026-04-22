@@ -50,42 +50,46 @@ Get current weather conditions and forecasts.
 
 Always include a city, region, or airport code in weather queries.
 
+## Units
+
+**Always use metric (°C, km/h, mm).** Add `&m` to all wttr.in requests. The server is US-hosted so the default is Fahrenheit — never omit `&m`.
+
 ## Commands
 
 ### Current Weather
 
 ```bash
 # One-line summary
-curl "wttr.in/London?format=3"
+curl "wttr.in/London?format=3&m"
 
 # Detailed current conditions
-curl "wttr.in/London?0"
+curl "wttr.in/London?0&m"
 
 # Specific city
-curl "wttr.in/New+York?format=3"
+curl "wttr.in/New+York?format=3&m"
 ```
 
 ### Forecasts
 
 ```bash
 # 3-day forecast
-curl "wttr.in/London"
+curl "wttr.in/London?m"
 
 # Week forecast
-curl "wttr.in/London?format=v2"
+curl "wttr.in/London?format=v2&m"
 
 # Specific day (0=today, 1=tomorrow, 2=day after)
-curl "wttr.in/London?1"
+curl "wttr.in/London?1&m"
 ```
 
 ### Format Options
 
 ```bash
 # One-liner
-curl "wttr.in/London?format=%l:+%c+%t+%w"
+curl "wttr.in/London?format=%l:+%c+%t+%w&m"
 
-# JSON output
-curl "wttr.in/London?format=j1"
+# JSON output (use lang param for metric in JSON)
+curl "wttr.in/London?format=j1&m"
 
 # PNG image
 curl "wttr.in/London.png"
@@ -106,19 +110,19 @@ curl "wttr.in/London.png"
 **"What's the weather?"**
 
 ```bash
-curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
+curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity&m"
 ```
 
 **"Will it rain?"**
 
 ```bash
-curl -s "wttr.in/London?format=%l:+%c+%p"
+curl -s "wttr.in/London?format=%l:+%c+%p&m"
 ```
 
 **"Weekend forecast"**
 
 ```bash
-curl "wttr.in/London?format=v2"
+curl "wttr.in/London?format=v2&m"
 ```
 
 ## Notes
