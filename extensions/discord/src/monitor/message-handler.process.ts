@@ -275,7 +275,7 @@ export async function processDiscordMessage(
   const forumParentSlug =
     isForumParent && threadParentName ? normalizeDiscordSlug(threadParentName) : "";
   const threadChannelId = threadChannel?.id;
-  const threadInheritParent = discordConfig.thread?.inheritParent ?? false;
+  const threadInheritParent = discordConfig?.thread?.inheritParent ?? false;
   const isForumStarter =
     Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
@@ -904,7 +904,7 @@ export async function processDiscordMessage(
     });
 
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
-  let dispatchResult: { queuedFinal: boolean; counts: { final: number } } | null = null;
+  let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   try {

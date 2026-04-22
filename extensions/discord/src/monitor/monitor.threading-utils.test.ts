@@ -284,6 +284,7 @@ describe("resolveDiscordAutoThreadContext", () => {
         name: "no created thread",
         createdThreadId: undefined,
         expectedNull: true,
+        inheritParent: undefined,
       },
       {
         name: "created thread without parent inheritance",
