@@ -217,6 +217,81 @@ describe("searchMessagesMSTeams", () => {
     expect(result.messages).toHaveLength(1);
   });
 
+  it("matches against rendered text, not raw HTML, when contentType is html", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: { content: "<p>Hello <b>world</b></p>", contentType: "html" },
+          from: { user: { id: "u1", displayName: "Alice" } },
+          createdDateTime: "2026-03-25T10:00:00Z",
+        },
+        {
+          id: "msg-2",
+          body: { content: "<p>no match here</p>", contentType: "html" },
+          from: { user: { id: "u2", displayName: "Bob" } },
+          createdDateTime: "2026-03-25T10:05:00Z",
+        },
+      ],
+    });
+
+    // Query "<b>" should NOT match the <b> tag in msg-1's markup.
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "<b>",
+    });
+
+    expect(result.messages).toEqual([]);
+  });
+
+  it("matches rendered text inside HTML bodies", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: { content: "<p>Hello <b>world</b></p>", contentType: "html" },
+          from: { user: { id: "u1", displayName: "Alice" } },
+          createdDateTime: "2026-03-25T10:00:00Z",
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "hello world",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].id).toBe("msg-1");
+  });
+
+  it("preserves @mention display names in HTML content for matching", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: {
+            content: '<p>hey <at id="0">Alice</at> ping</p>',
+            contentType: "html",
+          },
+          from: { user: { id: "u1", displayName: "Bob" } },
+          createdDateTime: "2026-03-25T10:00:00Z",
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "@alice",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].id).toBe("msg-1");
+  });
+
   it("returns empty array when no messages match", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [

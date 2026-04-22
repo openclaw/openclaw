@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import {
   type GraphResponse,
   deleteGraphRequest,
@@ -538,7 +539,14 @@ export async function searchMessagesMSTeams(
   const matches =
     needle.length === 0
       ? (res.value ?? [])
-      : (res.value ?? []).filter((msg) => (msg.body?.content ?? "").toLowerCase().includes(needle));
+      : (res.value ?? []).filter((msg) => {
+          const raw = msg.body?.content ?? "";
+          // Teams bodies default to HTML — strip tags so queries match the
+          // rendered text rather than raw markup (e.g. "bold" would otherwise
+          // match "<b>old").
+          const text = msg.body?.contentType === "html" ? stripHtmlFromTeamsMessage(raw) : raw;
+          return text.toLowerCase().includes(needle);
+        });
 
   const messages = matches.slice(0, top).map((msg) => ({
     id: msg.id ?? "",
