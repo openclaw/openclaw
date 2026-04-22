@@ -39,7 +39,19 @@ function looksLikeGroupSender(senderPart: string): boolean {
   return false;
 }
 
-export function extractEnvelopeSender(text: string): string | null {
+// Check if header looks like a group chat based on channel format
+function looksLikeGroupHeader(header: string): boolean {
+  // Group indicators in the header: "group:", "guild:", "channel:", or # prefix
+  if (/group:|guild:|channel:/i.test(header)) return true;
+  // If the channel name starts with something other than a known channel, might be a group
+  // But typically we check if the sender part looks like a group/room
+  return false;
+}
+
+export function extractEnvelopeSender(
+  text: string,
+  chatType?: "direct" | "group",
+): string | null {
   const match = text.match(ENVELOPE_PREFIX);
   if (!match) {
     return null;
@@ -60,6 +72,16 @@ export function extractEnvelopeSender(text: string): string | null {
   }
   // Exclude group/room sender parts (they would misidentify the actual sender)
   if (looksLikeGroupSender(senderPart)) {
+    return null;
+  }
+  // If caller explicitly specified chat type, respect it
+  // Only use envelope sender for direct chats (matching steipete's design intent)
+  if (chatType === "group") {
+    return null;
+  }
+  // If chatType is explicit "direct", proceed
+  // If chatType is undefined, use heuristic: if header looks like a group, skip
+  if (chatType === undefined && looksLikeGroupHeader(header)) {
     return null;
   }
   // Remove trailing timestamp if present (last part with 4-digit year)
