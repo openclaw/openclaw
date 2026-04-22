@@ -92,6 +92,14 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
+    // Strip user_id from metadata for Vertex AI — it validates and rejects user_ids that
+    // look like email addresses (contain "@"), even when the user_id is a valid non-email string.
+    const metadata = options?.metadata
+      ? (Object.fromEntries(
+          Object.entries(options.metadata).filter(([k]) => k !== "user_id"),
+        ) as Record<string, string>)
+      : undefined;
+
     const opts: AnthropicOptions = {
       client: client as unknown as AnthropicOptions["client"],
       temperature: options?.temperature,
@@ -106,7 +114,7 @@ export function createAnthropicVertexStreamFn(
         onPayload: options?.onPayload,
       }),
       maxRetryDelayMs: options?.maxRetryDelayMs,
-      metadata: options?.metadata,
+      metadata,
     };
 
     if (options?.reasoning) {
