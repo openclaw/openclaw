@@ -1,7 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
+import type {
+  CompactionStatus,
+  FallbackStatus,
+  SubagentBlockingStatus,
+} from "../app-tool-stream.ts";
+import type { PlanApprovalRequest } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
@@ -16,6 +21,21 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
+import { extractTextCached } from "../chat/message-extract.ts";
+import {
+  isToolResultMessage,
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../chat/message-normalizer.ts";
+import {
+  // handleModeShortcut TODO(PR-8 follow-up): wire Ctrl+1-4 keyboard
+  // shortcuts on the chat surface. Skipping in this iteration since the
+  // chip menu + /plan slash command already cover the path; the
+  // shortcut needs a window-level keydown listener wired in app.ts.
+  type ModeDefinition,
+  renderModeSwitcher,
+  resolveCurrentMode,
+} from "../chat/mode-switcher.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
@@ -42,6 +62,7 @@ import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveChatAvatarRenderUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
+import { renderInlinePlanApproval } from "./plan-approval-inline.ts";
 import "../components/resizable-divider.ts";
 
 export type ChatProps = {
@@ -55,6 +76,9 @@ export type ChatProps = {
   canAbort?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
+  /** Live-test iteration 1 Bug 3: bottom-toast for "subagents still running"
+   * when user clicks Approve while subagents are mid-flight. */
+  subagentBlockingStatus?: SubagentBlockingStatus | null;
   messages: unknown[];
   sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
@@ -110,6 +134,49 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  /**
+   * PR-8 / #67721: invoked when the user picks a mode from the chip menu
+   * (or hits the Ctrl+1-4 keyboard shortcut). The host translates the
+   * `ModeDefinition` into the appropriate `sessions.patch` calls
+   * (planMode for plan, execSecurity/execAsk for permission modes).
+   * Optional so existing callers that don't yet wire it stay compiling.
+   */
+  onSetMode?: (mode: ModeDefinition) => void;
+  // PR-8 follow-up: inline plan approval card wiring. Optional so non-
+  // plan-mode embeddings of renderChat (tests, alt apps) keep compiling.
+  planApprovalRequest?: PlanApprovalRequest | null;
+  planApprovalBusy?: boolean;
+  planApprovalError?: string | null;
+  onPlanApprovalDecision?: (
+    decision: "approve" | "reject" | "edit",
+    feedback?: string,
+  ) => void | Promise<void>;
+  // PR-10 AskUserQuestion: route the user's answer to sessions.patch
+  // { planApproval: { action: "answer", answer: <text> }} via the
+  // host. Same approval-card surface, different action verb.
+  onPlanApprovalAnswer?: (answer: string) => void | Promise<void>;
+  /** Open the full plan content in the right sidebar (read-only viewer). */
+  onOpenPlanInSidebar?: (request: PlanApprovalRequest) => void;
+  /**
+   * Inline-revise textarea state owned by the host. When the user
+   * clicks Revise we open an inline textarea (no popup) — this state
+   * tracks open/draft so the textarea survives chat re-renders.
+   */
+  planApprovalReviseOpen?: boolean;
+  planApprovalReviseDraft?: string;
+  onPlanApprovalReviseOpen?: () => void;
+  onPlanApprovalReviseCancel?: () => void;
+  onPlanApprovalReviseDraftChange?: (text: string) => void;
+  /**
+   * PR-13 Bug 2: question-card "Other" inline-textarea props.
+   * Mirrors the revise pattern. Cancel returns to the option list.
+   */
+  planApprovalQuestionOtherOpen?: boolean;
+  planApprovalQuestionOtherDraft?: string;
+  onPlanApprovalQuestionOtherOpen?: () => void;
+  onPlanApprovalQuestionOtherCancel?: () => void;
+  onPlanApprovalQuestionOtherDraftChange?: (text: string) => void;
+  onPlanApprovalQuestionOtherSubmit?: () => void | Promise<void>;
 };
 
 // Persistent instances keyed by session
@@ -150,6 +217,8 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  /** PR-8 / #67721: mode-switcher chip menu open state. */
+  modeMenuOpen: boolean;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -166,6 +235,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    modeMenuOpen: false,
   };
 }
 
@@ -187,6 +257,162 @@ export const cleanupChatModuleState = resetChatViewState;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+}
+
+function syncToolCardExpansionState(
+  sessionKey: string,
+  items: Array<ChatItem | MessageGroup>,
+  autoExpandToolCalls: boolean,
+) {
+  const expanded = getExpandedToolCards(sessionKey);
+  const initialized = getInitializedToolCards(sessionKey);
+  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
+  const currentToolCardIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const entry of item.messages) {
+      const cards = extractToolCards(entry.message, entry.key);
+      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
+        currentToolCardIds.add(disclosureId);
+        if (initialized.has(disclosureId)) {
+          continue;
+        }
+        expanded.set(disclosureId, autoExpandToolCalls);
+        initialized.add(disclosureId);
+      }
+      const messageRecord = entry.message as Record<string, unknown>;
+      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
+      const normalizedRole = normalizeRoleForGrouping(role);
+      const isToolMessage =
+        isToolResultMessage(entry.message) ||
+        normalizedRole === "tool" ||
+        role.toLowerCase() === "toolresult" ||
+        role.toLowerCase() === "tool_result" ||
+        typeof messageRecord.toolCallId === "string" ||
+        typeof messageRecord.tool_call_id === "string";
+      if (!isToolMessage) {
+        continue;
+      }
+      const disclosureId = `toolmsg:${entry.key}`;
+      currentToolCardIds.add(disclosureId);
+      if (initialized.has(disclosureId)) {
+        continue;
+      }
+      expanded.set(disclosureId, autoExpandToolCalls);
+      initialized.add(disclosureId);
+    }
+  }
+  if (autoExpandToolCalls && !previousAutoExpand) {
+    for (const toolCardId of currentToolCardIds) {
+      expanded.set(toolCardId, true);
+    }
+  }
+  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
+}
+
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  if (status.phase === "active" || status.phase === "retrying") {
+    return html`
+      <div
+        class="compaction-indicator compaction-indicator--active"
+        role="status"
+        aria-live="polite"
+      >
+        ${icons.loader} Compacting context...
+      </div>
+    `;
+  }
+  if (status.completedAt) {
+    const elapsed = Date.now() - status.completedAt;
+    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
+      return html`
+        <div
+          class="compaction-indicator compaction-indicator--complete"
+          role="status"
+          aria-live="polite"
+        >
+          ${icons.check} Context compacted
+        </div>
+      `;
+    }
+  }
+  return nothing;
+}
+
+/**
+ * Live-test iteration 1 Bug 3: bottom-of-chat toast that fires when
+ * the user clicks Approve on a plan while the parent agent run still
+ * has open subagents. Mirrors the model-fallback toast pattern (CSS
+ * class `compaction-indicator--fallback`, 8s auto-dismiss, polite
+ * aria-live) so the user sees it in the same region as the fallback
+ * toast they already recognize.
+ */
+function renderSubagentBlockingIndicator(status: SubagentBlockingStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
+    return nothing;
+  }
+  const tooltip =
+    status.openSubagentRunIds.length > 0
+      ? `Open subagents: ${status.openSubagentRunIds.slice(0, 5).join(", ")}${
+          status.openSubagentRunIds.length > 5
+            ? ` and ${status.openSubagentRunIds.length - 5} more`
+            : ""
+        }`
+      : status.message;
+  return html`
+    <div
+      class="compaction-indicator compaction-indicator--fallback"
+      role="status"
+      aria-live="polite"
+      title=${tooltip}
+    >
+      ${icons.brain} ${status.message}
+    </div>
+  `;
+}
+
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const phase = status.phase ?? "active";
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
+    return nothing;
+  }
+  const details = [
+    `Selected: ${status.selected}`,
+    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
+    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
+    status.reason ? `Reason: ${status.reason}` : null,
+    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  const message =
+    phase === "cleared"
+      ? `Fallback cleared: ${status.selected}`
+      : `Fallback active: ${status.active}`;
+  const className =
+    phase === "cleared"
+      ? "compaction-indicator compaction-indicator--fallback-cleared"
+      : "compaction-indicator compaction-indicator--fallback";
+  const icon = phase === "cleared" ? icons.check : icons.brain;
+  return html`
+    <div class=${className} role="status" aria-live="polite" title=${details}>
+      ${icon} ${message}
+    </div>
+  `;
 }
 
 function generateAttachmentId(): string {
@@ -1143,6 +1369,7 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
+      ${renderSubagentBlockingIndicator(props.subagentBlockingStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
       ${props.showNewMessages
@@ -1152,104 +1379,152 @@ export function renderChat(props: ChatProps) {
             </button>
           `
         : nothing}
+      ${props.planApprovalRequest &&
+      props.planApprovalRequest.sessionKey === activeSession?.key &&
+      props.onPlanApprovalDecision
+        ? renderInlinePlanApproval({
+            request: props.planApprovalRequest,
+            connected: props.connected,
+            busy: props.planApprovalBusy ?? false,
+            error: props.planApprovalError ?? null,
+            reviseOpen: props.planApprovalReviseOpen ?? false,
+            reviseDraft: props.planApprovalReviseDraft ?? "",
+            onApprove: () => void props.onPlanApprovalDecision!("approve"),
+            onAcceptWithEdits: () => void props.onPlanApprovalDecision!("edit"),
+            onReviseOpen: () => props.onPlanApprovalReviseOpen?.(),
+            onReviseCancel: () => props.onPlanApprovalReviseCancel?.(),
+            onReviseDraftChange: (text) => props.onPlanApprovalReviseDraftChange?.(text),
+            onReviseSubmit: () => {
+              const draft = (props.planApprovalReviseDraft ?? "").trim();
+              // Codex P2 review #68939 (2026-04-19): block empty
+              // submits client-side. The wire schema's reject
+              // variant now requires `feedback: minLength: 1`
+              // (closes the "reject with no guidance" loophole),
+              // so passing `undefined` for empty drafts would
+              // produce a server-side validation error and the
+              // user would see a confusing "request failed" toast
+              // instead of the expected "type something" affordance.
+              // The textarea remains visible for the user to type
+              // into; only the submit is suppressed when empty.
+              if (!draft) {
+                return;
+              }
+              void props.onPlanApprovalDecision!("reject", draft);
+            },
+            onOpenPlan: () => {
+              if (
+                props.planApprovalRequest &&
+                props.planApprovalRequest.sessionKey === activeSession?.key &&
+                props.onOpenPlanInSidebar
+              ) {
+                props.onOpenPlanInSidebar(props.planApprovalRequest);
+              }
+            },
+            // PR-10 AskUserQuestion routing.
+            onAnswerOption: props.onPlanApprovalAnswer
+              ? (answer) => void props.onPlanApprovalAnswer!(answer)
+              : undefined,
+            // PR-13 Bug 2: inline-textarea "Other" path props.
+            questionOtherOpen: props.planApprovalQuestionOtherOpen ?? false,
+            questionOtherDraft: props.planApprovalQuestionOtherDraft ?? "",
+            onQuestionOtherOpen: () => props.onPlanApprovalQuestionOtherOpen?.(),
+            onQuestionOtherCancel: () => props.onPlanApprovalQuestionOtherCancel?.(),
+            onQuestionOtherDraftChange: (text) =>
+              props.onPlanApprovalQuestionOtherDraftChange?.(text),
+            onQuestionOtherSubmit: () => void props.onPlanApprovalQuestionOtherSubmit?.(),
+          })
+        : nothing}
 
-      <!-- Input bar -->
-      <div class="agent-chat__input">
-        ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
+      <!--
+        Hide the chat input while a plan-approval card is showing —
+        prevents the user from typing into the wrong surface during
+        the approval moment. The card's own Revise textarea handles
+        feedback collection in-place.
 
-        <input
-          type="file"
-          accept=${CHAT_ATTACHMENT_ACCEPT}
-          multiple
-          class="agent-chat__file-input"
-          @change=${(e: Event) => handleFileSelect(e, props)}
-        />
+        PR-7 review fix (Copilot #3105170553 / #3105219639): only hide
+        the input when BOTH planApprovalRequest AND
+        onPlanApprovalDecision are present. Otherwise the user would
+        see neither the card (which requires the handler) nor the
+        input — leaving them with no way to interact. When the
+        decision handler isn't wired, leave the input visible so the
+        user can still chat.
+      -->
+      ${props.planApprovalRequest &&
+      props.planApprovalRequest.sessionKey === activeSession?.key &&
+      props.onPlanApprovalDecision
+        ? nothing
+        : html`
+            <!-- Input bar -->
+            <div class="agent-chat__input">
+              ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
 
-        ${vs.sttRecording && vs.sttInterimText
-          ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
-          : nothing}
+              <input
+                type="file"
+                accept=${CHAT_ATTACHMENT_ACCEPT}
+                multiple
+                class="agent-chat__file-input"
+                @change=${(e: Event) => handleFileSelect(e, props)}
+              />
 
-        <textarea
-          ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-          .value=${props.draft}
-          dir=${detectTextDirection(props.draft)}
-          ?disabled=${!props.connected}
-          @keydown=${handleKeyDown}
-          @input=${handleInput}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${vs.sttRecording ? "Listening..." : placeholder}
-          rows="1"
-        ></textarea>
+              ${vs.sttRecording && vs.sttInterimText
+                ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
+                : nothing}
 
-        <div class="agent-chat__toolbar">
-          <div class="agent-chat__toolbar-left">
-            <button
-              class="agent-chat__input-btn"
-              @click=${() => {
-                document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-              }}
-              title="Attach file"
-              aria-label="Attach file"
-              ?disabled=${!props.connected}
-            >
-              ${icons.paperclip}
-            </button>
+              <textarea
+                ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+                .value=${props.draft}
+                dir=${detectTextDirection(props.draft)}
+                ?disabled=${!props.connected}
+                @keydown=${handleKeyDown}
+                @input=${handleInput}
+                @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+                placeholder=${vs.sttRecording ? "Listening..." : placeholder}
+                rows="1"
+              ></textarea>
 
-            ${isSttSupported()
-              ? html`
-                  <button
-                    class="agent-chat__input-btn ${vs.sttRecording
-                      ? "agent-chat__input-btn--recording"
-                      : ""}"
-                    @click=${() => {
-                      if (vs.sttRecording) {
-                        stopStt();
-                        vs.sttRecording = false;
-                        vs.sttInterimText = "";
+              <div class="agent-chat__toolbar">
+                <div class="agent-chat__toolbar-left">
+                  ${(() => {
+                    // PR-8 / #67721: mode chip lives at the LEFT edge of the
+                    // toolbar (before paperclip) per user feedback — it's the
+                    // most-frequently-touched control on the input row.
+                    if (!props.onSetMode) {
+                      return nothing;
+                    }
+                    const currentMode = resolveCurrentMode(
+                      activeSession?.execSecurity,
+                      activeSession?.execAsk,
+                      activeSession?.planMode?.mode,
+                      // PR-10: surface "Plan ⚡" when the session has
+                      // auto-approve armed so the chip + tooltip match
+                      // the live runtime state.
+                      activeSession?.planMode?.autoApprove,
+                    );
+                    return renderModeSwitcher({
+                      currentMode,
+                      menuOpen: vs.modeMenuOpen,
+                      onToggleMenu: () => {
+                        vs.modeMenuOpen = !vs.modeMenuOpen;
                         requestUpdate();
-                      } else {
-                        const started = startStt({
-                          onTranscript: (text, isFinal) => {
-                            if (isFinal) {
-                              const current = getDraft();
-                              const sep = current && !current.endsWith(" ") ? " " : "";
-                              props.onDraftChange(current + sep + text);
-                              vs.sttInterimText = "";
-                            } else {
-                              vs.sttInterimText = text;
-                            }
-                            requestUpdate();
-                          },
-                          onStart: () => {
-                            vs.sttRecording = true;
-                            requestUpdate();
-                          },
-                          onEnd: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                          onError: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                        });
-                        if (started) {
-                          vs.sttRecording = true;
-                          requestUpdate();
-                        }
-                      }
+                      },
+                      onSelectMode: (mode) => {
+                        vs.modeMenuOpen = false;
+                        props.onSetMode!(mode);
+                        requestUpdate();
+                      },
+                    });
+                  })()}
+                  <button
+                    class="agent-chat__input-btn"
+                    @click=${() => {
+                      document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
                     }}
-                    title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    title="Attach file"
+                    aria-label="Attach file"
                     ?disabled=${!props.connected}
                   >
-                    ${vs.sttRecording ? icons.micOff : icons.mic}
+                    ${icons.paperclip}
                   </button>
-                `
-              : nothing}
-            ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-          </div>
 
           ${renderChatRunControls({
             canAbort,

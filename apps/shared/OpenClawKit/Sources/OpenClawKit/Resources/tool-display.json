@@ -369,6 +369,35 @@
         "plan.0.step"
       ]
     },
+    "enter_plan_mode": {
+      "emoji": "🧭",
+      "title": "Enter Plan Mode",
+      "detailKeys": [
+        "reason"
+      ]
+    },
+    "exit_plan_mode": {
+      "emoji": "✅",
+      "title": "Exit Plan Mode",
+      "detailKeys": [
+        "title",
+        "summary",
+        "plan.0.step"
+      ]
+    },
+    "plan_mode_status": {
+      "emoji": "🔍",
+      "title": "Plan Mode Status",
+      "detailKeys": []
+    },
+    "ask_user_question": {
+      "emoji": "❓",
+      "title": "Ask User",
+      "detailKeys": [
+        "question",
+        "options.0"
+      ]
+    },
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",

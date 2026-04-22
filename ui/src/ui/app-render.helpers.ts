@@ -233,8 +233,26 @@ export function renderChatControls(state: AppViewState) {
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
+  // PR-8 follow-up: track whether the right sidebar is currently
+  // showing the live plan markdown. Used to set aria-pressed on the
+  // plan-view toggle so the chip looks "on" while the sidebar is open.
+  const sidebarPlanOpen =
+    state.sidebarOpen &&
+    state.sidebarContent?.kind === "markdown" &&
+    state.latestPlanMarkdown != null &&
+    state.sidebarContent.content === state.latestPlanMarkdown;
   return html`
     <div class="chat-controls">
+      <button
+        class="btn btn--sm btn--icon ${sidebarPlanOpen ? "active" : ""}"
+        @click=${() => {
+          state.togglePlanViewSidebar();
+        }}
+        aria-pressed=${sidebarPlanOpen}
+        title=${t("chat.planViewToggle")}
+      >
+        ${icons.scrollText}
+      </button>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}

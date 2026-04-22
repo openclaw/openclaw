@@ -265,6 +265,24 @@ export type FallbackStatus = {
   occurredAt: number;
 };
 
+/**
+ * Live-test iteration 1 Bug 3: bottom-of-chat toast surface for the
+ * "subagents still running" feedback when the user clicks Approve on
+ * a plan while subagents are in flight. Mirrors `FallbackStatus` so
+ * the chat-controls render path can use the same toast region (the
+ * only toast surface the user has actually seen working in webchat).
+ *
+ * Set by `app.ts:handlePlanApprovalDecision()` when the gateway
+ * returns error code `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS`. Auto-
+ * dismisses after 8 seconds (matches model-fallback toast cadence).
+ */
+export type SubagentBlockingStatus = {
+  message: string;
+  /** In-flight subagent runIds the gateway reported (for tooltip). */
+  openSubagentRunIds: string[];
+  occurredAt: number;
+};
+
 type CompactionHost = ToolStreamHost & {
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;
@@ -447,6 +465,342 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
+/**
+ * PR-8 / #67721: plan approval request emitted from the runtime when
+ * the agent calls `exit_plan_mode`. Stored on the host so the chat
+ * view can render an Approve/Reject/Edit overlay tied to the active
+ * session.
+ */
+export type PlanApprovalRequest = {
+  approvalId: string;
+  sessionKey: string;
+  toolCallId?: string;
+  title: string;
+  summary?: string;
+  plan: Array<{ step: string; status: string; activeForm?: string }>;
+  receivedAt: number;
+  // PR-10 plan-archetype fields. All optional and additive — the
+  // approval card / sidebar render them when present.
+  analysis?: string;
+  assumptions?: string[];
+  risks?: Array<{ risk: string; mitigation: string }>;
+  verification?: string[];
+  references?: string[];
+  /**
+   * PR-10 AskUserQuestion: when present, this approval is a question
+   * (not a plan submission). The plan-approval card renders a question
+   * prompt + one button per option instead of the standard
+   * Approve/Revise/Reject triad.
+   */
+  question?: {
+    prompt: string;
+    options: string[];
+    allowFreetext?: boolean;
+    questionId?: string;
+  };
+};
+
+type PlanApprovalHost = ToolStreamHost & {
+  planApprovalRequest: PlanApprovalRequest | null;
+  planApprovalReviseOpen?: boolean;
+  planApprovalReviseDraft?: string;
+  planApprovalQuestionOtherOpen?: boolean;
+  planApprovalQuestionOtherDraft?: string;
+  planApprovalError?: string | null;
+  /**
+   * Optional auto-open hook — when the runtime emits a fresh plan
+   * approval, also pop the full plan into the right sidebar so the
+   * user doesn't have to click "Open plan" first.
+   */
+  openPlanInSidebar?: (request: PlanApprovalRequest) => void;
+  /**
+   * Optional live-plan hook — fires every time the agent calls
+   * update_plan. The host re-renders the sidebar content with the
+   * current plan state so the user always sees the latest checklist
+   * (boxes ticking off as the agent steps through after approval).
+   */
+  refreshLivePlanSidebar?: (plan: PlanApprovalRequest["plan"], summary?: string) => void;
+};
+
+function setPlanApprovalRequest(host: PlanApprovalHost, next: PlanApprovalRequest | null): void {
+  const previous = host.planApprovalRequest;
+  const previousQuestionId = previous?.question?.questionId;
+  const nextQuestionId = next?.question?.questionId;
+  const changedInteraction =
+    previous?.approvalId !== next?.approvalId ||
+    previousQuestionId !== nextQuestionId ||
+    Boolean(previous?.question) !== Boolean(next?.question);
+  host.planApprovalRequest = next;
+  if (!changedInteraction) {
+    return;
+  }
+  if ("planApprovalReviseOpen" in host) {
+    host.planApprovalReviseOpen = false;
+  }
+  if ("planApprovalReviseDraft" in host) {
+    host.planApprovalReviseDraft = "";
+  }
+  if ("planApprovalQuestionOtherOpen" in host) {
+    host.planApprovalQuestionOtherOpen = false;
+  }
+  if ("planApprovalQuestionOtherDraft" in host) {
+    host.planApprovalQuestionOtherDraft = "";
+  }
+  if ("planApprovalError" in host) {
+    host.planApprovalError = null;
+  }
+}
+
+/**
+ * Detect update_plan tool calls in the live tool-event stream and
+ * emit the parsed plan steps. We listen on the start phase (when
+ * args are present) since that's when the plan payload is freshest.
+ */
+function maybeForwardLivePlanUpdate(host: PlanApprovalHost, payload: AgentEventPayload): void {
+  const data = payload.data ?? {};
+  if (data.name !== "update_plan") {
+    return;
+  }
+  if (data.phase !== "start" && data.phase !== "result") {
+    return;
+  }
+  // PR-10 review fix (Codex P2 #3104743333 — option C selected):
+  // under `update_plan { merge: true }` the tool INPUT is a delta,
+  // not the merged result. Reading `data.args.plan` would refresh
+  // the sidebar with stale partial data. The fix path is on the
+  // separate `stream: "plan"` channel — see the new
+  // maybeForwardMergedPlanEvent handler below — which carries the
+  // structured `mergedSteps` field with the full merged plan.
+  // For non-merge calls, the input == output so the legacy path
+  // here still works as a fallback.
+  const args = (data.args ?? data.params) as Record<string, unknown> | undefined;
+  if (!args || typeof args !== "object") {
+    return;
+  }
+  // Skip the legacy refresh entirely on merge calls — the plan-event
+  // handler below has the authoritative merged result.
+  if ((args as { merge?: unknown }).merge === true) {
+    return;
+  }
+  const rawPlan = (args as { plan?: unknown }).plan;
+  if (!Array.isArray(rawPlan) || rawPlan.length === 0) {
+    return;
+  }
+  const plan: PlanApprovalRequest["plan"] = [];
+  for (const entry of rawPlan) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const step = (entry as Record<string, unknown>).step;
+    const status = (entry as Record<string, unknown>).status;
+    const activeForm = (entry as Record<string, unknown>).activeForm;
+    if (typeof step !== "string" || typeof status !== "string") {
+      continue;
+    }
+    plan.push({
+      step,
+      status,
+      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+    });
+  }
+  if (plan.length === 0) {
+    return;
+  }
+  try {
+    host.refreshLivePlanSidebar?.(plan, undefined);
+  } catch {
+    // ignore — sidebar refresh is best-effort
+  }
+}
+
+/**
+ * PR-10 review fix (Codex P2 #3104743333): authoritative live-plan
+ * sidebar refresh path that handles merge-mode correctly.
+ *
+ * Subscribes to `stream: "plan"` events (emitted by `update-plan-tool.ts`
+ * after `mergeSteps()` runs). The `mergedSteps` field carries the FULL
+ * merged plan with status/activeForm/criteria fields, so the sidebar
+ * refresh always reflects the actual post-merge state — never the
+ * delta-only tool input.
+ */
+function maybeForwardMergedPlanEvent(host: PlanApprovalHost, payload: AgentEventPayload): void {
+  if (payload.stream !== "plan") {
+    return;
+  }
+  const data = payload.data ?? {};
+  if (data.phase !== "update" && data.phase !== "completed") {
+    return;
+  }
+  const rawMerged = (data as { mergedSteps?: unknown }).mergedSteps;
+  if (!Array.isArray(rawMerged) || rawMerged.length === 0) {
+    return;
+  }
+  const plan: PlanApprovalRequest["plan"] = [];
+  for (const entry of rawMerged) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const step = (entry as Record<string, unknown>).step;
+    const status = (entry as Record<string, unknown>).status;
+    const activeForm = (entry as Record<string, unknown>).activeForm;
+    if (typeof step !== "string" || typeof status !== "string") {
+      continue;
+    }
+    plan.push({
+      step,
+      status,
+      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+    });
+  }
+  if (plan.length === 0) {
+    return;
+  }
+  try {
+    host.refreshLivePlanSidebar?.(plan, undefined);
+  } catch {
+    // ignore — best-effort
+  }
+}
+
+function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayload): void {
+  const data = payload.data ?? {};
+  if (data.kind !== "plugin" || data.phase !== "requested") {
+    return;
+  }
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (!sessionKey || sessionKey !== host.sessionKey) {
+    return;
+  }
+  // PR-10 AskUserQuestion: question approvals carry `question` but
+  // emit with `plan: []` (questions don't have plan steps). Detect this
+  // BEFORE the plan-empty early-return so the question card renders.
+  // Without this guard, both ask_user_question and the future
+  // mode-state-transition events would be dropped silently.
+  const isQuestionEvent = data.question != null && typeof data.question === "object";
+  const rawPlan = data.plan;
+  if (!isQuestionEvent && (!Array.isArray(rawPlan) || rawPlan.length === 0)) {
+    return;
+  }
+  const plan: PlanApprovalRequest["plan"] = [];
+  if (Array.isArray(rawPlan)) {
+    for (const entry of rawPlan) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const step = (entry as Record<string, unknown>).step;
+      const status = (entry as Record<string, unknown>).status;
+      const activeForm = (entry as Record<string, unknown>).activeForm;
+      if (typeof step !== "string" || typeof status !== "string") {
+        continue;
+      }
+      plan.push({
+        step,
+        status,
+        ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+      });
+    }
+  }
+  // For non-question events, an empty parsed plan still means "drop
+  // the event" — a malformed step list is worse than no card. Question
+  // events bypass this gate (their plan IS expected to be empty).
+  if (!isQuestionEvent && plan.length === 0) {
+    return;
+  }
+  const approvalId =
+    typeof data.approvalId === "string" && data.approvalId.trim() ? data.approvalId : "";
+  if (!approvalId) {
+    return;
+  }
+  const title = typeof data.title === "string" && data.title.trim() ? data.title : "Plan approval";
+  const summary =
+    typeof data.summary === "string" && data.summary.trim() ? data.summary : undefined;
+  const toolCallId =
+    typeof data.toolCallId === "string" && data.toolCallId.trim() ? data.toolCallId : undefined;
+  // PR-10 archetype fields. Defensive-parsed (drop blanks).
+  const cleanStrArr = (v: unknown): string[] | undefined => {
+    if (!Array.isArray(v)) {
+      return undefined;
+    }
+    const c = v
+      .filter((e): e is string => typeof e === "string")
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0);
+    return c.length > 0 ? c : undefined;
+  };
+  const analysis =
+    typeof data.analysis === "string" && data.analysis.trim() ? data.analysis.trim() : undefined;
+  const assumptions = cleanStrArr(data.assumptions);
+  const verification = cleanStrArr(data.verification);
+  const references = cleanStrArr(data.references);
+  let risks: PlanApprovalRequest["risks"];
+  if (Array.isArray(data.risks)) {
+    const c: NonNullable<PlanApprovalRequest["risks"]> = [];
+    for (const e of data.risks) {
+      if (!e || typeof e !== "object") {
+        continue;
+      }
+      const r = (e as Record<string, unknown>).risk;
+      const m = (e as Record<string, unknown>).mitigation;
+      if (typeof r === "string" && typeof m === "string" && r.trim() && m.trim()) {
+        c.push({ risk: r.trim(), mitigation: m.trim() });
+      }
+    }
+    if (c.length > 0) {
+      risks = c;
+    }
+  }
+  // PR-10 AskUserQuestion: if data.question is present, this approval
+  // is a clarifying question (not a plan submission). The card UI
+  // detects question and renders one button per option instead of
+  // the standard Approve/Revise/Reject triad.
+  let question: PlanApprovalRequest["question"];
+  if (data.question && typeof data.question === "object") {
+    const q = data.question as Record<string, unknown>;
+    const promptText = typeof q.prompt === "string" ? q.prompt.trim() : "";
+    const opts = cleanStrArr(q.options);
+    if (promptText && opts && opts.length > 0) {
+      question = {
+        prompt: promptText,
+        options: opts,
+        ...(typeof q.allowFreetext === "boolean" ? { allowFreetext: q.allowFreetext } : {}),
+        ...(typeof q.questionId === "string" && q.questionId.trim()
+          ? { questionId: q.questionId.trim() }
+          : {}),
+      };
+    }
+  }
+  const next: PlanApprovalRequest = {
+    approvalId,
+    sessionKey,
+    title,
+    plan,
+    receivedAt: Date.now(),
+    ...(summary ? { summary } : {}),
+    ...(toolCallId ? { toolCallId } : {}),
+    ...(analysis ? { analysis } : {}),
+    ...(assumptions ? { assumptions } : {}),
+    ...(risks ? { risks } : {}),
+    ...(verification ? { verification } : {}),
+    ...(references ? { references } : {}),
+    ...(question ? { question } : {}),
+  };
+  setPlanApprovalRequest(host, next);
+  // Auto-open the full plan in the right sidebar so the user can read
+  // it without clicking "Open plan" first. The card itself surfaces
+  // Accept/Edit/Reject; the sidebar shows the full markdown.
+  //
+  // PR-10 deep-dive review: skip the auto-open for question events
+  // (request.question present) — there's no plan to render, and
+  // popping an empty sidebar with just a header is a confusing UX.
+  if (!isQuestionEvent) {
+    try {
+      host.openPlanInSidebar?.(next);
+    } catch {
+      // ignore — sidebar open is a best-effort affordance
+    }
+  }
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -469,6 +823,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  if (payload.stream === "approval") {
+    handlePlanApprovalEvent(host as PlanApprovalHost, payload);
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }
@@ -480,6 +839,16 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (sessionKey && sessionKey !== host.sessionKey) {
     return;
   }
+
+  // PR-8 follow-up: forward live update_plan calls to the sidebar
+  // refresh hook so the user always sees the current plan state
+  // (boxes ticking off as the agent steps through after approval).
+  // Runs alongside the normal tool-stream path; doesn't replace it.
+  maybeForwardLivePlanUpdate(host as PlanApprovalHost, payload);
+  // PR-10 review fix (Codex P2 #3104743333): authoritative refresh
+  // for merge-mode plans via the agent_plan_event stream's
+  // `mergedSteps` field. See maybeForwardMergedPlanEvent for the why.
+  maybeForwardMergedPlanEvent(host as PlanApprovalHost, payload);
 
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";

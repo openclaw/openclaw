@@ -660,6 +660,7 @@ export const tr: TranslationMap = {
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
     refreshTitle: "Sohbet verilerini yenile",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",

@@ -1,0 +1,134 @@
+/* Plan card styles — expandable plan display in the message thread.
+ * Mirrors tool-cards.css patterns with an accent left-border to distinguish. */
+
+.chat-plan-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, #6366f1);
+  border-radius: var(--radius-md, 8px);
+  background: var(--card, #1a1a2e);
+  margin: 8px 0;
+  overflow: hidden;
+}
+
+.chat-plan-card summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--text-secondary, #a0a0b0);
+  list-style: none;
+}
+
+.chat-plan-card summary::-webkit-details-marker {
+  display: none;
+}
+/* Firefox uses ::marker (not ::-webkit-details-marker). Without this,
+   Firefox renders the native disclosure triangle ALONGSIDE the custom
+   chevron we draw in the markup. */
+.chat-plan-card summary::marker {
+  content: "";
+}
+
+.chat-plan-card summary:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+/* Copilot review #68939 (2026-04-19): a11y — `<summary>` is keyboard-
+ * focusable as the disclosure control, but the prior CSS only had a
+ * hover affordance, leaving keyboard navigation untracked. Add a
+ * `:focus-visible` outline using existing accent/border tokens so
+ * keyboard users can see the focused card. `:focus-visible` (vs
+ * `:focus`) avoids the outline showing on mouse click, matching the
+ * focus-ring conventions used elsewhere in the UI. */
+.chat-plan-card summary:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: -2px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.chat-plan-card__icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--accent, #6366f1);
+}
+
+.chat-plan-card__title {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-primary, #e0e0e8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-plan-card__meta {
+  font-size: 12px;
+  color: var(--text-tertiary, #666680);
+  white-space: nowrap;
+}
+
+.chat-plan-card__chevron {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s ease;
+  color: var(--text-tertiary, #666680);
+}
+
+.chat-plan-card[open] .chat-plan-card__chevron {
+  transform: rotate(90deg);
+}
+
+.chat-plan-card__body {
+  padding: 0 12px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-plan-card__explanation {
+  color: var(--text-secondary, #a0a0b0);
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
+.chat-plan-card__steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-plan-card__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 13px;
+  color: var(--text-primary, #e0e0e8);
+}
+
+.chat-plan-card__step--completed {
+  color: var(--text-tertiary, #666680);
+  text-decoration: line-through;
+}
+
+.chat-plan-card__step--cancelled {
+  color: var(--text-tertiary, #666680);
+  text-decoration: line-through;
+}
+
+.chat-plan-card__step--in-progress {
+  font-weight: 500;
+}
+
+.chat-plan-card__step-marker {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 14px;
+}
