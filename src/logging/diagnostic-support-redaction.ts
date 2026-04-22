@@ -40,6 +40,11 @@ type RedactSupportStringOptions = {
   truncationSuffix?: string;
 };
 
+type PathRedactionPrefix = {
+  prefix: string;
+  label: string;
+};
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -76,31 +81,75 @@ function privateMapEntryLabel(key: string): string {
   return normalized.endsWith("s") ? normalized.slice(0, -1) : normalized;
 }
 
-function pathRedactionPrefixes(options: SupportRedactionContext): Array<{
-  prefix: string;
-  label: string;
-}> {
-  const home = options.env.HOME ? path.resolve(options.env.HOME) : undefined;
-  return [
-    { prefix: path.resolve(options.stateDir), label: "$OPENCLAW_STATE_DIR" },
-    ...(home ? [{ prefix: home, label: "~" }] : []),
-  ].toSorted((a, b) => b.prefix.length - a.prefix.length);
+function isWindowsAbsolutePath(value: string): boolean {
+  return /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(value);
+}
+
+function normalizePathPrefix(value: string): string {
+  return isWindowsAbsolutePath(value) ? path.win32.resolve(value) : path.resolve(value);
+}
+
+function addPathPrefixVariants(
+  prefixes: Map<string, string>,
+  value: string | undefined,
+  label: string,
+): void {
+  if (!value) {
+    return;
+  }
+  const normalized = normalizePathPrefix(value);
+  if (!prefixes.has(normalized)) {
+    prefixes.set(normalized, label);
+  }
+  if (isWindowsAbsolutePath(normalized)) {
+    const forwardSlashPrefix = normalized.replaceAll("\\", "/");
+    if (!prefixes.has(forwardSlashPrefix)) {
+      prefixes.set(forwardSlashPrefix, label);
+    }
+  }
+}
+
+function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionPrefix[] {
+  const prefixes = new Map<string, string>();
+  addPathPrefixVariants(prefixes, options.stateDir, "$OPENCLAW_STATE_DIR");
+  addPathPrefixVariants(prefixes, options.env.HOME, "~");
+  addPathPrefixVariants(prefixes, options.env.USERPROFILE, "~");
+  return [...prefixes.entries()]
+    .map(([prefix, label]) => ({ prefix, label }))
+    .toSorted((a, b) => b.prefix.length - a.prefix.length);
+}
+
+function pathCandidates(file: string): string[] {
+  return isWindowsAbsolutePath(file)
+    ? [path.win32.resolve(file), path.win32.resolve(file).replaceAll("\\", "/")]
+    : [path.resolve(file)];
+}
+
+function matchPathPrefix(file: string, prefix: string): string | undefined {
+  if (file === prefix) {
+    return "";
+  }
+  const next = file[prefix.length];
+  return next === "/" || next === "\\" ? file.slice(prefix.length) : undefined;
+}
+
+function isSupportAbsolutePath(value: string): boolean {
+  return path.isAbsolute(value) || isWindowsAbsolutePath(value);
 }
 
 export function redactPathForSupport(file: string, options: SupportRedactionContext): string {
   if (file.startsWith("$")) {
     return file;
   }
-  const next = path.resolve(file);
-  for (const { prefix, label } of pathRedactionPrefixes(options)) {
-    if (next === prefix) {
-      return label;
-    }
-    if (next.startsWith(`${prefix}${path.sep}`)) {
-      return `${label}${next.slice(prefix.length)}`;
+  for (const next of pathCandidates(file)) {
+    for (const { prefix, label } of pathRedactionPrefixes(options)) {
+      const suffix = matchPathPrefix(next, prefix);
+      if (suffix !== undefined) {
+        return `${label}${suffix}`;
+      }
     }
   }
-  return redactSensitiveTextForSupport(next);
+  return redactSensitiveTextForSupport(pathCandidates(file)[0] ?? file);
 }
 
 function redactKnownPathPrefixesForSupport(
@@ -168,7 +217,7 @@ export function redactSupportString(
   const maxLength = options.maxLength ?? MAX_SUPPORT_STRING_LENGTH;
   const truncationSuffix = options.truncationSuffix ?? DEFAULT_TRUNCATION_SUFFIX;
   const redacted = redactTextForSupport(value);
-  const pathRedacted = path.isAbsolute(redacted)
+  const pathRedacted = isSupportAbsolutePath(redacted)
     ? redactPathForSupport(redacted, redaction)
     : redactKnownPathPrefixesForSupport(redacted, redaction);
   if (pathRedacted.length <= maxLength) {

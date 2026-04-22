@@ -14,7 +14,11 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 import { writeDiagnosticSupportExport } from "./diagnostic-support-export.js";
-import { redactTextForSupport } from "./diagnostic-support-redaction.js";
+import {
+  redactSupportString,
+  redactTextForSupport,
+  sanitizeSupportSnapshotValue,
+} from "./diagnostic-support-redaction.js";
 import type { LogTailPayload } from "./log-tail.js";
 
 async function readZipTextEntries(file: string): Promise<Record<string, string>> {
@@ -408,6 +412,47 @@ describe("diagnostic support export", () => {
     for (const [input, expected] of cases) {
       expect(redactTextForSupport(input)).toBe(expected);
     }
+  });
+
+  it("redacts Windows USERPROFILE paths when HOME is unset", () => {
+    const userProfile = "C:\\Users\\support-user";
+    const stateDir = `${userProfile}\\AppData\\Roaming\\openclaw`;
+    const redaction = {
+      env: {
+        USERPROFILE: userProfile,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      stateDir,
+    };
+
+    expect(redactSupportString(`${stateDir}\\logs\\gateway.log`, redaction)).toBe(
+      "$OPENCLAW_STATE_DIR\\logs\\gateway.log",
+    );
+    expect(
+      redactSupportString(`failed at ${userProfile}\\Documents\\snapshot-error.txt`, redaction),
+    ).toBe("failed at ~\\Documents\\snapshot-error.txt");
+
+    const status = sanitizeSupportSnapshotValue(
+      {
+        service: {
+          command: {
+            programArguments: [
+              "node",
+              `${userProfile}\\openclaw\\dist\\index.js`,
+              "--config",
+              `${stateDir}\\openclaw.json`,
+            ],
+            sourcePath: `${userProfile}\\AppData\\Local\\openclaw\\gateway-service.json`,
+          },
+        },
+      },
+      redaction,
+    );
+    const serialized = JSON.stringify(status);
+    expect(serialized).not.toContain("support-user");
+    expect(serialized).toContain("~\\\\openclaw\\\\dist\\\\index.js");
+    expect(serialized).toContain("$OPENCLAW_STATE_DIR\\\\openclaw.json");
+    expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
   });
 
   it("keeps writing when status and health snapshots fail", async () => {
