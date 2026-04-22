@@ -264,18 +264,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
-    whatsapp_login: {
-      emoji: "🟢",
-      title: "WhatsApp Login",
-      actions: {
-        start: {
-          label: "start",
-        },
-        wait: {
-          label: "wait",
-        },
-      },
-    },
     discord: {
       emoji: "💬",
       title: "Discord",
