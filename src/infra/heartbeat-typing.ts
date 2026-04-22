@@ -2,6 +2,8 @@ import type { ChannelHeartbeatDeps, ChannelPlugin } from "../channels/plugins/ty
 import { createTypingCallbacks, type TypingCallbacks } from "../channels/typing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+const DEFAULT_HEARTBEAT_TYPING_INTERVAL_SECONDS = 6;
+
 type HeartbeatTypingLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -31,7 +33,7 @@ export function createHeartbeatTypingCallbacks(params: {
   const keepaliveIntervalMs =
     typeof params.typingIntervalSeconds === "number" && params.typingIntervalSeconds > 0
       ? params.typingIntervalSeconds * 1000
-      : undefined;
+      : DEFAULT_HEARTBEAT_TYPING_INTERVAL_SECONDS * 1000;
   const target = {
     cfg: params.cfg,
     to,
