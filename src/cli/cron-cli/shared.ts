@@ -156,7 +156,8 @@ const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
-const pad = (value: string, width: number) => value.padEnd(width);
+const pad = (value: string | number | null | undefined, width: number) =>
+  (typeof value === "string" ? value : value == null ? "" : String(value)).padEnd(width);
 
 const truncate = (value: string, width: number) => {
   if (value.length <= width) {

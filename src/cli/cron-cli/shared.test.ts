@@ -196,6 +196,34 @@ describe("printCronList", () => {
     expect(dataLine).toContain("opus");
   });
 
+  it("handles job with non-string id (#70128)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    // Older-schema or corrupted cron entries can surface job.id as a non-string,
+    // which previously crashed pad() with `TypeError: value.padEnd is not a function`.
+    const numericIdJob = createBaseJob({
+      id: 42 as unknown as string,
+      name: "Numeric ID",
+      sessionTarget: "main",
+    });
+
+    expect(() => printCronList([numericIdJob], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("42"))).toBe(true);
+  });
+
+  it("handles job with undefined id (#70128)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    const undefinedIdJob = createBaseJob({
+      id: undefined as unknown as string,
+      name: "Missing ID",
+      sessionTarget: "main",
+    });
+
+    expect(() => printCronList([undefinedIdJob], runtime)).not.toThrow();
+    expect(logs.length).toBeGreaterThan(1);
+  });
+
   it("shows exact label for cron schedules with stagger disabled", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
