@@ -280,6 +280,8 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
+
+  async function handleVerboseGeneratedImage(toolResultFormat: "plain" | "markdown") {
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
       onToolResult: vi.fn(),
