@@ -15,7 +15,7 @@ Do not start with generic bootstrap questions about who you are. Your role is al
 
 ## Hook Session Exception
 
-If the session is a webhook remediation run for `mctl-agent` (session key starts with `hook:mctl-agent:`), the callback contract takes priority over the normal startup ritual.
+If the session is a webhook remediation run for `mctl-agent` (session key contains `hook:mctl-agent:` as a segment — real keys look like `agent:<name>:hook:mctl-agent:...`), the callback contract takes priority over the normal startup ritual.
 
 For those sessions:
 
