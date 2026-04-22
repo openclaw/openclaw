@@ -16,6 +16,15 @@ export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
+export const DEFAULT_MEMORY_DREAMING_DAILY_SIGNAL_FILES = ["memory/daily-log.md"];
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_ENABLED = true;
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_AUTO_APPLY = false;
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_MANAGED_ENTRIES = 48;
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_ENTRY_CHARS = 240;
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_INDEX_LINES = 12;
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_EVIDENCE_PER_ENTRY = 6;
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_QUERY_TERMS_PER_ENTRY = 8;
+export const DEFAULT_MEMORY_DREAMING_MAINTENANCE_STALE_AFTER_DAYS = 45;
 
 export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
 export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
@@ -70,6 +79,17 @@ export type MemoryDreamingStorageConfig = {
   separateReports: boolean;
 };
 
+export type MemoryDreamingMaintenanceConfig = {
+  enabled: boolean;
+  autoApply: boolean;
+  maxManagedEntries: number;
+  maxEntryChars: number;
+  maxIndexLines: number;
+  maxEvidencePerEntry: number;
+  maxQueryTermsPerEntry: number;
+  staleAfterDays: number;
+};
+
 export type MemoryLightDreamingConfig = {
   enabled: boolean;
   cron: string;
@@ -120,7 +140,9 @@ export type MemoryDreamingConfig = {
   frequency: string;
   timezone?: string;
   verboseLogging: boolean;
+  dailySignalFiles: string[];
   storage: MemoryDreamingStorageConfig;
+  maintenance: MemoryDreamingMaintenanceConfig;
   execution: {
     defaults: MemoryDreamingExecutionConfig;
   };
@@ -255,6 +277,34 @@ function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
   return DEFAULT_MEMORY_DREAMING_STORAGE_MODE;
 }
 
+function normalizeRelativeDreamingPath(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim().replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/\/{2,}/g, "/");
+}
+
+function normalizeRelativeDreamingPathList(value: unknown, fallback: readonly string[]): string[] {
+  if (!Array.isArray(value)) {
+    return [...fallback];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of value) {
+    const normalizedEntry = normalizeRelativeDreamingPath(entry);
+    if (!normalizedEntry || seen.has(normalizedEntry)) {
+      continue;
+    }
+    seen.add(normalizedEntry);
+    normalized.push(normalizedEntry);
+  }
+  return normalized.length > 0 ? normalized : [...fallback];
+}
+
 function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "fast" || normalized === "balanced" || normalized === "slow") {
@@ -357,6 +407,7 @@ export function resolveMemoryDreamingConfig(params: {
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
   const storage = asNullableRecord(dreaming?.storage);
+  const maintenance = asNullableRecord(dreaming?.maintenance);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
 
@@ -380,11 +431,46 @@ export function resolveMemoryDreamingConfig(params: {
       dreaming?.verboseLogging,
       DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
     ),
+    dailySignalFiles: normalizeRelativeDreamingPathList(
+      dreaming?.dailySignalFiles,
+      DEFAULT_MEMORY_DREAMING_DAILY_SIGNAL_FILES,
+    ),
     storage: {
       mode: normalizeStorageMode(storage?.mode),
       separateReports: normalizeBoolean(
         storage?.separateReports,
         DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS,
+      ),
+    },
+    maintenance: {
+      enabled: normalizeBoolean(maintenance?.enabled, DEFAULT_MEMORY_DREAMING_MAINTENANCE_ENABLED),
+      autoApply: normalizeBoolean(
+        maintenance?.autoApply,
+        DEFAULT_MEMORY_DREAMING_MAINTENANCE_AUTO_APPLY,
+      ),
+      maxManagedEntries: normalizeNonNegativeInt(
+        maintenance?.maxManagedEntries,
+        DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_MANAGED_ENTRIES,
+      ),
+      maxEntryChars: normalizeNonNegativeInt(
+        maintenance?.maxEntryChars,
+        DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_ENTRY_CHARS,
+      ),
+      maxIndexLines: normalizeNonNegativeInt(
+        maintenance?.maxIndexLines,
+        DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_INDEX_LINES,
+      ),
+      maxEvidencePerEntry: normalizeNonNegativeInt(
+        maintenance?.maxEvidencePerEntry,
+        DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_EVIDENCE_PER_ENTRY,
+      ),
+      maxQueryTermsPerEntry: normalizeNonNegativeInt(
+        maintenance?.maxQueryTermsPerEntry,
+        DEFAULT_MEMORY_DREAMING_MAINTENANCE_MAX_QUERY_TERMS_PER_ENTRY,
+      ),
+      staleAfterDays: normalizeNonNegativeInt(
+        maintenance?.staleAfterDays,
+        DEFAULT_MEMORY_DREAMING_MAINTENANCE_STALE_AFTER_DAYS,
       ),
     },
     execution: {
@@ -509,6 +595,8 @@ export function resolveMemoryDeepDreamingConfig(params: {
 }): MemoryDeepDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
+  dailySignalFiles: string[];
+  maintenance: MemoryDreamingMaintenanceConfig;
   storage: MemoryDreamingStorageConfig;
 } {
   const resolved = resolveMemoryDreamingConfig(params);
@@ -517,6 +605,8 @@ export function resolveMemoryDeepDreamingConfig(params: {
     enabled: resolved.enabled && resolved.phases.deep.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
+    dailySignalFiles: resolved.dailySignalFiles,
+    maintenance: resolved.maintenance,
     storage: resolved.storage,
   };
 }
@@ -527,6 +617,8 @@ export function resolveMemoryLightDreamingConfig(params: {
 }): MemoryLightDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
+  dailySignalFiles: string[];
+  maintenance: MemoryDreamingMaintenanceConfig;
   storage: MemoryDreamingStorageConfig;
 } {
   const resolved = resolveMemoryDreamingConfig(params);
@@ -535,6 +627,8 @@ export function resolveMemoryLightDreamingConfig(params: {
     enabled: resolved.enabled && resolved.phases.light.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
+    dailySignalFiles: resolved.dailySignalFiles,
+    maintenance: resolved.maintenance,
     storage: resolved.storage,
   };
 }
@@ -545,6 +639,8 @@ export function resolveMemoryRemDreamingConfig(params: {
 }): MemoryRemDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
+  dailySignalFiles: string[];
+  maintenance: MemoryDreamingMaintenanceConfig;
   storage: MemoryDreamingStorageConfig;
 } {
   const resolved = resolveMemoryDreamingConfig(params);
@@ -553,6 +649,8 @@ export function resolveMemoryRemDreamingConfig(params: {
     enabled: resolved.enabled && resolved.phases.rem.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
+    dailySignalFiles: resolved.dailySignalFiles,
+    maintenance: resolved.maintenance,
     storage: resolved.storage,
   };
 }

@@ -1,6 +1,10 @@
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
-import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaces,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { applyDreamingMaintenance, rollbackDreamingMaintenance } from "./dreaming-maintenance.js";
 import { asRecord } from "./dreaming-shared.js";
 import {
   resolveDreamingBlockedReason,
@@ -44,7 +48,8 @@ function formatEnabled(value: boolean): string {
 function formatPhaseGuide(): string {
   return [
     "- implementation detail: each sweep runs light -> REM -> deep.",
-    "- deep is the only stage that writes durable entries to MEMORY.md.",
+    "- deep stages durable maintenance by default; it does not write MEMORY.md until apply.",
+    "- /dreaming apply writes the staged managed block; /dreaming rollback reverts the last apply.",
     "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
   ].join("\n");
 }
@@ -64,6 +69,8 @@ function formatStatus(cfg: OpenClawConfig): string {
     `- enabled: ${formatEnabled(dreaming.enabled)}${timezone}`,
     ...(blockedReason ? [`- blocked: ${blockedReason}`] : []),
     `- sweep cadence: ${dreaming.frequency}`,
+    `- daily signals: ${dreaming.dailySignalFiles.join(", ")}`,
+    `- maintenance: ${dreaming.maintenance.autoApply ? "auto-apply" : "stage-only"} (maxManagedEntries=${dreaming.maintenance.maxManagedEntries}, staleAfterDays=${dreaming.maintenance.staleAfterDays})`,
     `- promotion policy: score>=${deep.minScore}, recalls>=${deep.minRecallCount}, uniqueQueries>=${deep.minUniqueQueries}`,
   ].join("\n");
 }
@@ -72,12 +79,42 @@ function formatUsage(includeStatus: string): string {
   return [
     "Usage: /dreaming status",
     "Usage: /dreaming on|off",
+    "Usage: /dreaming apply|rollback",
     "",
     includeStatus,
     "",
     "Phases:",
     formatPhaseGuide(),
   ].join("\n");
+}
+
+async function mutateDreamingMaintenanceAcrossWorkspaces(params: {
+  cfg: OpenClawConfig;
+  action: "apply" | "rollback";
+}): Promise<string> {
+  const workspaces = resolveMemoryDreamingWorkspaces(params.cfg);
+  if (workspaces.length === 0) {
+    return `Dreaming ${params.action}: no memory workspace is configured.`;
+  }
+  const lines = [`Dreaming ${params.action}:`];
+  for (const workspace of workspaces) {
+    const outcome =
+      params.action === "apply"
+        ? await applyDreamingMaintenance({ workspaceDir: workspace.workspaceDir })
+        : await rollbackDreamingMaintenance({ workspaceDir: workspace.workspaceDir });
+    if (outcome.status === "applied" || outcome.status === "rolled_back") {
+      lines.push(
+        `- ${workspace.workspaceDir}: ${outcome.status} (${outcome.reportId}) [${outcome.touchedFiles.join(", ")}]`,
+      );
+      continue;
+    }
+    if (outcome.status === "conflict") {
+      lines.push(`- ${workspace.workspaceDir}: conflict on ${outcome.path}`);
+      continue;
+    }
+    lines.push(`- ${workspace.workspaceDir}: ${outcome.reason}`);
+  }
+  return lines.join("\n");
 }
 
 function requiresAdminToMutateDreaming(gatewayClientScopes?: readonly string[]): boolean {
@@ -123,6 +160,20 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
             "",
             formatStatus(nextConfig),
           ].join("\n"),
+        };
+      }
+
+      if (firstToken === "apply" || firstToken === "rollback") {
+        if (requiresAdminToMutateDreaming(ctx.gatewayClientScopes)) {
+          return {
+            text: "⚠️ /dreaming apply|rollback requires operator.admin for gateway clients.",
+          };
+        }
+        return {
+          text: await mutateDreamingMaintenanceAcrossWorkspaces({
+            cfg: currentConfig,
+            action: firstToken,
+          }),
         };
       }
 

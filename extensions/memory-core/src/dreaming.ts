@@ -17,6 +17,11 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  applyDreamingMaintenance,
+  rollbackDreamingMaintenance,
+  stageDreamingMaintenance,
+} from "./dreaming-maintenance.js";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
@@ -26,7 +31,7 @@ import {
   normalizeTrimmedString,
 } from "./dreaming-shared.js";
 import {
-  applyShortTermPromotions,
+  readShortTermRecallEntries,
   repairShortTermPromotionArtifacts,
   rankShortTermPromotionCandidates,
 } from "./short-term-promotion.js";
@@ -108,6 +113,17 @@ export type ShortTermPromotionDreamingConfig = {
   storage?: {
     mode: "inline" | "separate" | "both";
     separateReports: boolean;
+  };
+  dailySignalFiles?: string[];
+  maintenance?: {
+    enabled: boolean;
+    autoApply: boolean;
+    maxManagedEntries: number;
+    maxEntryChars: number;
+    maxIndexLines: number;
+    maxEvidencePerEntry: number;
+    maxQueryTermsPerEntry: number;
+    staleAfterDays: number;
   };
 };
 
@@ -354,6 +370,8 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     recencyHalfLifeDays: resolved.recencyHalfLifeDays,
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
+    dailySignalFiles: resolved.dailySignalFiles,
+    maintenance: resolved.maintenance,
     storage: resolved.storage,
   };
 }
@@ -552,7 +570,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         nowMs: sweepNowMs,
       });
       totalCandidates += candidates.length;
-      reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
+      reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable maintenance.`);
       if (params.config.verboseLogging) {
         const candidateSummary =
           candidates.length > 0
@@ -567,32 +585,60 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           `memory-core: dreaming candidate details [workspace=${workspaceDir}] ${candidateSummary}`,
         );
       }
-      const applied = await applyShortTermPromotions({
+      const recallEntries = await readShortTermRecallEntries({
         workspaceDir,
-        candidates,
-        limit: params.config.limit,
-        minScore: params.config.minScore,
-        minRecallCount: params.config.minRecallCount,
-        minUniqueQueries: params.config.minUniqueQueries,
-        maxAgeDays: params.config.maxAgeDays,
-        timezone: params.config.timezone,
         nowMs: sweepNowMs,
       });
-      totalApplied += applied.applied;
-      reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
-      if (params.config.verboseLogging) {
-        const appliedSummary =
-          applied.appliedCandidates.length > 0
-            ? applied.appliedCandidates
-                .map(
-                  (candidate) =>
-                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount}`,
-                )
-                .join(" | ")
-            : "none";
-        params.logger.info(
-          `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
+      const maintenanceConfig = params.config.maintenance ?? {
+        enabled: true,
+        autoApply: false,
+        maxManagedEntries: 48,
+        maxEntryChars: 240,
+        maxIndexLines: 12,
+        maxEvidencePerEntry: 6,
+        maxQueryTermsPerEntry: 8,
+        staleAfterDays: 45,
+      };
+      if (!maintenanceConfig.enabled) {
+        reportLines.push("- Maintenance staging disabled; no durable patch was generated.");
+      } else {
+        const staged = await stageDreamingMaintenance({
+          workspaceDir,
+          nowMs: sweepNowMs,
+          config: maintenanceConfig,
+          dailySignalFiles: params.config.dailySignalFiles ?? ["memory/daily-log.md"],
+          candidates,
+          recalls: recallEntries,
+          autoApply: maintenanceConfig.autoApply,
+        });
+        reportLines.push(
+          `- Staged durable maintenance report ${staged.reportId} (add=${staged.operationCounts.add}, merge=${staged.operationCounts.merge}, fix=${staged.operationCounts.fix}, prune=${staged.operationCounts.prune}, index=${staged.operationCounts.index}).`,
         );
+        if (staged.noChangeReasons.length > 0) {
+          reportLines.push(`- No-change rationale: ${staged.noChangeReasons.join("; ")}.`);
+        }
+        if (maintenanceConfig.autoApply) {
+          const applied = await applyDreamingMaintenance({ workspaceDir });
+          if (applied.status === "applied") {
+            totalApplied += 1;
+            reportLines.push(
+              `- Applied staged maintenance report ${applied.reportId} to ${applied.touchedFiles.join(", ")}.`,
+            );
+          } else if (applied.status === "conflict") {
+            reportLines.push(
+              `- Apply skipped because ${applied.path} changed after staging; manual /dreaming apply is required.`,
+            );
+          } else {
+            reportLines.push(`- Apply skipped: ${applied.reason}.`);
+          }
+        } else {
+          reportLines.push("- Durable changes remain staged until /dreaming apply is run.");
+        }
+        if (params.config.verboseLogging) {
+          params.logger.info(
+            `memory-core: dreaming staged details [workspace=${workspaceDir}] ${staged.diffSummary.join(" | ") || "no changes"}`,
+          );
+        }
       }
       await writeDeepDreamingReport({
         workspaceDir,
@@ -602,11 +648,11 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         storage: params.config.storage ?? { mode: "separate", separateReports: false },
       });
       // Generate dream diary narrative from promoted memories.
-      if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
+      if (params.subagent && candidates.length > 0) {
         const data: NarrativePhaseData = {
           phase: "deep",
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
-          promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
+          promotions: [],
         };
         await generateAndAppendDreamNarrative({
           subagent: params.subagent,
@@ -770,6 +816,8 @@ export const __testing = {
   buildManagedDreamingPatch,
   isManagedDreamingJob,
   resolveCronServiceFromGatewayContext,
+  applyDreamingMaintenance,
+  rollbackDreamingMaintenance,
   constants: {
     MANAGED_DREAMING_CRON_NAME,
     MANAGED_DREAMING_CRON_TAG,

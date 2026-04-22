@@ -43,6 +43,10 @@ function mantleEndpoint(region: string): string {
   return `https://bedrock-mantle.${region}.api.aws`;
 }
 
+function mantleAnthropicBaseUrl(region: string): string {
+  return `https://bedrock-mantle.${region}.api.aws/anthropic`;
+}
+
 function isSupportedRegion(region: string): boolean {
   return (MANTLE_SUPPORTED_REGIONS as readonly string[]).includes(region);
 }
@@ -52,17 +56,6 @@ function isSupportedRegion(region: string): boolean {
 // ---------------------------------------------------------------------------
 
 export type MantleBearerTokenProvider = () => Promise<string>;
-export type MantleBearerTokenProviderFactory = (opts?: {
-  region?: string;
-  expiresInSeconds?: number;
-}) => MantleBearerTokenProvider;
-
-async function loadMantleBearerTokenProviderFactory(): Promise<MantleBearerTokenProviderFactory> {
-  const { getTokenProvider } = (await import("@aws/bedrock-token-generator")) as {
-    getTokenProvider: MantleBearerTokenProviderFactory;
-  };
-  return getTokenProvider;
-}
 
 /**
  * Resolve a bearer token for Mantle authentication.
@@ -107,7 +100,6 @@ function getCachedIamTokenEntry(
 export async function generateBearerTokenFromIam(params: {
   region: string;
   now?: () => number;
-  tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<string | undefined> {
   const now = params.now?.() ?? Date.now();
   const cached = getCachedIamTokenEntry(params.region, now);
@@ -117,8 +109,12 @@ export async function generateBearerTokenFromIam(params: {
   }
 
   try {
-    const getTokenProvider =
-      params.tokenProviderFactory ?? (await loadMantleBearerTokenProviderFactory());
+    const { getTokenProvider } = (await import("@aws/bedrock-token-generator")) as {
+      getTokenProvider: (opts?: {
+        region?: string;
+        expiresInSeconds?: number;
+      }) => () => Promise<string>;
+    };
     const token = await getTokenProvider({
       region: params.region,
       expiresInSeconds: 7200, // 2 hours
@@ -148,7 +144,6 @@ export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<{ apiKey: string; expiresAt?: number } | undefined> {
   if (params.apiKey !== MANTLE_IAM_TOKEN_MARKER) {
     return { apiKey: params.apiKey };
@@ -165,7 +160,6 @@ export async function resolveMantleRuntimeBearerToken(params: {
   const token = await generateBearerTokenFromIam({
     region,
     now: params.now,
-    tokenProviderFactory: params.tokenProviderFactory,
   });
   if (!token) {
     return undefined;
@@ -323,7 +317,6 @@ export async function discoverMantleModels(params: {
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
-  tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
   const region = resolveMantleRegion(env);
@@ -335,12 +328,7 @@ export async function resolveImplicitMantleProvider(params: {
   }
 
   // Try explicit token first, then generate from IAM credentials
-  const bearerToken =
-    explicitBearerToken ??
-    (await generateBearerTokenFromIam({
-      region,
-      tokenProviderFactory: params.tokenProviderFactory,
-    }));
+  const bearerToken = explicitBearerToken ?? (await generateBearerTokenFromIam({ region }));
 
   if (!bearerToken) {
     return null;
@@ -362,11 +350,13 @@ export async function resolveImplicitMantleProvider(params: {
   // Opus 4.7 currently needs the provider-owned bearer-auth path here, but we
   // keep reasoning off until the underlying Anthropic transport learns Opus 4.7
   // adaptive thinking semantics.
-  const claudeModels: ModelDefinitionConfig[] = [
+  const anthropicBaseUrl = mantleAnthropicBaseUrl(region);
+  const claudeModels: Array<ModelDefinitionConfig & { baseUrl: string }> = [
     {
       id: "anthropic.claude-opus-4-7",
       name: "Claude Opus 4.7",
       api: "anthropic-messages" as const,
+      baseUrl: anthropicBaseUrl,
       reasoning: false,
       input: ["text", "image"],
       cost: {

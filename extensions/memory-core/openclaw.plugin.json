@@ -35,6 +35,12 @@
           "verboseLogging": {
             "type": "boolean"
           },
+          "dailySignalFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "storage": {
             "type": "object",
             "additionalProperties": false,
@@ -45,6 +51,42 @@
               },
               "separateReports": {
                 "type": "boolean"
+              }
+            }
+          },
+          "maintenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "autoApply": {
+                "type": "boolean"
+              },
+              "maxManagedEntries": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "maxEntryChars": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "maxIndexLines": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "maxEvidencePerEntry": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "maxQueryTermsPerEntry": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "staleAfterDays": {
+                "type": "integer",
+                "minimum": 0
               }
             }
           },

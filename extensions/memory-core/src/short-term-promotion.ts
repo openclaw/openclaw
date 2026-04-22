@@ -25,6 +25,7 @@ export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const MAX_QUERY_HASHES = 32;
+const MAX_QUERY_TERMS = 12;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
 const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
@@ -67,6 +68,7 @@ export type ShortTermRecallEntry = {
   startLine: number;
   endLine: number;
   source: "memory";
+  shortTermKind?: "daily-note" | "daily-signal" | "session-corpus";
   snippet: string;
   recallCount: number;
   dailyCount: number;
@@ -76,6 +78,7 @@ export type ShortTermRecallEntry = {
   firstRecalledAt: string;
   lastRecalledAt: string;
   queryHashes: string[];
+  queryTerms: string[];
   recallDays: string[];
   conceptTags: string[];
   claimHash?: string;
@@ -125,6 +128,7 @@ export type PromotionCandidate = {
   avgScore: number;
   maxScore: number;
   uniqueQueries: number;
+  queryTerms: string[];
   claimHash?: string;
   promotedAt?: string;
   firstRecalledAt: string;
@@ -341,6 +345,30 @@ function mergeQueryHashes(existing: string[], queryHash: string): string[] {
   return next.slice(next.length - MAX_QUERY_HASHES);
 }
 
+function mergeQueryTerms(existing: string[], nextQuery: string): string[] {
+  const normalized = normalizeSnippet(nextQuery).slice(0, 120);
+  if (!normalized) {
+    return existing;
+  }
+  const seen = new Set<string>();
+  const next = existing
+    .map((value) => normalizeSnippet(value).slice(0, 120))
+    .filter((value) => {
+      if (!value || seen.has(value)) {
+        return false;
+      }
+      seen.add(value);
+      return true;
+    });
+  if (!seen.has(normalized)) {
+    next.push(normalized);
+  }
+  if (next.length <= MAX_QUERY_TERMS) {
+    return next;
+  }
+  return next.slice(next.length - MAX_QUERY_TERMS);
+}
+
 function mergeRecentDistinct(existing: string[], nextValue: string, limit: number): string[] {
   const seen = new Set<string>();
   const next = existing.filter((value): value is string => {
@@ -396,6 +424,37 @@ function totalSignalCountForEntry(entry: {
     Math.max(0, Math.floor(entry.recallCount ?? 0)) +
     Math.max(0, Math.floor(entry.dailyCount ?? 0)) +
     Math.max(0, Math.floor(entry.groundedCount ?? 0))
+  );
+}
+
+function resolveShortTermKind(
+  filePath: string,
+  allowedPaths: ReadonlySet<string> = new Set<string>(),
+): ShortTermRecallEntry["shortTermKind"] | undefined {
+  const normalized = normalizeMemoryPath(filePath);
+  if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
+    return undefined;
+  }
+  if (allowedPaths.has(normalized)) {
+    return "daily-signal";
+  }
+  if (SHORT_TERM_SESSION_CORPUS_RE.test(normalized)) {
+    return "session-corpus";
+  }
+  if (SHORT_TERM_PATH_RE.test(normalized) || SHORT_TERM_BASENAME_RE.test(normalized)) {
+    return "daily-note";
+  }
+  return undefined;
+}
+
+function isTrackedShortTermEntry(
+  entry: Pick<ShortTermRecallEntry, "path" | "shortTermKind">,
+): boolean {
+  return (
+    entry.shortTermKind === "daily-note" ||
+    entry.shortTermKind === "daily-signal" ||
+    entry.shortTermKind === "session-corpus" ||
+    isShortTermMemoryPath(entry.path)
   );
 }
 
@@ -471,8 +530,17 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
       if (snippet && isContaminatedDreamingSnippet(snippet)) {
         continue;
       }
+      const shortTermKind =
+        entry.shortTermKind === "daily-note" ||
+        entry.shortTermKind === "daily-signal" ||
+        entry.shortTermKind === "session-corpus"
+          ? entry.shortTermKind
+          : resolveShortTermKind(entryPath);
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
+        : [];
+      const queryTerms = Array.isArray(entry.queryTerms)
+        ? normalizeDistinctStrings(entry.queryTerms, MAX_QUERY_TERMS)
         : [];
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
@@ -496,6 +564,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         startLine,
         endLine,
         source,
+        ...(shortTermKind ? { shortTermKind } : {}),
         snippet,
         recallCount,
         dailyCount,
@@ -505,6 +574,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         firstRecalledAt,
         lastRecalledAt,
         queryHashes,
+        queryTerms,
         recallDays: recallDays.slice(-MAX_RECALL_DAYS),
         conceptTags,
         ...(claimHash ? { claimHash } : {}),
@@ -755,6 +825,13 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
   });
 }
 
+export async function runWithShortTermPromotionLock<T>(
+  workspaceDir: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  return withShortTermLock(workspaceDir, task);
+}
+
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
   const storePath = resolveStorePath(workspaceDir);
   try {
@@ -880,6 +957,7 @@ export async function recordShortTermRecalls(params: {
   results: MemorySearchResult[];
   signalType?: "recall" | "daily";
   dedupeByQueryPerDay?: boolean;
+  allowPaths?: string[];
   dayBucket?: string;
   nowMs?: number;
   timezone?: string;
@@ -892,8 +970,12 @@ export async function recordShortTermRecalls(params: {
   if (!query) {
     return;
   }
+  const allowedPaths = new Set(
+    (params.allowPaths ?? []).map((entry) => normalizeMemoryPath(entry)),
+  );
   const relevant = params.results.filter(
-    (result) => result.source === "memory" && isShortTermMemoryPath(result.path),
+    (result) =>
+      result.source === "memory" && Boolean(resolveShortTermKind(result.path, allowedPaths)),
   );
   if (relevant.length === 0) {
     return;
@@ -910,8 +992,9 @@ export async function recordShortTermRecalls(params: {
 
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
+      const shortTermKind = resolveShortTermKind(normalizedPath, allowedPaths);
       const snippet = normalizeSnippet(result.snippet);
-      if (!snippet || isContaminatedDreamingSnippet(snippet)) {
+      if (!snippet || isContaminatedDreamingSnippet(snippet) || !shortTermKind) {
         continue;
       }
       const claimHash = snippet ? buildClaimHash(snippet) : undefined;
@@ -945,6 +1028,7 @@ export async function recordShortTermRecalls(params: {
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + (dedupeSignal ? 0 : score));
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+      const queryTerms = mergeQueryTerms(existing?.queryTerms ?? [], query);
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
@@ -954,6 +1038,7 @@ export async function recordShortTermRecalls(params: {
         startLine: Math.max(1, Math.floor(result.startLine)),
         endLine: Math.max(1, Math.floor(result.endLine)),
         source: "memory",
+        shortTermKind,
         snippet: snippet || existing?.snippet || "",
         recallCount,
         dailyCount,
@@ -963,6 +1048,7 @@ export async function recordShortTermRecalls(params: {
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
         lastRecalledAt: nowIso,
         queryHashes,
+        queryTerms,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         ...(existing?.claimHash ? { claimHash: existing.claimHash } : {}),
@@ -1021,7 +1107,7 @@ export async function recordGroundedShortTermCandidates(params: {
         !snippet ||
         isContaminatedDreamingSnippet(snippet) ||
         !normalizedPath ||
-        !isShortTermMemoryPath(normalizedPath) ||
+        !resolveShortTermKind(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
         !Number.isFinite(item.endLine)
       ) {
@@ -1057,6 +1143,7 @@ export async function recordGroundedShortTermCandidates(params: {
       }
       const queryHash = hashQuery(effectiveQuery);
       const claimHash = buildClaimHash(item.snippet);
+      const shortTermKind = resolveShortTermKind(item.path);
       const key = buildEntryKey({
         path: item.path,
         startLine: item.startLine,
@@ -1081,6 +1168,7 @@ export async function recordGroundedShortTermCandidates(params: {
       );
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : item.score);
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+      const queryTerms = mergeQueryTerms(existing?.queryTerms ?? [], effectiveQuery);
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
@@ -1090,6 +1178,7 @@ export async function recordGroundedShortTermCandidates(params: {
         startLine: item.startLine,
         endLine: item.endLine,
         source: "memory",
+        ...(shortTermKind ? { shortTermKind } : {}),
         snippet: item.snippet,
         recallCount: Math.max(0, Math.floor(existing?.recallCount ?? 0)),
         dailyCount: Math.max(0, Math.floor(existing?.dailyCount ?? 0)),
@@ -1099,6 +1188,7 @@ export async function recordGroundedShortTermCandidates(params: {
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
         lastRecalledAt: nowIso,
         queryHashes,
+        queryTerms,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         claimHash,
@@ -1199,7 +1289,7 @@ export async function rankShortTermPromotionCandidates(
   const candidates: PromotionCandidate[] = [];
 
   for (const entry of Object.values(store.entries)) {
-    if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
+    if (!entry || entry.source !== "memory" || !isTrackedShortTermEntry(entry)) {
       continue;
     }
     if (isContaminatedDreamingSnippet(entry.snippet)) {
@@ -1271,6 +1361,7 @@ export async function rankShortTermPromotionCandidates(
       avgScore,
       maxScore: clampScore(entry.maxScore),
       uniqueQueries,
+      queryTerms: entry.queryTerms ?? [],
       ...(entry.claimHash ? { claimHash: entry.claimHash } : {}),
       promotedAt: entry.promotedAt,
       firstRecalledAt: entry.firstRecalledAt,
@@ -1319,7 +1410,7 @@ export async function readShortTermRecallEntries(params: {
   const store = await readStore(workspaceDir, nowIso);
   return Object.values(store.entries).filter(
     (entry): entry is ShortTermRecallEntry =>
-      Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
+      Boolean(entry) && entry.source === "memory" && isTrackedShortTermEntry(entry),
   );
 }
 
@@ -1857,6 +1948,7 @@ export async function repairShortTermPromotionArtifacts(params: {
             key,
             {
               ...entry,
+              ...(entry.shortTermKind ? { shortTermKind: entry.shortTermKind } : {}),
               dailyCount: Math.max(
                 0,
                 Math.floor((entry as { dailyCount?: number }).dailyCount ?? 0),
@@ -1866,6 +1958,7 @@ export async function repairShortTermPromotionArtifacts(params: {
                 Math.floor((entry as { groundedCount?: number }).groundedCount ?? 0),
               ),
               queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
+              queryTerms: (entry.queryTerms ?? []).slice(-MAX_QUERY_TERMS),
               recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
               conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
             } satisfies ShortTermRecallEntry,
