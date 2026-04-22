@@ -6,7 +6,7 @@ description = "Official OpenClaw native Windows wrapper"
 authors = ["OpenClaw Project"]
 
 [dependencies]
-tauri = { version = "1.5", features = ["system-tray", "devtools", "notification-all", "process-exit", "process-relaunch", "shell-sidecar", "window-all"] }
+tauri = { version = "1.5", features = ["system-tray", "devtools", "notification-all", "process-exit", "process-relaunch", "shell-sidecar", "updater"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
