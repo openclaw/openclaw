@@ -4,6 +4,7 @@ import { resetToolStream } from "./app-tool-stream.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
+import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   abortChatRun,
   loadChatHistory,
@@ -13,7 +14,6 @@ import {
 } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
@@ -604,7 +604,10 @@ export async function refreshChatAvatar(host: ChatHost) {
       setChatAvatarUrl(host, avatarUrl);
       return;
     }
-    const avatarRes = await fetch(avatarUrl, { method: "GET", headers: { Authorization: authHeader } });
+    const avatarRes = await fetch(avatarUrl, {
+      method: "GET",
+      headers: { Authorization: authHeader },
+    });
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
         clearChatAvatarUrl(host);

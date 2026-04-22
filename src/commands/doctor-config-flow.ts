@@ -2,12 +2,13 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
-import { emitDoctorNotes } from "./doctor/emit-notes.js";
+import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
@@ -39,6 +40,8 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
+  runtime?: RuntimeEnv;
+  prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
   const preflight = await runDoctorConfigPreflight();
@@ -132,6 +135,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  if (params.runtime && params.prompter) {
+    const { maybeRepairBundledPluginRuntimeDeps } =
+      await import("./doctor-bundled-plugin-runtime-deps.js");
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: params.runtime,
+      prompter: params.prompter,
+      config: candidate,
+      includeConfiguredChannels: true,
+    });
+  }
+
   const hasConfiguredChannels = collectConfiguredChannelIds(candidate).length > 0;
   let collectMutableAllowlistWarnings:
     | typeof import("./doctor/shared/channel-doctor.js").collectChannelDoctorMutableAllowlistWarnings
@@ -152,11 +166,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     for (const staleCleanup of await channelDoctor.collectChannelDoctorStaleConfigMutations(
       candidate,
+      { env: process.env },
     )) {
       if (staleCleanup.changes.length === 0) {
         continue;
       }
-      note(staleCleanup.changes.join("\n"), "Doctor changes");
+      note(sanitizeDoctorNote(staleCleanup.changes.join("\n")), "Doctor changes");
       ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
         state: { cfg, candidate, pendingChanges, fixHints },
         mutation: staleCleanup,
@@ -181,6 +196,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const repairSequence = await runDoctorRepairSequence({
       state: { cfg, candidate, pendingChanges, fixHints },
       doctorFixCommand,
+      env: process.env,
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
     emitDoctorNotes({
@@ -195,6 +211,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       warningNotes: await collectDoctorPreviewWarnings({
         cfg: candidate,
         doctorFixCommand,
+        env: process.env,
       }),
     });
   }
@@ -202,10 +219,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const mutableAllowlistWarnings = collectMutableAllowlistWarnings
     ? await collectMutableAllowlistWarnings({
         cfg: candidate,
+        env: process.env,
       })
     : [];
   if (mutableAllowlistWarnings.length > 0) {
-    note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
+    note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
   const unknownStep = applyUnknownConfigKeyStep({

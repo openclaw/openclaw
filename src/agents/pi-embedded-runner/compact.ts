@@ -70,8 +70,8 @@ import {
   consumeCompactionSafeguardCancelReason,
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
-import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
+import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -844,6 +844,8 @@ export async function compactEmbeddedPiSessionDirect(
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
+      // OpenClaw registers filtered tools through `customTools`; keep Pi's
+      // built-in tool list empty so the SDK does not re-enable defaults.
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
@@ -854,6 +856,7 @@ export async function compactEmbeddedPiSessionDirect(
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider,
         modelApi: effectiveModel.api,
+        modelBaseUrl: effectiveModel.baseUrl,
       });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({

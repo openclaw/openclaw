@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
-import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
@@ -13,6 +12,7 @@ import {
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
@@ -44,7 +44,9 @@ type ChatRefreshHost = AppViewState & {
   updateComplete?: Promise<unknown>;
 };
 
-export function resolveAssistantAttachmentAuthToken(state: Pick<AppViewState, "hello" | "settings" | "password">) {
+export function resolveAssistantAttachmentAuthToken(
+  state: Pick<AppViewState, "hello" | "settings" | "password">,
+) {
   return resolveControlUiAuthToken(state);
 }
 
