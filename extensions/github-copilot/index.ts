@@ -6,6 +6,10 @@ import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
+import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
+import { fetchCopilotUsage } from "./usage.js";
+import { discoverCopilotModels, COPILOT_IDE_HEADERS } from "./discovery.js";
+import { getDefaultCopilotModelIds } from "./models-defaults.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"] as const;
@@ -116,21 +120,40 @@ export default definePluginEntry({
             return null;
           }
           let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+          let copilotToken: string | undefined;
           if (githubToken) {
             try {
-              const token = await resolveCopilotApiToken({
+              const resolved = await resolveCopilotApiToken({
                 githubToken,
                 env: ctx.env,
               });
-              baseUrl = token.baseUrl;
+              baseUrl = resolved.baseUrl;
+              copilotToken = resolved.token;
             } catch {
               baseUrl = DEFAULT_COPILOT_API_BASE_URL;
             }
           }
+
+          let discoveredModels: Awaited<ReturnType<typeof discoverCopilotModels>> = [];
+          if (copilotToken) {
+            try {
+              const knownModelIds = new Set(getDefaultCopilotModelIds());
+              discoveredModels = await discoverCopilotModels({
+                baseUrl,
+                copilotToken,
+                knownModelIds,
+              });
+            } catch {
+              // best-effort: discovery failure is not fatal
+            }
+          }
+
           return {
             provider: {
               baseUrl,
-              models: [],
+              ...(discoveredModels.length > 0
+                ? { headers: COPILOT_IDE_HEADERS, models: discoveredModels }
+                : { models: [] }),
             },
           };
         },
