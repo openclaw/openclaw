@@ -813,8 +813,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("renders the thinking panel on assistant start for claude-cli even without reasoning preview", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
     const { result, options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
+      runtime: runtime as never,
       allowReasoningPreview: false,
     });
 
@@ -831,6 +832,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
       expect.stringContaining("⏳ Thinking"),
       { title: "💭 Thinking" },
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("thinking panel visible"));
+  });
+
+  it("logs pending thinking-card lifecycle when a queued followup preview is shown", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const { result } = createDispatcherHarness({
+      runtime: runtime as never,
+    });
+
+    const pending = await result.showPendingThinkingCard?.();
+    await flushAsyncTasks();
+
+    expect(pending).toEqual({ messageId: "stream-message-id" });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("showPendingThinkingCard requested"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("showPendingThinkingCard ready messageId=stream-message-id"),
     );
   });
 

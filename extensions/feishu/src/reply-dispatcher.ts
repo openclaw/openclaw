@@ -422,6 +422,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let replyCycleInitialized = false;
   let preservePendingThinkingCardOnIdle = false;
   let forcePendingThinkingPreview = false;
+  let thinkingPanelVisibleLogged = false;
   let typingIdlePending = false;
 
   const resetReplyCycleState = () => {
@@ -443,6 +444,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     thinkingActivityTick = 0;
     preservePendingThinkingCardOnIdle = false;
     forcePendingThinkingPreview = false;
+    thinkingPanelVisibleLogged = false;
     typingIdlePending = false;
   };
   /**
@@ -939,6 +941,32 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         hasThinkingPrelude),
     );
 
+  const describeThinkingPreludeReason = (options?: { forcePreview?: boolean }): string => {
+    const reasons: string[] = [];
+    if (options?.forcePreview) {
+      reasons.push("force_preview");
+    }
+    if (toolCallCount > 0 || activeTools.length > 0) {
+      reasons.push("tool_activity");
+    }
+    if (hasReasoningText()) {
+      reasons.push("reasoning_text");
+    }
+    if (reasoningPreviewEnabled) {
+      reasons.push("reasoning_preview");
+    }
+    if (claudeCliInitThinkingPanelEnabled) {
+      reasons.push("claude_cli_init");
+    }
+    if (forcePendingThinkingPreview) {
+      reasons.push("pending_followup_preview");
+    }
+    if (hasThinkingPrelude) {
+      reasons.push("already_armed");
+    }
+    return reasons.join("+") || "unknown";
+  };
+
   const queueThinkingPrelude = (options?: { forcePreview?: boolean }): boolean => {
     if (!shouldRenderThinkingPanel(options)) {
       return false;
@@ -948,6 +976,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     streamPhase = "thinking";
     hasThinkingPrelude = true;
+    logDispatcher(`thinking prelude armed cause=${describeThinkingPreludeReason(options)}`);
     return true;
   };
 
@@ -963,6 +992,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streaming?.isActive()) {
         const panel = composeThinkingContent();
         await streaming.updateThinking(panel.text, { title: panel.title });
+        if (!thinkingPanelVisibleLogged) {
+          thinkingPanelVisibleLogged = true;
+          logDispatcher(
+            `thinking panel visible title=${panel.title} textChars=${panel.text.trim().length} phase=${streamPhase}`,
+          );
+        }
       }
     });
   };
@@ -1646,11 +1681,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     markDispatchIdle,
     showPendingThinkingCard: async () => {
       if (!streamingEnabled) {
+        logDispatcher(`showPendingThinkingCard skipped streamingEnabled=false`);
         return { messageId: undefined };
       }
       if (!replyCycleInitialized) {
         resetReplyCycleState();
       }
+      logDispatcher(
+        `showPendingThinkingCard requested replyTo=${replyToMessageId ?? "none"} root=${rootId ?? "none"} effectiveReplyInThread=${effectiveReplyInThread ? "true" : "false"}`,
+      );
       preservePendingThinkingCardOnIdle = true;
       forcePendingThinkingPreview = true;
       queueThinkingPrelude({ forcePreview: true });
@@ -1660,7 +1699,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streamingStartPromise;
       }
       await partialUpdateQueue;
-      return { messageId: streaming?.getMessageId() };
+      const messageId = streaming?.getMessageId();
+      logDispatcher(`showPendingThinkingCard ready messageId=${messageId ?? "none"}`);
+      return { messageId };
     },
   };
 }
