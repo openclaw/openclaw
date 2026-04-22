@@ -58,6 +58,8 @@ const mockState = vi.hoisted(() => ({
   saveMediaWait: null as Promise<void> | null,
   activeSaveMediaCalls: 0,
   maxActiveSaveMediaCalls: 0,
+  savedMediaIdCounter: 0,
+  deletedMediaIds: [] as string[],
 }));
 
 const bindingMocks = vi.hoisted(() => ({
@@ -197,6 +199,34 @@ vi.mock("../../sessions/transcript-events.js", () => ({
   ),
 }));
 
+// Attachment-race test (below) needs to hold chat.send inside its attachment
+// parsing window long enough for a second same-idempotencyKey caller to pass
+// the pre-parse chatAbortControllers guard. Expose a controllable deferral so
+// those tests can install a pending promise; when the slot is empty the mock
+// delegates to the real parseMessageWithAttachments so unrelated directive-tag
+// tests keep their existing behaviour.
+const attachmentParseHooks = vi.hoisted(() => ({
+  pending: null as Promise<void> | null,
+  callCount: 0,
+}));
+
+vi.mock("../chat-attachments.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../chat-attachments.js")>("../chat-attachments.js");
+  return {
+    ...actual,
+    parseMessageWithAttachments: vi.fn(
+      async (...args: Parameters<typeof actual.parseMessageWithAttachments>) => {
+        attachmentParseHooks.callCount += 1;
+        if (attachmentParseHooks.pending) {
+          await attachmentParseHooks.pending;
+        }
+        return actual.parseMessageWithAttachments(...args);
+      },
+    ),
+  };
+});
+
 vi.mock("../../media/store.js", async () => {
   const original =
     await vi.importActual<typeof import("../../media/store.js")>("../../media/store.js");
@@ -217,9 +247,11 @@ vi.mock("../../media/store.js", async () => {
       }
       mockState.savedMediaCalls.push({ contentType, subdir, size: buffer.byteLength });
       const next = mockState.savedMediaResults.shift();
+      mockState.savedMediaIdCounter += 1;
+      const generatedId = `saved-media-${mockState.savedMediaIdCounter}`;
       try {
         return {
-          id: "saved-media",
+          id: generatedId,
           path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
           size: buffer.byteLength,
           contentType: next?.contentType ?? contentType,
@@ -227,6 +259,9 @@ vi.mock("../../media/store.js", async () => {
       } finally {
         mockState.activeSaveMediaCalls -= 1;
       }
+    }),
+    deleteMediaBuffer: vi.fn(async (id: string, _subdir?: string) => {
+      mockState.deletedMediaIds.push(id);
     }),
   };
 });
@@ -2475,6 +2510,148 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           timestamp: expect.any(Number),
         },
       });
+    });
+  });
+
+  // Regression guard for the `chat.send` attachment-branch race documented in
+  // chat.ts near the post-parse re-check (~L1957). The pre-parse
+  // `chatAbortControllers.get` guard (L1920) and the `.set` that claims the
+  // entry (L1960) are separated by two real I/O awaits
+  // (`resolveGatewayModelSupportsImages`, `parseMessageWithAttachments`).
+  // A same-idempotencyKey retry that arrives during that window would, before
+  // the fix, pass the initial guard and overwrite the original caller's
+  // AbortController entry — leaving the real run orphaned so a subsequent
+  // user-initiated `chat.abort` would hit the wrong controller. The no-
+  // attachment branch has no await between get and set and is atomic under JS
+  // single-thread semantics, so this regression is attachment-specific.
+  describe("chat.send attachment branch — chatAbortControllers atomicity", () => {
+    it("returns in_flight for a same-idempotencyKey retry that arrives during attachment parsing", async () => {
+      createTranscriptFixture("openclaw-chat-send-attachment-race-");
+      mockState.finalText = "ok";
+      mockState.config = {
+        agents: {
+          list: [
+            {
+              id: "vision",
+              default: true,
+              model: "test-provider/vision-model",
+            },
+          ],
+        },
+      };
+      mockState.modelCatalog = [
+        {
+          provider: "test-provider",
+          id: "vision-model",
+          name: "Vision model",
+          input: ["text", "image"],
+        },
+      ];
+
+      const context = createChatContext();
+      const respondA = vi.fn();
+      const respondB = vi.fn();
+      let releaseParse = () => {};
+      attachmentParseHooks.pending = new Promise<void>((resolve) => {
+        releaseParse = resolve;
+      });
+      attachmentParseHooks.callCount = 0;
+
+      const idempotencyKey = "idem-attachment-race-1";
+      // Use a >2 MB payload so parseMessageWithAttachments hits the offload
+      // branch and registers offloadedRefs (OFFLOAD_THRESHOLD_BYTES=2_000_000
+      // in chat-attachments.ts). The loser's offloaded file must be cleaned
+      // up on the post-parse re-check's early return or it leaks an orphan
+      // until an opt-in TTL sweep runs.
+      const largeBuffer = Buffer.alloc(2_100_000, 0xab);
+      const sendParams = {
+        sessionKey: "main",
+        message: "hello with attachment",
+        idempotencyKey,
+        attachments: [
+          {
+            mimeType: "image/png",
+            fileName: "pic.png",
+            content: largeBuffer.toString("base64"),
+          },
+        ],
+      };
+
+      const firstInvocation = chatHandlers["chat.send"]({
+        params: sendParams,
+        respond: respondA as unknown as Parameters<
+          (typeof chatHandlers)["chat.send"]
+        >[0]["respond"],
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      // Wait for the first invocation to reach the parse await so the second
+      // caller passes the pre-parse chatAbortControllers.get guard too.
+      await waitForAssertion(() => {
+        expect(attachmentParseHooks.callCount).toBeGreaterThanOrEqual(1);
+      });
+      expect(context.chatAbortControllers.has(idempotencyKey)).toBe(false);
+
+      const secondInvocation = chatHandlers["chat.send"]({
+        params: sendParams,
+        respond: respondB as unknown as Parameters<
+          (typeof chatHandlers)["chat.send"]
+        >[0]["respond"],
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      await waitForAssertion(() => {
+        expect(attachmentParseHooks.callCount).toBeGreaterThanOrEqual(2);
+      });
+
+      releaseParse();
+      attachmentParseHooks.pending = null;
+
+      await Promise.allSettled([firstInvocation, secondInvocation]);
+
+      // Exactly one caller claims the abort controller entry. The other must
+      // be told the run is already in flight per
+      // docs/web/control-ui.md#L131-132.
+      const respondCalls = [...respondA.mock.calls, ...respondB.mock.calls];
+      const startedAcks = respondCalls.filter((call) => {
+        const payload = call[1];
+        return (
+          payload &&
+          typeof payload === "object" &&
+          (payload as { status?: unknown }).status === "started"
+        );
+      });
+      const inFlightAcks = respondCalls.filter((call) => {
+        const payload = call[1];
+        return (
+          payload &&
+          typeof payload === "object" &&
+          (payload as { status?: unknown }).status === "in_flight"
+        );
+      });
+
+      expect(startedAcks).toHaveLength(1);
+      expect(inFlightAcks).toHaveLength(1);
+      // After both calls settle, the map entry belongs to the winner — not to
+      // an orphan controller that an abort RPC would hit instead of the real
+      // run.
+      expect(context.chatAbortControllers.has(idempotencyKey)).toBe(true);
+
+      // Both callers ran parseMessageWithAttachments on the >2 MB payload, so
+      // each offloaded one file via saveMediaBuffer. The loser returns early
+      // through the post-parse re-check and must free its offloadedRef(s) so
+      // we do not rely on the opt-in mediaCleanup TTL sweep to catch up.
+      expect(mockState.savedMediaCalls.length).toBeGreaterThanOrEqual(2);
+      expect(mockState.deletedMediaIds.length).toBeGreaterThanOrEqual(1);
+      // The deleted id must come from the saveMediaBuffer id sequence so we
+      // know we actually dropped an offloaded attachment (not a spurious id).
+      expect(mockState.deletedMediaIds.every((id) => id.startsWith("saved-media-"))).toBe(true);
     });
   });
 });

@@ -22,7 +22,7 @@ import {
 } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
+import { deleteMediaBuffer, type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -2233,6 +2233,46 @@ export const chatHandlers: GatewayRequestHandlers = {
             String(err),
           ),
         );
+        return;
+      }
+      // Attachment parsing spans two real I/O awaits (model catalog lookup and
+      // buffer/fs work in parseMessageWithAttachments). A same-idempotencyKey
+      // retry that arrives during that window would otherwise pass the guard
+      // at the top of this block and fall through to the .set below, which
+      // would overwrite the prior caller's AbortController entry — leaving the
+      // real run orphaned (user-initiated abort via the map would hit the
+      // overwriting entry and fail to stop the in-flight run). Re-check here
+      // so the documented same-idempotencyKey contract
+      // (docs/web/control-ui.md#L131-132: "Re-sending with the same
+      // idempotencyKey returns { status: \"in_flight\" } while running") holds
+      // on the attachment branch just as it does on the no-attachment branch
+      // (which has no await between get and set and is therefore atomic).
+      const duringParseWinner = context.chatAbortControllers.get(clientRunId);
+      if (duringParseWinner) {
+        // parseMessageWithAttachments may have offloaded large attachments to
+        // disk (chat-attachments.ts:425-431, any payload >2MB on a supported
+        // mime). Those files are only cleaned up on parse failure; the happy
+        // path persists them. Returning in_flight here without a matching
+        // cleanup would leak an orphan file per offloaded ref until an
+        // opt-in TTL sweep catches up (server-maintenance.ts mediaCleanup is
+        // only armed when cfg.media.ttlHours is set). Mirror the cleanup
+        // loop used by agent.request's post-parse early-return
+        // (server-node-events.ts:448-458).
+        if (offloadedRefs.length > 0) {
+          for (const ref of offloadedRefs) {
+            try {
+              await deleteMediaBuffer(ref.id);
+            } catch (cleanupErr) {
+              context.logGateway.warn(
+                `Failed to cleanup orphaned inbound media ${ref.id}: ${String(cleanupErr)}`,
+              );
+            }
+          }
+        }
+        respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: clientRunId,
+        });
         return;
       }
     }
