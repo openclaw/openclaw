@@ -493,6 +493,87 @@ describe("telegram exec approvals", () => {
       );
       expect(handled).toEqual(["sentry"]);
     });
+
+    it("does not bind a target account when forwarding is disabled or filtered out", () => {
+      const accounts = {
+        default: { botToken: "t1", allowFrom: ["55"] },
+        sentry: { botToken: "t2", allowFrom: ["55"] },
+      };
+      const request: TelegramExecApprovalRequest = {
+        id: "req-gated",
+        request: { command: "echo hi", sessionKey: "agent:main:main" },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      };
+
+      const disabled = {
+        approvals: {
+          exec: {
+            enabled: false,
+            mode: "targets",
+            targets: [{ channel: "telegram", to: "55", accountId: "sentry" }],
+          },
+        },
+        channels: { telegram: { accounts } },
+      } as OpenClawConfig;
+      expect(
+        shouldHandleTelegramExecApprovalRequest({ cfg: disabled, accountId: "default", request }),
+      ).toBe(true);
+
+      const filteredOut = {
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "targets",
+            agentFilter: ["other"],
+            targets: [{ channel: "telegram", to: "55", accountId: "sentry" }],
+          },
+        },
+        channels: { telegram: { accounts } },
+      } as OpenClawConfig;
+      expect(
+        shouldHandleTelegramExecApprovalRequest({
+          cfg: filteredOut,
+          accountId: "default",
+          request,
+        }),
+      ).toBe(true);
+    });
+
+    it("ignores unscoped sibling targets and still binds when a scoped target is unambiguous", () => {
+      const cfg = {
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "targets",
+            targets: [
+              { channel: "telegram", to: "55" },
+              { channel: "telegram", to: "56", accountId: "sentry" },
+            ],
+          },
+        },
+        channels: {
+          telegram: {
+            accounts: {
+              default: { botToken: "t1", allowFrom: ["55", "56"] },
+              sentry: { botToken: "t2", allowFrom: ["55", "56"] },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const request: TelegramExecApprovalRequest = {
+        id: "req-mixed",
+        request: { command: "echo hi", sessionKey: "agent:main:main" },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      };
+      expect(shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "sentry", request })).toBe(
+        true,
+      );
+      expect(shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "default", request })).toBe(
+        false,
+      );
+    });
   });
 
   describe("isTelegramExecApprovalAuthorizedSender", () => {

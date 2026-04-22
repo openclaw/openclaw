@@ -1,15 +1,13 @@
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type {
-  ExecApprovalForwardingConfig,
-  ExecApprovalForwardTarget,
-} from "../config/types.approvals.js";
+import type { ExecApprovalForwardingConfig } from "../config/types.approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -122,19 +120,37 @@ function resolveConfiguredForwardTargetAccountId(
   const section: ExecApprovalForwardingConfig | undefined = isPlugin
     ? params.cfg.approvals?.plugin
     : params.cfg.approvals?.exec;
-  const mode = section?.mode ?? "session";
+  if (!section?.enabled) {
+    return null;
+  }
+  const mode = section.mode ?? "session";
   if (mode !== "targets" && mode !== "both") {
     return null;
   }
+  if (
+    !matchesApprovalRequestFilters({
+      request: {
+        agentId: params.request.request.agentId,
+        sessionKey: params.request.request.sessionKey,
+      },
+      agentFilter: section.agentFilter,
+      sessionFilter: section.sessionFilter,
+      fallbackAgentIdFromSessionKey: true,
+    })
+  ) {
+    return null;
+  }
   const matching = new Set<string>();
-  for (const target of section?.targets ?? []) {
+  for (const target of section.targets ?? []) {
     if (normalizeOptionalChannel(target.channel) !== expectedChannel) {
       continue;
     }
     const accountId = normalizeOptionalAccountId(target.accountId);
     if (!accountId) {
-      return null;
-    } // Unscoped target -> fall back to existing heuristics.
+      // Unscoped target -> ignore; do not let a signal-less entry disable the
+      // scoping inferred from sibling entries that do set `accountId`.
+      continue;
+    }
     matching.add(accountId);
   }
   return matching.size === 1 ? (matching.values().next().value ?? null) : null;
