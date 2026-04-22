@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { slackPlugin } from "../../../extensions/slack/api.js";
 import type {
   ChannelMessagingAdapter,
   ChannelPlugin,
@@ -59,12 +60,12 @@ const slackMessaging: ChannelMessagingAdapter = {
   },
 };
 
-const slackThreading: ChannelThreadingAdapter = {
-  resolveReplyTransport: ({ threadId, replyToId }) => ({
-    replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
-    threadId: null,
-  }),
-};
+const slackThreading = (() => {
+  if (!slackPlugin.threading) {
+    throw new Error("slack threading unavailable");
+  }
+  return slackPlugin.threading satisfies ChannelThreadingAdapter;
+})();
 
 const mattermostThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId }) => ({
@@ -446,6 +447,21 @@ describe("routeReply", () => {
     expectLastDelivery({
       channel: "slack",
       replyToId: "1710000000.9999",
+      threadId: null,
+    });
+  });
+
+  it("prefers Slack threadId over a non-Slack replyToId when routing", async () => {
+    await routeReply({
+      payload: { text: "hi", replyToId: "msg-internal-1" },
+      channel: "slack",
+      to: "channel:C123",
+      threadId: "1712345678.123456",
+      cfg: {} as never,
+    });
+    expectLastDelivery({
+      channel: "slack",
+      replyToId: "1712345678.123456",
       threadId: null,
     });
   });
