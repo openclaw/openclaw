@@ -232,7 +232,7 @@ function isTerminalDurableJobStatus(status: string): boolean {
 function syncLinkedDurableJobTerminal(params: {
   ownerKey: string;
   flowId: string;
-  flowStatus: Extract<TaskFlowRecord["status"], "succeeded" | "failed">;
+  flowStatus: Extract<TaskFlowRecord["status"], "blocked" | "succeeded" | "failed">;
   currentStep?: string | null;
   summary?: string | null;
   updatedAt?: number;
@@ -254,7 +254,17 @@ function syncLinkedDurableJobTerminal(params: {
   });
   const to = params.flowStatus === "succeeded" ? "completed" : "blocked";
   const reason =
-    params.flowStatus === "succeeded" ? "Linked TaskFlow finished" : "Linked TaskFlow failed";
+    params.flowStatus === "succeeded"
+      ? "Linked TaskFlow finished"
+      : params.flowStatus === "failed"
+        ? "Linked TaskFlow failed"
+        : "Linked TaskFlow blocked";
+  const wakeDetail =
+    params.flowStatus === "succeeded"
+      ? "TaskFlow reached a successful terminal state."
+      : params.flowStatus === "failed"
+        ? "TaskFlow reached a failed terminal state."
+        : "TaskFlow entered a blocked state.";
 
   jobs.transition({
     jobId: job.jobId,
@@ -265,15 +275,12 @@ function syncLinkedDurableJobTerminal(params: {
     at: params.updatedAt,
     wake: {
       status: "cleared",
-      detail:
-        params.flowStatus === "succeeded"
-          ? "TaskFlow reached a successful terminal state."
-          : "TaskFlow reached a failed terminal state.",
+      detail: wakeDetail,
     },
     patch: {
       currentStep: params.currentStep,
       nextWakeAt: null,
-      summary: params.flowStatus === "failed" ? (params.summary ?? null) : null,
+      summary: params.flowStatus === "succeeded" ? null : (params.summary ?? null),
     },
   });
 }
@@ -399,15 +406,26 @@ function createBoundTaskFlowRuntime(params: {
         }),
       );
       if (result.applied) {
-        syncLinkedDurableJobWaiting({
-          ownerKey,
-          flowId: result.flow.flowId,
-          flowStatus: result.flow.status,
-          currentStep: input.currentStep,
-          waitJson: input.waitJson,
-          blockedSummary: input.blockedSummary,
-          updatedAt: input.updatedAt,
-        });
+        if (result.flow.status === "waiting") {
+          syncLinkedDurableJobWaiting({
+            ownerKey,
+            flowId: result.flow.flowId,
+            flowStatus: result.flow.status,
+            currentStep: input.currentStep,
+            waitJson: input.waitJson,
+            blockedSummary: input.blockedSummary,
+            updatedAt: input.updatedAt,
+          });
+        } else if (result.flow.status === "blocked") {
+          syncLinkedDurableJobTerminal({
+            ownerKey,
+            flowId: result.flow.flowId,
+            flowStatus: result.flow.status,
+            currentStep: result.flow.currentStep,
+            summary: result.flow.blockedSummary,
+            updatedAt: result.flow.updatedAt,
+          });
+        }
       }
       return result;
     },
