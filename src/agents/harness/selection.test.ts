@@ -53,7 +53,7 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
     modelRegistry: {} as never,
     thinkLevel: "low",
     config,
-  } as EmbeddedRunAttemptParams;
+  } as unknown as EmbeddedRunAttemptParams;
 }
 
 function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
