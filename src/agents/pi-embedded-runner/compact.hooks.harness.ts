@@ -336,6 +336,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-bundle-mcp-tools.js", () => ({
+    retireSessionMcpRuntime: vi.fn(async () => true),
     createBundleMcpToolRuntime: vi.fn(async () => ({
       tools: [],
       dispose: vi.fn(async () => {}),

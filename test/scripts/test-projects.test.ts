@@ -44,6 +44,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps extension batch runner edits on extension script tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/test-extension-batch.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/test-extension.test.ts"],
+    });
+  });
+
   it("routes changed extension vitest configs to their own shard", () => {
     expect(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [

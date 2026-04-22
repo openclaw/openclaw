@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
 import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
 import { CodexAppServerClient } from "./src/app-server/client.js";
 import {
@@ -160,7 +161,11 @@ describe("codex provider", () => {
       reasoning: true,
       compat: { supportsReasoningEffort: true },
     });
-    expect(provider.supportsXHighThinking?.({ provider: "codex", modelId: "o4-mini" })).toBe(true);
+    expect(
+      provider
+        .resolveThinkingProfile?.({ provider: "codex", modelId: "o4-mini" } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
+    ).toBe(true);
   });
 
   it("declares synthetic auth because the harness owns Codex credentials", () => {
@@ -171,5 +176,34 @@ describe("codex provider", () => {
       source: "codex-app-server",
       mode: "token",
     });
+  });
+
+  it("adds the GPT-5 prompt overlay to Codex provider runs", () => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider.resolveSystemPromptContribution?.({
+        provider: "codex",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
+      sectionOverrides: {
+        interaction_style: expect.stringContaining(
+          "Quiet monitoring does not satisfy an explicit ongoing-work instruction.",
+        ),
+      },
+    });
+  });
+
+  it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider.resolveSystemPromptContribution?.({
+        provider: "codex",
+        modelId: "o4-mini",
+      } as never),
+    ).toBeUndefined();
   });
 });

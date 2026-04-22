@@ -23,6 +23,8 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
+export const CLI_AUTH_EPOCH_VERSION = 2;
+
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
 }
@@ -41,24 +43,16 @@ function encodeUnknown(value: unknown): string {
 
 function encodeClaudeCredential(credential: ClaudeCliCredential): string {
   if (credential.type === "oauth") {
-    return JSON.stringify([
-      "oauth",
-      credential.provider,
-      credential.access,
-      credential.refresh,
-      credential.expires,
-    ]);
+    return JSON.stringify(["oauth", credential.provider, credential.refresh]);
   }
-  return JSON.stringify(["token", credential.provider, credential.token, credential.expires]);
+  return JSON.stringify(["token", credential.provider, credential.token]);
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
   return JSON.stringify([
     credential.type,
     credential.provider,
-    credential.access,
     credential.refresh,
-    credential.expires,
     credential.accountId ?? null,
   ]);
 }
@@ -81,7 +75,6 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.provider,
         credential.token ?? null,
         encodeUnknown(credential.tokenRef),
-        credential.expires ?? null,
         credential.email ?? null,
         credential.displayName ?? null,
       ]);
@@ -89,12 +82,9 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
       return JSON.stringify([
         "oauth",
         credential.provider,
-        credential.access,
         credential.refresh,
-        credential.expires,
         credential.clientId ?? null,
         credential.email ?? null,
-        credential.displayName ?? null,
         credential.enterpriseUrl ?? null,
         credential.projectId ?? null,
         credential.accountId ?? null,

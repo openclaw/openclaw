@@ -100,6 +100,10 @@ The Gateway also keeps a trusted last-known-good copy after a successful startup
 `openclaw.json` is later changed outside OpenClaw and no longer validates, startup
 and hot reload preserve the broken file as a timestamped `.clobbered.*` snapshot,
 restore the last-known-good copy, and log a loud warning with the recovery reason.
+If a status/log line is accidentally prepended before an otherwise valid JSON
+config, gateway startup and `openclaw doctor --fix` can strip the prefix,
+preserve the polluted file as `.clobbered.*`, and continue with the recovered
+JSON.
 The next main-agent turn also receives a system-event warning telling it that the
 config was restored and must not be blindly rewritten. Last-known-good promotion
 is updated after validated startup and after accepted hot reloads, including
@@ -539,16 +543,16 @@ for the recovery checklist.
 
 Most fields hot-apply without downtime. In `hybrid` mode, restart-required changes are handled automatically.
 
-| Category            | Fields                                                               | Restart needed? |
-| ------------------- | -------------------------------------------------------------------- | --------------- |
-| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and extension channels | No              |
-| Agent & models      | `agent`, `agents`, `models`, `routing`                               | No              |
-| Automation          | `hooks`, `cron`, `agent.heartbeat`                                   | No              |
-| Sessions & messages | `session`, `messages`                                                | No              |
-| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                        | No              |
-| UI & misc           | `ui`, `logging`, `identity`, `bindings`                              | No              |
-| Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)                 | **Yes**         |
-| Infrastructure      | `discovery`, `canvasHost`, `plugins`                                 | **Yes**         |
+| Category            | Fields                                                            | Restart needed? |
+| ------------------- | ----------------------------------------------------------------- | --------------- |
+| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and plugin channels | No              |
+| Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
+| Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
+| Sessions & messages | `session`, `messages`                                             | No              |
+| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                     | No              |
+| UI & misc           | `ui`, `logging`, `identity`, `bindings`                           | No              |
+| Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)              | **Yes**         |
+| Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
 
 <Note>
 `gateway.reload` and `gateway.remote` are exceptions — changing them does **not** trigger a restart.

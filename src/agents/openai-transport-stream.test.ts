@@ -19,6 +19,74 @@ import {
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 describe("openai transport stream", () => {
+  it("moves Azure OpenAI completions api-version headers into default query params", () => {
+    const config = __testing.buildOpenAICompletionsClientConfig(
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
+        api: "openai-completions",
+        provider: "azure-custom",
+        baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini?existing=1",
+        headers: {
+          "api-key": "azure-key",
+          "api-version": "2024-10-21",
+          "X-Tenant": "acme",
+        },
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(config).toEqual({
+      baseURL: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini",
+      defaultHeaders: {
+        "api-key": "azure-key",
+        "X-Tenant": "acme",
+      },
+      defaultQuery: {
+        existing: "1",
+        "api-version": "2024-10-21",
+      },
+    });
+  });
+
+  it("preserves configured base URL query params without moving non-Azure headers", () => {
+    const config = __testing.buildOpenAICompletionsClientConfig(
+      {
+        id: "proxy-model",
+        name: "Proxy Model",
+        api: "openai-completions",
+        provider: "custom-proxy",
+        baseUrl: "https://proxy.example.com/v1?tenant=acme",
+        headers: {
+          "api-version": "proxy-header",
+          "X-Tenant": "acme",
+        },
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(config).toEqual({
+      baseURL: "https://proxy.example.com/v1",
+      defaultHeaders: {
+        "api-version": "proxy-header",
+        "X-Tenant": "acme",
+      },
+      defaultQuery: {
+        tenant: "acme",
+      },
+    });
+  });
+
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("openai-codex-responses")).toBe(true);
@@ -513,7 +581,7 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
-  it("defaults OpenAI Responses reasoning effort to high when unset", () => {
+  it("does not infer high reasoning when Pi passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -535,8 +603,8 @@ describe("openai transport stream", () => {
       undefined,
     ) as { reasoning?: unknown; include?: string[] };
 
-    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
-    expect(params.include).toEqual(["reasoning.encrypted_content"]);
+    expect(params.reasoning).toEqual({ effort: "none" });
+    expect(params).not.toHaveProperty("include");
   });
 
   it("uses shared stream reasoning as OpenAI Responses effort", () => {
@@ -564,6 +632,62 @@ describe("openai transport stream", () => {
     ) as { reasoning?: unknown };
 
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+  });
+
+  it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { reasoning?: unknown; include?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "none" });
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("omits disabled OpenAI Responses reasoning when the model does not support none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { reasoning?: unknown; include?: unknown };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
   });
 
   it("maps minimal shared reasoning to low for OpenAI Responses", () => {

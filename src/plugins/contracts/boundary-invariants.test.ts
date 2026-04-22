@@ -7,6 +7,74 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 const sourceCache = new Map<string, string>();
 const tsFilesCache = new Map<string, string[]>();
+const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
+  "extensions/acpx/index.ts",
+  "extensions/active-memory/index.ts",
+  "extensions/diffs/src/plugin.ts",
+  "extensions/discord/subagent-hooks-api.ts",
+  "extensions/feishu/subagent-hooks-api.ts",
+  "extensions/matrix/subagent-hooks-api.ts",
+  "extensions/memory-core/src/dreaming.ts",
+  "extensions/memory-lancedb/index.ts",
+  "extensions/skill-workshop/index.ts",
+  "extensions/thread-ownership/index.ts",
+] as const;
+const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
+  "extensions/acpx/index.ts": ["reply_dispatch"],
+  "extensions/active-memory/index.ts": ["before_prompt_build"],
+  "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
+  "extensions/discord/subagent-hooks-api.ts": [
+    "subagent_delivery_target",
+    "subagent_ended",
+    "subagent_spawning",
+  ],
+  "extensions/feishu/subagent-hooks-api.ts": [
+    "subagent_delivery_target",
+    "subagent_ended",
+    "subagent_spawning",
+  ],
+  "extensions/matrix/subagent-hooks-api.ts": [
+    "subagent_delivery_target",
+    "subagent_ended",
+    "subagent_spawning",
+  ],
+  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
+  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/skill-workshop/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
+} as const satisfies Record<
+  (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
+  readonly string[]
+>;
+const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
+  "extensions/active-memory/index.ts": [
+    'resolvePluginConfigObject(api.runtime.config.loadConfig(), "active-memory")',
+    "api.runtime.config.loadConfig()",
+  ],
+  "extensions/diffs/src/plugin.ts": [
+    'resolvePluginConfigObject(currentConfig, "diffs")',
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
+  "extensions/memory-core/src/dreaming.ts": [
+    'params.reason === "runtime"',
+    "resolveMemoryCorePluginConfig(startupCfg)",
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
+  "extensions/memory-lancedb/index.ts": [
+    'resolvePluginConfigObject(runtimeConfig, "memory-lancedb")',
+    "api.runtime.config?.loadConfig?.()",
+  ],
+  "extensions/skill-workshop/index.ts": [
+    'resolvePluginConfigObject(runtimeConfig, "skill-workshop")',
+    'typeof api.runtime.config?.loadConfig === "function"',
+    "api.runtime.config.loadConfig()",
+  ],
+  "extensions/thread-ownership/index.ts": [
+    'resolvePluginConfigObject(currentConfig, "thread-ownership")',
+    'typeof api.runtime.config?.loadConfig === "function"',
+    "api.runtime.config.loadConfig() ?? api.config",
+  ],
+} as const satisfies Record<string, readonly string[]>;
 
 type FileFilter = {
   excludeTests?: boolean;
@@ -59,6 +127,28 @@ function readRepoSource(file: string): string {
   return source;
 }
 
+function isAllowedBundledExtensionImport(specifier: string): boolean {
+  return /(?:^|\/)extensions\/[^/]+\/(?:api|runtime-api)\.js$/u.test(specifier);
+}
+
+function collectBundledExtensionImports(source: string): string[] {
+  const matches = [
+    ...source.matchAll(/from\s+["']([^"']*extensions\/[^"']+)["']/gu),
+    ...source.matchAll(/vi\.(?:mock|doMock)\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
+    ...source.matchAll(/importActual(?:<[^>]*>)?\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
+  ];
+  return matches
+    .map((match) => match[1])
+    .filter((specifier): specifier is string => typeof specifier === "string");
+}
+
+function collectTypedHookNames(source: string): string[] {
+  return [...source.matchAll(/\bapi\.on\(\s*"([^"]+)"/gu)]
+    .map((match) => match[1])
+    .filter((hookName): hookName is string => typeof hookName === "string")
+    .toSorted();
+}
+
 describe("plugin contract boundary invariants", () => {
   it("keeps bundled-capability-metadata confined to contract/test inventory", () => {
     const files = listTsFiles("src");
@@ -86,11 +176,8 @@ describe("plugin contract boundary invariants", () => {
   it("keeps core tests off bundled extension deep imports", () => {
     const files = listTsFiles("src", { testOnly: true });
     const offenders = files.filter((file) => {
-      const source = readRepoSource(file);
-      return (
-        /from\s+["'][^"']*extensions\/.+(?:api|runtime-api|test-api)\.js["']/u.test(source) ||
-        /vi\.(?:mock|doMock)\(\s*["'][^"']*extensions\/.+["']/u.test(source) ||
-        /importActual<[^>]*>\(\s*["'][^"']*extensions\/.+["']/u.test(source)
+      return collectBundledExtensionImports(readRepoSource(file)).some(
+        (specifier) => !isAllowedBundledExtensionImport(specifier),
       );
     });
     expect(offenders).toEqual([]);
@@ -125,5 +212,46 @@ describe("plugin contract boundary invariants", () => {
       return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
     });
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps bundled plugin production code off legacy before_agent_start hooks", () => {
+    const files = listTsFiles("extensions", { excludeTests: true });
+    const offenders = files.filter((file) => readRepoSource(file).includes("before_agent_start"));
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps bundled plugin typed hook registrations on an explicit allowlist", () => {
+    const files = listTsFiles("extensions", { excludeTests: true });
+    const hookRegistrationFiles = files.filter((file) => /\bapi\.on\(/u.test(readRepoSource(file)));
+    expect(hookRegistrationFiles).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_FILES);
+  });
+
+  it("keeps bundled plugin typed hook names on an explicit allowlist", () => {
+    expect(
+      Object.fromEntries(
+        BUNDLED_TYPED_HOOK_REGISTRATION_FILES.map((file) => [
+          file,
+          collectTypedHookNames(readRepoSource(file)),
+        ]),
+      ),
+    ).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS);
+  });
+
+  it("keeps bundled plugin production code off raw registerHook calls", () => {
+    const files = listTsFiles("extensions", { excludeTests: true });
+    const offenders = files.filter((file) => /\bregisterHook\(/u.test(readRepoSource(file)));
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps long-lived bundled hook handlers on live runtime config lookups", () => {
+    const missingGuards = Object.entries(BUNDLED_LIVE_CONFIG_HOOK_GUARDS).flatMap(
+      ([file, requiredSnippets]) => {
+        const source = readRepoSource(file);
+        return requiredSnippets
+          .filter((snippet) => !source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
+    expect(missingGuards).toEqual([]);
   });
 });
