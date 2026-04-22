@@ -365,7 +365,7 @@ export function writeDiagnosticStabilityBundleForFailureSync(
     ...options,
     reason,
     error,
-    includeEmpty: false,
+    includeEmpty: true,
   });
   if (result.status === "written") {
     return {

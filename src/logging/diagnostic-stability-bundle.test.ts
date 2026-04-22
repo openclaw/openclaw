@@ -9,6 +9,7 @@ import {
   readDiagnosticStabilityBundleFileSync,
   readLatestDiagnosticStabilityBundleSync,
   resetDiagnosticStabilityBundleForTest,
+  writeDiagnosticStabilityBundleForFailureSync,
   writeDiagnosticStabilityBundleSync,
   type DiagnosticStabilityBundle,
 } from "./diagnostic-stability-bundle.js";
@@ -108,6 +109,33 @@ describe("diagnostic stability bundles", () => {
 
     expect(result).toEqual({ status: "skipped", reason: "empty" });
     expect(fs.existsSync(path.join(tempDir, "logs", "stability"))).toBe(false);
+  });
+
+  it("writes failure bundles even when the recorder snapshot is empty", () => {
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      Object.assign(new Error("raw startup config payload"), { code: "ERR_CONFIG_PARSE" }),
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
+
+    expect(result.status).toBe("written");
+    const bundle = readBundle(result.status === "written" ? result.path : "");
+    const raw = fs.readFileSync(result.status === "written" ? result.path : "", "utf8");
+    expect(bundle).toMatchObject({
+      reason: "gateway.restart_startup_failed",
+      error: {
+        name: "Error",
+        code: "ERR_CONFIG_PARSE",
+      },
+      snapshot: {
+        count: 0,
+        events: [],
+      },
+    });
+    expect(raw).not.toContain("raw startup config payload");
   });
 
   it("registers a fatal hook only while installed", () => {

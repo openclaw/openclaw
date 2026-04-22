@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   resetDiagnosticStabilityBundleForTest,
@@ -548,5 +548,52 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(tempDir);
     expect(combined).toContain("log-tail-read-failed");
     expect(combined).toContain("sanitized log tail unavailable");
+  });
+
+  it("keeps writing when config stat fails", async () => {
+    const fakeToken = "sk-test-config-stat-secret-token-1234567890";
+    const configPath = path.join(tempDir, "openclaw.json");
+    const outputPath = path.join(tempDir, "support-failed-config-stat.zip");
+    fs.writeFileSync(configPath, "{}\n", "utf8");
+
+    const originalStatSync = fs.statSync.bind(fs);
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+      if (target === configPath) {
+        throw new Error(`config stat failed with token ${fakeToken}`);
+      }
+      return originalStatSync(target, options as never);
+    });
+
+    try {
+      await writeDiagnosticSupportExport({
+        env: {
+          ...process.env,
+          HOME: tempDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: tempDir,
+        },
+        stateDir: tempDir,
+        outputPath,
+        now: new Date("2026-04-22T12:00:03.000Z"),
+        readLogTail: async () => ({
+          file: path.join(tempDir, "logs", "openclaw.log"),
+          cursor: 0,
+          size: 0,
+          truncated: false,
+          reset: false,
+          lines: [],
+        }),
+      });
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    const entries = await readZipTextEntries(outputPath);
+    const combined = Object.values(entries).join("\n");
+    expect(Object.keys(entries).toSorted()).toContain("config/shape.json");
+    expect(combined).not.toContain(fakeToken);
+    expect(combined).toContain('"parseOk": false');
+    expect(combined).toContain("config stat failed with token");
+    expect(combined).toContain("Attach this zip to the bug report");
   });
 });

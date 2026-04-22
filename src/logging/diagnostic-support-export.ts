@@ -284,19 +284,22 @@ function configShapeReadFailure(params: {
   return shape;
 }
 
+function isMissingPathError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return false;
+  }
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
+}
+
 function readConfigExport(options: {
   configPath: string;
   env: NodeJS.ProcessEnv;
   stateDir: string;
 }): ConfigExport {
   const redactedConfigPath = redactPathForSupport(options.configPath, options);
-  const stat = fs.existsSync(options.configPath) ? fs.statSync(options.configPath) : null;
-  if (!stat) {
-    return {
-      shape: configShapeReadFailure({ configPath: redactedConfigPath, redaction: options }),
-    };
-  }
+  let stat: fs.Stats | undefined;
   try {
+    stat = fs.statSync(options.configPath);
     const parsed = parseConfigJson5(fs.readFileSync(options.configPath, "utf8"));
     if (!parsed.ok) {
       return {
@@ -313,12 +316,13 @@ function readConfigExport(options: {
       sanitized: sanitizeConfigDetails(parsed.parsed, options),
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       shape: configShapeReadFailure({
         configPath: redactedConfigPath,
         redaction: options,
         stat,
-        error: error instanceof Error ? error.message : String(error),
+        error: !stat && isMissingPathError(error) ? undefined : errorMessage,
       }),
     };
   }
