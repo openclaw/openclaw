@@ -58,6 +58,15 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
   id: ANTHROPIC_MODEL,
 } as never;
 
+const APP_INFERENCE_PROFILE_ARN =
+  "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+
+const APP_INFERENCE_PROFILE_DESCRIPTOR = {
+  api: "openai-completions",
+  provider: "amazon-bedrock",
+  id: APP_INFERENCE_PROFILE_ARN,
+} as never;
+
 /**
  * Call wrapStreamFn and then invoke the returned stream function, capturing
  * the payload via the onPayload hook that streamWithPayloadPatch installs.
@@ -300,6 +309,241 @@ describe("amazon-bedrock provider plugin", () => {
       });
       // Non-Anthropic models should also get cacheRetention: "none"
       expect(result).toMatchObject({ cacheRetention: "none" });
+    });
+  });
+
+  describe("application inference profile cache point injection", () => {
+    /**
+     * Invoke wrapStreamFn with a payload containing system/messages, then
+     * trigger onPayload to capture the patched payload.
+     */
+    function callWrappedStreamWithPayload(
+      provider: RegisteredProviderPlugin,
+      modelId: string,
+      modelDescriptor: never,
+      options: Record<string, unknown>,
+      payload: Record<string, unknown>,
+    ): Record<string, unknown> {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId,
+        streamFn: spyStreamFn,
+      } as never);
+
+      const result = wrapped?.(modelDescriptor, { messages: [] } as never, options) as unknown as Record<
+        string,
+        unknown
+      >;
+
+      if (typeof result?.onPayload === "function") {
+        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
+      }
+      return payload;
+    }
+
+    it("injects cache points for application inference profile ARNs", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [
+          { role: "user", content: [{ text: "Hello" }] },
+        ],
+      };
+
+      callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        { cacheRetention: "short" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system).toHaveLength(2);
+      expect(system[1]).toEqual({ cachePoint: { type: "default" } });
+
+      const messages = payload.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      const lastUserContent = messages[0].content;
+      expect(lastUserContent).toHaveLength(2);
+      expect(lastUserContent[1]).toEqual({ cachePoint: { type: "default" } });
+    });
+
+    it("uses long TTL when cacheRetention is 'long'", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [
+          { role: "user", content: [{ text: "Hello" }] },
+        ],
+      };
+
+      callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        { cacheRetention: "long" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system[1]).toEqual({ cachePoint: { type: "default", ttl: "1h" } });
+    });
+
+    it("does not inject cache points when cacheRetention is 'none'", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [
+          { role: "user", content: [{ text: "Hello" }] },
+        ],
+      };
+
+      callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        { cacheRetention: "none" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system).toHaveLength(1);
+    });
+
+    it("does not double-inject cache points if already present", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }, { cachePoint: { type: "default" } }],
+        messages: [
+          { role: "user", content: [{ text: "Hello" }, { cachePoint: { type: "default" } }] },
+        ],
+      };
+
+      callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        { cacheRetention: "short" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system).toHaveLength(2);
+
+      const messages = payload.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      expect(messages[0].content).toHaveLength(2);
+    });
+
+    it("does not inject cache points for regular Anthropic model IDs (pi-ai handles them)", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [
+          { role: "user", content: [{ text: "Hello" }] },
+        ],
+      };
+
+      // Regular model IDs contain "claude" so pi-ai handles caching natively.
+      // wrapStreamFn should not install an onPayload hook for these.
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId: ANTHROPIC_MODEL,
+        streamFn: spyStreamFn,
+      } as never);
+
+      const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
+        cacheRetention: "short",
+      }) as unknown as Record<string, unknown>;
+
+      // For regular Anthropic models, no onPayload should be installed for cache injection.
+      if (typeof result?.onPayload === "function") {
+        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
+      }
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system).toHaveLength(1);
+    });
+
+    it("does not inject cache points for older Claude models not in pi-ai's cache list", async () => {
+      const provider = await registerWithConfig(undefined);
+      const oldClaudeModel = "anthropic.claude-3-opus-20240229-v1:0";
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [
+          { role: "user", content: [{ text: "Hello" }] },
+        ],
+      };
+
+      // Claude 3 Opus is not in pi-ai's supportsPromptCaching list, but it's
+      // also not an application inference profile — we should not inject.
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId: oldClaudeModel,
+        streamFn: spyStreamFn,
+      } as never);
+
+      const result = wrapped?.({ id: oldClaudeModel } as never, { messages: [] } as never, {
+        cacheRetention: "short",
+      }) as unknown as Record<string, unknown>;
+
+      if (typeof result?.onPayload === "function") {
+        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
+      }
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system).toHaveLength(1);
+    });
+
+    it("defaults to 'short' cache retention when not explicitly set", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [
+          { role: "user", content: [{ text: "Hello" }] },
+        ],
+      };
+
+      callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        {},
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system).toHaveLength(2);
+      // Default is "short" which means no ttl field
+      expect(system[1]).toEqual({ cachePoint: { type: "default" } });
+    });
+
+    it("injects cache point only on last USER message", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [
+          { role: "user", content: [{ text: "First question" }] },
+          { role: "assistant", content: [{ text: "Answer" }] },
+          { role: "user", content: [{ text: "Follow-up" }] },
+        ],
+      };
+
+      callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        { cacheRetention: "short" },
+        payload,
+      );
+
+      const messages = payload.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      // First user message should NOT have a cache point
+      expect(messages[0].content).toHaveLength(1);
+      // Assistant message untouched
+      expect(messages[1].content).toHaveLength(1);
+      // Last user message should have a cache point
+      expect(messages[2].content).toHaveLength(2);
+      expect(messages[2].content[1]).toEqual({ cachePoint: { type: "default" } });
     });
   });
 });
