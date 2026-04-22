@@ -166,6 +166,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.compact",
     "sessions.compaction.restore",
     "connect",
+    "gateway.restart",
     "chat.inject",
     "web.login.start",
     "web.login.wait",

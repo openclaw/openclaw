@@ -27,14 +27,28 @@ export const ConfigSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const RestartRequestSharedParamsSchema = {
+  sessionKey: Type.Optional(Type.String()),
+  deliveryContext: Type.Optional(
+    Type.Object(
+      {
+        channel: Type.Optional(Type.String()),
+        to: Type.Optional(Type.String()),
+        accountId: Type.Optional(Type.String()),
+        threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+  note: Type.Optional(Type.String()),
+  restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+};
+
 const ConfigApplyLikeParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
     baseHash: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(Type.String()),
-    deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
-    note: Type.Optional(Type.String()),
-    restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    ...RestartRequestSharedParamsSchema,
   },
   { additionalProperties: false },
 );
@@ -51,12 +65,17 @@ export const ConfigSchemaLookupParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const GatewayRestartParamsSchema = Type.Object(
+  {
+    ...RestartRequestSharedParamsSchema,
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const UpdateRunParamsSchema = Type.Object(
   {
-    sessionKey: Type.Optional(Type.String()),
-    deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
-    note: Type.Optional(Type.String()),
-    restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    ...RestartRequestSharedParamsSchema,
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },

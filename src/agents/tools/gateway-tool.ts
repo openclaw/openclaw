@@ -3,14 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  formatDoctorNonInteractiveHint,
-  type RestartSentinelPayload,
-  writeRestartSentinel,
-} from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
@@ -322,6 +315,7 @@ export function createGatewayTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      const gatewayOpts = readGatewayCallOptions(params);
       if (action === "restart") {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
@@ -335,39 +329,17 @@ export function createGatewayTool(opts?: {
             : undefined;
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
-        // Extract channel + threadId for routing after restart.
-        // Uses generic :thread: parsing plus plugin-owned session grammars.
-        const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
-        const payload: RestartSentinelPayload = {
-          kind: "restart",
-          status: "ok",
-          ts: Date.now(),
-          sessionKey,
-          deliveryContext,
-          threadId,
-          message: note ?? reason ?? null,
-          doctorHint: formatDoctorNonInteractiveHint(),
-          stats: {
-            mode: "gateway.restart",
-            reason,
-          },
-        };
-        try {
-          await writeRestartSentinel(payload);
-        } catch {
-          // ignore: sentinel is best-effort
-        }
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
-        const scheduled = scheduleGatewaySigusr1Restart({
-          delayMs,
+        const result = await callGatewayTool("gateway.restart", gatewayOpts, {
+          sessionKey,
+          note,
           reason,
+          restartDelayMs: delayMs,
         });
-        return jsonResult(scheduled);
+        return jsonResult(result);
       }
-
-      const gatewayOpts = readGatewayCallOptions(params);
 
       const resolveGatewayWriteMeta = (): {
         sessionKey: string | undefined;
