@@ -71,3 +71,8 @@ export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
+export {
+  runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmInputHook,
+  runAgentHarnessLlmOutputHook,
+} from "../agents/harness/lifecycle-hook-helpers.js";

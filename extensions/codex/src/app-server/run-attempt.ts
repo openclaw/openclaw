@@ -5,6 +5,7 @@ import {
   clearActiveEmbeddedRun,
   createOpenClawCodingTools,
   embeddedAgentLog,
+  formatErrorMessage,
   isSubagentSessionKey,
   normalizeProviderToolSchemas,
   resolveAttemptSpawnWorkspaceDir,
@@ -14,6 +15,9 @@ import {
   resolveSessionAgentIds,
   resolveUserPath,
   resolveAgentHarnessBeforePromptBuildResult,
+  runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmInputHook,
+  runAgentHarnessLlmOutputHook,
   setActiveEmbeddedRun,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
@@ -51,6 +55,7 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
 ): Promise<EmbeddedRunAttemptResult> {
+  const attemptStartedAt = Date.now();
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -108,20 +113,21 @@ export async function runCodexAppServerAttempt(
     },
   });
   const historyMessages = readMirroredSessionHistoryMessages(params.sessionFile);
+  const hookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    messageProvider: params.messageProvider ?? undefined,
+    trigger: params.trigger,
+    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+  };
   const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
     prompt: params.prompt,
     developerInstructions: buildDeveloperInstructions(params),
     messages: historyMessages,
-    ctx: {
-      runId: params.runId,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      workspaceDir: params.workspaceDir,
-      messageProvider: params.messageProvider ?? undefined,
-      trigger: params.trigger,
-      channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-    },
+    ctx: hookContext,
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
@@ -219,6 +225,19 @@ export async function runCodexAppServerAttempt(
 
   let turn: CodexTurnStartResponse;
   try {
+    runAgentHarnessLlmInputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        systemPrompt: promptBuild.developerInstructions,
+        prompt: promptBuild.prompt,
+        historyMessages,
+        imagesCount: params.images?.length ?? 0,
+      },
+      ctx: hookContext,
+    });
     turn = await client.request<CodexTurnStartResponse>(
       "turn/start",
       buildTurnStartParams(params, {
@@ -230,6 +249,25 @@ export async function runCodexAppServerAttempt(
       { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
   } catch (error) {
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        assistantTexts: [],
+      },
+      ctx: hookContext,
+    });
+    runAgentHarnessAgentEndHook({
+      event: {
+        messages: [],
+        success: false,
+        error: formatErrorMessage(error),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
+    });
     notificationCleanup();
     requestCleanup();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
@@ -290,6 +328,27 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       threadId: thread.threadId,
       turnId: activeTurnId,
+    });
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        assistantTexts: result.assistantTexts,
+        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      },
+      ctx: hookContext,
+    });
+    runAgentHarnessAgentEndHook({
+      event: {
+        messages: result.messagesSnapshot,
+        success: !result.aborted && !result.promptError,
+        ...(result.promptError ? { error: formatErrorMessage(result.promptError) } : {}),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
     });
     return {
       ...result,
@@ -512,7 +571,7 @@ function readMirroredSessionHistoryMessages(sessionFile: string): unknown[] {
   try {
     return SessionManager.open(sessionFile).buildSessionContext().messages;
   } catch (error) {
-    embeddedAgentLog.warn("failed to read mirrored session history for codex prompt hooks", {
+    embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       error,
       sessionFile,
     });
