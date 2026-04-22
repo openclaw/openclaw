@@ -1,8 +1,34 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadProviderCatalogModelsForList,
   resolveProviderCatalogPluginIdsForFilter,
 } from "./list.provider-catalog.js";
+
+const providerDiscoveryMocks = vi.hoisted(() => ({
+  resolveBundledProviderCompatPluginIds: vi.fn(),
+  resolveOwningPluginIdsForProvider: vi.fn(),
+  resolvePluginDiscoveryProviders: vi.fn(),
+  resolveProviderContractPluginIdsForProviderAlias: vi.fn(),
+}));
+
+vi.mock("../../plugins/providers.js", () => ({
+  resolveBundledProviderCompatPluginIds:
+    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds,
+  resolveOwningPluginIdsForProvider: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
+}));
+
+vi.mock("../../plugins/contracts/registry.js", () => ({
+  resolveProviderContractPluginIdsForProviderAlias:
+    providerDiscoveryMocks.resolveProviderContractPluginIdsForProviderAlias,
+}));
+
+vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/provider-discovery.js")>();
+  return {
+    ...actual,
+    resolvePluginDiscoveryProviders: providerDiscoveryMocks.resolvePluginDiscoveryProviders,
+  };
+});
 
 const baseParams = {
   cfg: {
@@ -21,9 +47,67 @@ const baseParams = {
   },
 };
 
+const chutesProvider = {
+  id: "chutes",
+  pluginId: "chutes",
+  label: "Chutes",
+  auth: [],
+  staticCatalog: {
+    run: async () => ({
+      provider: { baseUrl: "https://chutes.example/v1", models: [] },
+    }),
+  },
+};
+
+const moonshotProvider = {
+  id: "moonshot",
+  pluginId: "moonshot",
+  label: "Moonshot",
+  auth: [],
+  staticCatalog: {
+    run: async () => ({
+      provider: {
+        baseUrl: "https://api.moonshot.ai/v1",
+        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+      },
+    }),
+  },
+};
+
+const openaiProvider = {
+  id: "openai",
+  pluginId: "openai",
+  label: "OpenAI",
+  aliases: ["azure-openai-responses"],
+  auth: [],
+  staticCatalog: {
+    run: async () => ({
+      provider: { baseUrl: "https://api.openai.com/v1", models: [] },
+    }),
+  },
+};
+
+const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
+
 describe("loadProviderCatalogModelsForList", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([
+      "chutes",
+      "moonshot",
+      "openai",
+    ]);
+    providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockImplementation(
+      ({ provider }: { provider: string }) =>
+        defaultProviders.some((entry) => entry.id === provider) ? [provider] : undefined,
+    );
+    providerDiscoveryMocks.resolveProviderContractPluginIdsForProviderAlias.mockImplementation(
+      (provider: string) => (provider === "azure-openai-responses" ? ["openai"] : undefined),
+    );
+    providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockImplementation(
+      async ({ onlyPluginIds }: { onlyPluginIds?: string[] }) =>
+        defaultProviders.filter((provider) => onlyPluginIds?.includes(provider.pluginId)),
+    );
   });
 
   it("does not use live provider discovery for display-only rows", async () => {
@@ -62,13 +146,11 @@ describe("loadProviderCatalogModelsForList", () => {
   });
 
   it("does not execute workspace provider static catalogs", async () => {
-    const providers = await import("../../plugins/providers.js");
-    const discovery = await import("../../plugins/provider-discovery.js");
     const workspaceStaticCatalog = vi.fn(async () => ({
       provider: { baseUrl: "https://workspace.example/v1", models: [] },
     }));
-    vi.spyOn(providers, "resolveBundledProviderCompatPluginIds").mockReturnValue(["bundled-demo"]);
-    vi.spyOn(discovery, "resolvePluginDiscoveryProviders").mockResolvedValue([
+    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["bundled-demo"]);
+    providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValue([
       {
         id: "bundled-demo",
         pluginId: "bundled-demo",
@@ -93,7 +175,7 @@ describe("loadProviderCatalogModelsForList", () => {
       ...baseParams,
     });
 
-    expect(discovery.resolvePluginDiscoveryProviders).toHaveBeenCalledWith(
+    expect(providerDiscoveryMocks.resolvePluginDiscoveryProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["bundled-demo"],
         includeUntrustedWorkspacePlugins: false,

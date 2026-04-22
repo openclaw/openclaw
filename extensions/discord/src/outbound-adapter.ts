@@ -113,7 +113,7 @@ function resolveDiscordWebhookIdentity(params: {
 }
 
 async function maybeSendDiscordWebhookText(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   text: string;
   threadId?: string | number | null;
   accountId?: string | null;

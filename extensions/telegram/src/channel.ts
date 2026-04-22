@@ -640,8 +640,9 @@ export const telegramPlugin = createChatChannelPlugin({
           : null;
       },
       shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
-      createManager: ({ accountId }) =>
+      createManager: ({ cfg, accountId }) =>
         createTelegramThreadBindingManager({
+          cfg,
           accountId: accountId ?? undefined,
           persist: false,
           enableSweeper: false,
@@ -734,6 +735,16 @@ export const telegramPlugin = createChatChannelPlugin({
         await deleteTelegramUpdateOffset({ accountId });
       },
     },
+    heartbeat: {
+      sendTyping: async ({ cfg, to, accountId, threadId }) => {
+        const { sendTypingTelegram } = await loadTelegramSendModule();
+        await sendTypingTelegram(to, {
+          cfg,
+          ...(accountId ? { accountId } : {}),
+          messageThreadId: parseTelegramThreadId(threadId),
+        });
+      },
+    },
     approvalCapability: {
       ...telegramApprovalCapability,
       render: {
@@ -750,6 +761,7 @@ export const telegramPlugin = createChatChannelPlugin({
     actions: telegramMessageActions,
     status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      staleSocketHealthCheckModes: ["polling"],
       collectStatusIssues: collectTelegramStatusIssues,
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
@@ -971,7 +983,7 @@ export const telegramPlugin = createChatChannelPlugin({
           throw new Error("telegram token not configured");
         }
         const send = await resolveTelegramSend();
-        await send(id, message, { token, accountId });
+        await send(id, message, { cfg, token, accountId });
       },
     },
   },
@@ -980,6 +992,12 @@ export const telegramPlugin = createChatChannelPlugin({
     topLevelReplyToMode: "telegram",
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
+    resolveCurrentChannelId: ({ to, threadId }) => {
+      if (threadId == null) {
+        return to;
+      }
+      return to.includes(":topic:") ? to : `${to}:topic:${threadId}`;
+    },
   },
   outbound: {
     base: {
@@ -1009,6 +1027,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
       shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,
+      preferFinalAssistantVisibleText: true,
       targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
       resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
         typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,

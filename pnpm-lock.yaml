@@ -104,9 +104,6 @@ importers:
       file-type:
         specifier: 22.0.1
         version: 22.0.1
-      gaxios:
-        specifier: 7.1.4
-        version: 7.1.4
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
@@ -146,6 +143,9 @@ importers:
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      semver:
+        specifier: 7.7.4
+        version: 7.7.4
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
@@ -222,9 +222,6 @@ importers:
       oxlint-tsgolint:
         specifier: ^0.21.1
         version: 0.21.1
-      semver:
-        specifier: 7.7.4
-        version: 7.7.4
       signal-utils:
         specifier: 0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
@@ -594,8 +591,11 @@ importers:
 
   extensions/googlechat:
     dependencies:
+      gaxios:
+        specifier: 7.1.4
+        version: 7.1.4
       google-auth-library:
-        specifier: ^10.6.2
+        specifier: 10.6.2
         version: 10.6.2
       zod:
         specifier: ^4.3.6
@@ -1182,6 +1182,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/tencent:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/tlon:
     dependencies:
       '@aws-sdk/client-s3':
@@ -1203,6 +1209,16 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/tokenjuice:
+    dependencies:
+      tokenjuice:
+        specifier: 0.6.1
+        version: 0.6.1
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
 
   extensions/together:
     devDependencies:
@@ -7139,6 +7155,11 @@ packages:
 
   token-stream@1.0.0:
     resolution: {integrity: sha512-VSsyNPPW74RpHwR8Fc21uubwHY7wMDeJLys2IX5zJNih+OnAnaifKHo+1LHT7DAdloQ7apeaaWg8l7qnf/TnEg==}
+
+  tokenjuice@0.6.1:
+    resolution: {integrity: sha512-9Vg9303NeNrTa9n7gQhiHsXfgi7b61bi26zxoAobW/pKIuMOUD/G04+5NPKAbpj+TSKaSEivZZp79222oHbdEA==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   token-types@6.1.2:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
@@ -14210,6 +14231,8 @@ snapshots:
   toidentifier@1.0.1: {}
 
   token-stream@1.0.0: {}
+
+  tokenjuice@0.6.1: {}
 
   token-types@6.1.2:
     dependencies:
