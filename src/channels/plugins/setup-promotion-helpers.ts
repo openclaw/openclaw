@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getBundledChannelPlugin } from "./bundled.js";
+import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
 import { getLoadedChannelPlugin } from "./registry.js";
 
 type ChannelSectionBase = {
@@ -49,8 +49,6 @@ type ChannelSetupPromotionSurface = {
   }) => string | undefined;
 };
 
-const BUNDLED_CHANNELS_WITHOUT_SETUP_PROMOTION_SURFACE = new Set(["whatsapp"]);
-
 function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null {
   return setup && typeof setup === "object" ? (setup as ChannelSetupPromotionSurface) : null;
 }
@@ -64,7 +62,7 @@ function getLoadedChannelSetupPromotionSurface(
 function getBundledChannelSetupPromotionSurface(
   channelKey: string,
 ): ChannelSetupPromotionSurface | null {
-  if (BUNDLED_CHANNELS_WITHOUT_SETUP_PROMOTION_SURFACE.has(channelKey)) {
+  if (!hasBundledChannelPackageSetupFeature(channelKey, "configPromotion")) {
     return null;
   }
   return asPromotionSurface(getBundledChannelPlugin(channelKey)?.setup);
@@ -104,7 +102,10 @@ export function resolveSingleAccountKeysToMove(params: {
     Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
     0;
   const entries = Object.entries(params.channel)
-    .filter(([key, value]) => key !== "accounts" && key !== "enabled" && value !== undefined)
+    .filter(
+      ([key, value]) =>
+        key !== "accounts" && key !== "defaultAccount" && key !== "enabled" && value !== undefined,
+    )
     .map(([key]) => key);
   if (entries.length === 0) {
     return [];

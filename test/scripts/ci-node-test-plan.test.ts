@@ -187,12 +187,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-agent-runner-a",
       },
       {
-        checkName: "checks-node-auto-reply-reply-agent-runner-b",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-agent-runner-b",
-      },
-      {
         checkName: "checks-node-auto-reply-reply-commands-a",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
@@ -205,40 +199,16 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-commands-b",
       },
       {
-        checkName: "checks-node-auto-reply-reply-commands-c",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-c",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-d",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-d",
-      },
-      {
         checkName: "checks-node-auto-reply-reply-dispatch-a",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
         shardName: "auto-reply-reply-dispatch-a",
       },
       {
-        checkName: "checks-node-auto-reply-reply-dispatch-b",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-b",
-      },
-      {
         checkName: "checks-node-auto-reply-reply-state-routing-a",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
         shardName: "auto-reply-reply-state-routing-a",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-state-routing-b",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-state-routing-b",
       },
     ]);
   });

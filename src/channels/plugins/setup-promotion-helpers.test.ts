@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getBundledChannelPluginMock = vi.hoisted(() => vi.fn());
+const hasBundledChannelPackageSetupFeatureMock = vi.hoisted(() => vi.fn());
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./bundled.js", () => ({
   getBundledChannelPlugin: getBundledChannelPluginMock,
+  hasBundledChannelPackageSetupFeature: hasBundledChannelPackageSetupFeatureMock,
 }));
 
 vi.mock("./registry.js", () => ({
@@ -19,6 +21,8 @@ import {
 describe("setup promotion helpers", () => {
   beforeEach(() => {
     getBundledChannelPluginMock.mockReset();
+    hasBundledChannelPackageSetupFeatureMock.mockReset();
+    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(false);
     getLoadedChannelPluginMock.mockReset();
   });
 
@@ -26,6 +30,7 @@ describe("setup promotion helpers", () => {
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",
       channel: {
+        defaultAccount: "ops",
         dmPolicy: "allowlist",
         allowFrom: ["+15551234567"],
         groupPolicy: "allowlist",
@@ -38,9 +43,9 @@ describe("setup promotion helpers", () => {
     expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
   });
 
-  it("keeps WhatsApp static promotion cheap even when named accounts already exist", () => {
+  it("skips bundled setup promotion without a manifest feature", () => {
     const keys = resolveSingleAccountKeysToMove({
-      channelKey: "whatsapp",
+      channelKey: "demo",
       channel: {
         accounts: {
           work: { enabled: true },
@@ -53,11 +58,16 @@ describe("setup promotion helpers", () => {
     });
 
     expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
-    expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("whatsapp");
+    expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
+    expect(hasBundledChannelPackageSetupFeatureMock).toHaveBeenCalledWith(
+      "demo",
+      "configPromotion",
+    );
     expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
   });
 
   it("loads bundled setup only for non-static migration keys", () => {
+    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
     getBundledChannelPluginMock.mockReturnValue({
       setup: {
         singleAccountKeysToMove: ["customAuth"],
@@ -96,6 +106,7 @@ describe("setup promotion helpers", () => {
   });
 
   it("loads bundled setup for named-account filters before registry bootstrap", () => {
+    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
     getBundledChannelPluginMock.mockReturnValue({
       setup: {
         namedAccountPromotionKeys: ["token"],
