@@ -16,6 +16,10 @@ if [[ ! -f "$FILTER_FILES" ]]; then
   exit 1
 fi
 
+has_pnpm_runner() {
+  command -v pnpm >/dev/null 2>&1 || command -v corepack >/dev/null 2>&1
+}
+
 run_pnpm() {
   if command -v pnpm >/dev/null 2>&1; then
     pnpm "$@"
@@ -85,10 +89,11 @@ if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; the
       if [[ "$docs_only" == true ]]; then
         echo "Docs-only staged changes detected: skipping pnpm check in pre-commit hook."
       else
-        if ! run_pnpm check:changed --staged; then
+        if ! has_pnpm_runner; then
           echo "Missing pnpm and corepack, cannot run repo check in pre-commit hook." >&2
           exit 1
         fi
+        run_pnpm check:changed --staged
       fi
       ;;
   esac

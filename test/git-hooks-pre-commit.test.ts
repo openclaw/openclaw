@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,7 +8,18 @@ const baseGitEnv = {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_TERMINAL_PROMPT: "0",
 };
-const baseRunEnv: NodeJS.ProcessEnv = { ...process.env, ...baseGitEnv };
+const scrubbedGitEnv = { ...process.env };
+delete scrubbedGitEnv.GIT_DIR;
+delete scrubbedGitEnv.GIT_WORK_TREE;
+delete scrubbedGitEnv.GIT_INDEX_FILE;
+delete scrubbedGitEnv.GIT_PREFIX;
+delete scrubbedGitEnv.GIT_AUTHOR_NAME;
+delete scrubbedGitEnv.GIT_AUTHOR_EMAIL;
+delete scrubbedGitEnv.GIT_AUTHOR_DATE;
+delete scrubbedGitEnv.GIT_COMMITTER_NAME;
+delete scrubbedGitEnv.GIT_COMMITTER_EMAIL;
+delete scrubbedGitEnv.GIT_COMMITTER_DATE;
+const baseRunEnv: NodeJS.ProcessEnv = { ...scrubbedGitEnv, ...baseGitEnv };
 const tempDirs: string[] = [];
 
 const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
@@ -106,6 +117,60 @@ describe("git-hooks/pre-commit (integration)", () => {
     });
 
     expect(run(dir, "cat", ["pnpm-args.txt"])).toBe("check:changed --staged");
+  });
+
+  it("fails with a missing-tool message when neither pnpm nor corepack exists", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-pnpm-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    const fakeBinDir = installPreCommitFixture(dir);
+    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    writeExecutable(fakeBinDir, "git", '#!/bin/sh\n/usr/bin/git "$@"\n');
+    writeExecutable(fakeBinDir, "node", "#!/bin/sh\nexit 0\n");
+
+    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
+    run(dir, "git", ["add", "--", "tracked.txt"]);
+
+    const result = spawnSync("/bin/bash", ["git-hooks/pre-commit"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...baseRunEnv, PATH: fakeBinDir },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Missing pnpm and corepack, cannot run repo check in pre-commit hook.",
+    );
+  });
+
+  it("preserves failing check output instead of replacing it with a missing-tool message", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-check-fails-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    const fakeBinDir = installPreCommitFixture(dir);
+    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      "#!/usr/bin/env bash\necho 'real check failure' >&2\nexit 23\n",
+    );
+
+    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
+    run(dir, "git", ["add", "--", "tracked.txt"]);
+
+    const result = spawnSync("bash", ["git-hooks/pre-commit"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...baseRunEnv, PATH: `${fakeBinDir}:${process.env.PATH ?? ""}` },
+    });
+
+    expect(result.status).toBe(23);
+    expect(result.stderr).toContain("real check failure");
+    expect(result.stderr).not.toContain(
+      "Missing pnpm and corepack, cannot run repo check in pre-commit hook.",
+    );
   });
 
   it("skips changed-scope check when FAST_COMMIT is enabled", () => {
