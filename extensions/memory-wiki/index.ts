@@ -1,7 +1,7 @@
 import { definePluginEntry } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
 import {
-  containsVaultPathTemplate,
+  hasAnyVaultPathPlaceholder,
   memoryWikiConfigSchema,
   resolveMemoryWikiConfig,
   resolveMemoryWikiConfigForCtx,
@@ -25,20 +25,24 @@ export default definePluginEntry({
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
 
-    // When `vault.path` is templated (e.g. `{workspaceDir}/wiki`) the real
-    // vault location is only knowable at wiki-tool invocation time, where the
-    // registered factory calls `resolveMemoryWikiConfigForCtx(config, ctx)`.
+    // When `vault.path` contains any `{...}` placeholder — a known token
+    // like `{workspaceDir}` OR an unknown one like `{tenant}` / a typo like
+    // `{workspaceDIR}` — the real vault location is only knowable at
+    // wiki-tool invocation time (where `resolveMemoryWikiConfigForCtx` either
+    // expands it or throws for unresolved placeholders).
     // `registerMemoryPromptSupplement` and `registerMemoryCorpusSupplement`
     // capture `config` at plugin registration time and their SDK contracts do
-    // not thread `workspaceDir`/`agentId`/`agentDir`, so registering them with
+    // not thread `workspaceDir`/`agentId`/`agentDir`. Registering them with
     // an unresolved templated path would leave `memory_search`/`memory_get`
     // (wiki corpus) and the memory prompt section reading from the literal
-    // templated path while `wiki_search`/`wiki_get` read from the per-context
-    // expanded path — an inconsistency that can return cross-tenant results
-    // inside the same conversation. When the operator opts into templating we
-    // skip both surfaces so the `wiki_*` tools remain the single authoritative
-    // per-context entry point for the wiki vault.
-    const vaultPathIsTemplated = containsVaultPathTemplate(config.vault.path);
+    // templated path while `wiki_search`/`wiki_get` throw at invocation —
+    // split-brain failure where `memory_*` flows silently write to a literal
+    // brace directory under CWD. Use the broader any-placeholder check so
+    // unknown-placeholder configs are also skipped instead of letting
+    // `memory_*` fall through to the literal path. When any placeholder is
+    // present we skip both surfaces so the `wiki_*` tools remain the single
+    // authoritative per-context entry point for the wiki vault.
+    const vaultPathIsTemplated = hasAnyVaultPathPlaceholder(config.vault.path);
 
     if (!vaultPathIsTemplated) {
       api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));

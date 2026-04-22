@@ -89,4 +89,24 @@ describe("memory-wiki plugin", () => {
     expect(registerGatewayMethod).toHaveBeenCalled();
     expect(registerCli).toHaveBeenCalledTimes(1);
   });
+
+  it("also skips memory supplements when vault.path contains only unknown placeholders", async () => {
+    // Regression: the previous gate used the narrow known-tokens regex, so a
+    // config like `{tenant}/wiki` (or a typo like `{workspaceDIR}/wiki`)
+    // registered the memory supplements against the literal brace path. At
+    // tool invocation `wiki_*` would throw on expansion while `memory_*`
+    // flows would silently write/read through `fs.mkdir`/`initializeMemoryWikiVault`
+    // against a CWD-relative `./{tenant}/wiki` — asymmetric fail-closed with
+    // cross-surface data mixing.
+    const { api, registerMemoryCorpusSupplement, registerMemoryPromptSupplement } = createPluginApi(
+      {
+        pluginConfig: { vault: { path: "{tenant}/wiki" } },
+      },
+    );
+
+    await plugin.register(api);
+
+    expect(registerMemoryCorpusSupplement).not.toHaveBeenCalled();
+    expect(registerMemoryPromptSupplement).not.toHaveBeenCalled();
+  });
 });

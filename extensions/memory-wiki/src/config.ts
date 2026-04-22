@@ -235,6 +235,19 @@ export function containsVaultPathTemplate(candidatePath: string): boolean {
 }
 
 /**
+ * Broader placeholder check used for fail-closed gates: returns `true` for
+ * any `{word}` placeholder, not just the four known tokens. Callers that
+ * must treat unknown placeholders (typos like `{tenant}` or
+ * `{workspaceDIR}`) the same as known templated paths — for example the
+ * plugin registration code that decides whether to skip memory-corpus /
+ * prompt-section supplements — should gate on this instead of
+ * {@link containsVaultPathTemplate}.
+ */
+export function hasAnyVaultPathPlaceholder(candidatePath: string): boolean {
+  return VAULT_PATH_ANY_PLACEHOLDER.test(candidatePath);
+}
+
+/**
  * Expand `{workspaceDir}`, `{agentDir}`, `{agentId}`, `{sessionKey}` placeholders
  * in a vault path using the supplied tool invocation context. Throws if the
  * expanded path still contains any `{...}` placeholder — either because a
