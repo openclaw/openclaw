@@ -12,7 +12,7 @@ const spinnerInstances: Array<{
   stop: ReturnType<typeof vi.fn>;
 }> = [];
 
-// Mock @clack/prompts before importing clack-prompter
+// Mock @clack/prompts - returns real spinner stub by default
 vi.mock("@clack/prompts", () => ({
   spinner: vi.fn(() => {
     const instance = {
@@ -33,7 +33,20 @@ describe("progress stop with spinner", () => {
     spinnerInstances.length = 0;
   });
 
-  it("should call spinner.clear on stop(undefined)", () => {
+  it("should not throw when spinner is undefined", () => {
+    // Re-mock spinner to return undefined - simulating initialization failure
+    vi.mocked(vi.fn()).mockImplementation(() => undefined as unknown);
+
+    const prompter = createClackPrompter();
+    const progress = prompter.progress("test label");
+
+    // Should not throw even though spinner is undefined
+    // The optional chaining (spin?.clear() / spin?.stop()) protects against this
+    expect(() => progress.stop(undefined)).not.toThrow();
+    expect(() => progress.stop("done")).not.toThrow();
+  });
+
+  it("should call spinner.clear on stop(undefined) when spinner is defined", () => {
     const prompter = createClackPrompter();
     const progress = prompter.progress("test label");
     progress.stop(undefined);
@@ -43,7 +56,7 @@ describe("progress stop with spinner", () => {
     expect(spinnerInstances[0].clear).toHaveBeenCalled();
   });
 
-  it("should call spinner.stop on stop(message)", () => {
+  it("should call spinner.stop on stop(message) when spinner is defined", () => {
     const prompter = createClackPrompter();
     const progress = prompter.progress("test label");
     progress.stop("done");
