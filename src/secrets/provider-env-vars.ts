@@ -51,13 +51,44 @@ function shouldUsePluginProviderEnvVars(
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
+// Safe env var name validation: only allow conventional uppercase-with-underscores names.
+// Reject known high-value unrelated secrets to prevent accidental exfiltration.
+const DANGEROUS_ENV_NAMES = new Set([
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "GITHUB_TOKEN",
+  "NPM_TOKEN",
+  "SSH_AUTH_SOCK",
+  "SSH_KEY",
+]);
+
+function isSafeEnvVarName(name: string): boolean {
+  const trimmed = name.trim();
+  // Must match conventional uppercase-with-underscores pattern
+  if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(trimmed)) {
+    return false;
+  }
+  // Reject known dangerous unrelated secrets
+  if (DANGEROUS_ENV_NAMES.has(trimmed)) {
+    return false;
+  }
+  return true;
+}
+
+// Block prototype pollution keys
+const PROTOTYPE_POLLUTION_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function appendUniqueEnvVarCandidates(
   target: Record<string, string[]>,
   providerId: string,
   keys: readonly string[],
 ) {
   const normalizedProviderId = providerId.trim();
-  if (!normalizedProviderId || keys.length === 0) {
+  // Prevent prototype pollution from untrusted providerId
+  if (!normalizedProviderId || PROTOTYPE_POLLUTION_KEYS.has(normalizedProviderId)) {
+    return;
+  }
+  if (keys.length === 0) {
     return;
   }
   const bucket = (target[normalizedProviderId] ??= []);
@@ -65,6 +96,10 @@ function appendUniqueEnvVarCandidates(
   for (const key of keys) {
     const normalizedKey = key.trim();
     if (!normalizedKey || seen.has(normalizedKey)) {
+      continue;
+    }
+    // Validate env var names to prevent secret exfiltration
+    if (!isSafeEnvVarName(normalizedKey)) {
       continue;
     }
     seen.add(normalizedKey);
@@ -80,7 +115,8 @@ function resolveManifestProviderAuthEnvVarCandidates(
     workspaceDir: params?.workspaceDir,
     env: params?.env,
   });
-  const candidates: Record<string, string[]> = {};
+  // Use null-prototype object to prevent prototype pollution from untrusted providerId keys
+  const candidates: Record<string, string[]> = Object.create(null);
   for (const plugin of registry.plugins) {
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
       continue;
@@ -109,10 +145,16 @@ function resolveManifestProviderAuthEnvVarCandidates(
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
-  return {
-    ...resolveManifestProviderAuthEnvVarCandidates(params),
-    ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
-  };
+  // Use null-prototype object to prevent prototype pollution
+  const result: Record<string, readonly string[]> = Object.create(null);
+  const manifest = resolveManifestProviderAuthEnvVarCandidates(params);
+  for (const [key, value] of Object.entries(manifest)) {
+    result[key] = value;
+  }
+  for (const [key, value] of Object.entries(CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES)) {
+    result[key] = value;
+  }
+  return result;
 }
 
 export function resolveProviderEnvVars(
@@ -143,7 +185,9 @@ function createLazyReadonlyRecord(
       if (typeof prop !== "string") {
         return undefined;
       }
-      return getResolved()[prop];
+      const v = getResolved()[prop];
+      // Return defensive copy to prevent mutation of shared cached arrays
+      return Array.isArray(v) ? [...v] : v;
     },
     has(_target, prop) {
       return typeof prop === "string" && Object.hasOwn(getResolved(), prop);
