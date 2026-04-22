@@ -117,6 +117,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     chatLog?: HandlerChatLog;
     btw?: HandlerBtwPresenter;
     refreshSessionInfo?: () => Promise<void>;
+    localMode?: boolean;
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
@@ -126,6 +127,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       btw: (params?.btw ?? context.btw) as MockBtwPresenter & HandlerBtwPresenter,
       tui: context.tui,
       state,
+      localMode: params?.localMode,
       setActivityStatus: context.setActivityStatus,
       refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
@@ -848,6 +850,28 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(String(rendered)).toContain("HTTP 401");
     expect(String(rendered)).toContain("Missing scopes: model.request");
     expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
+  });
+
+  it("shows a concise /auth hint for local auth failures", () => {
+    const { chatLog, handleChatEvent } = createHandlersHarness({
+      localMode: true,
+      state: {
+        activeChatRunId: null,
+        sessionInfo: { modelProvider: "openai-codex" },
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-auth-error",
+      sessionKey: "agent:main:main",
+      state: "error",
+      errorMessage:
+        "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "auth or provider access failed for openai-codex. Run /auth openai-codex to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.",
+    );
   });
 
   it("drops streaming assistant when chat final has no message", () => {

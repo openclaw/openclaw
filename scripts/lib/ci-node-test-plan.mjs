@@ -65,8 +65,15 @@ function createAutoReplyReplySplitShards() {
     }
   }
 
+  const shardCounts = {
+    "auto-reply-reply-agent-runner": 1,
+    "auto-reply-reply-commands": 2,
+    "auto-reply-reply-dispatch": 1,
+    "auto-reply-reply-state-routing": 1,
+  };
+
   return Object.entries(groups).flatMap(([groupName, includePatterns]) => {
-    const shardCount = groupName === "auto-reply-reply-commands" ? 4 : 2;
+    const shardCount = shardCounts[groupName] ?? 1;
     return Array.from({ length: shardCount }, (_, index) => ({
       shardName: `${groupName}-${String.fromCharCode(97 + index)}`,
       configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
@@ -85,12 +92,11 @@ const SPLIT_NODE_SHARDS = new Map([
         configs: [
           "test/vitest/vitest.infra.config.ts",
           "test/vitest/vitest.hooks.config.ts",
-          "test/vitest/vitest.runtime-config.config.ts",
           "test/vitest/vitest.secrets.config.ts",
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
       {
         shardName: "core-runtime-media-ui",
@@ -101,18 +107,19 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.ui.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
       {
         shardName: "core-runtime-shared",
         configs: [
           "test/vitest/vitest.acp.config.ts",
           "test/vitest/vitest.cron.config.ts",
+          "test/vitest/vitest.runtime-config.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
     ],
   ],
@@ -137,13 +144,7 @@ const SPLIT_NODE_SHARDS = new Map([
     [
       {
         shardName: "agentic-control-plane",
-        configs: [
-          "test/vitest/vitest.gateway-core.config.ts",
-          "test/vitest/vitest.gateway-client.config.ts",
-          "test/vitest/vitest.gateway-methods.config.ts",
-          "test/vitest/vitest.gateway-server.config.ts",
-          "test/vitest/vitest.daemon.config.ts",
-        ],
+        configs: ["test/vitest/vitest.gateway-server.config.ts"],
         requiresDist: false,
       },
       {
@@ -152,17 +153,23 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.cli.config.ts",
           "test/vitest/vitest.commands-light.config.ts",
           "test/vitest/vitest.commands.config.ts",
+          "test/vitest/vitest.daemon.config.ts",
         ],
         requiresDist: false,
       },
       {
         shardName: "agentic-agents",
-        configs: ["test/vitest/vitest.agents.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents.config.ts",
+          "test/vitest/vitest.gateway-client.config.ts",
+        ],
         requiresDist: false,
       },
       {
         shardName: "agentic-plugin-sdk",
         configs: [
+          "test/vitest/vitest.gateway-core.config.ts",
+          "test/vitest/vitest.gateway-methods.config.ts",
           "test/vitest/vitest.plugin-sdk-light.config.ts",
           "test/vitest/vitest.plugin-sdk.config.ts",
         ],
@@ -171,12 +178,12 @@ const SPLIT_NODE_SHARDS = new Map([
       {
         shardName: "agentic-plugins",
         configs: ["test/vitest/vitest.plugins.config.ts"],
-        requiresDist: true,
+        requiresDist: false,
       },
     ],
   ],
 ]);
-const DIST_DEPENDENT_NODE_SHARD_NAMES = new Set(["core-support-boundary", "core-runtime"]);
+const DIST_DEPENDENT_NODE_SHARD_NAMES = new Set(["core-support-boundary"]);
 
 function formatNodeTestShardCheckName(shardName) {
   const normalizedShardName = shardName.startsWith("core-unit-")

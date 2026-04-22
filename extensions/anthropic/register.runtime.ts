@@ -494,16 +494,26 @@ export function buildAnthropicProvider(): ProviderPlugin {
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
-    supportsXHighThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
-    supportsAdaptiveThinking: ({ modelId }) => supportsAnthropicAdaptiveThinking(modelId),
-    supportsMaxThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
+    resolveThinkingProfile: ({ modelId }) => {
+      const levels: Array<{
+        id: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+      }> = [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }];
+      if (isAnthropicOpus47Model(modelId)) {
+        levels.push({ id: "xhigh" }, { id: "adaptive" }, { id: "max" });
+      } else if (supportsAnthropicAdaptiveThinking(modelId)) {
+        levels.push({ id: "adaptive" });
+      }
+      return {
+        levels,
+        defaultLevel: isAnthropicOpus47Model(modelId)
+          ? "off"
+          : matchesAnthropicModernModel(modelId) &&
+              shouldUseAnthropicAdaptiveThinkingDefault(modelId)
+            ? "adaptive"
+            : undefined,
+      };
+    },
     wrapStreamFn: wrapAnthropicProviderStream,
-    resolveDefaultThinkingLevel: ({ modelId }) =>
-      isAnthropicOpus47Model(modelId)
-        ? "off"
-        : matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
-          ? "adaptive"
-          : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
     fetchUsageSnapshot: async (ctx) =>
       await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),

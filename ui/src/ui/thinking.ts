@@ -7,12 +7,6 @@ export type ThinkingCatalogEntry = {
 };
 
 const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
-const BINARY_THINKING_LEVELS = ["off", "on"] as const;
-const ANTHROPIC_CLAUDE_46_MODEL_RE = /^claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-const ANTHROPIC_OPUS_47_MODEL_RE = /^claude-opus-4(?:\.|-)7(?:$|[-.])/i;
-const AMAZON_BEDROCK_CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-const OPENAI_XHIGH_MODEL_RE =
-  /^(?:gpt-5\.[2-9](?:\.\d+)?|gpt-5\.[2-9](?:\.\d+)?-pro|gpt-5\.\d+-codex|gpt-5\.\d+-codex-spark|gpt-5\.1-codex|gpt-5\.2-codex)(?:$|-)/i;
 
 export function normalizeThinkingProviderId(provider?: string | null): string {
   if (!provider) {
@@ -29,7 +23,8 @@ export function normalizeThinkingProviderId(provider?: string | null): string {
 }
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
-  return normalizeThinkingProviderId(provider) === "zai";
+  void provider;
+  return false;
 }
 
 export function normalizeThinkLevel(raw?: string | null): string | undefined {
@@ -71,49 +66,13 @@ export function normalizeThinkLevel(raw?: string | null): string | undefined {
   return undefined;
 }
 
-function supportsAdaptiveThinking(provider?: string | null, model?: string | null): boolean {
-  const normalizedProvider = normalizeThinkingProviderId(provider);
-  const modelId = model?.trim() ?? "";
-  if (normalizedProvider === "anthropic") {
-    return ANTHROPIC_CLAUDE_46_MODEL_RE.test(modelId) || ANTHROPIC_OPUS_47_MODEL_RE.test(modelId);
-  }
-  if (normalizedProvider === "amazon-bedrock") {
-    return AMAZON_BEDROCK_CLAUDE_46_MODEL_RE.test(modelId);
-  }
-  return false;
-}
-
-function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  const normalizedProvider = normalizeThinkingProviderId(provider);
-  const modelId = model?.trim() ?? "";
-  if (normalizedProvider === "anthropic") {
-    return ANTHROPIC_OPUS_47_MODEL_RE.test(modelId);
-  }
-  if (["openai", "openai-codex", "github-copilot", "codex"].includes(normalizedProvider)) {
-    return OPENAI_XHIGH_MODEL_RE.test(modelId);
-  }
-  return false;
-}
-
-function supportsMaxThinking(provider?: string | null, model?: string | null): boolean {
-  return normalizeThinkingProviderId(provider) === "anthropic"
-    ? ANTHROPIC_OPUS_47_MODEL_RE.test(model?.trim() ?? "")
-    : false;
-}
-
 export function listThinkingLevelLabels(
   provider?: string | null,
   model?: string | null,
 ): readonly string[] {
-  if (isBinaryThinkingProvider(provider)) {
-    return BINARY_THINKING_LEVELS;
-  }
-  return [
-    ...BASE_THINKING_LEVELS,
-    ...(supportsXHighThinking(provider, model) ? ["xhigh"] : []),
-    ...(supportsAdaptiveThinking(provider, model) ? ["adaptive"] : []),
-    ...(supportsMaxThinking(provider, model) ? ["max"] : []),
-  ];
+  void provider;
+  void model;
+  return BASE_THINKING_LEVELS;
 }
 
 export function formatThinkingLevels(provider?: string | null, model?: string | null): string {
@@ -125,14 +84,6 @@ export function resolveThinkingDefaultForModel(params: {
   model: string;
   catalog?: ThinkingCatalogEntry[];
 }): string {
-  const normalizedProvider = normalizeThinkingProviderId(params.provider);
-  const modelId = params.model.trim();
-  if (normalizedProvider === "anthropic" && ANTHROPIC_CLAUDE_46_MODEL_RE.test(modelId)) {
-    return "adaptive";
-  }
-  if (normalizedProvider === "amazon-bedrock" && AMAZON_BEDROCK_CLAUDE_46_MODEL_RE.test(modelId)) {
-    return "adaptive";
-  }
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );

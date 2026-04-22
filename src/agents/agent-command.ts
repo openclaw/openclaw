@@ -1,10 +1,9 @@
 import {
   formatThinkingLevels,
-  formatXHighModelHint,
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   resolveSupportedThinkingLevel,
-  supportsXHighThinking,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -783,33 +782,27 @@ async function agentCommandInternal(
         catalog: catalogForThinking,
       });
     }
-    if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+    if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+        throw new Error(
+          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        );
       }
-      resolvedThinkLevel = "high";
-      if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-        const entry = sessionEntry;
-        entry.thinkingLevel = "high";
-        entry.updatedAt = Date.now();
-        await persistSessionEntry({
-          sessionStore,
-          sessionKey,
-          storePath,
-          entry,
-        });
-      }
-    }
-    if (resolvedThinkLevel === "max") {
       const fallbackThinkLevel = resolveSupportedThinkingLevel({
         provider,
         model,
         level: resolvedThinkLevel,
       });
       if (fallbackThinkLevel !== resolvedThinkLevel) {
+        const previousThinkLevel = resolvedThinkLevel;
         resolvedThinkLevel = fallbackThinkLevel;
-        if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "max") {
+        if (
+          sessionEntry &&
+          sessionStore &&
+          sessionKey &&
+          sessionEntry.thinkingLevel === previousThinkLevel
+        ) {
           const entry = sessionEntry;
           entry.thinkingLevel = fallbackThinkLevel;
           entry.updatedAt = Date.now();
