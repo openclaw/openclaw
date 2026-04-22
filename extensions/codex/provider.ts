@@ -10,6 +10,7 @@ import {
   type CodexAppServerModel,
   type CodexAppServerModelListResult,
 } from "./harness.js";
+import { resolveCodexSystemPromptContribution } from "./prompt-overlay.js";
 import {
   type CodexAppServerStartOptions,
   readCodexPluginConfig,
@@ -99,6 +100,8 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
         ...(isKnownXHighCodexModel(modelId) ? [{ id: "xhigh" as const }] : []),
       ],
     }),
+    resolveSystemPromptContribution: ({ modelId }) =>
+      resolveCodexSystemPromptContribution({ modelId }),
     isModernModelRef: ({ modelId }) => isModernCodexModel(modelId),
   };
 }

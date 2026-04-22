@@ -44,6 +44,8 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
     confirm: (p) => prompter.confirm(p),
+    runtime: effectiveRuntime,
+    prompter,
   });
   const { CONFIG_PATH } = await import("../config/config.js");
   const ctx = {

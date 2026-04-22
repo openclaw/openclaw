@@ -216,6 +216,11 @@ describe("slackPlugin actions", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "user:U12345678",
       expect.stringContaining("approved"),
+      expect.objectContaining({
+        accountId: "work",
+        cfg,
+        token: "xoxb-work",
+      }),
     );
   });
 
@@ -309,6 +314,26 @@ describe("slackPlugin status", () => {
       status: 200,
       bot: { id: "B1", name: "openclaw-bot" },
       team: { id: "T1", name: "OpenClaw" },
+    });
+  });
+
+  it("recovers thread routing from mixed-case Slack session keys", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+
+    const route = await resolveRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      target: "channel:C1",
+      currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:channel:c1:thread:1712345678.123456",
+      baseSessionKey: "agent:main:slack:channel:c1",
+      threadId: "1712345678.123456",
     });
   });
 });

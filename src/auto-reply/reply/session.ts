@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -137,6 +138,11 @@ function resolveStaleSessionEndReason(params: {
     return "daily";
   }
   return undefined;
+}
+
+function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
+  const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
+  return Boolean(provider && getCliSessionBinding(entry, provider));
 }
 
 export type SessionInitResult = {
@@ -447,8 +453,9 @@ export async function initSessionState(params: {
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
   // Forcing freshEntry=true prevents accidental data loss on automated system events.
+  const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const entryFreshness = entry
-    ? isSystemEvent
+    ? isSystemEvent || skipImplicitExpiry
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
     : undefined;
