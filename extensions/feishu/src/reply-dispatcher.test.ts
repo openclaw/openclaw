@@ -2156,6 +2156,98 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  // Test D: onIdle fires while deliverInFlight is true → typingCallbacks.onIdle NOT called immediately
+  it("does not call typingCallbacks.onIdle immediately when onIdle fires during deliverInFlight", async () => {
+    let resolveHook!: () => void;
+    runMessageSendingMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveHook = resolve;
+      }),
+    );
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now(),
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.(); // starts typing indicator
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+
+    // Start a deliver — deliverInFlight will be set to true synchronously
+    // before the hook is awaited. The promise intentionally never resolves yet.
+    const deliverPromise = options.deliver({ text: "hello" }, { kind: "final" });
+
+    // Yield one microtask so the deliver reaches and awaits the hook call
+    await Promise.resolve();
+
+    // Fire onIdle while the hook is still pending (deliverInFlight === true).
+    // The new code must defer — NOT call typingCallbacks.onIdle() yet.
+    await options.onIdle?.();
+
+    // Typing should NOT have been stopped yet.
+    expect(removeTypingIndicatorMock).not.toHaveBeenCalled();
+
+    // Resolve the hook so deliver can complete
+    resolveHook();
+    await deliverPromise;
+    await flushAsyncTasks();
+
+    // After deliver settles, the deferred idle should fire and stop typing.
+    expect(removeTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    // No streaming session was created (plain text path) — nothing left open.
+    expect(streamingInstances).toHaveLength(0);
+  });
+
+  // Test E: After deliver completes (deliverInFlight cleared), the deferred typingCallbacks.onIdle fires
+  it("flushes deferred typingCallbacks.onIdle in deliver finally once deliverInFlight is cleared", async () => {
+    let resolveHook!: (value?: unknown) => void;
+    runMessageSendingMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveHook = resolve;
+      }),
+    );
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now(),
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    // Kick off deliver without awaiting — it will set deliverInFlight and suspend
+    const deliverPromise = options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+    await Promise.resolve();
+
+    // Trigger idle while deliver is pending
+    const idlePromise = options.onIdle?.();
+    await idlePromise;
+
+    // Typing still active — idle was deferred
+    expect(removeTypingIndicatorMock).not.toHaveBeenCalled();
+
+    // Complete the hook — deliver.finally should now flush the pending idle
+    resolveHook();
+    await deliverPromise;
+    await flushAsyncTasks();
+
+    // Deferred idle fired: typing indicator removed exactly once
+    expect(removeTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    // Streaming card was closed by the deferred idle path — not left in dirty/open state.
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers streaming after start() throws (HTTP 400)", async () => {
     const errorMock = vi.fn();
     let shouldFailStart = true;

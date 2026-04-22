@@ -422,6 +422,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let replyCycleInitialized = false;
   let preservePendingThinkingCardOnIdle = false;
   let forcePendingThinkingPreview = false;
+  let typingIdlePending = false;
 
   const resetReplyCycleState = () => {
     replyCycleInitialized = true;
@@ -442,6 +443,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     thinkingActivityTick = 0;
     preservePendingThinkingCardOnIdle = false;
     forcePendingThinkingPreview = false;
+    typingIdlePending = false;
   };
   /**
    * Deliver media files and emit persistence signals for media-only final payloads.
@@ -1238,240 +1240,252 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await typingCallbacks?.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const originalReply = resolveSendableOutboundReplyParts(payload);
-        const shouldRunSendingHook =
-          originalReply.hasMedia || !streaming?.isActive() || info?.kind === "final";
-        let text = originalReply.text;
-        let hookMetadata: Record<string, unknown> | undefined;
-        // Capture streaming state BEFORE the async hook call — onIdle may race
-        // and null-out `streaming` while the hook is awaited.
-        const streamingWasActive = streaming?.isActive() ?? false;
-        logDispatcher(
-          `deliver ENTRY kind=${info?.kind ?? "unknown"} streamingActive=${streamingWasActive ? "true" : "false"} streamMsgId=${streaming?.getMessageId() ?? "none"} originalChars=${originalReply.text.trim().length} shouldRunHook=${shouldRunSendingHook ? "true" : "false"}`,
-        );
-        if (shouldRunSendingHook) {
-          deliverInFlight = true;
-          let hookResult: Awaited<ReturnType<typeof runMessageSending>>;
-          try {
-            hookResult = await runMessageSending({
-              content: text,
-              mediaUrls: originalReply.mediaUrls,
-            });
-          } finally {
-            deliverInFlight = false;
-          }
-          if (hookResult.cancelled) {
-            const policyNote = "[Message filtered by policy]";
-            if (info?.kind === "final" && (streaming?.isActive() || streamingStartPromise)) {
-              // Show a brief note in the streaming card so the user sees
-              // feedback rather than a silently discarded empty card.
-              streamText = policyNote;
-              await closeStreaming({ emitFinalText: true, reason: "error" });
-            } else if (info?.kind === "final") {
-              // No streaming session — send a plain text notification so the
-              // user is not left with zero feedback after the hook cancellation.
-              await sendMessageFeishu({
-                cfg,
-                to: chatId,
-                text: policyNote,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                accountId,
+        try {
+          const originalReply = resolveSendableOutboundReplyParts(payload);
+          const shouldRunSendingHook =
+            originalReply.hasMedia || !streaming?.isActive() || info?.kind === "final";
+          let text = originalReply.text;
+          let hookMetadata: Record<string, unknown> | undefined;
+          // Capture streaming state BEFORE the async hook call — onIdle may race
+          // and null-out `streaming` while the hook is awaited.
+          const streamingWasActive = streaming?.isActive() ?? false;
+          logDispatcher(
+            `deliver ENTRY kind=${info?.kind ?? "unknown"} streamingActive=${streamingWasActive ? "true" : "false"} streamMsgId=${streaming?.getMessageId() ?? "none"} originalChars=${originalReply.text.trim().length} shouldRunHook=${shouldRunSendingHook ? "true" : "false"}`,
+          );
+          if (shouldRunSendingHook) {
+            deliverInFlight = true;
+            let hookResult: Awaited<ReturnType<typeof runMessageSending>>;
+            try {
+              hookResult = await runMessageSending({
+                content: text,
+                mediaUrls: originalReply.mediaUrls,
               });
+            } finally {
+              deliverInFlight = false;
             }
-            return;
-          }
-          text = hookResult.content;
-          hookMetadata =
-            hookResult.metadata && typeof hookResult.metadata === "object"
-              ? hookResult.metadata
-              : undefined;
-        }
-        text = stripInlineDirectiveTagsForDelivery(text).text;
-        const hasText = text.trim().length > 0;
-        const hasMedia = originalReply.hasMedia;
-        const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
-        const skipTextForDuplicateFinal =
-          info?.kind === "final" &&
-          hasText &&
-          (deliveredFinalTexts.has(text) ||
-            deliveredFinalTexts.has(normalizeMentionTagsForCard(text)) ||
-            deliveredFinalTexts.has(stripMentionTags(text)));
-        const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
-
-        if (info?.kind === "final" && hasText) {
-          params.runtime.log?.(
-            `feishu[${account.accountId}] final deliver candidate: chars=${text.trim().length} useCard=${useCard ? "true" : "false"} skipDuplicate=${skipTextForDuplicateFinal ? "true" : "false"}`,
-          );
-          logDispatcher(
-            `deliver final hasText=true useCard=${useCard ? "true" : "false"} skipDuplicate=${skipTextForDuplicateFinal ? "true" : "false"} streamingActive=${streaming?.isActive() ? "true" : "false"} streamMessageId=${streaming?.getMessageId() ?? "none"} hookTextChanged=${text !== originalReply.text ? "true" : "false"} originalChars=${originalReply.text.trim().length} finalChars=${text.trim().length}`,
-          );
-        }
-
-        if (!shouldDeliverText && !hasMedia) {
-          logDispatcher(
-            `deliver SKIPPED kind=${info?.kind ?? "unknown"} skipDuplicate=${skipTextForDuplicateFinal ? "true" : "false"} hasText=${hasText ? "true" : "false"} hasMedia=${hasMedia ? "true" : "false"}`,
-          );
-          return;
-        }
-
-        if (shouldDeliverText) {
-          if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
+            if (hookResult.cancelled) {
+              const policyNote = "[Message filtered by policy]";
+              if (info?.kind === "final" && (streaming?.isActive() || streamingStartPromise)) {
+                // Show a brief note in the streaming card so the user sees
+                // feedback rather than a silently discarded empty card.
+                streamText = policyNote;
+                await closeStreaming({ emitFinalText: true, reason: "error" });
+              } else if (info?.kind === "final") {
+                // No streaming session — send a plain text notification so the
+                // user is not left with zero feedback after the hook cancellation.
+                await sendMessageFeishu({
+                  cfg,
+                  to: chatId,
+                  text: policyNote,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  accountId,
+                });
+              }
               return;
             }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
+            text = hookResult.content;
+            hookMetadata =
+              hookResult.metadata && typeof hookResult.metadata === "object"
+                ? hookResult.metadata
+                : undefined;
           }
+          text = stripInlineDirectiveTagsForDelivery(text).text;
+          const hasText = text.trim().length > 0;
+          const hasMedia = originalReply.hasMedia;
+          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+          const skipTextForDuplicateFinal =
+            info?.kind === "final" &&
+            hasText &&
+            (deliveredFinalTexts.has(text) ||
+              deliveredFinalTexts.has(normalizeMentionTagsForCard(text)) ||
+              deliveredFinalTexts.has(stripMentionTags(text)));
+          const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
-          if (info?.kind === "final" && streamingEnabled && useCard) {
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
-          }
-
-          // Use streamingWasActive (captured before hook await) to handle the
-          // race where onIdle fired and nulled streaming during the hook call.
-          // If streaming was active when deliver started, treat it as the
-          // streaming path even if onIdle snuck in between.
-          if (streaming?.isActive() || (streamingWasActive && info?.kind === "final")) {
-            logDispatcher(
-              `deliver PATH=streaming kind=${info?.kind ?? "unknown"} streamMsgId=${streaming?.getMessageId() ?? "raced-null"}`,
+          if (info?.kind === "final" && hasText) {
+            params.runtime.log?.(
+              `feishu[${account.accountId}] final deliver candidate: chars=${text.trim().length} useCard=${useCard ? "true" : "false"} skipDuplicate=${skipTextForDuplicateFinal ? "true" : "false"}`,
             );
+            logDispatcher(
+              `deliver final hasText=true useCard=${useCard ? "true" : "false"} skipDuplicate=${skipTextForDuplicateFinal ? "true" : "false"} streamingActive=${streaming?.isActive() ? "true" : "false"} streamMessageId=${streaming?.getMessageId() ?? "none"} hookTextChanged=${text !== originalReply.text ? "true" : "false"} originalChars=${originalReply.text.trim().length} finalChars=${text.trim().length}`,
+            );
+          }
+
+          if (!shouldDeliverText && !hasMedia) {
+            logDispatcher(
+              `deliver SKIPPED kind=${info?.kind ?? "unknown"} skipDuplicate=${skipTextForDuplicateFinal ? "true" : "false"} hasText=${hasText ? "true" : "false"} hasMedia=${hasMedia ? "true" : "false"}`,
+            );
+            return;
+          }
+
+          if (shouldDeliverText) {
             if (info?.kind === "block") {
-              if (!suppressAssistantTextStreaming) {
-                // Some runtimes emit block payloads without onPartial/final callbacks.
-                // Mirror block text into streamText so onIdle close still sends content.
-                // hasVisibleTextInReply is set by queueStreamingRender on successful update.
-                queueThinkingPrelude();
-                queueStreamingUpdate(text);
+              // Drop internal block chunks unless we can safely consume them as
+              // streaming-card fallback content.
+              if (!(streamingEnabled && useCard)) {
+                return;
               }
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
+            }
+
+            if (info?.kind === "final" && streamingEnabled && useCard) {
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
+            }
+
+            // Use streamingWasActive (captured before hook await) to handle the
+            // race where onIdle fired and nulled streaming during the hook call.
+            // If streaming was active when deliver started, treat it as the
+            // streaming path even if onIdle snuck in between.
+            if (streaming?.isActive() || (streamingWasActive && info?.kind === "final")) {
+              logDispatcher(
+                `deliver PATH=streaming kind=${info?.kind ?? "unknown"} streamMsgId=${streaming?.getMessageId() ?? "raced-null"}`,
+              );
+              if (info?.kind === "block") {
+                if (!suppressAssistantTextStreaming) {
+                  // Some runtimes emit block payloads without onPartial/final callbacks.
+                  // Mirror block text into streamText so onIdle close still sends content.
+                  // hasVisibleTextInReply is set by queueStreamingRender on successful update.
+                  queueThinkingPrelude();
+                  queueStreamingUpdate(text);
+                }
+              }
+              if (info?.kind === "final") {
+                logDispatcher(
+                  `deliver final -> streaming close streamMessageId=${streaming?.getMessageId() ?? "raced-null"} finalChars=${text.trim().length}`,
+                );
+                streamText = text;
+                if (streaming?.isActive()) {
+                  await closeStreaming({ emitFinalText: true, reason: "idle" });
+                } else {
+                  // Streaming was already closed (by a raced onIdle). The card is
+                  // already delivered — just record the text for dedup and emit hooks.
+                  logDispatcher(
+                    `deliver final: streaming already closed by onIdle, skipping duplicate send`,
+                  );
+                  hasVisibleTextInReply = true;
+                }
+                // Mark visible only after closeStreaming succeeds — text is now delivered.
+                hasVisibleTextInReply = true;
+                deliveredFinalTexts.add(text);
+                deliveredFinalTexts.add(normalizeMentionTagsForCard(text));
+                deliveredFinalTexts.add(stripMentionTags(text));
+              }
+              // Send media even when streaming handled the text
+              if (hasMedia) {
+                await deliverMediaAndEmitIfNeeded(originalReply.mediaUrls, text, info, hasText);
+              }
+              return;
+            }
+
+            logDispatcher(
+              `deliver PATH=non-streaming kind=${info?.kind ?? "unknown"} useCard=${useCard ? "true" : "false"} chars=${text.trim().length} hookChanged=${text !== originalReply.text ? "true" : "false"}`,
+            );
+            const finalThinking =
+              useCard && info?.kind === "final"
+                ? composeThinkingContent({ final: true })
+                : undefined;
+            const cardText = text;
+
+            let chunkResult: { lastMessageId?: string; deliveredMessageIds: string[] };
+            if (useCard) {
+              if (info?.kind === "final") {
+                logDispatcher(
+                  `deliver final -> sendStructuredCardFeishu non-streaming finalChars=${cardText.trim().length} replyTo=${sendReplyToMessageId ?? "none"} effectiveReplyInThread=${effectiveReplyInThread ? "true" : "false"}`,
+                );
+              }
+              const cardHeader = showCardHeader ? resolveCardHeader(agentId, identity) : undefined;
+              const cardNote = showCardNote
+                ? resolveCardNote(agentId, identity, prefixContext.prefixContext)
+                : undefined;
+              chunkResult = await sendChunkedTextReply({
+                text: cardText,
+                useCard: true,
+                infoKind: info?.kind,
+                sendChunk: async ({ chunk, isFirst }) => {
+                  const sent = await sendStructuredCardFeishu({
+                    cfg,
+                    to: chatId,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    mentions: isFirst ? mentionTargets : undefined,
+                    accountId,
+                    header: cardHeader,
+                    note: cardNote,
+                    ...(isFirst && finalThinking?.text
+                      ? {
+                          thinkingTitle: finalThinking.title,
+                          thinkingText: finalThinking.text,
+                          thinkingExpanded: false,
+                        }
+                      : {}),
+                  });
+                  return { messageId: sent?.messageId };
+                },
+              });
+            } else {
+              chunkResult = await sendChunkedTextReply({
+                text,
+                useCard: false,
+                infoKind: info?.kind,
+                sendChunk: async ({ chunk, isFirst }) => {
+                  const sent = await sendMessageFeishu({
+                    cfg,
+                    to: chatId,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    mentions: isFirst ? mentionTargets : undefined,
+                    accountId,
+                  });
+                  return { messageId: sent?.messageId };
+                },
+              });
+            }
+            if (chunkResult.deliveredMessageIds.length > 0) {
+              hasVisibleTextInReply = true;
             }
             if (info?.kind === "final") {
-              logDispatcher(
-                `deliver final -> streaming close streamMessageId=${streaming?.getMessageId() ?? "raced-null"} finalChars=${text.trim().length}`,
-              );
-              streamText = text;
-              if (streaming?.isActive()) {
-                await closeStreaming({ emitFinalText: true, reason: "idle" });
-              } else {
-                // Streaming was already closed (by a raced onIdle). The card is
-                // already delivered — just record the text for dedup and emit hooks.
-                logDispatcher(
-                  `deliver final: streaming already closed by onIdle, skipping duplicate send`,
-                );
-                hasVisibleTextInReply = true;
-              }
-              // Mark visible only after closeStreaming succeeds — text is now delivered.
-              hasVisibleTextInReply = true;
+              const deliveredContent = useCard ? normalizeMentionTagsForCard(cardText) : text;
               deliveredFinalTexts.add(text);
               deliveredFinalTexts.add(normalizeMentionTagsForCard(text));
               deliveredFinalTexts.add(stripMentionTags(text));
+              emitMessageSent({
+                content: deliveredContent,
+                success: true,
+                messageId: chunkResult.lastMessageId,
+                metadata: {
+                  finalContent: deliveredContent,
+                  contentType: useCard ? "interactive" : "post",
+                  ...(hookMetadata ?? {}),
+                },
+              });
+              await emitFinalTextIfNeeded(text, {
+                ...(chunkResult.lastMessageId ? { messageId: chunkResult.lastMessageId } : {}),
+                ...(chunkResult.deliveredMessageIds.length > 0
+                  ? { messageIds: chunkResult.deliveredMessageIds }
+                  : {}),
+              });
             }
-            // Send media even when streaming handled the text
-            if (hasMedia) {
-              await deliverMediaAndEmitIfNeeded(originalReply.mediaUrls, text, info, hasText);
-            }
-            return;
           }
 
-          logDispatcher(
-            `deliver PATH=non-streaming kind=${info?.kind ?? "unknown"} useCard=${useCard ? "true" : "false"} chars=${text.trim().length} hookChanged=${text !== originalReply.text ? "true" : "false"}`,
-          );
-          const finalThinking =
-            useCard && info?.kind === "final" ? composeThinkingContent({ final: true }) : undefined;
-          const cardText = text;
-
-          let chunkResult: { lastMessageId?: string; deliveredMessageIds: string[] };
-          if (useCard) {
-            if (info?.kind === "final") {
-              logDispatcher(
-                `deliver final -> sendStructuredCardFeishu non-streaming finalChars=${cardText.trim().length} replyTo=${sendReplyToMessageId ?? "none"} effectiveReplyInThread=${effectiveReplyInThread ? "true" : "false"}`,
-              );
+          if (hasMedia) {
+            await deliverMediaAndEmitIfNeeded(originalReply.mediaUrls, text, info, hasText);
+          }
+        } finally {
+          if (typingIdlePending && !deliverInFlight) {
+            typingIdlePending = false;
+            if (!preservePendingThinkingCardOnIdle) {
+              await closeStreaming({ emitFinalText: true, reason: "idle" });
             }
-            const cardHeader = showCardHeader ? resolveCardHeader(agentId, identity) : undefined;
-            const cardNote = showCardNote
-              ? resolveCardNote(agentId, identity, prefixContext.prefixContext)
-              : undefined;
-            chunkResult = await sendChunkedTextReply({
-              text: cardText,
-              useCard: true,
-              infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
-                const sent = await sendStructuredCardFeishu({
-                  cfg,
-                  to: chatId,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  mentions: isFirst ? mentionTargets : undefined,
-                  accountId,
-                  header: cardHeader,
-                  note: cardNote,
-                  ...(isFirst && finalThinking?.text
-                    ? {
-                        thinkingTitle: finalThinking.title,
-                        thinkingText: finalThinking.text,
-                        thinkingExpanded: false,
-                      }
-                    : {}),
-                });
-                return { messageId: sent?.messageId };
-              },
-            });
-          } else {
-            chunkResult = await sendChunkedTextReply({
-              text,
-              useCard: false,
-              infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
-                const sent = await sendMessageFeishu({
-                  cfg,
-                  to: chatId,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  mentions: isFirst ? mentionTargets : undefined,
-                  accountId,
-                });
-                return { messageId: sent?.messageId };
-              },
-            });
+            typingCallbacks?.onIdle?.();
           }
-          if (chunkResult.deliveredMessageIds.length > 0) {
-            hasVisibleTextInReply = true;
-          }
-          if (info?.kind === "final") {
-            const deliveredContent = useCard ? normalizeMentionTagsForCard(cardText) : text;
-            deliveredFinalTexts.add(text);
-            deliveredFinalTexts.add(normalizeMentionTagsForCard(text));
-            deliveredFinalTexts.add(stripMentionTags(text));
-            emitMessageSent({
-              content: deliveredContent,
-              success: true,
-              messageId: chunkResult.lastMessageId,
-              metadata: {
-                finalContent: deliveredContent,
-                contentType: useCard ? "interactive" : "post",
-                ...(hookMetadata ?? {}),
-              },
-            });
-            await emitFinalTextIfNeeded(text, {
-              ...(chunkResult.lastMessageId ? { messageId: chunkResult.lastMessageId } : {}),
-              ...(chunkResult.deliveredMessageIds.length > 0
-                ? { messageIds: chunkResult.deliveredMessageIds }
-                : {}),
-            });
-          }
-        }
-
-        if (hasMedia) {
-          await deliverMediaAndEmitIfNeeded(originalReply.mediaUrls, text, info, hasText);
         }
       },
       onError: async (error, info) => {
@@ -1484,13 +1498,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       onIdle: async () => {
         logDispatcher(
-          `onIdle fired streamingActive=${streaming?.isActive() ? "true" : "false"} streamMsgId=${streaming?.getMessageId() ?? "none"} streamTextChars=${streamText.trim().length} deliveredFinals=${deliveredFinalTexts.size} deliverInFlight=${deliverInFlight ? "true" : "false"}`,
+          `onIdle fired streamingActive=${streaming?.isActive() ? "true" : "false"} deliverInFlight=${deliverInFlight ? "true" : "false"}`,
         );
         if (deliverInFlight) {
           // A deliver callback is currently awaiting the message_sending hook.
           // It will close the streaming card itself once the hook resolves.
           // Closing here would race and cause a duplicate non-streaming send.
+          // Defer typing cleanup until deliver settles.
           logDispatcher(`onIdle DEFERRED — deliver in flight`);
+          typingIdlePending = true;
+          replyCycleInitialized = false;
+          return;
         } else if (preservePendingThinkingCardOnIdle) {
           logDispatcher(`onIdle preserving pending thinking card`);
         } else {

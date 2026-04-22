@@ -75,7 +75,7 @@ export function createTypingSignaler(params: {
   };
 
   const signalRunStart = async () => {
-    if (disabled || !shouldStartImmediately) {
+    if (disabled) {
       return;
     }
     await typing.startTypingLoop();
@@ -117,9 +117,6 @@ export function createTypingSignaler(params: {
 
   const signalReasoningDelta = async () => {
     if (disabled || !shouldStartOnReasoning) {
-      return;
-    }
-    if (!hasRenderableText) {
       return;
     }
     await typing.startTypingLoop();
