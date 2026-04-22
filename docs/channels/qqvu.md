@@ -1,8 +1,9 @@
 # QQvu
 
 ## 快速开始
- > Support OpenClaw 2026.4.15 / OpenClaw 2026.4.20. Run `openclaw -v` to check and use `openclaw update` to upgrade
- 
+
+> Support OpenClaw 2026.4.15 / OpenClaw 2026.4.20. Run `openclaw -v` to check and use `openclaw update` to upgrade
+
 <Steps>
     <step title="Configure the plugin">
         ```bash
@@ -10,19 +11,19 @@
         ```
     </step>
     <step title="Configure robots in openclaw.json">
-        Need to create a robot on the QQvu app now, directory: my --> Robot --> Create Robot, 
-        Copy the `UID` and `privateKey` of the robot, and replace the 【private key】 in the UID and 
-        privateKey of the following tags.
+        Need to create a robot on the QQvu app now, directory: my --> Robot --> Create Robot,
+        Copy the `UID` and `privateKey` of the robot, and paste the key material into the UID's
+        `privateKey` field in the following example.
         Here are examples of multiple robots.
         ```bash
                 "pufferfish": {
                   "bots":{
                     "UID": {
-                      "privateKey": "-----BEGIN PRIVATE KEY-----\n【private key】\n-----END PRIVATE KEY-----\n",
+                      "privateKey": "<PASTE_YOUR_KEY_MATERIAL_HERE>",
                       "enabled":true
                     },
                     "UID2": {
-                      "privateKey": "-----BEGIN PRIVATE KEY-----\n【private key】\n-----END PRIVATE KEY-----\n",
+                      "privateKey": "<PASTE_YOUR_KEY_MATERIAL_HERE>",
                       "enabled":true
                     }
                   },
@@ -57,12 +58,12 @@
     </step>
     <step>
         Enter the. openclaw/workspace and delete the BOOTSTRAP.md file
-    </step> 
+    </step>
     <step title="Start OpenClaw">
         Execute `openclaw gateway start`
     </step>
     <step title="Uninstalling plugins">
-        ···bash
+        ```bash
             openclaw plugins uninstall pufferfish-channel
         ```
     </step>
