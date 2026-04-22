@@ -31,6 +31,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramReplyToMode } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -469,7 +470,7 @@ export const registerTelegramNativeCommands = ({
   telegramCfg,
   allowFrom,
   groupAllowFrom,
-  replyToMode,
+  replyToMode: _replyToMode,
   textLimit,
   useAccessGroups,
   nativeEnabled,
@@ -694,6 +695,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
     linkPreview?: boolean;
+    chatType: "direct" | "group";
   }) => ({
     chatId: String(params.chatId),
     currentMessageId: params.currentMessageId,
@@ -705,7 +707,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
-    replyToMode,
+    replyToMode: resolveTelegramReplyToMode(cfg, params.accountId, params.chatType),
     textLimit,
     thread: params.threadSpec,
     tableMode: params.tableMode,
@@ -864,6 +866,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          chatType: isGroup ? "group" : "direct",
         });
         const conversationLabel = isGroup
           ? msg.chat.title
@@ -1050,6 +1053,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          chatType: isGroup ? "group" : "direct",
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;
