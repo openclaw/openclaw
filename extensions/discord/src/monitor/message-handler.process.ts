@@ -763,7 +763,7 @@ export async function processDiscordMessage(
     createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-      typingCallbacks,
+      typingCallbacks: replyPipeline.typingCallbacks,
       beforeDeliver: async (payload) => {
         if (payload.isReasoning) {
           return payload;

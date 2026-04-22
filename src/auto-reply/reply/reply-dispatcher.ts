@@ -237,7 +237,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         let deliverPayload: ReplyPayload | null = normalized;
         if (options.beforeDeliver) {
           deliverPayload = await options.beforeDeliver(normalized, { kind });
-          if (!deliverPayload) {
+          if (deliverPayload === null) {
             return; // Hook cancelled delivery.
           }
         }
