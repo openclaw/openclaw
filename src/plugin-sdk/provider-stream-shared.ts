@@ -298,6 +298,26 @@ export function sanitizeGoogleThinkingPayload(params: {
     return;
   }
   const payloadObj = params.payload as Record<string, unknown>;
+
+  // When thinkingLevel is "off" and the payload has NEITHER `config` nor
+  // `generationConfig`, the provider will silently apply its default thinking
+  // budget (often several thousand tokens) — which adds multi-second latency
+  // per call and silently regresses sub-agents that asked for a no-thinking
+  // Google call. Create a minimal `generationConfig` with
+  // `thinkingConfig.thinkingBudget = 0` so the caller's explicit
+  // thinking-off intent is honored end-to-end. Skip this for models that
+  // either require thinking mode or use the newer `thinkingLevel` enum.
+  if (
+    params.thinkingLevel === "off" &&
+    typeof params.modelId === "string" &&
+    !isGoogleThinkingRequiredModel(params.modelId) &&
+    !isGemma4Model(params.modelId) &&
+    !isGoogleGemini3ThinkingLevelModel(params.modelId) &&
+    !(payloadObj.config && typeof payloadObj.config === "object") &&
+    !(payloadObj.generationConfig && typeof payloadObj.generationConfig === "object")
+  ) {
+    payloadObj.generationConfig = { thinkingConfig: { thinkingBudget: 0 } };
+  }
   sanitizeGoogleThinkingConfigContainer({
     container: payloadObj.config,
     modelId: params.modelId,
