@@ -289,6 +289,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
+
+        // Developer/MVP entry point: open wallboard shell when launched with --wallboard.
+        // Pass --wallboard-display=<name> to target a specific display by localized name.
+        if CommandLine.arguments.contains("--wallboard") {
+            let preferred = CommandLine.arguments
+                .first { $0.hasPrefix("--wallboard-display=") }?
+                .split(separator: "=", maxSplits: 1).last.map(String.init)
+            Task { @MainActor in WallboardManager.shared.open(preferredDisplayName: preferred) }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
