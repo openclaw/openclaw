@@ -1,5 +1,7 @@
 import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 
+export const PI_EMBEDDED_EXTENSION_RUNTIME_ID = "pi";
+
 export type RegisteredEmbeddedExtensionFactory = {
   factory: ExtensionFactory;
   ownerPluginId?: string;

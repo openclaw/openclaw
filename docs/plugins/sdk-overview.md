@@ -363,8 +363,10 @@ plugin-owned methods.
 Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
 event timing during OpenClaw embedded runs, for example async `tool_result`
 rewrites that must happen before the final tool-result message is emitted.
-Keep normal OpenClaw plugin hooks for everything that does not require that
-lower-level seam.
+This is a bundled-plugin seam today: only bundled plugins may register one, and
+they must declare `contracts.embeddedExtensionFactories: ["pi"]` in
+`openclaw.plugin.json`. Keep normal OpenClaw plugin hooks for everything that
+does not require that lower-level seam.
 
 ### CLI registration metadata
 

@@ -382,6 +382,7 @@ read without importing the plugin runtime.
 ```json
 {
   "contracts": {
+    "embeddedExtensionFactories": ["pi"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
@@ -397,17 +398,18 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                  |
-| -------------------------------- | ---------- | -------------------------------------------------------------- |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                          |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.          |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                  |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.             |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                       |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                      |
-| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
+| Field                            | Type       | What it means                                                     |
+| -------------------------------- | ---------- | ----------------------------------------------------------------- |
+| `embeddedExtensionFactories`     | `string[]` | Embedded runtime ids a bundled plugin may register factories for. |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                             |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.             |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                     |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                   |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                   |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                          |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                         |
+| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks.    |
 
 ## mediaUnderstandingProviderMetadata reference
 

@@ -2007,7 +2007,7 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
-  /** Register a Pi embedded extension factory for OpenClaw embedded runs. */
+  /** Register a Pi embedded extension factory for OpenClaw embedded runs. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"pi"`. */
   registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (

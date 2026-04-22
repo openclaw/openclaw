@@ -12,17 +12,31 @@ import { buildEmbeddedExtensionFactories } from "./pi-embedded-runner/extensions
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const tempDirs: string[] = [];
 
-function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
+function createTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-ext-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writeTempPlugin(params: {
+  dir: string;
+  id: string;
+  body: string;
+  manifest?: Record<string, unknown>;
+  filename?: string;
+}): string {
   const pluginDir = path.join(params.dir, params.id);
   fs.mkdirSync(pluginDir, { recursive: true });
-  const file = path.join(pluginDir, `${params.id}.mjs`);
+  const file = path.join(pluginDir, params.filename ?? `${params.id}.mjs`);
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify(
       {
         id: params.id,
+        ...params.manifest,
         configSchema: EMPTY_PLUGIN_SCHEMA,
       },
       null,
@@ -34,6 +48,9 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
 }
 
 afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   clearPluginLoaderCache();
   clearEmbeddedExtensionFactories();
   if (originalBundledPluginsDir === undefined) {
@@ -44,13 +61,19 @@ afterEach(() => {
 });
 
 describe("buildEmbeddedExtensionFactories", () => {
-  it("includes plugin-registered embedded extension factories and restores them from cache", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-ext-"));
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  it("includes plugin-registered embedded extension factories and restores them from cache", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
 
-    const pluginFile = writeTempPlugin({
+    writeTempPlugin({
       dir: tmp,
       id: "embedded-ext",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          embeddedExtensionFactories: ["pi"],
+        },
+      },
       body: `export default { id: "embedded-ext", register(api) {
   api.registerEmbeddedExtensionFactory((pi) => {
     pi.on("session_start", () => undefined);
@@ -59,11 +82,13 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     const options = {
-      workspaceDir: tmp,
       config: {
         plugins: {
-          load: { paths: [pluginFile] },
-          allow: ["embedded-ext"],
+          entries: {
+            "embedded-ext": {
+              enabled: true,
+            },
+          },
         },
       },
     };
@@ -95,11 +120,97 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(cachedFactories).toHaveLength(1);
 
     const handlers = new Map<string, Function>();
-    void cachedFactories[0]?.({
+    await cachedFactories[0]?.({
       on(event: string, handler: Function) {
         handlers.set(event, handler);
       },
     } as never);
     expect(handlers.has("session_start")).toBe(true);
+  });
+
+  it("rejects embedded extension factories from non-bundled plugins even when they declare the Pi manifest contract", () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginFile = writeTempPlugin({
+      dir: tmp,
+      id: "embedded-ext",
+      manifest: {
+        contracts: {
+          embeddedExtensionFactories: ["pi"],
+        },
+      },
+      body: `export default { id: "embedded-ext", register(api) {
+  api.registerEmbeddedExtensionFactory((pi) => {
+    pi.on("session_start", () => undefined);
+  });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [pluginFile] },
+          allow: ["embedded-ext"],
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "embedded-ext",
+        message: "only bundled plugins can register Pi embedded extension factories",
+      }),
+    );
+    expect(listEmbeddedExtensionFactories()).toHaveLength(0);
+    expect(
+      buildEmbeddedExtensionFactories({
+        cfg: undefined,
+        sessionManager: SessionManager.inMemory(),
+        provider: "openai",
+        modelId: "gpt-5.4",
+        model: undefined,
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("rejects bundled plugins that omit the Pi embedded extension manifest contract", () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "embedded-ext",
+      filename: "index.mjs",
+      body: `export default { id: "embedded-ext", register(api) {
+  api.registerEmbeddedExtensionFactory((pi) => {
+    pi.on("session_start", () => undefined);
+  });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      config: {
+        plugins: {
+          entries: {
+            "embedded-ext": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "embedded-ext",
+        message:
+          'plugin must declare contracts.embeddedExtensionFactories: ["pi"] to register Pi embedded extension factories',
+      }),
+    );
+    expect(listEmbeddedExtensionFactories()).toHaveLength(0);
   });
 });

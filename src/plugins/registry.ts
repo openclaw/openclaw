@@ -35,7 +35,10 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
-import { registerEmbeddedExtensionFactory } from "./embedded-extension-factory.js";
+import {
+  PI_EMBEDDED_EXTENSION_RUNTIME_ID,
+  registerEmbeddedExtensionFactory,
+} from "./embedded-extension-factory.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
@@ -1273,6 +1276,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerCompactionProvider(provider, { ownerPluginId: record.id });
               },
               registerEmbeddedExtensionFactory: (factory) => {
+                if (record.origin !== "bundled") {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only bundled plugins can register Pi embedded extension factories",
+                  });
+                  return;
+                }
+                if (
+                  !(record.contracts?.embeddedExtensionFactories ?? []).includes(
+                    PI_EMBEDDED_EXTENSION_RUNTIME_ID,
+                  )
+                ) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      'plugin must declare contracts.embeddedExtensionFactories: ["pi"] to register Pi embedded extension factories',
+                  });
+                  return;
+                }
                 registerEmbeddedExtensionFactory(factory, { ownerPluginId: record.id });
               },
               registerMemoryCapability: (capability) => {
