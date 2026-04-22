@@ -36,7 +36,10 @@ static GtkWidget *cfg_validation_label = NULL;
 static GtkWidget *cfg_copy_btn = NULL;
 static GtkWidget *cfg_reload_btn = NULL;
 static GtkWidget *cfg_save_btn = NULL;
-static GtkWidget *cfg_setup_summary_label = NULL;
+static GtkWidget *cfg_setup_provider_label = NULL;
+static GtkWidget *cfg_setup_default_model_label = NULL;
+static GtkWidget *cfg_setup_catalog_label = NULL;
+static GtkWidget *cfg_setup_readiness_label = NULL;
 static GtkWidget *cfg_setup_status_label = NULL;
 static GtkWidget *cfg_provider_id_entry = NULL;
 static GtkWidget *cfg_provider_base_url_entry = NULL;
@@ -269,6 +272,33 @@ static void cfg_refresh_buttons(void) {
     }
 }
 
+static void cfg_set_validation_message(const gchar *message, gboolean valid) {
+    if (!cfg_validation_label) {
+        return;
+    }
+
+    gtk_label_set_text(GTK_LABEL(cfg_validation_label), message ? message : "Validation unavailable");
+    gtk_widget_remove_css_class(cfg_validation_label, "success");
+    gtk_widget_remove_css_class(cfg_validation_label, "error");
+    gtk_widget_add_css_class(cfg_validation_label, valid ? "success" : "error");
+}
+
+static GtkWidget* cfg_setup_fact_row(const gchar *title, GtkWidget **out_value) {
+    GtkWidget *row = adw_action_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+
+    GtkWidget *value = gtk_label_new("—");
+    gtk_label_set_selectable(GTK_LABEL(value), TRUE);
+    gtk_label_set_wrap(GTK_LABEL(value), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(value), 1.0);
+    gtk_widget_set_hexpand(value, TRUE);
+    gtk_widget_set_halign(value, GTK_ALIGN_END);
+    adw_action_row_add_suffix(ADW_ACTION_ROW(row), value);
+
+    *out_value = value;
+    return row;
+}
+
 static gboolean cfg_validate_and_track(const gchar *text) {
     g_autoptr(JsonParser) parser = json_parser_new();
     g_autoptr(GError) error = NULL;
@@ -278,16 +308,16 @@ static gboolean cfg_validate_and_track(const gchar *text) {
         JsonNode *root = json_parser_get_root(parser);
         valid = root && JSON_NODE_HOLDS_OBJECT(root);
         if (!valid && cfg_validation_label) {
-            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Validation: root value must be a JSON object");
+            cfg_set_validation_message("Validation: root value must be a JSON object", FALSE);
         }
     } else if (cfg_validation_label) {
         g_autofree gchar *message = g_strdup_printf("Validation: %s",
                                                     error && error->message ? error->message : "invalid JSON");
-        gtk_label_set_text(GTK_LABEL(cfg_validation_label), message);
+        cfg_set_validation_message(message, FALSE);
     }
 
     if (valid && cfg_validation_label) {
-        gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Validation: JSON is valid");
+        cfg_set_validation_message("Validation: JSON is valid", TRUE);
     }
 
     cfg_editor_valid = valid;
@@ -320,7 +350,7 @@ static void cfg_request_save_text(const gchar *text) {
     if (!request_id) {
         cfg_request_in_flight = FALSE;
         if (cfg_validation_label) {
-            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Failed to request config.set");
+            cfg_set_validation_message("Failed to request config.set", FALSE);
         }
         if (cfg_setup_status_label) {
             gtk_label_set_text(GTK_LABEL(cfg_setup_status_label), "Provider/model save request failed.");
@@ -396,17 +426,26 @@ static void cfg_refresh_setup_surface(void) {
     const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
     ChatGateInfo gate = {0};
     readiness_describe_chat_gate(snapshot, &gate);
-    if (cfg_setup_summary_label) {
-        g_autofree gchar *summary = g_strdup_printf(
-            "Provider: %s | Default model: %s | Catalog: %s | Selected: %s | Agents: %s | Chat: %s (%s)",
-            provider_id && provider_id[0] != '\0' ? provider_id : "missing",
-            default_model_id ? default_model_id : "missing",
-            snapshot && snapshot->model_catalog_available ? "ready" : "missing",
-            snapshot && snapshot->selected_model_resolved ? "resolved" : "unresolved",
-            snapshot && snapshot->agents_available ? "ready" : "missing",
-            gate.ready ? "ready" : "blocked",
-            readiness_chat_block_reason_to_string(gate.reason));
-        gtk_label_set_text(GTK_LABEL(cfg_setup_summary_label), summary);
+    if (cfg_setup_provider_label) {
+        gtk_label_set_text(GTK_LABEL(cfg_setup_provider_label),
+                           provider_id && provider_id[0] != '\0' ? provider_id : "missing");
+    }
+    if (cfg_setup_default_model_label) {
+        gtk_label_set_text(GTK_LABEL(cfg_setup_default_model_label),
+                           default_model_id ? default_model_id : "missing");
+    }
+    if (cfg_setup_catalog_label) {
+        g_autofree gchar *catalog_text = g_strdup_printf("%s / %s",
+                                                         snapshot && snapshot->model_catalog_available ? "catalog ready" : "catalog missing",
+                                                         snapshot && snapshot->selected_model_resolved ? "selected resolved" : "selected unresolved");
+        gtk_label_set_text(GTK_LABEL(cfg_setup_catalog_label), catalog_text);
+    }
+    if (cfg_setup_readiness_label) {
+        g_autofree gchar *readiness_text = g_strdup_printf("%s / %s (%s)",
+                                                           snapshot && snapshot->agents_available ? "agents ready" : "agents missing",
+                                                           gate.ready ? "chat ready" : "chat blocked",
+                                                           readiness_chat_block_reason_to_string(gate.reason));
+        gtk_label_set_text(GTK_LABEL(cfg_setup_readiness_label), readiness_text);
     }
 
     if (cfg_setup_status_label) {
@@ -621,7 +660,7 @@ static void on_cfg_get_done(const GatewayRpcResponse *response, gpointer user_da
         if (cfg_validation_label) {
             g_autofree gchar *message = g_strdup_printf("Load failed: %s",
                                                         response && response->error_msg ? response->error_msg : "unknown error");
-            gtk_label_set_text(GTK_LABEL(cfg_validation_label), message);
+            cfg_set_validation_message(message, FALSE);
         }
         cfg_refresh_buttons();
         return;
@@ -630,7 +669,7 @@ static void on_cfg_get_done(const GatewayRpcResponse *response, gpointer user_da
     GatewayConfigSnapshot *snapshot = gateway_data_parse_config_get(response->payload);
     if (!snapshot || !snapshot->config) {
         if (cfg_validation_label) {
-            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Load failed: invalid config response");
+            cfg_set_validation_message("Load failed: invalid config response", FALSE);
         }
         gateway_config_snapshot_free(snapshot);
         cfg_refresh_buttons();
@@ -673,7 +712,7 @@ static void cfg_request_reload(void) {
     if (!request_id) {
         cfg_request_in_flight = FALSE;
         if (cfg_validation_label) {
-            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Failed to request config.get");
+            cfg_set_validation_message("Failed to request config.get", FALSE);
         }
         cfg_refresh_buttons();
     }
@@ -696,14 +735,14 @@ static void on_cfg_save_done(const GatewayRpcResponse *response, gpointer user_d
         if (cfg_validation_label) {
             g_autofree gchar *message = g_strdup_printf("Save failed: %s",
                                                         response && response->error_msg ? response->error_msg : "unknown error");
-            gtk_label_set_text(GTK_LABEL(cfg_validation_label), message);
+            cfg_set_validation_message(message, FALSE);
         }
         cfg_refresh_buttons();
         return;
     }
 
     if (cfg_validation_label) {
-        gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Save successful. Reloading baseline…");
+        cfg_set_validation_message("Save successful. Reloading baseline…", TRUE);
     }
     if (cfg_setup_status_label) {
         gtk_label_set_text(GTK_LABEL(cfg_setup_status_label), "Saved provider/model config. Reloading baseline…");
@@ -727,59 +766,75 @@ static void on_cfg_save(GtkButton *button, gpointer user_data) {
 }
 
 static GtkWidget* config_build(void) {
-    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
     gtk_widget_set_margin_start(page, 24);
     gtk_widget_set_margin_end(page, 24);
     gtk_widget_set_margin_top(page, 24);
     gtk_widget_set_margin_bottom(page, 24);
 
     GtkWidget *title = gtk_label_new("Config");
-    gtk_widget_add_css_class(title, "title-1");
+    gtk_widget_add_css_class(title, "title-3");
     gtk_label_set_xalign(GTK_LABEL(title), 0.0);
     gtk_box_append(GTK_BOX(page), title);
+
+    GtkWidget *subtitle = gtk_label_new("Operator-oriented gateway configuration with structured setup controls and raw JSON editing.");
+    gtk_widget_add_css_class(subtitle, "dim-label");
+    gtk_label_set_wrap(GTK_LABEL(subtitle), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(subtitle), 0.0);
+    gtk_box_append(GTK_BOX(page), subtitle);
+
+    GtkWidget *status_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(status_group), "Status");
+    gtk_box_append(GTK_BOX(page), status_group);
+
+    GtkWidget *status_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_margin_start(status_box, 12);
+    gtk_widget_set_margin_end(status_box, 12);
+    gtk_widget_set_margin_top(status_box, 6);
+    gtk_widget_set_margin_bottom(status_box, 6);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(status_group), status_box);
 
     cfg_status_label = gtk_label_new("—");
     gtk_widget_add_css_class(cfg_status_label, "title-3");
     gtk_label_set_xalign(GTK_LABEL(cfg_status_label), 0.0);
-    gtk_widget_set_margin_top(cfg_status_label, 4);
-    gtk_box_append(GTK_BOX(page), cfg_status_label);
+    gtk_box_append(GTK_BOX(status_box), cfg_status_label);
 
     cfg_issues_label = gtk_label_new("");
     gtk_widget_add_css_class(cfg_issues_label, "dim-label");
     gtk_label_set_xalign(GTK_LABEL(cfg_issues_label), 0.0);
     gtk_widget_set_visible(cfg_issues_label, FALSE);
-    gtk_box_append(GTK_BOX(page), cfg_issues_label);
+    gtk_box_append(GTK_BOX(status_box), cfg_issues_label);
 
     cfg_warning_label = gtk_label_new("");
     gtk_label_set_wrap(GTK_LABEL(cfg_warning_label), TRUE);
     gtk_label_set_xalign(GTK_LABEL(cfg_warning_label), 0.0);
     gtk_widget_set_visible(cfg_warning_label, FALSE);
-    gtk_box_append(GTK_BOX(page), cfg_warning_label);
+    gtk_box_append(GTK_BOX(status_box), cfg_warning_label);
 
-    GtkWidget *sep1 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_widget_set_margin_top(sep1, 8);
-    gtk_box_append(GTK_BOX(page), sep1);
+    GtkWidget *file_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(file_group), "File");
+    gtk_box_append(GTK_BOX(page), file_group);
 
-    GtkWidget *path_heading = gtk_label_new("Config File");
-    gtk_widget_add_css_class(path_heading, "heading");
-    gtk_label_set_xalign(GTK_LABEL(path_heading), 0.0);
-    gtk_widget_set_margin_top(path_heading, 8);
-    gtk_box_append(GTK_BOX(page), path_heading);
+    GtkWidget *file_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_margin_start(file_box, 12);
+    gtk_widget_set_margin_end(file_box, 12);
+    gtk_widget_set_margin_top(file_box, 6);
+    gtk_widget_set_margin_bottom(file_box, 6);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(file_group), file_box);
 
     cfg_path_label = gtk_label_new("—");
     gtk_label_set_selectable(GTK_LABEL(cfg_path_label), TRUE);
     gtk_label_set_xalign(GTK_LABEL(cfg_path_label), 0.0);
     gtk_label_set_wrap(GTK_LABEL(cfg_path_label), TRUE);
     gtk_widget_add_css_class(cfg_path_label, "monospace");
-    gtk_box_append(GTK_BOX(page), cfg_path_label);
+    gtk_box_append(GTK_BOX(file_box), cfg_path_label);
 
     cfg_modified_label = gtk_label_new("Last modified: —");
     gtk_widget_add_css_class(cfg_modified_label, "dim-label");
     gtk_label_set_xalign(GTK_LABEL(cfg_modified_label), 0.0);
-    gtk_box_append(GTK_BOX(page), cfg_modified_label);
+    gtk_box_append(GTK_BOX(file_box), cfg_modified_label);
 
     GtkWidget *file_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_set_margin_top(file_row, 6);
 
     GtkWidget *open_file_btn = gtk_button_new_with_label("Open Config File");
     g_signal_connect(open_file_btn, "clicked", G_CALLBACK(on_cfg_open_file), NULL);
@@ -789,28 +844,31 @@ static GtkWidget* config_build(void) {
     g_signal_connect(open_folder_btn, "clicked", G_CALLBACK(on_cfg_open_folder), NULL);
     gtk_box_append(GTK_BOX(file_row), open_folder_btn);
 
-    gtk_box_append(GTK_BOX(page), file_row);
+    gtk_box_append(GTK_BOX(file_box), file_row);
 
-    GtkWidget *setup_sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_widget_set_margin_top(setup_sep, 8);
-    gtk_box_append(GTK_BOX(page), setup_sep);
+    GtkWidget *setup_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(setup_group), "Provider & Model");
+    gtk_box_append(GTK_BOX(page), setup_group);
 
-    GtkWidget *setup_heading = gtk_label_new("Provider & Model Setup");
-    gtk_widget_add_css_class(setup_heading, "heading");
-    gtk_label_set_xalign(GTK_LABEL(setup_heading), 0.0);
-    gtk_widget_set_margin_top(setup_heading, 8);
-    gtk_box_append(GTK_BOX(page), setup_heading);
+    GtkWidget *setup_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_margin_start(setup_box, 12);
+    gtk_widget_set_margin_end(setup_box, 12);
+    gtk_widget_set_margin_top(setup_box, 6);
+    gtk_widget_set_margin_bottom(setup_box, 6);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(setup_group), setup_box);
 
-    cfg_setup_summary_label = gtk_label_new("Provider: missing | Default model: missing");
-    gtk_widget_add_css_class(cfg_setup_summary_label, "dim-label");
-    gtk_label_set_xalign(GTK_LABEL(cfg_setup_summary_label), 0.0);
-    gtk_box_append(GTK_BOX(page), cfg_setup_summary_label);
+    GtkWidget *facts_group = adw_preferences_group_new();
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Provider", &cfg_setup_provider_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Default model", &cfg_setup_default_model_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Catalog / Selected", &cfg_setup_catalog_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Agents / Chat", &cfg_setup_readiness_label));
+    gtk_box_append(GTK_BOX(setup_box), facts_group);
 
     cfg_setup_status_label = gtk_label_new("Use this section to complete provider/model setup for chat readiness.");
     gtk_widget_add_css_class(cfg_setup_status_label, "dim-label");
     gtk_label_set_xalign(GTK_LABEL(cfg_setup_status_label), 0.0);
     gtk_label_set_wrap(GTK_LABEL(cfg_setup_status_label), TRUE);
-    gtk_box_append(GTK_BOX(page), cfg_setup_status_label);
+    gtk_box_append(GTK_BOX(setup_box), cfg_setup_status_label);
 
     GtkWidget *provider_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     cfg_provider_id_entry = gtk_entry_new();
@@ -826,7 +884,7 @@ static GtkWidget* config_build(void) {
     cfg_apply_provider_btn = gtk_button_new_with_label("Configure Provider");
     g_signal_connect(cfg_apply_provider_btn, "clicked", G_CALLBACK(on_cfg_apply_provider), NULL);
     gtk_box_append(GTK_BOX(provider_row), cfg_apply_provider_btn);
-    gtk_box_append(GTK_BOX(page), provider_row);
+    gtk_box_append(GTK_BOX(setup_box), provider_row);
 
     GtkWidget *model_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     cfg_reload_models_btn = gtk_button_new_with_label("Reload Models");
@@ -842,15 +900,20 @@ static GtkWidget* config_build(void) {
     gtk_widget_add_css_class(cfg_apply_model_btn, "suggested-action");
     g_signal_connect(cfg_apply_model_btn, "clicked", G_CALLBACK(on_cfg_apply_default_model), NULL);
     gtk_box_append(GTK_BOX(model_row), cfg_apply_model_btn);
-    gtk_box_append(GTK_BOX(page), model_row);
+    gtk_box_append(GTK_BOX(setup_box), model_row);
 
     cfg_set_model_dropdown_placeholder("Load models to pick default", FALSE);
 
-    GtkWidget *json_heading = gtk_label_new("Raw Config");
-    gtk_widget_add_css_class(json_heading, "heading");
-    gtk_label_set_xalign(GTK_LABEL(json_heading), 0.0);
-    gtk_widget_set_margin_top(json_heading, 12);
-    gtk_box_append(GTK_BOX(page), json_heading);
+    GtkWidget *json_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(json_group), "Raw Config (Advanced)");
+    gtk_box_append(GTK_BOX(page), json_group);
+
+    GtkWidget *json_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_start(json_box, 12);
+    gtk_widget_set_margin_end(json_box, 12);
+    gtk_widget_set_margin_top(json_box, 6);
+    gtk_widget_set_margin_bottom(json_box, 6);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(json_group), json_box);
 
     GtkTextBuffer *json_buffer = gtk_text_buffer_new(NULL);
     cfg_json_view = gtk_text_view_new_with_buffer(json_buffer);
@@ -865,31 +928,31 @@ static GtkWidget* config_build(void) {
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(json_scrolled), cfg_json_view);
     gtk_widget_set_vexpand(json_scrolled, TRUE);
     gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(json_scrolled), 200);
-    gtk_box_append(GTK_BOX(page), json_scrolled);
+    GtkWidget *json_frame = gtk_frame_new(NULL);
+    gtk_frame_set_child(GTK_FRAME(json_frame), json_scrolled);
+    gtk_box_append(GTK_BOX(json_box), json_frame);
 
     cfg_validation_label = gtk_label_new("Validation: loading config…");
-    gtk_widget_add_css_class(cfg_validation_label, "dim-label");
     gtk_label_set_xalign(GTK_LABEL(cfg_validation_label), 0.0);
-    gtk_widget_set_margin_top(cfg_validation_label, 6);
-    gtk_box_append(GTK_BOX(page), cfg_validation_label);
+    gtk_label_set_wrap(GTK_LABEL(cfg_validation_label), TRUE);
+    gtk_box_append(GTK_BOX(json_box), cfg_validation_label);
 
-    GtkWidget *copy_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_set_margin_top(copy_row, 6);
+    GtkWidget *copy_row = gtk_action_bar_new();
 
     cfg_reload_btn = gtk_button_new_with_label("Reload");
     g_signal_connect(cfg_reload_btn, "clicked", G_CALLBACK(on_cfg_reload), NULL);
-    gtk_box_append(GTK_BOX(copy_row), cfg_reload_btn);
+    gtk_action_bar_pack_start(GTK_ACTION_BAR(copy_row), cfg_reload_btn);
+
+    cfg_copy_btn = gtk_button_new_with_label("Copy Config JSON");
+    g_signal_connect(cfg_copy_btn, "clicked", G_CALLBACK(on_cfg_copy_json), NULL);
+    gtk_action_bar_pack_start(GTK_ACTION_BAR(copy_row), cfg_copy_btn);
 
     cfg_save_btn = gtk_button_new_with_label("Save");
     gtk_widget_add_css_class(cfg_save_btn, "suggested-action");
     g_signal_connect(cfg_save_btn, "clicked", G_CALLBACK(on_cfg_save), NULL);
-    gtk_box_append(GTK_BOX(copy_row), cfg_save_btn);
+    gtk_action_bar_pack_end(GTK_ACTION_BAR(copy_row), cfg_save_btn);
 
-    cfg_copy_btn = gtk_button_new_with_label("Copy Config JSON");
-    g_signal_connect(cfg_copy_btn, "clicked", G_CALLBACK(on_cfg_copy_json), NULL);
-    gtk_box_append(GTK_BOX(copy_row), cfg_copy_btn);
-
-    gtk_box_append(GTK_BOX(page), copy_row);
+    gtk_box_append(GTK_BOX(json_box), copy_row);
 
     cfg_refresh_buttons();
     return page;
@@ -958,7 +1021,10 @@ static void config_destroy(void) {
     cfg_issues_label = NULL;
     cfg_json_view = NULL;
     cfg_validation_label = NULL;
-    cfg_setup_summary_label = NULL;
+    cfg_setup_provider_label = NULL;
+    cfg_setup_default_model_label = NULL;
+    cfg_setup_catalog_label = NULL;
+    cfg_setup_readiness_label = NULL;
     cfg_setup_status_label = NULL;
     cfg_provider_id_entry = NULL;
     cfg_provider_base_url_entry = NULL;

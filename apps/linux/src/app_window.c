@@ -431,7 +431,7 @@ static GtkWidget* build_content_stack(void) {
 /* ── Sidebar row activation ── */
 
 static void refresh_active_section(AppSection section) {
-    if (section >= 0 && section < SECTION_COUNT && section_controllers[section]) {
+    if (section >= 0 && section < SECTION_COUNT && section_controllers[section] && section_controllers[section]->refresh) {
         section_controllers[section]->refresh();
     }
 }

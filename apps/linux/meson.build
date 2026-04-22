@@ -23,9 +23,19 @@ gio_unix_dep = dependency('gio-unix-2.0')
 glib_dep = dependency('glib-2.0')
 sodium_dep = dependency('libsodium')
 
+app_version = meson.project_version()
+git_commit = run_command('git', 'rev-parse', '--short', 'HEAD', check : false).stdout().strip()
+build_timestamp = run_command('date', '-u', '+%Y-%m-%dT%H:%M:%SZ', check : false).stdout().strip()
+if git_commit == ''
+  git_commit = 'unknown'
+endif
+
 # Define LIBEXEC_PATH for the C compiler so tray.c knows where the installed helper lives
 libexec_path = get_option('prefix') / get_option('libexecdir') / meson.project_name()
 add_project_arguments('-DOPENCLAW_LIBEXEC_DIR="' + libexec_path + '"', language: 'c')
+add_project_arguments('-DOPENCLAW_APP_VERSION="' + app_version + '"', language: 'c')
+add_project_arguments('-DOPENCLAW_GIT_COMMIT="' + git_commit + '"', language: 'c')
+add_project_arguments('-DOPENCLAW_BUILD_TIMESTAMP="' + build_timestamp + '"', language: 'c')
 
 # Main app (GTK4 + Libadwaita + JSON-GLib + libsoup-3.0 + GIO)
 sources = [
