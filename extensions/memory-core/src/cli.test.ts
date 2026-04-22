@@ -472,7 +472,8 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("reports dreaming blocked for main even when a non-main agent is the default", async () => {
+  it("reports dreaming blocked for the configured default agent when it is not main", async () => {
+    resolveDefaultAgentId.mockReturnValue("ops");
     loadConfig.mockReturnValue({
       plugins: {
         entries: {
@@ -488,19 +489,10 @@ describe("memory cli", () => {
       agents: {
         defaults: {
           heartbeat: {
-            every: "30m",
+            every: "0m",
           },
         },
-        list: [
-          {
-            id: "ops",
-            default: true,
-            heartbeat: {
-              every: "30m",
-            },
-          },
-          { id: "main" },
-        ],
+        list: [{ id: "ops", default: true }],
       },
     });
     const close = vi.fn(async () => {});
@@ -515,7 +507,7 @@ describe("memory cli", () => {
 
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "ops". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
       ),
     );
     expect(close).toHaveBeenCalled();

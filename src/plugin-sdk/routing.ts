@@ -10,7 +10,6 @@ export {
 export {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,
-  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   buildGroupHistoryKey,
   isCronSessionKey,
