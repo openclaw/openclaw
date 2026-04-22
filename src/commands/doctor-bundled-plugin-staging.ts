@@ -166,6 +166,12 @@ export type RepairParams = {
   // discovery scan so the caller can run a single discovery for both the
   // early-exit guard and the repair call.
   missing?: MissingStagingEntry[];
+  // Base environment for the install subprocess, before the staging-specific
+  // `npm_config_*` overlays are applied. Callers should pass the same
+  // hardened env they use for the main install step (e.g. the output of
+  // `createGlobalInstallEnv`) so `PATH` and corepack-prompt settings stay
+  // deterministic across both steps. Defaults to `process.env` when omitted.
+  baseEnv?: NodeJS.ProcessEnv;
   runCommand: RunCommandFn;
 };
 
@@ -178,7 +184,7 @@ export async function repairBundledPluginStaging(params: RepairParams): Promise<
 
   const command = packageManagerCommand ?? packageManager;
   const installArgs = resolveProductionInstallArgs(packageManager);
-  const env = createBundledPluginStagingInstallEnv();
+  const env = createBundledPluginStagingInstallEnv(params.baseEnv);
 
   for (const entry of missing) {
     const extDir = path.dirname(entry.expectedPath);

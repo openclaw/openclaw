@@ -263,6 +263,41 @@ describe("repairBundledPluginStaging", () => {
     expect(env?.npm_config_legacy_peer_deps).toBe("true");
   });
 
+  it("composes baseEnv under the staging env overlays so caller-provided PATH/corepack settings flow through", async () => {
+    const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
+    writeExtension({
+      extensionsDir,
+      id: "codex",
+      stageRuntimeDependencies: true,
+      hasNodeModules: false,
+    });
+
+    const received: Array<NodeJS.ProcessEnv | undefined> = [];
+    await repairBundledPluginStaging({
+      extensionsDir,
+      packageManager: "pnpm",
+      baseEnv: {
+        PATH: "/trusted/bin:/usr/bin",
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        npm_config_global: "true",
+      },
+      runCommand: async ({ cwd, env }) => {
+        received.push(env);
+        fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    const env = received[0];
+    // Base env PATH / corepack settings survive.
+    expect(env?.PATH).toBe("/trusted/bin:/usr/bin");
+    expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
+    // Nested-install leakage still gets stripped from the base env.
+    expect(env?.npm_config_global).toBeUndefined();
+    // Staging-specific overlays are applied on top.
+    expect(env?.npm_config_package_lock).toBe("false");
+  });
+
   it("uses a caller-provided missing list and skips its own discovery scan", async () => {
     const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
     writeExtension({

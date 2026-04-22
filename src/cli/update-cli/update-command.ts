@@ -414,6 +414,7 @@ async function runPackageInstallUpdate(params: {
       packageRoot: verifiedPackageRoot,
       manager,
       packageManagerCommand: installTarget.command,
+      baseEnv: installEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -460,6 +461,7 @@ async function runBundledPluginStagingStep(params: {
   packageRoot: string;
   manager: "pnpm" | "npm" | "bun";
   packageManagerCommand: string;
+  baseEnv: NodeJS.ProcessEnv | undefined;
   timeoutMs: number;
   progress?: UpdateStepProgress;
 }): Promise<UpdateStepResult | null> {
@@ -487,11 +489,14 @@ async function runBundledPluginStagingStep(params: {
   // Pass the already-computed `discovery.missing` into repair so a single scan
   // drives both the early-exit guard above and the per-plugin loop. Pin the
   // subprocess to the caller-resolved package-manager command so the staging
-  // step spawns the same executable the global install step already used.
+  // step spawns the same executable the global install step already used, and
+  // pass the shared `installEnv` as baseEnv so PATH/corepack settings stay
+  // consistent between the main install step and this staging step.
   const result = await repairBundledPluginStaging({
     extensionsDir,
     packageManager: params.manager,
     packageManagerCommand: params.packageManagerCommand,
+    baseEnv: params.baseEnv,
     missing: discovery.missing,
     runCommand: async ({ command: cmd, args, cwd, env }) => {
       const spawned = await runCommandWithTimeout([cmd, ...args], {
