@@ -58,13 +58,13 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     messages: params.messages,
   };
 
-  const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
+  const promptBuildResult = hookRunner.hasHooks("before_prompt_build")
     ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error) => {
         log.warn(`before_prompt_build hook failed: ${String(error)}`);
         return undefined;
       })
     : undefined;
-  const legacyResult = hookRunner?.hasHooks("before_agent_start")
+  const legacyResult = hookRunner.hasHooks("before_agent_start")
     ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error) => {
         log.warn(`before_agent_start hook (legacy prompt build path) failed: ${String(error)}`);
         return undefined;
