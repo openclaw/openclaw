@@ -20,15 +20,20 @@ const mockState = vi.hoisted(() => ({
   sessionId: "sess-1",
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
-  finalPayload: null as
-    | { text?: string; mediaUrl?: string; replyToId?: string; replyToCurrent?: boolean }
-    | null,
+  finalPayload: null as {
+    text?: string;
+    mediaUrl?: string;
+    sensitiveMedia?: boolean;
+    replyToId?: string;
+    replyToCurrent?: boolean;
+  } | null,
   dispatchedReplies: [] as Array<{
     kind: "tool" | "block" | "final";
     payload: {
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      trustedLocalMedia?: boolean;
       replyToId?: string;
       replyToCurrent?: boolean;
     };
@@ -102,6 +107,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         sendFinalReply: (payload: {
           text?: string;
           mediaUrl?: string;
+          sensitiveMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
         }) => boolean;
@@ -109,6 +115,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
         }) => boolean;
@@ -116,6 +123,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
         }) => boolean;

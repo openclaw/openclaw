@@ -166,6 +166,7 @@ export type ToolHandlerState = Pick<
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
   | "pendingToolAudioAsVoice"
+  | "pendingToolTrustedLocalMedia"
   | "deterministicApprovalPromptPending"
   | "replayState"
   | "messagingToolSentTexts"
