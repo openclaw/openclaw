@@ -58,6 +58,7 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
       env: process.env,
       detached: true,
       stdio: "inherit",
+      windowsHide: true,
     });
     child.unref();
     return { mode: "spawned", pid: child.pid ?? undefined };
