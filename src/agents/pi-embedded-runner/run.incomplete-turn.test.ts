@@ -360,7 +360,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("Please try again");
   });
 
-  it("does not retry reasoning-only turns for non-openai assistant metadata", async () => {
+  it("does not retry reasoning-only turns for non-strict-agentic providers", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -386,8 +386,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "anthropic",
+      model: "sonnet-4.6",
       runId: "run-reasoning-only-provider-mismatch",
     });
 

@@ -539,6 +539,7 @@ export function resolvePlanningOnlyRetryLimit(
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -555,6 +556,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||
