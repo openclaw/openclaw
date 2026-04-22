@@ -34,6 +34,10 @@ TypeScript compilation. If an installed package only declares a TypeScript
 source entry, OpenClaw will use a matching built `dist/*.js` peer when one
 exists, then fall back to the TypeScript source.
 
+All entry paths must stay inside the plugin package directory. Runtime entries
+and inferred built JavaScript peers do not make an escaping `extensions` or
+`setupEntry` source path valid.
+
 <Tip>
   **Looking for a walkthrough?** See [Channel Plugins](/plugins/sdk-channel-plugins)
   or [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
