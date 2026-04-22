@@ -2000,7 +2000,7 @@ jobs:
       - name: Setup pnpm + cache store
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "10.32.1"
+          pnpm-version: "10.33.0"
           cache-key-suffix: "node24"
           use-restore-keys: "false"
           use-actions-cache: "true"
