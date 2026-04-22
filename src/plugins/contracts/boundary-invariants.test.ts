@@ -94,6 +94,9 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const fullPath = resolve(directory, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
+          continue;
+        }
         walk(fullPath);
         continue;
       }
