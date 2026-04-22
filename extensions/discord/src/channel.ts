@@ -542,7 +542,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }).map(toConversationLifecycleBinding),
       },
       heartbeat: {
-        sendTyping: async ({ to, accountId, threadId }) => {
+        sendTyping: async ({ cfg, to, accountId, threadId }) => {
           const resolvedTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
           const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
           if (!target || target.kind !== "channel") {
@@ -551,6 +551,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           await (
             await loadDiscordSendModule()
           ).sendTypingDiscord(target.id, {
+            cfg,
             accountId: accountId ?? undefined,
           });
         },
