@@ -9,7 +9,7 @@ Default startup for interactive sessions:
 1. Read `SOUL.md`
 2. Read `USER.md`
 3. Read `TOOLS.md`
-4. Read `memory/YYYY-MM-DD.md` for today and yesterday when available
+4. Read `memory/YYYY-MM-DD*.md` for today and yesterday when available (the `session-memory` hook writes `YYYY-MM-DD-<slug>.md`, so match as a glob)
 
 Do not start with generic bootstrap questions about who you are. Your role is already defined here.
 
