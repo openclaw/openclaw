@@ -637,6 +637,7 @@ export async function compactEmbeddedPiSessionDirect(
       sessionKey: params.sessionKey,
       config: params.config,
     });
+    const effectiveCompactionAgentId = params.agentId ?? sessionAgentId;
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions(
@@ -813,7 +814,7 @@ export async function compactEmbeddedPiSessionDirect(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
-        agentId: sessionAgentId,
+        agentId: effectiveCompactionAgentId,
         contextTokenBudget: ctxInfo.tokens,
       });
       // Sets compaction/pruning runtime state and returns extension factories
@@ -824,7 +825,7 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
-        agentId: sessionAgentId,
+        agentId: effectiveCompactionAgentId,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,
@@ -838,7 +839,7 @@ export async function compactEmbeddedPiSessionDirect(
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
-        agentId: sessionAgentId,
+        agentId: effectiveCompactionAgentId,
         contextTokenBudget: ctxInfo.tokens,
       });
 
