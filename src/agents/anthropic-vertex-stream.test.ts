@@ -316,6 +316,32 @@ describe("createAnthropicVertexStreamFn", () => {
       }),
     );
   });
+
+  it("strips metadata.user_id before forwarding Vertex requests", () => {
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
+
+    void streamFn(
+      model,
+      { messages: [] },
+      {
+        metadata: {
+          user_id: "owner@example.com",
+          trace_id: "trace-123",
+        },
+      } as never,
+    );
+
+    expect(hoisted.streamAnthropicMock).toHaveBeenCalledWith(
+      model,
+      { messages: [] },
+      expect.objectContaining({
+        metadata: {
+          trace_id: "trace-123",
+        },
+      }),
+    );
+  });
 });
 
 describe("createAnthropicVertexStreamFnForModel", () => {
