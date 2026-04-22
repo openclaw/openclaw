@@ -32,7 +32,11 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTokens } from "./tui-formatters.js";
+import {
+  formatCompactPercent,
+  formatCompactTokens,
+  renderCompactProgressBar,
+} from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
@@ -814,34 +818,39 @@ export async function runTui(opts: TuiOptions) {
     : undefined;
 
   const updateFooter = () => {
-    const sessionKeyLabel = formatSessionKey(currentSessionKey);
-    const sessionLabel = sessionInfo.displayName
-      ? `${sessionKeyLabel} (${sessionInfo.displayName})`
-      : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
     const modelLabel = sessionInfo.model
       ? sessionInfo.modelProvider
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
         : sessionInfo.model
       : "unknown";
-    const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const think = sessionInfo.thinkingLevel ?? "off";
-    const fast = sessionInfo.fastMode === true;
-    const verbose = sessionInfo.verboseLevel ?? "off";
-    const reasoning = sessionInfo.reasoningLevel ?? "off";
-    const reasoningLabel =
-      reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const totalTokens = sessionInfo.totalTokens ?? null;
+    const contextTokens = sessionInfo.contextTokens ?? null;
+    const percentUsed =
+      typeof totalTokens === "number" && typeof contextTokens === "number" && contextTokens > 0
+        ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
+        : null;
+    const progress = renderCompactProgressBar(percentUsed, 12);
+    const progressColor =
+      progress.percent >= 85
+        ? theme.error
+        : progress.percent >= 65
+          ? theme.accentSoft
+          : progress.percent >= 40
+            ? theme.accent
+            : theme.success;
+    const progressBar = `${theme.dim("[")}${progressColor("█".repeat(progress.filled))}${theme.dim("░".repeat(progress.empty))}${theme.dim("]")}`;
+    const elapsedLabel = statusStartedAt ? formatElapsed(statusStartedAt) : "0s";
+    const divider = theme.dim(" | ");
     const footerParts = [
-      `agent ${agentLabel}`,
-      `session ${sessionLabel}`,
-      modelLabel,
-      think !== "off" ? `think ${think}` : null,
-      fast ? "fast" : null,
-      verbose !== "off" ? `verbose ${verbose}` : null,
-      reasoningLabel,
-      tokens,
-    ].filter(Boolean);
-    footer.setText(theme.dim(footerParts.join(" | ")));
+      theme.bold(theme.accent(modelLabel)),
+      theme.fg(formatCompactTokens(totalTokens, contextTokens)),
+      progressBar,
+      progressColor(formatCompactPercent(totalTokens, contextTokens)),
+      theme.success(agentLabel),
+      theme.dim(elapsedLabel),
+    ];
+    footer.setText(footerParts.join(divider));
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
