@@ -160,7 +160,7 @@ function resolveUpdateStatusBanner(params: { status?: string; reason?: string })
       "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
       "global-install-failed":
         "The global package install did not verify on disk. Retry or reinstall from the CLI.",
-      "restart-disabled": "Enable gateway restarts or restart the gateway manually after updating.",
+      "restart-disabled": "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry — or run `openclaw update` from the CLI.",
       "restart-unavailable":
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       "restart-unhealthy":
