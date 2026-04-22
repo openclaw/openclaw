@@ -160,4 +160,44 @@ describe("qqbot sensitive slash commands", () => {
     expect(result?.text).toContain("/bot-approve on");
     expect(result?.text).toContain("/bot-approve status");
   });
+
+  it("/bot-approve rejects non-QQ framework channels", async () => {
+    let registeredFrameworkCommand: CapturedFrameworkCommand | undefined;
+    const configState: Record<string, unknown> = {};
+
+    registerApproveRuntimeGetter(() => ({
+      config: {
+        loadConfig: () => configState,
+        writeConfigFile: async (cfg) => {
+          for (const key of Object.keys(configState)) {
+            delete configState[key];
+          }
+          Object.assign(configState, cfg as Record<string, unknown>);
+        },
+      },
+    }));
+
+    registerQQBotFrameworkCommands({
+      registerCommand(command: CapturedFrameworkCommand) {
+        if (command.name === "bot-approve") {
+          registeredFrameworkCommand = command;
+        }
+      },
+    } as never);
+
+    expect(registeredFrameworkCommand).toBeTruthy();
+
+    const result = await registeredFrameworkCommand?.handler({
+      args: "off",
+      from: "telegram:group:-100123",
+      config: {},
+      accountId: "default",
+      senderId: "USER123",
+      messageId: "msg-1",
+      channel: "telegram",
+    });
+
+    expect(result?.text).toContain("only available on QQBot");
+    expect(configState).toEqual({});
+  });
 });

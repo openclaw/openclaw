@@ -26,6 +26,9 @@ export function registerQQBotFrameworkCommands(api: OpenClawPluginApi): void {
       requireAuth: true,
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
+        if (ctx.channel !== "qqbot") {
+          return { text: `⚠️ /${cmd.name} is only available on QQBot.` };
+        }
         const from = parseQQBotFrom(ctx.from);
         const account = resolveQQBotAccount(ctx.config, ctx.accountId ?? undefined);
         const slashCtx = buildFrameworkSlashContext({
