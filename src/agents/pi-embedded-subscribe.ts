@@ -416,6 +416,23 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onToolResult) {
       return;
     }
+    // When audioAsVoice is set, the audio will be sent as a voice message via the
+    // pendingToolMedia queue. Suppress the placeholder text so the user does not
+    // receive both a "Generated audio reply." text and a duplicate voice message.
+    if (result && typeof result === "object") {
+      const details = (result as Record<string, unknown>).details;
+      if (
+        details &&
+        typeof details === "object" &&
+        !Array.isArray(details) &&
+        (details as Record<string, unknown>).media != null
+      ) {
+        const media = (details as Record<string, unknown>).media as Record<string, unknown>;
+        if (media.audioAsVoice === true) {
+          return;
+        }
+      }
+    }
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
     const filteredMediaUrls = filterToolResultMediaUrls(
       toolName,

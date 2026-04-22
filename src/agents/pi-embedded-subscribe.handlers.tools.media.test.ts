@@ -254,7 +254,32 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
-  async function handleVerboseGeneratedImage(toolResultFormat: "plain" | "markdown") {
+  it("suppresses onToolResult text when audioAsVoice is true (no duplicate text+audio)", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated audio reply." }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+
+    // The audio is queued via pendingToolMediaUrls so onToolResult must NOT be called
+    // (otherwise the user receives both "Generated audio reply." text and the voice audio).
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+  });
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
       onToolResult: vi.fn(),
