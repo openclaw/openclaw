@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 RUN_NODE_TOOL="$ROOT_DIR/scripts/pre-commit/run-node-tool.sh"
 FILTER_FILES="$ROOT_DIR/scripts/pre-commit/filter-staged-files.mjs"
+CHECK_RESOURCES="$ROOT_DIR/scripts/pre-commit/check-host-resources.mjs"
 
 if [[ ! -x "$RUN_NODE_TOOL" ]]; then
   echo "Missing helper: $RUN_NODE_TOOL" >&2
@@ -50,8 +51,21 @@ for file in "${files[@]}"; do
   esac
 done
 
+# Determine host resource mode: "throttled" on constrained machines (< 48 GiB
+# RAM or < 12 CPUs), "full" on well-provisioned CI-class hosts.  On throttled
+# machines the heavy changed-scope check gate is deferred to the pre-push hook
+# so that commits stay fast while validation still happens before push.
+resource_mode="full"
+if [[ -f "$CHECK_RESOURCES" ]]; then
+  resource_mode="$(node "$CHECK_RESOURCES" 2>/dev/null || echo full)"
+fi
+
 if [ "${#lint_files[@]}" -gt 0 ]; then
-  "$RUN_NODE_TOOL" oxlint --type-aware --fix -- "${lint_files[@]}"
+  oxlint_extra_args=()
+  if [[ "$resource_mode" == "throttled" ]]; then
+    oxlint_extra_args+=(--threads=1)
+  fi
+  "$RUN_NODE_TOOL" oxlint --type-aware "${oxlint_extra_args[@]}" --fix -- "${lint_files[@]}"
 fi
 
 if [ "${#format_files[@]}" -gt 0 ]; then
@@ -71,7 +85,9 @@ if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; the
       ;;
     *)
       if [[ "$docs_only" == true ]]; then
-        echo "Docs-only staged changes detected: skipping pnpm check in pre-commit hook."
+        echo "Docs-only staged changes detected: skipping changed-scope check in pre-commit hook."
+      elif [[ "$resource_mode" == "throttled" ]]; then
+        echo "Throttled host detected: deferring changed-scope check to pre-push hook."
       else
         pnpm check:changed --staged
       fi

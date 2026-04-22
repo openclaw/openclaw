@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CHECK_RESOURCES="$ROOT_DIR/scripts/pre-commit/check-host-resources.mjs"
+
+# Skip pre-push checks when not inside a full OpenClaw checkout (e.g. test
+# repos, worktrees without the full workspace).
+if [[ ! -f "$ROOT_DIR/package.json" ]] || [[ ! -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
+  exit 0
+fi
+
+cd "$ROOT_DIR"
+
+# On throttled machines the heavy changed-scope check gate was deferred from
+# pre-commit to here.  On full-spec machines it already ran in pre-commit so
+# we skip the duplicate work.
+resource_mode="full"
+if [[ -f "$CHECK_RESOURCES" ]]; then
+  resource_mode="$(node "$CHECK_RESOURCES" 2>/dev/null || echo full)"
+fi
+
+case "${FAST_PUSH:-}" in
+  1|true|TRUE|yes|YES|on|ON)
+    echo "FAST_PUSH enabled: skipping changed-scope check in pre-push hook."
+    exit 0
+    ;;
+esac
+
+if [[ "$resource_mode" == "throttled" ]]; then
+  # Read remote ref info from stdin (git provides: local_ref local_sha remote_ref remote_sha).
+  # Use the remote SHA as the comparison base for check:changed.
+  base=""
+  while read -r _ local_sha _ remote_sha; do
+    if [[ "$remote_sha" =~ ^0+$ ]]; then
+      # New branch — compare against origin/main as a reasonable default.
+      base="origin/main"
+    else
+      base="$remote_sha"
+    fi
+    break
+  done
+
+  if [[ -z "$base" ]]; then
+    base="origin/main"
+  fi
+
+  echo "Running deferred changed-scope check (throttled host, base=$base) before push..."
+  pnpm check:changed --base "$base"
+fi
