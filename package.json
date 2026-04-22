@@ -1663,7 +1663,7 @@
       "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch"
     },
     "minimumReleaseAge": 2880,
-    "minimumReleaseAgeExcludes": [
+    "minimumReleaseAgeExclude": [
       "acpx",
       "axios",
       "basic-ftp",
