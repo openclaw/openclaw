@@ -104,6 +104,7 @@ export type SpawnAcpParams = {
   label?: string;
   agentId?: string;
   resumeSessionId?: string;
+  model?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
@@ -890,6 +891,7 @@ async function initializeAcpSpawnRuntime(params: {
   targetAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
+  model?: string;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
@@ -914,6 +916,7 @@ async function initializeAcpSpawnRuntime(params: {
     agent: params.targetAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
+    runtimeOptions: params.model ? { model: params.model } : undefined,
     cwd: params.cwd,
     backendId: params.cfg.acp?.backend,
   });
@@ -1249,6 +1252,7 @@ export async function spawnAcpDirect(
       targetAgentId,
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
+      model: params.model,
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
