@@ -61,15 +61,48 @@ prtags auth status
 
 The expected outcome is that `prtags` stores the logged-in maintainer identity locally and uses that account for authenticated writes.
 
-### Verify the tools before triage
+## Missing-Setup Rule
 
-Before using this skill, make sure all three tools are available:
+Do not require an up-front preflight before starting the workflow.
+Proceed with the normal steps until you actually need a tool or account state.
+
+As soon as you discover that a required CLI is missing or `prtags` is not logged in, stop immediately.
+Do not continue in a partial mode after that point.
+
+If `ghr` is missing, ask the user to run the `ghreplica` install command.
+
+If `prtags` is missing, ask the user to run both CLI install commands:
 
 ```bash
-ghr repo view openclaw/openclaw
-prtags auth status
-uvx --from pr-search-cli pr-search status
+curl -fsSL https://raw.githubusercontent.com/dutifuldev/ghreplica/main/scripts/install-ghr.sh | bash -s -- --bin-dir "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/dutifuldev/prtags/main/scripts/install-prtags.sh | bash -s -- --bin-dir "$HOME/.local/bin"
 ```
+
+If `uvx --from pr-search-cli pr-search ...` fails because `uvx` or the `pr-search` launcher is not available, ask the user to make that command work before continuing.
+
+If `prtags auth status` shows that the user is not logged in, ask the user to run:
+
+```bash
+prtags auth login
+```
+
+Resume only after the missing tool or login state has been fixed.
+
+## Read-Path Default
+
+For read-only GitHub operations in this workflow, use `ghr` as the default CLI.
+Treat it as a drop-in replacement for the `gh` read operations you would normally use for PRs, issues, comments, reviews, and duplicate-search evidence.
+
+Only fall back to `gh` when `ghr` is failing for a concrete reason, such as:
+
+- the mirrored object is not present yet
+- the mirror data is clearly stale or incomplete for the decision you need to make
+- the `ghr` command errors, times out, or does not expose the specific read you need
+
+When you fall back to `gh`, note that you did so and why.
+
+If `ghr` is missing a fresh PR or issue but `gh` can read it, you may use `gh` for the read-side judgment.
+If a later `prtags` target-level write fails because the same object is still missing from `ghreplica`, stop and report that the mirror has not caught up yet instead of forcing the write.
 
 ## Goal
 
@@ -86,10 +119,13 @@ For each target PR or issue:
 Use the tools with these boundaries:
 
 - `ghreplica` is the raw evidence source
+  - use `ghr` first for normal GitHub read operations in this workflow
   - use it for title/body/comment search, related PRs, overlapping files, overlapping ranges, and current PR or issue status
+  - resort to `gh` only when `ghr` cannot provide the needed read cleanly
 - `pr-search-cli` is candidate generation and ranking
   - use it to suggest likely duplicate PRs or issue-cluster context
   - do not treat it as final truth
+  - do not create or expand a duplicate group only because `pr-search-cli` put multiple PRs in the same issue or duplicate cluster
 - `prtags` is the maintainer curation layer
   - use it to create or reuse one duplicate group
   - use it to save the duplicate status, confidence, rationale, and group summary
@@ -146,6 +182,7 @@ Examples:
 ## Evidence Checklist
 
 Before declaring a duplicate, gather evidence from at least two categories.
+Same-issue or same-cluster output from `pr-search-cli` counts only as candidate generation, not as one of the required proof categories by itself.
 
 For PRs:
 
@@ -168,6 +205,7 @@ If you only have wording similarity, that is not enough.
 ## Step 1: Read The Target
 
 Start by reading the target itself.
+Use `ghr` first for this step even if you would normally reach for `gh`.
 
 For a PR:
 
@@ -197,6 +235,7 @@ Record:
 ## Step 2: Search Broadly With ghreplica
 
 Use `ghreplica` first because it is the most direct evidence source.
+Do not switch to `gh` for ordinary reads unless `ghr` is missing data or failing.
 
 ### PR duplicate search
 
@@ -253,6 +292,9 @@ Interpretation:
 - `issues for-pr` shows which issue clusters the PR appears to belong to
 - `issues duplicate-prs` is useful for spotting already-known duplicate PR patterns
 
+Treat every `pr-search-cli` result as a hint to investigate, not as enough evidence to create or widen a duplicate group.
+Multiple PRs can share the same issue or issue cluster while still taking meaningfully different fix paths.
+
 For an issue:
 
 - use `ghreplica` first to find candidate PRs or issue wording
@@ -301,6 +343,9 @@ Reuse an existing group when:
 - it represents the same problem
 - it already contains clearly related members
 - adding the target would keep the group coherent
+
+Do not widen an existing group just because `pr-search-cli` placed several PRs under the same issue or duplicate cluster.
+Confirm that the actual implementation path and maintainer intent still match before adding the new member.
 
 Create a new group only when no existing group clearly fits.
 
@@ -377,6 +422,9 @@ prtags annotation group set <group-id> \
 ```
 
 When the evidence is incomplete, set `duplicate_status=candidate` and lower the confidence.
+
+If a per-PR or per-issue annotation write fails because `prtags` cannot resolve the target through `ghreplica`, do not force a fallback write path.
+Keep the group state you were able to write, report that the mirror is still missing the target object, and defer the target-level annotation until `ghreplica` catches up.
 
 ## Step 8: Let prtags Sync The Group Comment
 

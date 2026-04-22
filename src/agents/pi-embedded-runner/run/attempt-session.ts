@@ -5,7 +5,7 @@ export type EmbeddedAgentSessionOptions = {
   modelRegistry: unknown;
   model: unknown;
   thinkingLevel: unknown;
-  tools: readonly unknown[];
+  tools: readonly string[];
   customTools: readonly unknown[];
   sessionManager: unknown;
   settingsManager: unknown;
