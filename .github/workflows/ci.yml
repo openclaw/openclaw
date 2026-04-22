@@ -1625,7 +1625,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/channels/plugins/**', 'src/config/types*.ts', 'src/plugin-sdk/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 
@@ -1639,7 +1639,7 @@ jobs:
             -path '*/node_modules' -prune -o \
             -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
             -exec touch -t 200001010000 {} +
-          find src/channels/plugins src/config src/plugin-sdk src/types \
+          find src \
             -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
             -exec touch -t 200001010000 {} +
           touch -t 200001010000 \
@@ -2084,89 +2084,6 @@ jobs:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
 
-      - name: Patch mlx-audio-swift manifest
-        # macOS node tests do not build the Swift package; keep SwiftPM resolution
-        # out of this lane so it stays focused on platform-specific TS tests.
-        if: ${{ false }}
-        run: |
-          set -euo pipefail
-          swift package resolve --package-path apps/macos >/dev/null
-          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
-          text = path.read_text()
-          excludes = {
-              "Sources/MLXAudioTTS": [
-                  "Models/Llama/README.md",
-                  "Models/Marvis/README.md",
-                  "Models/PocketTTS/README.md",
-                  "Models/Qwen3/README.md",
-                  "Models/Soprano/README.md",
-              ],
-              "Sources/MLXAudioSTT": [
-                  "Models/GLMASR/README.md",
-                  "Models/VoxtralRealtime/README.md",
-                  "Models/Qwen3ASR/README.md",
-                  "Models/GraniteSpeech/README.md",
-                  "Models/Parakeet/README.md",
-              ],
-              "Sources/MLXAudioVAD": [
-                  "Models/SmartTurn/README.md",
-                  "Models/Sortformer/README.md",
-              ],
-              "Sources/MLXAudioLID": [
-                  "README.md",
-              ],
-              "Sources/MLXAudioSTS": [
-                  "Models/SAMAudio/README.md",
-                  "Models/LFMAudio/README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-tts": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-codec": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-sts": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-stt": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-lid": [
-                  "README.md",
-              ],
-          }
-
-          updated = False
-          for target_path, files in excludes.items():
-              already_patched = f'path: "{target_path}",\n            exclude: [' in text
-              if already_patched:
-                  continue
-
-              needle = f'            path: "{target_path}"\n'
-              replacement = (
-                  f'            path: "{target_path}",\n'
-                  "            exclude: [\n"
-                  + "".join(f'                "{file}",\n' for file in files)
-                  + "            ]\n"
-              )
-
-              if needle not in text:
-                  raise SystemExit(f"Could not find {target_path} target path in mlx-audio-swift Package.swift")
-
-              text = text.replace(needle, replacement, 1)
-              updated = True
-
-          if updated:
-              path.write_text(text)
-              print(f"Patched {path}")
-          else:
-              print("mlx-audio-swift README excludes already present")
-          PY
-
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -2244,93 +2161,6 @@ jobs:
             apps/macos/Package.resolved \
             apps/shared/OpenClawKit/Package.swift \
             Swabble/Package.swift
-
-      - name: Patch mlx-audio-swift manifest
-        if: steps.swift-build-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
-            swift package resolve --package-path apps/macos >/dev/null
-          fi
-          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
-            echo "mlx-audio-swift checkout missing after swift package resolve" >&2
-            exit 1
-          fi
-          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
-          text = path.read_text()
-          excludes = {
-              "Sources/MLXAudioTTS": [
-                  "Models/Llama/README.md",
-                  "Models/Marvis/README.md",
-                  "Models/PocketTTS/README.md",
-                  "Models/Qwen3/README.md",
-                  "Models/Soprano/README.md",
-              ],
-              "Sources/MLXAudioSTT": [
-                  "Models/GLMASR/README.md",
-                  "Models/VoxtralRealtime/README.md",
-                  "Models/Qwen3ASR/README.md",
-                  "Models/GraniteSpeech/README.md",
-                  "Models/Parakeet/README.md",
-              ],
-              "Sources/MLXAudioVAD": [
-                  "Models/SmartTurn/README.md",
-                  "Models/Sortformer/README.md",
-              ],
-              "Sources/MLXAudioLID": [
-                  "README.md",
-              ],
-              "Sources/MLXAudioSTS": [
-                  "Models/SAMAudio/README.md",
-                  "Models/LFMAudio/README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-tts": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-codec": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-sts": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-stt": [
-                  "README.md",
-              ],
-              "Sources/Tools/mlx-audio-swift-lid": [
-                  "README.md",
-              ],
-          }
-
-          updated = False
-          for target_path, files in excludes.items():
-              already_patched = f'path: "{target_path}",\n            exclude: [' in text
-              if already_patched:
-                  continue
-
-              needle = f'            path: "{target_path}"\n'
-              replacement = (
-                  f'            path: "{target_path}",\n'
-                  "            exclude: [\n"
-                  + "".join(f'                "{file}",\n' for file in files)
-                  + "            ]\n"
-              )
-
-              if needle not in text:
-                  raise SystemExit(f"Could not find {target_path} target path in mlx-audio-swift Package.swift")
-
-              text = text.replace(needle, replacement, 1)
-              updated = True
-
-          if updated:
-              path.write_text(text)
-              print(f"Patched {path}")
-          else:
-              print("mlx-audio-swift README excludes already present")
-          PY
 
       - name: Show toolchain
         run: |

@@ -9,16 +9,7 @@ const tscBin = require.resolve("typescript/bin/tsc");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 
-const ROOT_DTS_INPUTS = [
-  "tsconfig.json",
-  "tsconfig.plugin-sdk.dts.json",
-  "src/channels/plugins",
-  "src/config",
-  "src/plugin-sdk",
-  "src/video-generation/dashscope-compatible.ts",
-  "src/video-generation/types.ts",
-  "src/types",
-];
+const ROOT_DTS_INPUTS = ["tsconfig.json", "tsconfig.plugin-sdk.dts.json", "src"];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
@@ -26,16 +17,7 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/video-generation.d.ts",
 ];
-const PACKAGE_DTS_INPUTS = [
-  "tsconfig.json",
-  "packages/plugin-sdk/tsconfig.json",
-  "src/channels/plugins",
-  "src/config",
-  "src/plugin-sdk",
-  "src/video-generation/dashscope-compatible.ts",
-  "src/video-generation/types.ts",
-  "src/types",
-];
+const PACKAGE_DTS_INPUTS = ["tsconfig.json", "packages/plugin-sdk/tsconfig.json", "src"];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
