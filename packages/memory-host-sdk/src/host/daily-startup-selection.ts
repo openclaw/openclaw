@@ -229,7 +229,10 @@ export async function selectStartupDailyMemoryPaths(params: {
   );
   const boundaryDay =
     utcToday !== localToday &&
-    entries.some((entry) => entry.day === utcToday && sessionSummaryPaths.has(entry.relativePath))
+    (utcToday > localToday ||
+      entries.some(
+        (entry) => entry.day === utcToday && sessionSummaryPaths.has(entry.relativePath),
+      ))
       ? utcToday
       : null;
 

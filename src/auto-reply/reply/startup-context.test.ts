@@ -397,6 +397,34 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
   });
 
+  it("keeps the adjacent UTC day when it only has an ordinary daily note late in the local day", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-12.md"),
+      "next UTC day notes",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 1,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 12, 0, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12.md]");
+  });
+
   it("caps UTC/local boundary loading to startupContext.dailyMemoryDays", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
