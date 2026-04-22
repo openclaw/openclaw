@@ -55,6 +55,11 @@ type SupportObjectEntry = {
   value: unknown;
 };
 
+type LimitedSupportArray = {
+  count: number;
+  items: unknown[];
+};
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -95,10 +100,14 @@ function createSupportRecord(): Record<string, unknown> {
   return Object.create(null) as Record<string, unknown>;
 }
 
+function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 function countOwnObjectEntries(record: Record<string, unknown>): number {
   let count = 0;
   for (const key in record) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) {
+    if (hasOwnRecordKey(record, key)) {
       count += 1;
     }
   }
@@ -112,7 +121,7 @@ function limitedSupportObjectEntries(record: Record<string, unknown>): {
   let count = 0;
   const entries: SupportObjectEntry[] = [];
   for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    if (!hasOwnRecordKey(record, key)) {
       continue;
     }
     count += 1;
@@ -123,6 +132,13 @@ function limitedSupportObjectEntries(record: Record<string, unknown>): {
   }
   entries.sort((a, b) => a.key.localeCompare(b.key));
   return { count, entries };
+}
+
+function limitedSupportArray(value: unknown[]): LimitedSupportArray {
+  return {
+    count: value.length,
+    items: value.slice(0, MAX_SUPPORT_ARRAY_ITEMS),
+  };
 }
 
 function addTruncationMetadata(sanitized: Record<string, unknown>, count: number): void {
@@ -367,17 +383,13 @@ export function sanitizeSupportSnapshotValue(
     return "<truncated>";
   }
   if (Array.isArray(value)) {
+    const { count, items } = limitedSupportArray(value);
     if (key === "programArguments") {
-      return supportArrayResult(
-        sanitizeCommandArguments(value.slice(0, MAX_SUPPORT_ARRAY_ITEMS), redaction),
-        value.length,
-      );
+      return supportArrayResult(sanitizeCommandArguments(items, redaction), count);
     }
     return supportArrayResult(
-      value
-        .slice(0, MAX_SUPPORT_ARRAY_ITEMS)
-        .map((entry) => sanitizeSupportSnapshotValue(entry, redaction, key, depth + 1)),
-      value.length,
+      items.map((entry) => sanitizeSupportSnapshotValue(entry, redaction, key, depth + 1)),
+      count,
     );
   }
   const record = asRecord(value);
@@ -423,11 +435,10 @@ export function sanitizeSupportConfigValue(
         count: value.length,
       };
     }
+    const { count, items } = limitedSupportArray(value);
     return supportArrayResult(
-      value
-        .slice(0, MAX_SUPPORT_ARRAY_ITEMS)
-        .map((entry) => sanitizeSupportConfigValue(entry, redaction, key, depth + 1)),
-      value.length,
+      items.map((entry) => sanitizeSupportConfigValue(entry, redaction, key, depth + 1)),
+      count,
     );
   }
   const record = asRecord(value);
