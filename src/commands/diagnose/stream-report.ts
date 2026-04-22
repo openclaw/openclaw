@@ -76,8 +76,10 @@ export async function streamDiagnosticReport(
       expectFinal: true,
     });
 
-    // Extract text from the agent response payloads.
-    const payloads = (response as Record<string, unknown>)?.result as
+    // Extract text from the agent response payloads. callGateway defaults its
+    // generic to Record<string, unknown>, so response is already that shape —
+    // no redundant cast on response itself, just narrow `.result`.
+    const payloads = response.result as
       | { payloads?: Array<{ text?: string }>; meta?: Record<string, unknown> }
       | undefined;
     const textParts = (payloads?.payloads ?? [])
