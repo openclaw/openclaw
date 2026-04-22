@@ -22,6 +22,7 @@ import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -367,6 +368,7 @@ function buildConfigRestartSentinelPayload(params: {
     deliveryContext: params.deliveryContext,
     threadId: params.threadId,
     message: params.note ?? null,
+    continuation: buildRestartSuccessContinuation({ sessionKey: params.sessionKey }),
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {
       mode: params.mode,

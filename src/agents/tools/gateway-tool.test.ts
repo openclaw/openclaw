@@ -141,4 +141,30 @@ describe("gateway tool restart continuation", () => {
     });
     expect(result?.details).toEqual({ scheduled: true, delayMs: 250 });
   });
+
+  it("defaults session-scoped restarts to a success continuation", async () => {
+    const { createGatewayTool } = await import("./gateway-tool.js");
+    const { DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE } =
+      await import("../../infra/restart-sentinel.js");
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-1", {
+      action: "restart",
+      delayMs: 250,
+      reason: "restart requested",
+    });
+
+    expect(writeRestartSentinelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        continuation: {
+          kind: "agentTurn",
+          message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+        },
+      }),
+    );
+  });
 });

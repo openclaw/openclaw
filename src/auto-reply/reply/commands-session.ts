@@ -8,9 +8,16 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import {
+  buildRestartSuccessContinuation,
+  formatDoctorNonInteractiveHint,
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import {
@@ -26,13 +33,37 @@ import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
-import type { CommandHandler } from "./commands-types.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+
+async function writeRestartCommandSentinel(params: HandleCommandsParams) {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const payload: RestartSentinelPayload = {
+    kind: "restart",
+    status: "ok",
+    ts: Date.now(),
+    sessionKey,
+    deliveryContext,
+    threadId,
+    message: "/restart",
+    continuation: buildRestartSuccessContinuation({ sessionKey }),
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: "gateway.restart",
+      reason: "/restart",
+    },
+  };
+  await writeRestartSentinel(payload).catch(() => {});
+}
 
 function resolveSessionCommandUsage() {
   return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
@@ -641,6 +672,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
+    await writeRestartCommandSentinel(params);
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,
@@ -649,6 +681,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  await writeRestartCommandSentinel(params);
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";

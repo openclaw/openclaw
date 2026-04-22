@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  buildRestartSuccessContinuation,
   consumeRestartSentinel,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
@@ -181,6 +183,32 @@ describe("restart sentinel", () => {
     ).toBe("Gateway restart update skipped");
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
+  });
+});
+
+describe("restart success continuation", () => {
+  it("builds the default agent turn for session-scoped restarts", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
+  });
+
+  it("keeps explicit continuation messages", () => {
+    expect(
+      buildRestartSuccessContinuation({
+        sessionKey: "agent:main:main",
+        continuationKind: "systemEvent",
+        continuationMessage: "wake after restart",
+      }),
+    ).toEqual({
+      kind: "systemEvent",
+      text: "wake after restart",
+    });
+  });
+
+  it("stays silent without session context", () => {
+    expect(buildRestartSuccessContinuation({})).toBeNull();
   });
 });
 

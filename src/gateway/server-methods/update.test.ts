@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  type RestartSentinelPayload,
+} from "../../infra/restart-sentinel.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 
 // Capture the sentinel payload written during update.run
@@ -122,6 +125,10 @@ describe("update.run sentinel deliveryContext", () => {
       to: "webchat:user-123",
       accountId: "default",
     });
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
   });
 
   it("omits deliveryContext when no sessionKey is provided", async () => {
@@ -132,6 +139,7 @@ describe("update.run sentinel deliveryContext", () => {
     expect(capturedPayload).toBeDefined();
     expect(capturedPayload!.deliveryContext).toBeUndefined();
     expect(capturedPayload!.threadId).toBeUndefined();
+    expect(capturedPayload!.continuation).toBeNull();
   });
 
   it("includes threadId in sentinel payload for threaded sessions", async () => {
@@ -146,6 +154,10 @@ describe("update.run sentinel deliveryContext", () => {
       accountId: "workspace-1",
     });
     expect(capturedPayload!.threadId).toBe("1234567890.123456");
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
   });
 });
 
@@ -194,5 +206,6 @@ describe("update.run restart scheduling", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
+    expect(capturedPayload?.continuation).toBeNull();
   });
 });

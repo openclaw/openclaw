@@ -1,0 +1,136 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import type { HandleCommandsParams } from "./commands-types.js";
+
+const mocks = vi.hoisted(() => ({
+  isRestartEnabled: vi.fn(() => true),
+  extractDeliveryInfo: vi.fn(() => ({
+    deliveryContext: {
+      channel: "telegram",
+      to: "telegram:123",
+      accountId: "default",
+    },
+    threadId: "thread-1",
+  })),
+  formatDoctorNonInteractiveHint: vi.fn(() => "Run: openclaw doctor --non-interactive"),
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/sentinel.json"),
+  scheduleGatewaySigusr1Restart: vi.fn(() => ({ scheduled: true })),
+  triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
+}));
+
+vi.mock("../../config/commands.flags.js", () => ({
+  isRestartEnabled: mocks.isRestartEnabled,
+}));
+
+vi.mock("../../config/sessions.js", () => ({
+  extractDeliveryInfo: mocks.extractDeliveryInfo,
+}));
+
+vi.mock("../../globals.js", () => ({
+  logVerbose: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: vi.fn(),
+  normalizeChannelId: (value?: string | null) => value?.trim().toLowerCase() ?? null,
+}));
+
+vi.mock("../../channels/plugins/conversation-bindings.js", () => ({
+  setChannelConversationBindingIdleTimeoutBySessionKey: vi.fn(),
+  setChannelConversationBindingMaxAgeBySessionKey: vi.fn(),
+}));
+
+vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: vi.fn(),
+}));
+
+vi.mock("../../infra/restart-sentinel.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
+    "../../infra/restart-sentinel.js",
+  );
+  return {
+    ...actual,
+    formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
+    writeRestartSentinel: mocks.writeRestartSentinel,
+  };
+});
+
+vi.mock("../../infra/restart.js", () => ({
+  scheduleGatewaySigusr1Restart: mocks.scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart: mocks.triggerOpenClawRestart,
+}));
+
+const { handleRestartCommand } = await import("./commands-session.js");
+
+function restartCommandParams(overrides?: Partial<HandleCommandsParams>): HandleCommandsParams {
+  return {
+    ctx: {},
+    cfg: {},
+    command: {
+      surface: "telegram",
+      channel: "telegram",
+      ownerList: [],
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      senderId: "user-1",
+      rawBodyNormalized: "/restart",
+      commandBodyNormalized: "/restart",
+      from: "telegram:123",
+      to: "bot",
+    },
+    directives: {},
+    elevated: { enabled: true, allowed: true, failures: [] },
+    sessionKey: "agent:main:telegram:direct:123:thread:thread-1",
+    workspaceDir: "/tmp",
+    defaultGroupActivation: () => "mention",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    provider: "openai",
+    model: "gpt-5.4",
+    contextTokens: 0,
+    isGroup: false,
+    ...overrides,
+  } as HandleCommandsParams;
+}
+
+describe("handleRestartCommand", () => {
+  beforeEach(() => {
+    mocks.isRestartEnabled.mockReset();
+    mocks.isRestartEnabled.mockReturnValue(true);
+    mocks.extractDeliveryInfo.mockClear();
+    mocks.formatDoctorNonInteractiveHint.mockClear();
+    mocks.writeRestartSentinel.mockClear();
+    mocks.scheduleGatewaySigusr1Restart.mockClear();
+    mocks.triggerOpenClawRestart.mockReset();
+    mocks.triggerOpenClawRestart.mockReturnValue({ ok: true, method: "launchctl" });
+  });
+
+  it("writes a routed restart sentinel before restarting from chat", async () => {
+    const { DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE } =
+      await import("../../infra/restart-sentinel.js");
+
+    const result = await handleRestartCommand(restartCommandParams(), true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(mocks.writeRestartSentinel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "restart",
+        status: "ok",
+        sessionKey: "agent:main:telegram:direct:123:thread:thread-1",
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:123",
+          accountId: "default",
+        },
+        threadId: "thread-1",
+        message: "/restart",
+        continuation: {
+          kind: "agentTurn",
+          message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+        },
+      }),
+    );
+    expect(mocks.triggerOpenClawRestart).toHaveBeenCalledTimes(1);
+  });
+});

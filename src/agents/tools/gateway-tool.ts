@@ -6,6 +6,7 @@ import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -350,17 +351,11 @@ export function createGatewayTool(opts?: {
           deliveryContext,
           threadId,
           message: note ?? reason ?? null,
-          continuation: continuationMessage
-            ? continuationKind === "systemEvent"
-              ? {
-                  kind: "systemEvent",
-                  text: continuationMessage,
-                }
-              : {
-                  kind: "agentTurn",
-                  message: continuationMessage,
-                }
-            : null,
+          continuation: buildRestartSuccessContinuation({
+            sessionKey,
+            continuationKind,
+            continuationMessage,
+          }),
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
             mode: "gateway.restart",
