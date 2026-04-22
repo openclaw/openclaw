@@ -70,9 +70,11 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     }
     if (raw.type !== "object") {
       raw.type = "object";
-      if (!raw.properties) {
-        raw.properties = {};
-      }
+    }
+    // Ensure properties is always present — OpenAI/OpenRouter reject
+    // {"type":"object"} with no "properties" key as an invalid schema.
+    if (!raw.properties) {
+      raw.properties = {};
     }
     return {
       name: tool.name,
