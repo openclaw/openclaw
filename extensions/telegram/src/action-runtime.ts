@@ -182,6 +182,7 @@ async function maybePinTelegramActionSend(params: {
   accountId?: string;
   to: string;
   messageId?: string;
+  gatewayClientScopes?: readonly string[];
 }) {
   const pin = normalizeTelegramDeliveryPin(params.args);
   if (!pin) {
@@ -197,6 +198,7 @@ async function maybePinTelegramActionSend(params: {
     await telegramActionRuntime.pinMessageTelegram(params.to, params.messageId, {
       cfg: params.cfg,
       accountId: params.accountId,
+      gatewayClientScopes: params.gatewayClientScopes,
       notify: pin.notify,
       verbose: false,
     });
@@ -386,6 +388,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       to,
       messageId: result.messageId,
+      gatewayClientScopes: options?.gatewayClientScopes,
     });
     return jsonResult({
       ok: true,

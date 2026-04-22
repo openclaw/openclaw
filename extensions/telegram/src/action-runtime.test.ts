@@ -709,12 +709,17 @@ describe("handleTelegramAction", () => {
         delivery: { pin: { enabled: true } },
       },
       telegramConfig(),
+      { gatewayClientScopes: ["operator.write"] },
     );
 
     expect(pinMessageTelegram).toHaveBeenCalledWith(
       "123456",
       "789",
-      expect.objectContaining({ accountId: undefined, verbose: false }),
+      expect.objectContaining({
+        accountId: undefined,
+        verbose: false,
+        gatewayClientScopes: ["operator.write"],
+      }),
     );
   });
 
