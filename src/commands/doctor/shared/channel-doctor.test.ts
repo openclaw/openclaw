@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorEmptyAllowlistExtraWarnings,
+  createChannelDoctorEmptyAllowlistPolicyHooks,
 } from "./channel-doctor.js";
 
 const mocks = vi.hoisted(() => ({
@@ -246,5 +247,72 @@ describe("channel doctor compatibility mutations", () => {
     expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledWith(
       expect.objectContaining({ cfg }),
     );
+  });
+
+  it("reuses empty allowlist doctor entries across per-account hooks", () => {
+    const collectEmptyAllowlistExtraWarnings = vi.fn(({ prefix }: { prefix: string }) => [
+      `${prefix} extra`,
+    ]);
+    const shouldSkipDefaultEmptyGroupAllowlistWarning = vi.fn(() => true);
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            work: {},
+            personal: {},
+          },
+        },
+      },
+    };
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-test-home" };
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "matrix",
+          doctor: {
+            collectEmptyAllowlistExtraWarnings,
+            shouldSkipDefaultEmptyGroupAllowlistWarning,
+          },
+        },
+      ],
+    });
+
+    const hooks = createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: cfg as never, env });
+
+    expect(
+      hooks.extraWarningsForAccount({
+        account: {},
+        channelName: "matrix",
+        cfg: cfg as never,
+        env,
+        prefix: "channels.matrix.accounts.work",
+      }),
+    ).toEqual(["channels.matrix.accounts.work extra"]);
+    expect(
+      hooks.shouldSkipDefaultEmptyGroupAllowlistWarning({
+        account: {},
+        channelName: "matrix",
+        cfg: cfg as never,
+        env,
+        prefix: "channels.matrix.accounts.work",
+      }),
+    ).toBe(true);
+    expect(
+      hooks.extraWarningsForAccount({
+        account: {},
+        channelName: "matrix",
+        cfg: cfg as never,
+        env,
+        prefix: "channels.matrix.accounts.personal",
+      }),
+    ).toEqual(["channels.matrix.accounts.personal extra"]);
+
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
+      env,
+      includePersistedAuthState: false,
+    });
+    expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(2);
+    expect(shouldSkipDefaultEmptyGroupAllowlistWarning).toHaveBeenCalledTimes(1);
   });
 });

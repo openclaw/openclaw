@@ -12,6 +12,7 @@ type CollectEmptyAllowlistPolicyWarningsParams = {
   env?: NodeJS.ProcessEnv;
   parent?: DoctorAccountRecord;
   prefix: string;
+  shouldSkipDefaultEmptyGroupAllowlistWarning?: typeof shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning;
 };
 
 function usesSenderBasedGroupAllowlist(channelName?: string): boolean {
@@ -67,7 +68,10 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
 
   if (
     params.channelName &&
-    shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning({
+    (
+      params.shouldSkipDefaultEmptyGroupAllowlistWarning ??
+      shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning
+    )({
       account: params.account,
       channelName: params.channelName,
       cfg: params.cfg,

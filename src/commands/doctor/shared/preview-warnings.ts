@@ -156,12 +156,18 @@ export async function collectDoctorPreviewWarnings(params: {
   }
 
   if (hasChannelConfig) {
-    const { collectChannelDoctorEmptyAllowlistExtraWarnings } = await loadChannelDoctorModule();
+    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await loadChannelDoctorModule();
     const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
+    const emptyAllowlistHooks = createChannelDoctorEmptyAllowlistPolicyHooks({
+      cfg: params.cfg,
+      env,
+    });
     const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(params.cfg, {
       doctorFixCommand: params.doctorFixCommand,
       env,
-      extraWarningsForAccount: collectChannelDoctorEmptyAllowlistExtraWarnings,
+      extraWarningsForAccount: emptyAllowlistHooks.extraWarningsForAccount,
+      shouldSkipDefaultEmptyGroupAllowlistWarning:
+        emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
     }).filter(
       (warning) =>
         !(

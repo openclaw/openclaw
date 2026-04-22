@@ -2,7 +2,7 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
-  collectChannelDoctorEmptyAllowlistExtraWarnings,
+  createChannelDoctorEmptyAllowlistPolicyHooks,
   collectChannelDoctorRepairMutations,
 } from "./shared/channel-doctor.js";
 import {
@@ -63,7 +63,7 @@ export async function runDoctorRepairSequence(params: {
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,
     env,
-    extraWarningsForAccount: collectChannelDoctorEmptyAllowlistExtraWarnings,
+    ...createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env }),
   });
   if (emptyAllowlistWarnings.length > 0) {
     warningNotes.push(sanitizeLines(emptyAllowlistWarnings));
