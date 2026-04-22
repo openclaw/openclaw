@@ -156,7 +156,7 @@ describe("config mcp config", () => {
   });
 
   it("accepts MCP server configs with tools.allow and tools.deny", async () => {
-    await withTempHome(async () => {
+    await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
         name: "plane",
         server: {
