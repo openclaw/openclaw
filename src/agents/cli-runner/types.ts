@@ -67,4 +67,10 @@ export type PreparedCliRunContext = {
   heartbeatPrompt?: string;
   authEpoch?: string;
   extraSystemPromptHash?: string;
+  /**
+   * Per-turn context the `before_prompt_build` hook wants prepended to the
+   * user message (not the system prompt). Applied inside execute.ts before
+   * the prompt is handed to the CLI backend.
+   */
+  promptBuildHookPrependContext?: string;
 };

@@ -193,8 +193,11 @@ export async function executePreparedCliRun(
         })
       : undefined;
 
+  const promptWithHookPrepend = context.promptBuildHookPrependContext
+    ? `${context.promptBuildHookPrependContext}\n\n${params.prompt}`
+    : params.prompt;
   let prompt = applyPluginTextReplacements(
-    prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
+    prependBootstrapPromptWarning(promptWithHookPrepend, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,

@@ -3,6 +3,8 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -31,6 +33,10 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
+import {
+  applyPromptBuildHookToSystemPrompt,
+  resolveCliPromptBuildHook,
+} from "./prompt-build-hook.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
@@ -211,8 +217,34 @@ export async function prepareCliRunContext(
       agentId: sessionAgentId,
       systemPrompt: builtSystemPrompt,
     }) ?? builtSystemPrompt;
+  // Invoke before_prompt_build hook (and legacy before_agent_start) so
+  // plugins can add per-turn context to CLI-backend runs, symmetric with
+  // the Pi embedded runner. Result fields:
+  //   - systemPrompt      → full override of the system prompt
+  //   - prependSystemContext / appendSystemContext → spliced around system
+  //   - prependContext    → passed through to execute() to prepend to the
+  //                         user message (per-turn, not cached)
+  const promptBuildHookCtx: PluginHookAgentContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir,
+    modelProviderId: params.provider,
+    modelId,
+    messageProvider: params.messageProvider,
+  };
+  const promptBuildHookResult = await resolveCliPromptBuildHook({
+    prompt: params.prompt,
+    hookCtx: promptBuildHookCtx,
+    hookRunner: getGlobalHookRunner(),
+  });
+  const systemPromptFromHook = applyPromptBuildHookToSystemPrompt({
+    systemPrompt: transformedSystemPrompt,
+    hookResult: promptBuildHookResult,
+  });
   const systemPrompt = applyPluginTextReplacements(
-    transformedSystemPrompt,
+    systemPromptFromHook,
     backendResolved.textTransforms?.input,
   );
   const systemPromptReport = buildSystemPromptReport({
@@ -253,5 +285,6 @@ export async function prepareCliRunContext(
     heartbeatPrompt,
     authEpoch,
     extraSystemPromptHash,
+    promptBuildHookPrependContext: promptBuildHookResult.prependContext,
   };
 }
