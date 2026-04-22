@@ -4,6 +4,7 @@ import {
   type ControlUiEmbedSandboxMode,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
+import { resolveControlUiAuthHeader } from "../control-ui-auth.ts";
 import { normalizeBasePath } from "../navigation.ts";
 
 export type ControlUiBootstrapState = {
@@ -15,6 +16,9 @@ export type ControlUiBootstrapState = {
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
+  hello?: { auth?: { deviceToken?: string | null } | null } | null;
+  settings?: { token?: string | null } | null;
+  password?: string | null;
 };
 
 export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
@@ -29,11 +33,15 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
   const url = basePath
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
+  const authHeader = resolveControlUiAuthHeader(state);
 
   try {
     const res = await fetch(url, {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...(authHeader ? { Authorization: authHeader } : {}),
+      },
       credentials: "same-origin",
     });
     if (!res.ok) {

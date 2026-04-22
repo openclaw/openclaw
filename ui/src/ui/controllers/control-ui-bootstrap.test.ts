@@ -101,4 +101,36 @@ describe("loadControlUiBootstrapConfig", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("includes the configured auth token on bootstrap fetches", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "/openclaw",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      settings: { token: "session-token" },
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          Authorization: "Bearer session-token",
+        }),
+      }),
+    );
+
+    vi.unstubAllGlobals();
+  });
 });
