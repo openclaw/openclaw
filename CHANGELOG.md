@@ -11,8 +11,15 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Browser/Chrome MCP: reset cached existing-session control sessions when a `navigate_page` call times out, so one stuck navigation no longer poisons the browser profile until a gateway restart. (#69733) Thanks @ayeshakhalid192007-dev.
+- Channels/preview streaming: centralize draft-preview finalization so Slack, Discord, Mattermost, and Matrix no longer flush temporary preview messages for media/error finals, and preserve first-reply threading for normal fallback delivery.
 - Discord: keep slash command follow-up chunks ephemeral when the command is configured for ephemeral replies, so long `/status` output no longer leaks fallback model or runtime details into the public channel. (#69869) thanks @gumadeiras.
 - Plugins/discovery: reject package plugin source entries that escape the package directory before explicit runtime entries or inferred built JavaScript peers can be used. (#69868) thanks @gumadeiras.
+- CLI/channels: resolve channel presence through a shared policy that keeps ambient env vars and stale persisted auth from surfacing disabled bundled plugins in status, doctor, security audit, and cron delivery validation unless the channel or plugin is effectively enabled or explicitly configured. (#69862) Thanks @gumadeiras.
+
+### Fixes
+
+- memory-core/dreaming: surface a `Dreaming status: blocked` line in `openclaw memory status` when dreaming is enabled but the heartbeat that drives the managed cron is not firing for the default agent, and add a Troubleshooting section to the dreaming docs covering the two common causes (per-agent `heartbeat` blocks excluding `main`, and `heartbeat.every` set to `0`/empty/invalid), so the silent failure described in #69843 becomes legible on the status surface.
 
 ## 2026.4.21
 
@@ -41,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/CSP: tighten `img-src` to `'self' data:` only, and make Control UI avatar helpers drop remote `http(s)` and protocol-relative URLs so the UI falls back to the built-in logo/badge instead of issuing arbitrary remote image fetches. Same-origin avatar routes (relative paths) and `data:image/...` avatars still render. (#69773)
 - CLI/channels: keep `status`, `health`, `channels list`, and `channels status` on read-only channel metadata when Telegram, Slack, Discord, or third-party channel plugins are configured, avoiding full bundled plugin runtime imports on those cold paths. Fixes #69042. (#69479) Thanks @gumadeiras.
 - Synology Chat: validate outbound webhook `file_url` values against the shared SSRF policy before forwarding to the NAS, rejecting malformed URLs, non-`http(s)` schemes, and private/blocked network targets so the NAS cannot be used as a confused deputy to fetch internal addresses. (#69784) Thanks @eleqtrizit.
+- LINE: validate outbound media URLs against the shared public-network guard before handing them to LINE, preserving arbitrary public HTTPS media while rejecting loopback, link-local, and private-network targets.
 - Gateway/Control UI: require gateway auth on the Control UI avatar route (`GET /avatar/<agentId>` and `?meta=1` metadata) when auth is configured, matching the sibling assistant-media route, and propagate the existing gateway token through the UI avatar fetch (bearer header + authenticated blob URL) so authenticated dashboards still load local avatars. (#69775)
 - Exec/allowlist: reject POSIX parameter expansion forms such as `$VAR`, `$?`, `$$`, `$1`, and `$@` inside unquoted heredocs during shell approval analysis, so these heredocs no longer pass allowlist review as plain text. (#69795) Thanks @drobison00.
 - Gateway/MCP loopback: derive owner-only tool visibility from distinct authenticated owner vs non-owner loopback bearers instead of the caller-controlled owner header, so non-owner MCP child processes cannot recover owner access by spoofing request metadata. (#69796)
@@ -50,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - CLI/media understanding: make `openclaw infer image describe --model <provider/model>` execute the explicit image model instead of skipping description when that model supports native vision.
 - Usage/providers: keep plugin-owned usage auth enabled when manifest-declared provider auth env vars such as `MINIMAX_CODE_PLAN_KEY` are present, so `/usage` can resolve MiniMax billing credentials through the provider plugin.
 - Tlon/uploads: route both hosted Memex upload targets and custom-S3 presigned upload URLs through the shared SSRF guard so blocked private or loopback destinations fail before upload, while public upload URLs continue through the existing hosted upload flow. (#69794) Thanks @drobison00.
+- Channels/thread routing: keep outbound replies in existing Slack, Mattermost, Matrix, Telegram, Discord, and QA-channel thread sessions by sharing the Plugin SDK thread-aware route builder across bundled plugins.
 
 ## 2026.4.20
 
