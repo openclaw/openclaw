@@ -122,6 +122,40 @@ export function messagesEndWithUserTurn(messages: AgentMessage[]): boolean {
   return role === "user" || role === "toolResult" || role === "tool";
 }
 
+function isUserLikeTurn(message: AgentMessage | undefined): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role = (message as { role?: unknown }).role;
+  return role === "user" || role === "toolResult" || role === "tool";
+}
+
+/**
+ * Drops every trailing non-user turn until the transcript ends with a
+ * user-like turn (`user`, `toolResult`, or `tool`). This is the safety net
+ * for cases where a trailing assistant turn carries real but unsendable
+ * content — for example, gateway-surfaced error text like
+ * "API provider returned a billing error" or "LLM request rejected: this
+ * model does not support assistant message prefill". These turns are not
+ * empty or thinking-only, so `dropTrailingEmptyAssistantTurns` correctly
+ * leaves them alone; the runner-level guard uses this helper as a final
+ * pass immediately before sending the transcript to Anthropic so the
+ * provider call cannot land on a `role: assistant` tail.
+ *
+ * Non-trailing assistant turns are never touched; real assistant replies
+ * in the middle of the transcript remain intact.
+ */
+export function dropAllTrailingNonUserTurns(messages: AgentMessage[]): AgentMessage[] {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+  let end = messages.length;
+  while (end > 0 && !isUserLikeTurn(messages[end - 1])) {
+    end -= 1;
+  }
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
 /**
  * Decides whether to short-circuit an Anthropic request because the request
  * would otherwise end on an `assistant` turn (which Anthropic rejects with

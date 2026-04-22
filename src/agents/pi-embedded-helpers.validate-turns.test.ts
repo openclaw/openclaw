@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  dropAllTrailingNonUserTurns,
   dropTrailingEmptyAssistantTurns,
   mergeConsecutiveUserTurns,
   messagesEndWithUserTurn,
@@ -805,6 +806,152 @@ describe("dropTrailingEmptyAssistantTurns", () => {
       { role: "user", content: [{ type: "text", text: "Retry" }] },
     ]);
     expect(dropTrailingEmptyAssistantTurns(msgs)).toBe(msgs);
+  });
+
+  it("leaves gateway error-surface assistant messages intact (first-pass gap)", () => {
+    // Regression guard: gateway-surfaced errors (billing errors, prefill
+    // rejections, etc.) are injected as real-content assistant turns. They
+    // are NOT empty or thinking-only, so dropTrailingEmptyAssistantTurns
+    // must not remove them. The runner-level safety net is responsible for
+    // stripping them before the Anthropic request goes out.
+    const billingMsgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "API provider returned a billing error: please update payment info.",
+          },
+        ],
+      },
+    ]);
+    expect(dropTrailingEmptyAssistantTurns(billingMsgs)).toBe(billingMsgs);
+
+    const prefillRejectionMsgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "LLM request rejected: This model does not support assistant message prefill.",
+          },
+        ],
+      },
+    ]);
+    expect(dropTrailingEmptyAssistantTurns(prefillRejectionMsgs)).toBe(prefillRejectionMsgs);
+  });
+});
+
+describe("dropAllTrailingNonUserTurns", () => {
+  it("returns the input unchanged when the tail is already user-like", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+      { role: "user", content: [{ type: "text", text: "More" }] },
+    ]);
+    expect(dropAllTrailingNonUserTurns(msgs)).toBe(msgs);
+  });
+
+  it("drops a trailing assistant turn that carries real gateway error text", () => {
+    // The exact case that slipped past dropTrailingEmptyAssistantTurns and
+    // kept firing the old warn-only guard: a surfaced error shows up as a
+    // non-empty assistant tail, so the runner must strip it before sending
+    // to Anthropic.
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "API provider returned a billing error: please update payment info.",
+          },
+        ],
+      },
+    ]);
+    const result = dropAllTrailingNonUserTurns(msgs);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("user");
+    expect(messagesEndWithUserTurn(result)).toBe(true);
+  });
+
+  it("drops multiple consecutive non-user trailing turns including real text", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Reply 1" }] },
+      { role: "assistant", content: [{ type: "text", text: "Reply 2 (prefill error)" }] },
+    ]);
+    const result = dropAllTrailingNonUserTurns(msgs);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("user");
+  });
+
+  it("returns an empty array when every message is non-user", () => {
+    const msgs = asMessages([
+      { role: "assistant", content: [{ type: "text", text: "stray reply" }] },
+      { role: "assistant", content: [{ type: "text", text: "another stray" }] },
+    ]);
+    const result = dropAllTrailingNonUserTurns(msgs);
+    expect(result).toHaveLength(0);
+  });
+
+  it("preserves user-like tails of tool-result and tool roles", () => {
+    const toolResultTail = asMessages([
+      { role: "user", content: [{ type: "text", text: "use tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tool-1", name: "t", arguments: {} }],
+      },
+      { role: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "ok" }] },
+    ]);
+    expect(dropAllTrailingNonUserTurns(toolResultTail)).toBe(toolResultTail);
+
+    const toolTail = asMessages([
+      { role: "user", content: [{ type: "text", text: "use tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tool-2", name: "t", arguments: {} }],
+      },
+      { role: "tool", toolCallId: "tool-2", content: [{ type: "text", text: "ok" }] },
+    ]);
+    expect(dropAllTrailingNonUserTurns(toolTail)).toBe(toolTail);
+  });
+
+  it("only touches trailing turns; non-user turns in the middle stay intact", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "mid reply" }] },
+      { role: "user", content: [{ type: "text", text: "ok" }] },
+      { role: "assistant", content: [{ type: "text", text: "billing error text" }] },
+    ]);
+    const result = dropAllTrailingNonUserTurns(msgs);
+    expect(result).toHaveLength(3);
+    expect(result[0].role).toBe("user");
+    expect(result[1].role).toBe("assistant");
+    expect((result[1] as { content?: unknown[] }).content).toEqual([
+      { type: "text", text: "mid reply" },
+    ]);
+    expect(result[2].role).toBe("user");
+    expect(messagesEndWithUserTurn(result)).toBe(true);
+  });
+
+  it("returns the input unchanged for an empty array", () => {
+    const msgs = asMessages([]);
+    expect(dropAllTrailingNonUserTurns(msgs)).toBe(msgs);
+  });
+
+  it("is idempotent across repeated passes", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+      { role: "assistant", content: [{ type: "text", text: "error" }] },
+    ]);
+    const once = dropAllTrailingNonUserTurns(msgs);
+    const twice = dropAllTrailingNonUserTurns(once);
+    expect(twice).toBe(once);
+    expect(once).toHaveLength(1);
   });
 });
 
