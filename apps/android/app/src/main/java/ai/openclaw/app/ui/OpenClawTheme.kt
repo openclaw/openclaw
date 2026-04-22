@@ -14,9 +14,10 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 @Composable
-fun OpenClawTheme(content: @Composable () -> Unit) {
+fun OpenClawTheme(forceDark: Boolean = true, content: @Composable () -> Unit) {
   val context = LocalContext.current
-  val isDark = isSystemInDarkTheme()
+  // iOS forces dark mode (.preferredColorScheme(.dark)); match that as default.
+  val isDark = if (forceDark) true else isSystemInDarkTheme()
   val colorScheme = if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
   val mobileColors = if (isDark) darkMobileColors() else lightMobileColors()
 
