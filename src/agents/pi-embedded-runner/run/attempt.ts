@@ -167,7 +167,12 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
-import { collectAllowedToolNames, toSessionToolAllowlist } from "../tool-name-allowlist.js";
+import {
+  collectAllowedToolNames,
+  collectRegisteredToolNames,
+  PI_RESERVED_TOOL_NAMES,
+  toSessionToolAllowlist,
+} from "../tool-name-allowlist.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -1099,7 +1104,7 @@ export async function runEmbeddedAttempt(
       );
       const clientToolNameConflicts = findClientToolNameConflicts({
         tools: clientTools ?? [],
-        existingToolNames: coreBuiltinToolNames,
+        existingToolNames: [...coreBuiltinToolNames, ...PI_RESERVED_TOOL_NAMES],
       });
       if (clientToolNameConflicts.length > 0) {
         throw createClientToolNameConflictError(clientToolNameConflicts);
@@ -1123,9 +1128,12 @@ export async function runEmbeddedAttempt(
       const allCustomTools = [...customTools, ...clientToolDefs];
       // Pi 0.68.1 uses `tools` as a global allowlist across built-in and
       // custom tools. Keep the built-in tool list empty, but still pass the
-      // exact filtered tool names so our custom registrations remain active
-      // without re-enabling Pi defaults.
-      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
+      // exact registered custom-tool names so our OpenClaw-managed
+      // registrations remain active without widening the session boundary to
+      // raw client-provided names.
+      const sessionToolAllowlist = toSessionToolAllowlist(
+        collectRegisteredToolNames(allCustomTools),
+      );
 
       ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
         createAgentSession: async (options) =>

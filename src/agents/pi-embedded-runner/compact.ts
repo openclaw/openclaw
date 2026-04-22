@@ -132,7 +132,11 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
-import { collectAllowedToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
+import {
+  collectAllowedToolNames,
+  collectRegisteredToolNames,
+  toSessionToolAllowlist,
+} from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -845,9 +849,9 @@ export async function compactEmbeddedPiSessionDirect(
       });
       // Pi 0.68.1 uses `tools` as a global allowlist across built-in and
       // custom tools. Keep the built-in tool list empty, but still pass the
-      // exact filtered tool names so our custom registrations remain active
-      // without re-enabling Pi defaults.
-      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
+      // exact registered custom-tool names so our OpenClaw-managed
+      // registrations remain active without broadening the session boundary.
+      const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
