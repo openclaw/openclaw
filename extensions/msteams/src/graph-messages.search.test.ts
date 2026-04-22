@@ -115,7 +115,7 @@ describe("searchMessagesMSTeams", () => {
     expect(call.headers).toBeUndefined();
   });
 
-  it("requests a wider list window than the limit to allow local filtering", async () => {
+  it("requests Graph's max page size ($top=50) regardless of limit", async () => {
     mockState.fetchGraphJson.mockResolvedValue({ value: [] });
 
     await searchMessagesMSTeams({
@@ -126,23 +126,61 @@ describe("searchMessagesMSTeams", () => {
     });
 
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    // list window = clamp(limit*10, 50, 200) = 50 for limit=5
+    // Graph caps $top at 50 on chat/channel message endpoints; wider windows
+    // must come from @odata.nextLink pagination, not a larger $top.
     expect(calledPath).toContain("$top=50");
+    expect(calledPath).not.toContain("$top=200");
   });
 
-  it("caps the list window at 200 even for the max limit", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+  it("pages through @odata.nextLink until the list window is reached", async () => {
+    const page1Value = Array.from({ length: 50 }, (_, i) => ({
+      id: `msg-${i}`,
+      body: { content: `no match ${i}` },
+    }));
+    const page2Value = Array.from({ length: 50 }, (_, i) => ({
+      id: `msg-${50 + i}`,
+      body: { content: i === 5 ? "match needle here" : `no match ${50 + i}` },
+    }));
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: page1Value,
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/chats/next-page",
+    });
+    mockState.fetchGraphAbsoluteUrl.mockResolvedValue({ value: page2Value });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "needle",
+      limit: 50,
+    });
+
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(1);
+    expect(mockState.fetchGraphAbsoluteUrl.mock.calls[0][0].url).toBe(
+      "https://graph.microsoft.com/v1.0/chats/next-page",
+    );
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].id).toBe("msg-55");
+  });
+
+  it("stops paginating once the list window is filled", async () => {
+    // With limit=5, list window = 50; page 1 already returns 50 items, so
+    // we should NOT follow @odata.nextLink.
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: Array.from({ length: 50 }, (_, i) => ({
+        id: `msg-${i}`,
+        body: { content: `ping ${i}` },
+      })),
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/chats/next-page",
+    });
 
     await searchMessagesMSTeams({
       cfg: {} as OpenClawConfig,
       to: CHAT_ID,
-      query: "test",
-      limit: 100,
+      query: "ping",
+      limit: 5,
     });
 
-    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    // limit clamps to 50, list window = min(200, 50*10) = 200
-    expect(calledPath).toContain("$top=200");
+    expect(mockState.fetchGraphAbsoluteUrl).not.toHaveBeenCalled();
   });
 
   it("caps returned matches at the effective limit after local filtering", async () => {

@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import {
-  type GraphResponse,
   deleteGraphRequest,
   escapeOData,
   fetchGraphAbsoluteUrl,
@@ -36,6 +35,11 @@ type GraphPinnedMessage = {
 
 type GraphPinnedMessagesResponse = {
   value?: GraphPinnedMessage[];
+  "@odata.nextLink"?: string;
+};
+
+type GraphPagedMessagesResponse = {
+  value?: GraphMessage[];
   "@odata.nextLink"?: string;
 };
 
@@ -486,6 +490,8 @@ export type SearchMessagesMSTeamsResult = {
 
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
+/** Graph caps `$top` at 50 on chat/channel message endpoints. */
+const SEARCH_GRAPH_PAGE_SIZE = 50;
 const SEARCH_LIST_WINDOW_MIN = 50;
 const SEARCH_LIST_WINDOW_MAX = 200;
 const SEARCH_LIST_WINDOW_MULTIPLIER = 10;
@@ -499,6 +505,10 @@ const SEARCH_LIST_WINDOW_MULTIPLIER = 10;
  * locally. This keeps the action working for the most common app-only bot
  * configuration at the cost of only searching the recent window; full-archive
  * search requires Delegated auth and is out of scope here.
+ *
+ * The list window is retrieved in pages of 50 (Graph's `$top` max for these
+ * endpoints) via `@odata.nextLink` until the configured window size is reached
+ * or Graph runs out of messages.
  *
  * Sender filtering still pushes down to Graph via `$filter` when provided,
  * since `$filter` is supported for app-only on this endpoint.
@@ -526,7 +536,7 @@ export async function searchMessagesMSTeams(
 
   // Build query string manually (not URLSearchParams) to preserve literal $
   // in OData parameter names, consistent with other Graph calls in this module.
-  const parts = [`$top=${listWindow}`];
+  const parts = [`$top=${SEARCH_GRAPH_PAGE_SIZE}`];
   if (params.from) {
     parts.push(
       `$filter=${encodeURIComponent(`from/user/displayName eq '${escapeOData(params.from)}'`)}`,
@@ -534,17 +544,34 @@ export async function searchMessagesMSTeams(
   }
 
   const path = `${basePath}/messages?${parts.join("&")}`;
-  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({ token, path });
+  const maxPages = Math.ceil(listWindow / SEARCH_GRAPH_PAGE_SIZE);
+  const fetched: GraphMessage[] = [];
+  let page = await fetchGraphJson<GraphPagedMessagesResponse>({ token, path });
+  for (let i = 1; i <= maxPages; i++) {
+    for (const msg of page.value ?? []) {
+      fetched.push(msg);
+      if (fetched.length >= listWindow) {
+        break;
+      }
+    }
+    const nextLink = page["@odata.nextLink"];
+    if (!nextLink || fetched.length >= listWindow || i >= maxPages) {
+      break;
+    }
+    page = await fetchGraphAbsoluteUrl<GraphPagedMessagesResponse>({ token, url: nextLink });
+  }
 
+  // Note: Graph's `contentType` is "html" or "text". The production docs list
+  // "text" as the default, but real responses often omit the field. Treat any
+  // non-"text" body as HTML so queries always match rendered text rather than
+  // raw markup (e.g. "bold" must not match "<b>old"). This intentionally
+  // differs from `stripHtmlFromTeamsMessage`'s caller in graph-thread.ts,
+  // which is display-facing and prefers the documented default.
   const matches =
     needle.length === 0
-      ? (res.value ?? [])
-      : (res.value ?? []).filter((msg) => {
+      ? fetched
+      : fetched.filter((msg) => {
           const raw = msg.body?.content ?? "";
-          // Teams bodies default to HTML — strip tags so queries match the
-          // rendered text rather than raw markup (e.g. "bold" would otherwise
-          // match "<b>old"). Only skip stripping for explicit plain-text bodies;
-          // missing contentType falls through to the HTML-safe path.
           const text = msg.body?.contentType === "text" ? raw : stripHtmlFromTeamsMessage(raw);
           return text.toLowerCase().includes(needle);
         });
