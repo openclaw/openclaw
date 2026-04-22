@@ -149,7 +149,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "webhooks",
 ]);
 
-function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
+export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
   // Keep this gate tied to the real OpenClaw CLI entrypoints.
   //
   // This module can also land inside shared dist chunks that are imported from

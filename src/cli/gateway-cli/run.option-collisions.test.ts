@@ -28,6 +28,9 @@ const configState = vi.hoisted(() => ({
 const recoverConfigFromLastKnownGood = vi.fn<(params?: unknown) => Promise<boolean>>(
   async (_params?: unknown) => false,
 );
+const recoverConfigFromJsonRootSuffix = vi.fn<(snapshot?: unknown) => Promise<boolean>>(
+  async (_snapshot?: unknown) => false,
+);
 const writeRestartSentinel = vi.fn<(payload?: unknown) => Promise<string>>(
   async (_payload?: unknown) => "/tmp/restart-sentinel.json",
 );
@@ -42,6 +45,7 @@ vi.mock("../../config/config.js", () => ({
   readBestEffortConfig: async () => configState.cfg,
   readConfigFileSnapshot: async () => configState.snapshot,
   recoverConfigFromLastKnownGood: (params: unknown) => recoverConfigFromLastKnownGood(params),
+  recoverConfigFromJsonRootSuffix: (snapshot: unknown) => recoverConfigFromJsonRootSuffix(snapshot),
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
@@ -159,6 +163,8 @@ describe("gateway run option collisions", () => {
     gatewayLogMessages.length = 0;
     recoverConfigFromLastKnownGood.mockReset();
     recoverConfigFromLastKnownGood.mockResolvedValue(false);
+    recoverConfigFromJsonRootSuffix.mockReset();
+    recoverConfigFromJsonRootSuffix.mockResolvedValue(false);
     writeRestartSentinel.mockReset();
     writeRestartSentinel.mockResolvedValue("/tmp/restart-sentinel.json");
     startGatewayServer.mockClear();

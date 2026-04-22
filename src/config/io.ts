@@ -932,6 +932,92 @@ export function parseConfigJson5(
   }
 }
 
+function findJsonRootSuffix(
+  raw: string,
+  json5: { parse: (value: string) => unknown } = JSON5,
+): { raw: string; parsed: unknown } | null {
+  if (/^\s*(?:\{|\[)/.test(raw)) {
+    return null;
+  }
+  let offset = 0;
+  while (offset < raw.length) {
+    const nextNewline = raw.indexOf("\n", offset);
+    const lineEnd = nextNewline === -1 ? raw.length : nextNewline + 1;
+    const line = raw.slice(offset, lineEnd);
+    if (/^\s*(?:\{|\[)/.test(line)) {
+      const candidate = raw.slice(offset);
+      const parsed = parseConfigJson5(candidate, json5);
+      return parsed.ok ? { raw: candidate, parsed: parsed.parsed } : null;
+    }
+    offset = lineEnd;
+  }
+  return null;
+}
+
+async function persistPrefixedConfigRecovery(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  originalRaw: string;
+  recoveredRaw: string;
+}): Promise<void> {
+  const observedAt = new Date().toISOString();
+  const clobberedPath = await persistClobberedConfigSnapshot({
+    deps: params.deps,
+    configPath: params.configPath,
+    raw: params.originalRaw,
+    observedAt,
+  });
+  await params.deps.fs.promises.writeFile(params.configPath, params.recoveredRaw, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+  params.deps.logger.warn(
+    `Config auto-stripped non-JSON prefix: ${params.configPath}` +
+      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
+  );
+}
+
+async function recoverConfigFromJsonRootSuffixWithDeps(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  snapshot: ConfigFileSnapshot;
+}): Promise<boolean> {
+  if (!params.snapshot.exists || params.snapshot.valid || typeof params.snapshot.raw !== "string") {
+    return false;
+  }
+  const suffixRecovery = findJsonRootSuffix(params.snapshot.raw, params.deps.json5);
+  if (!suffixRecovery) {
+    return false;
+  }
+
+  let resolved: unknown;
+  try {
+    resolved = resolveConfigIncludesForRead(suffixRecovery.parsed, params.configPath, params.deps);
+  } catch {
+    return false;
+  }
+  const readResolution = resolveConfigForRead(resolved, params.deps.env);
+  const legacyResolution = resolveLegacyConfigForRead(
+    readResolution.resolvedConfigRaw,
+    suffixRecovery.parsed,
+  );
+  const validated = validateConfigObjectWithPlugins(legacyResolution.effectiveConfigRaw, {
+    env: params.deps.env,
+  });
+  if (!validated.ok) {
+    return false;
+  }
+
+  await persistPrefixedConfigRecovery({
+    deps: params.deps,
+    configPath: params.configPath,
+    originalRaw: params.snapshot.raw,
+    recoveredRaw: suffixRecovery.raw,
+  });
+  return true;
+}
+
 type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
@@ -1446,6 +1532,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     });
   }
 
+  async function recoverConfigFromJsonRootSuffix(snapshot: ConfigFileSnapshot): Promise<boolean> {
+    return await recoverConfigFromJsonRootSuffixWithDeps({
+      deps,
+      configPath,
+      snapshot,
+    });
+  }
+
   async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
     const result = await readConfigFileSnapshotInternal();
     return {
@@ -1793,6 +1887,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     readConfigFileSnapshotForWrite,
     promoteConfigSnapshotToLastKnownGood,
     recoverConfigFromLastKnownGood,
+    recoverConfigFromJsonRootSuffix,
     writeConfigFile,
   };
 }
@@ -1904,6 +1999,12 @@ export async function recoverConfigFromLastKnownGood(params: {
   reason: string;
 }): Promise<boolean> {
   return await createConfigIO().recoverConfigFromLastKnownGood(params);
+}
+
+export async function recoverConfigFromJsonRootSuffix(
+  snapshot: ConfigFileSnapshot,
+): Promise<boolean> {
+  return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot);
 }
 
 export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {

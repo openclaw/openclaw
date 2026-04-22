@@ -1620,7 +1620,7 @@
       "axios": "1.15.0",
       "follow-redirects": "1.16.0",
       "defu": "6.1.5",
-      "fast-xml-parser": "5.5.7",
+      "fast-xml-parser": "5.7.0",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
       "basic-ftp": "5.3.0",

@@ -66,7 +66,8 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   ],
   "extensions/skill-workshop/index.ts": [
     'resolvePluginConfigObject(runtimeConfig, "skill-workshop")',
-    "api.runtime.config?.loadConfig?.()",
+    'typeof api.runtime.config?.loadConfig === "function"',
+    "api.runtime.config.loadConfig()",
   ],
   "extensions/thread-ownership/index.ts": [
     'resolvePluginConfigObject(currentConfig, "thread-ownership")',

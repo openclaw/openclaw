@@ -207,6 +207,10 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 
 vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
+  retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
+    sessionId
+      ? bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId).then(() => true)
+      : Promise.resolve(false),
 }));
 
 installGatewayTestHooks({ scope: "suite" });

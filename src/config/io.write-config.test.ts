@@ -234,6 +234,44 @@ describe("config io write", () => {
     });
   });
 
+  it("recovers configs polluted by a leading status line", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const cleanConfig = {
+        gateway: { mode: "local" },
+        agents: { list: [{ id: "main", default: true }, { id: "discord-dm" }] },
+      } satisfies ConfigFileSnapshot["config"];
+      const cleanRaw = `${JSON.stringify(cleanConfig, null, 2)}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `Found and updated: False\n${cleanRaw}`, "utf-8");
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      const initialSnapshot = await io.readConfigFileSnapshot();
+      expect(initialSnapshot.valid).toBe(false);
+
+      await expect(io.recoverConfigFromJsonRootSuffix(initialSnapshot)).resolves.toBe(true);
+      const recoveredSnapshot = await io.readConfigFileSnapshot();
+
+      expect(recoveredSnapshot.valid).toBe(true);
+      expect(recoveredSnapshot.config.gateway?.mode).toBe("local");
+      expect(recoveredSnapshot.config.agents?.list?.map((entry) => entry.id)).toEqual([
+        "main",
+        "discord-dm",
+      ]);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
+      const entries = await fs.readdir(path.dirname(configPath));
+      expect(entries.some((entry) => entry.includes(".clobbered."))).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Config auto-stripped non-JSON prefix:"),
+      );
+    });
+  });
+
   it("rejects destructive internal writes before replacing the config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

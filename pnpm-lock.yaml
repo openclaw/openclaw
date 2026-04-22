@@ -11,7 +11,7 @@ overrides:
   axios: 1.15.0
   follow-redirects: 1.16.0
   defu: 6.1.5
-  fast-xml-parser: 5.5.7
+  fast-xml-parser: 5.7.0
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
   basic-ftp: 5.3.0
@@ -1210,17 +1210,17 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/tokenjuice:
-    dependencies:
-      tokenjuice:
-        specifier: 0.6.1
-        version: 0.6.1
+  extensions/together:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/together:
+  extensions/tokenjuice:
+    dependencies:
+      tokenjuice:
+        specifier: 0.6.1
+        version: 0.6.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2879,6 +2879,9 @@ packages:
   '@noble/hashes@2.0.1':
     resolution: {integrity: sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==}
     engines: {node: '>= 20.19.0'}
+
+  '@nodable/entities@2.1.0':
+    resolution: {integrity: sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==}
 
   '@node-llama-cpp/linux-arm64@3.18.1':
     resolution: {integrity: sha512-rXMgZxUay78FOJV/fJ67apYP9eElH5jd4df5YRKPlLhLHHchuOSyDn+qtyW/L/EnPzpogoLkmULqCkdXU39XsQ==}
@@ -5134,8 +5137,8 @@ packages:
   fast-xml-builder@1.1.5:
     resolution: {integrity: sha512-4TJn/8FKLeslLAH3dnohXqE3QSoxkhvaMzepOIZytwJXZO69Bfz0HBdDHzOTOon6G59Zrk6VQ2bEiv1t61rfkA==}
 
-  fast-xml-parser@5.5.7:
-    resolution: {integrity: sha512-LteOsISQ2GEiDHZch6L9hB0+MLoYVLToR7xotrzU0opCICBkxOPgHAy1HxAvtxfJNXDJpgAsQN30mkrfpO2Prg==}
+  fast-xml-parser@5.7.0:
+    resolution: {integrity: sha512-MTcrUoRQ1GSQ9iG3QJzBGquYYYeA7piZaJoIWbPFGbRn6Jj6z7xgoAyi4DrZX4y2ZIQQBF59gc/zmvvejjgoFQ==}
     hasBin: true
 
   fastq@1.20.1:
@@ -7050,14 +7053,14 @@ packages:
   token-stream@1.0.0:
     resolution: {integrity: sha512-VSsyNPPW74RpHwR8Fc21uubwHY7wMDeJLys2IX5zJNih+OnAnaifKHo+1LHT7DAdloQ7apeaaWg8l7qnf/TnEg==}
 
+  token-types@6.1.2:
+    resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
+    engines: {node: '>=14.16'}
+
   tokenjuice@0.6.1:
     resolution: {integrity: sha512-9Vg9303NeNrTa9n7gQhiHsXfgi7b61bi26zxoAobW/pKIuMOUD/G04+5NPKAbpj+TSKaSEivZZp79222oHbdEA==}
     engines: {node: '>=20'}
     hasBin: true
-
-  token-types@6.1.2:
-    resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
-    engines: {node: '>=14.16'}
 
   totalist@3.0.1:
     resolution: {integrity: sha512-sf4i37nQ2LBx4m3wB74y+ubopq6W/dIzXg0FDGjsYnZHVa1Da8FH853wlL2gtUhg+xJXjfk3kUZS3BRoQeoQBQ==}
@@ -8206,7 +8209,7 @@ snapshots:
   '@aws-sdk/xml-builder@3.972.18':
     dependencies:
       '@smithy/types': 4.14.1
-      fast-xml-parser: 5.5.7
+      fast-xml-parser: 5.7.0
       tslib: 2.8.1
 
   '@aws/bedrock-token-generator@1.1.0':
@@ -9523,6 +9526,8 @@ snapshots:
   '@noble/ed25519@3.1.0': {}
 
   '@noble/hashes@2.0.1': {}
+
+  '@nodable/entities@2.1.0': {}
 
   '@node-llama-cpp/linux-arm64@3.18.1':
     optional: true
@@ -11804,8 +11809,9 @@ snapshots:
     dependencies:
       path-expression-matcher: 1.5.0
 
-  fast-xml-parser@5.5.7:
+  fast-xml-parser@5.7.0:
     dependencies:
+      '@nodable/entities': 2.1.0
       fast-xml-builder: 1.1.5
       path-expression-matcher: 1.5.0
       strnum: 2.2.3
@@ -14052,13 +14058,13 @@ snapshots:
 
   token-stream@1.0.0: {}
 
-  tokenjuice@0.6.1: {}
-
   token-types@6.1.2:
     dependencies:
       '@borewit/text-codec': 0.2.2
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
+
+  tokenjuice@0.6.1: {}
 
   totalist@3.0.1: {}
 

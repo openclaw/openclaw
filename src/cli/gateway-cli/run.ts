@@ -13,6 +13,7 @@ import {
   readBestEffortConfig,
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
+  recoverConfigFromJsonRootSuffix,
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
@@ -288,6 +289,18 @@ async function readGatewayStartupConfig(params: {
       snapshot = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
         readConfigFileSnapshot().catch(() => null),
       );
+    } else {
+      const repaired = await params.startupTrace.measure("cli.config-prefix-recovery", () =>
+        recoverConfigFromJsonRootSuffix(invalidSnapshot),
+      );
+      if (repaired) {
+        gatewayLog.warn(
+          `gateway: repaired invalid effective config by stripping a non-JSON prefix: ${invalidSnapshot.path}`,
+        );
+        snapshot = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
+          readConfigFileSnapshot().catch(() => null),
+        );
+      }
     }
   }
   if (snapshot?.valid) {

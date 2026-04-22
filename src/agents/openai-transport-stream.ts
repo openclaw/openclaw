@@ -963,13 +963,71 @@ function createOpenAICompletionsClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
 ) {
+  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
   return new OpenAI({
     apiKey,
-    baseURL: model.baseUrl,
+    baseURL: clientConfig.baseURL,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
+    defaultHeaders: clientConfig.defaultHeaders,
+    defaultQuery: clientConfig.defaultQuery,
     fetch: buildGuardedModelFetch(model),
   });
+}
+
+function isAzureOpenAICompatibleHost(hostname: string): boolean {
+  return (
+    hostname.endsWith(".openai.azure.com") ||
+    hostname.endsWith(".services.ai.azure.com") ||
+    hostname.endsWith(".cognitiveservices.azure.com")
+  );
+}
+
+function buildOpenAICompletionsClientConfig(
+  model: Model<Api>,
+  context: Context,
+  optionHeaders?: Record<string, string>,
+): {
+  baseURL: string;
+  defaultHeaders: Record<string, string>;
+  defaultQuery?: Record<string, string>;
+} {
+  const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
+  const defaultQuery: Record<string, string> = {};
+  let baseURL = model.baseUrl;
+  let isAzureHost = false;
+
+  try {
+    const parsed = new URL(model.baseUrl);
+    isAzureHost = isAzureOpenAICompatibleHost(parsed.hostname.toLowerCase());
+    parsed.searchParams.forEach((value, key) => {
+      if (value) {
+        defaultQuery[key] = value;
+      }
+    });
+    parsed.search = "";
+    baseURL = parsed.toString().replace(/\/$/, "");
+  } catch {
+    // Keep the configured base URL unchanged; the OpenAI SDK will surface invalid URLs.
+  }
+
+  if (isAzureHost) {
+    const apiVersionHeader = Object.keys(headers).find(
+      (key) => key.toLowerCase() === "api-version",
+    );
+    if (apiVersionHeader) {
+      const apiVersion = headers[apiVersionHeader]?.trim();
+      delete headers[apiVersionHeader];
+      if (apiVersion && !defaultQuery["api-version"]) {
+        defaultQuery["api-version"] = apiVersion;
+      }
+    }
+  }
+
+  return {
+    baseURL,
+    defaultHeaders: headers,
+    defaultQuery: Object.keys(defaultQuery).length > 0 ? defaultQuery : undefined,
+  };
 }
 
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
@@ -1577,5 +1635,6 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
 };
