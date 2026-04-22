@@ -32,7 +32,14 @@ interface WeComToolsParams {
   method?: string;
   /** JSON arguments for the MCP method call (used when action=call) */
   args?: string | Record<string, unknown>;
-  /** Account ID for multi-account routing (optional; falls back to the default from createWeComMcpTool) */
+  /**
+   * Account ID for multi-account routing (optional).
+   *
+   * **Ignored when a trusted session context is bound**: the factory's
+   * `accountId` (from `ctx.agentAccountId`) takes precedence to enforce
+   * per-session tenant isolation. This field only takes effect for
+   * non-session callers (CLI / tests).
+   */
   accountId?: string;
 }
 
@@ -236,18 +243,31 @@ export function createWeComMcpTool(accountId?: string) {
     },
     async execute(_toolCallId: string, params: unknown) {
       const p = params as WeComToolsParams;
-      // Resolve accountId with the following priority:
-      //   1. params.accountId           — explicit per-call override from the caller
-      //   2. factory-provided accountId — trusted per-session context (ctx.agentAccountId),
-      //                                   routes MCP calls to the active account in
-      //                                   multi-account chats
-      //   3. runtime default account    — single-account setups / missing session context
-      //   4. "default" literal          — last-resort fallback when runtime unavailable
-      let resolvedAccountId = p.accountId?.trim() || "";
+      // Resolve accountId with **trusted-first** priority to enforce
+      // per-session tenant isolation. `params.accountId` comes from the
+      // LLM tool-call arguments (model-controlled) while the factory
+      // `accountId` parameter comes from `ctx.agentAccountId` (trusted
+      // per-session context). If we honored `params.accountId` first the
+      // model could route `wecom_mcp` calls to an account outside the
+      // active session in multi-account deployments.
+      //
+      // Priority:
+      //   1. factory accountId        — trusted ctx.agentAccountId.
+      //                                 When a session is bound, the
+      //                                 model CANNOT override it.
+      //   2. params.accountId         — only honored when no session
+      //                                 context exists (CLI / tests /
+      //                                 other non-session callers).
+      //   3. runtime default account  — single-account setups.
+      //   4. "default" literal        — last-resort fallback when the
+      //                                 runtime isn't reachable.
+      const sessionAccountId = accountId?.trim() || "";
+      const paramAccountId = p.accountId?.trim() || "";
+
+      let resolvedAccountId = sessionAccountId;
       if (!resolvedAccountId) {
-        const sessionAccountId = accountId?.trim() || "";
-        if (sessionAccountId) {
-          resolvedAccountId = sessionAccountId;
+        if (paramAccountId) {
+          resolvedAccountId = paramAccountId;
         } else {
           try {
             const { getWeComRuntime } = await import("../runtime.js");
@@ -258,6 +278,13 @@ export function createWeComMcpTool(accountId?: string) {
             resolvedAccountId = "default";
           }
         }
+      } else if (paramAccountId && paramAccountId !== sessionAccountId) {
+        // Audit trail: make tenant-isolation visible when the model
+        // tried to point at a different account than the session.
+        wecomMcpLog.debug(
+          `execute: ignoring params.accountId=${paramAccountId} ` +
+            `(session-bound to ${sessionAccountId})`,
+        );
       }
       wecomMcpLog.debug(
         `execute: action=${p.action}, category=${p.category}` +
