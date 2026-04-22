@@ -93,6 +93,15 @@ describe("gateway tool restart continuation", () => {
     expect(continuationKind).not.toHaveProperty("anyOf");
   });
 
+  it("instructs agents to use continuationMessage when a restart still needs a reply", async () => {
+    const { createGatewayTool } = await import("./gateway-tool.js");
+    const tool = createGatewayTool();
+
+    expect(tool.description).toContain("still owe the user a reply");
+    expect(tool.description).toContain("continuationMessage");
+    expect(tool.description).toContain("do not write restart sentinel files directly");
+  });
+
   it("writes an agentTurn continuation into the restart sentinel", async () => {
     const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool({
