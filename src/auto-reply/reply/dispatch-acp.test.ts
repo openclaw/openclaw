@@ -9,7 +9,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { resolveAcpAttachments } from "./dispatch-acp-attachments.js";
-import { tryDispatchAcpReply } from "./dispatch-acp.js";
+import { isStaleSessionInitError, tryDispatchAcpReply } from "./dispatch-acp.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -1341,5 +1341,47 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).not.toHaveBeenCalled();
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+  });
+});
+
+describe("isStaleSessionInitError", () => {
+  it("returns true for ACP_TURN_FAILED with persistent session resume failure", () => {
+    const result = isStaleSessionInitError({
+      code: "ACP_TURN_FAILED",
+      message: "Persistent ACP session abc123 could not be resumed: Resource not found",
+    });
+    expect(result).toBe(true);
+  });
+
+  it("returns false for ACP_TURN_FAILED with generic Resource not found (too broad)", () => {
+    const result = isStaleSessionInitError({
+      code: "ACP_TURN_FAILED",
+      message: "Resource not found",
+    });
+    expect(result).toBe(false);
+  });
+
+  it("returns true for ACP_SESSION_INIT_FAILED with Resource not found", () => {
+    const result = isStaleSessionInitError({
+      code: "ACP_SESSION_INIT_FAILED",
+      message: "Resource not found",
+    });
+    expect(result).toBe(true);
+  });
+
+  it("returns false for ACP_TURN_FAILED with different error message", () => {
+    const result = isStaleSessionInitError({
+      code: "ACP_TURN_FAILED",
+      message: "Other error",
+    });
+    expect(result).toBe(false);
+  });
+
+  it("returns false for OTHER_ERROR with Resource not found", () => {
+    const result = isStaleSessionInitError({
+      code: "OTHER_ERROR",
+      message: "Resource not found",
+    });
+    expect(result).toBe(false);
   });
 });

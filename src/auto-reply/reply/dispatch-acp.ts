@@ -137,13 +137,29 @@ export type AcpDispatchAttemptResult = {
 
 const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 
-function isStaleSessionInitError(params: { code: string; message: string }): boolean {
-  if (params.code !== "ACP_SESSION_INIT_FAILED") {
-    return false;
+// Test cases:
+// - { code: "ACP_SESSION_INIT_FAILED", message: "Resource not found" } → true
+// - { code: "ACP_TURN_FAILED", message: "Persistent ACP session abc could not be resumed: Resource not found" } → true
+// - { code: "ACP_TURN_FAILED", message: "Resource not found" } → false (too broad, could be tool call 404)
+// - { code: "ACP_TURN_FAILED", message: "Other error" } → false
+// - { code: "OTHER_ERROR", message: "Resource not found" } → false
+export function isStaleSessionInitError(params: { code: string; message: string }): boolean {
+  // ACP_SESSION_INIT_FAILED: broad "Resource not found" check (session never started)
+  if (params.code === "ACP_SESSION_INIT_FAILED") {
+    return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
+      params.message,
+    );
   }
-  return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
-    params.message,
-  );
+
+  // ACP_TURN_FAILED: narrow check (must be persistent session resume failure, not random 404)
+  if (params.code === "ACP_TURN_FAILED") {
+    return (
+      /persistent acp session .* could not be resumed/i.test(params.message) &&
+      /(resource not found|no matching session)/i.test(params.message)
+    );
+  }
+
+  return false;
 }
 
 async function maybeUnbindStaleBoundConversations(params: {
