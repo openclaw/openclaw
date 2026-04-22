@@ -1,3 +1,4 @@
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -5,8 +6,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 
 export type DiscordTokenSource = "env" | "config" | "none";
 
-export type DiscordTokenResolution = {
-  token: string;
+export type DiscordTokenResolution = BaseTokenResolution & {
   source: DiscordTokenSource;
 };
 
@@ -20,10 +20,20 @@ export function normalizeDiscordToken(raw: unknown, path: string): string | unde
 
 export function resolveDiscordToken(
   cfg?: OpenClawConfig,
-  opts: { accountId?: string | null; envToken?: string | null } = {},
+  opts: {
+    accountId?: string | null;
+    envToken?: string | null;
+    explicit?: boolean;
+  } = {},
 ): DiscordTokenResolution {
+  // Treat as explicit only when the caller intentionally targeted this account.
+  // Direct callers that supply an accountId are treated as explicit by default
+  // (back-compat); indirect callers such as resolveDiscordAccount forward
+  // `explicit: false` when the id was filled in from channels.discord.defaultAccount.
+  const hasProvidedAccountId =
+    typeof opts.accountId === "string" && opts.accountId.trim().length > 0;
   const explicitAccountId =
-    typeof opts.accountId === "string" && opts.accountId.trim().length > 0
+    hasProvidedAccountId && opts.explicit !== false
       ? normalizeAccountId(opts.accountId)
       : undefined;
   const accountId = normalizeAccountId(opts.accountId);

@@ -76,6 +76,25 @@ describe("resolveDiscordToken", () => {
     expect(res.source).toBe("none");
   });
 
+  it("falls back to top-level token when explicit=false and account has no token", () => {
+    // Implicit default-account flow: caller did not target a specific account
+    // (e.g. channels.discord.defaultAccount resolved to "work" internally), so
+    // a missing per-account token should still inherit the channel-level token.
+    const cfg = {
+      channels: {
+        discord: {
+          token: "base-token",
+          accounts: {
+            work: { name: "Work" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveDiscordToken(cfg, { accountId: "work", explicit: false });
+    expect(res.token).toBe("base-token");
+    expect(res.source).toBe("config");
+  });
+
   it("does not inherit top-level token when account token is explicitly blank", () => {
     const cfg = {
       channels: {
