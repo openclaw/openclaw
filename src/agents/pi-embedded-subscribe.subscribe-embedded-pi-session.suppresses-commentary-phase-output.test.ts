@@ -66,4 +66,31 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toEqual([]);
   });
+
+  it("suppresses tool-use assistant text even when commentary phase metadata is missing", () => {
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onBlockReply,
+      onPartialReply,
+      blockReplyBreak: "message_end",
+    });
+
+    const toolUseMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Let me check that." },
+        { type: "toolUse", id: "call_1", name: "read", input: { path: "README.md" } },
+      ],
+      stopReason: "toolUse",
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: toolUseMessage });
+    emit({ type: "message_end", message: toolUseMessage });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(subscription.assistantTexts).toEqual([]);
+  });
 });

@@ -6,6 +6,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
 const callGatewayMock = vi.fn();
+const runSessionsSendA2AFlowMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
@@ -32,7 +33,7 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 vi.mock("./sessions-send-tool.a2a.js", () => ({
-  runSessionsSendA2AFlow: vi.fn(),
+  runSessionsSendA2AFlow: (...args: unknown[]) => runSessionsSendA2AFlowMock(...args),
 }));
 
 let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
@@ -217,6 +218,7 @@ beforeEach(() => {
     session: { scope: "per-sender", mainKey: "main" },
     tools: { agentToAgent: { enabled: false } },
   });
+  runSessionsSendA2AFlowMock.mockReset();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -700,5 +702,56 @@ describe("sessions_send gating", () => {
       reply: undefined,
       sessionKey: MAIN_AGENT_SESSION_KEY,
     });
+  });
+
+  it("keeps sessions_send delivery session-local and does not start announce flow", async () => {
+    const tool = createMainSessionsSendTool();
+    let historyCalls = 0;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-inline-only", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-inline-only", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        historyCalls += 1;
+        return {
+          messages:
+            historyCalls === 1
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "session-local reply" }],
+                    timestamp: 30,
+                  },
+                ],
+        };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-inline-only", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "session-local reply",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      delivery: { status: "skipped", mode: "none" },
+    });
+    expect(runSessionsSendA2AFlowMock).not.toHaveBeenCalled();
   });
 });

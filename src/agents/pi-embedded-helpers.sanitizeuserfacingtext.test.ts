@@ -192,6 +192,20 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe(expected);
   });
 
+  it("strips leaked self-instruction prelude and keeps the user-facing answer", () => {
+    const input = [
+      "The user is asking me to confirm the session boundary.",
+      "I should keep the reply clean and avoid extra text.",
+      "Let me just answer directly.",
+      "",
+      "Understood. Good to know the session boundaries are solid—no leaks is the goal.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(
+      "Understood. Good to know the session boundaries are solid—no leaks is the goal.",
+    );
+  });
+
   it("preserves trailing whitespace and internal newlines", () => {
     expect(sanitizeUserFacingText("Hello\n\nWorld\n")).toBe("Hello\n\nWorld\n");
     expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");

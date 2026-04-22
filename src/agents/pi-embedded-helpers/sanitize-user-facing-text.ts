@@ -338,6 +338,100 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   return result.join("\n\n");
 }
 
+const SELF_INSTRUCTION_REPLY_RE =
+  /\b(?:i need to reply with exactly|i(?:'ll| will) output that|no extra text|the user is asking me to|we need to output|we must use a tool|i must use a tool|let(?:'s| us) do that|let me (?:call|try|use|run)|i should not send (?:any )?reply|i should not reply|not reply at all|respond with no_reply|reply with no_reply|appropriate response might be to not reply|i(?:'ll| will) respond with no_reply|i(?:'ll| will) reply with no_reply|the cleanest approach would be to respond with no_reply|therefore,? i should not send any reply|therefore,? i should not send a reply|i should respond with no_reply|i should reply with no_reply|\bno_reply\b)/i;
+
+const INTERNAL_MONOLOGUE_MARKERS = [
+  /^(?:the user|this user|the message|the prompt)\b/i,
+  /\bi should\b/i,
+  /\bi need to\b/i,
+  /\bi must\b/i,
+  /\blet me\b/i,
+  /\blooking at\b/i,
+  /\bgiven that\b/i,
+  /\bthis appears to\b/i,
+  /\bi can respond\b/i,
+  /\bmaintain my persona\b/i,
+  /\bcraft a response\b/i,
+  /\bconversation history\b/i,
+];
+
+function countInternalMonologueMarkers(text: string): number {
+  return INTERNAL_MONOLOGUE_MARKERS.reduce(
+    (count, pattern) => count + (pattern.test(text) ? 1 : 0),
+    0,
+  );
+}
+
+function isPureInternalMonologueBlock(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 1200) {
+    return false;
+  }
+  const markerCount = countInternalMonologueMarkers(trimmed);
+  if (markerCount < 2) {
+    return false;
+  }
+  if (
+    !/(?:\btool\b|\btools\b|tool call|reply|respond|output|prompt|message|session|memory|transcript|persona|greet user|read\b|write\b|search\b|check\b|look into|look at)/i.test(
+      trimmed,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /\b(?:here(?:'s| is)|answer|result|summary|found|done|fixed|updated|verified|you|your|Bernhard)\b/i.test(
+      trimmed,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function stripLeakedSelfInstructionPrefix(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return text;
+  }
+  const blocks = trimmed
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  if (blocks.length < 2) {
+    return isPureInternalMonologueBlock(trimmed) ? "" : text;
+  }
+
+  const finalBlock = blocks.at(-1)?.trim() ?? "";
+  if (!finalBlock || finalBlock.length > 1200) {
+    return text;
+  }
+
+  const prelude = blocks.slice(0, -1).join("\n\n").trim();
+  if (!prelude) {
+    return text;
+  }
+
+  if (SELF_INSTRUCTION_REPLY_RE.test(prelude) && !SELF_INSTRUCTION_REPLY_RE.test(finalBlock)) {
+    return finalBlock;
+  }
+
+  const markerCount = countInternalMonologueMarkers(prelude);
+  if (
+    markerCount >= 2 &&
+    countInternalMonologueMarkers(finalBlock) === 0 &&
+    finalBlock.length <= 500
+  ) {
+    return finalBlock;
+  }
+
+  if (isPureInternalMonologueBlock(prelude) && !isPureInternalMonologueBlock(finalBlock)) {
+    return finalBlock;
+  }
+
+  return text;
+}
+
 export function isLikelyHttpErrorText(raw: string): boolean {
   if (isCloudflareOrHtmlErrorPage(raw)) {
     return true;
@@ -425,5 +519,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   }
 
   const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
-  return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
+  return collapseConsecutiveDuplicateBlocks(
+    stripLeakedSelfInstructionPrefix(withoutLeadingEmptyLines),
+  );
 }

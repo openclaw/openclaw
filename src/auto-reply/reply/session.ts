@@ -38,7 +38,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
-import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isInterSessionInputProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -553,7 +556,11 @@ export async function initSessionState(params: {
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
-  const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
+  const inputProvenance = normalizeInputProvenance(ctx.InputProvenance);
+  const isInterSession = isInterSessionInputProvenance(inputProvenance);
+  const allowInterSessionExternalRoute = !(
+    isInterSession && inputProvenance?.sourceTool === "sessions_send"
+  );
   // Automated heartbeat/cron/exec turns run inside the conversation session,
   // but they must not rewrite the session's remembered external delivery route.
   // Otherwise a heartbeat target like "group:..." or a synthetic sender like
@@ -566,6 +573,7 @@ export async function initSessionState(params: {
         persistedLastChannel: baseEntry?.lastChannel,
         sessionKey,
         isInterSession,
+        allowInterSessionExternalRoute,
       });
   const lastToRaw = isSystemEvent
     ? baseEntry?.lastTo
@@ -577,6 +585,7 @@ export async function initSessionState(params: {
         persistedLastChannel: baseEntry?.lastChannel,
         sessionKey,
         isInterSession,
+        allowInterSessionExternalRoute,
       });
   const lastAccountIdRaw = isSystemEvent
     ? baseEntry?.lastAccountId

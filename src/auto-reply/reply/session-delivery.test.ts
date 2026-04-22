@@ -76,6 +76,33 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
     // No external route — falls through to normal resolution
     expect(result === "session:somekey" || result === undefined).toBe(true);
   });
+
+  it("sessions_send inter-session turns do not inherit an existing external lastChannel", () => {
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: "webchat",
+        persistedLastChannel: "telegram",
+        sessionKey: "agent:main:telegram:direct:123456",
+        isInterSession: true,
+        allowInterSessionExternalRoute: false,
+      }),
+    ).toBe("webchat");
+  });
+
+  it("sessions_send inter-session turns do not inherit an existing external lastTo", () => {
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: "webchat",
+        originatingToRaw: "session:somekey",
+        toRaw: "session:somekey",
+        persistedLastTo: "123456",
+        persistedLastChannel: "telegram",
+        sessionKey: "agent:main:telegram:direct:123456",
+        isInterSession: true,
+        allowInterSessionExternalRoute: false,
+      }),
+    ).toBe("session:somekey");
+  });
 });
 
 describe("session delivery direct-session routing overrides", () => {
