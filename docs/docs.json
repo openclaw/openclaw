@@ -1225,6 +1225,7 @@
                   "tools/loop-detection",
                   "tools/pdf",
                   "tools/reactions",
+                  "tools/tokenjuice",
                   "tools/thinking",
                   "tools/video-generation"
                 ]
