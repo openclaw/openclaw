@@ -590,9 +590,9 @@ describe("session-memory hook", () => {
   // Helper to drain postHookActions with per-action error isolation,
   // matching triggerInternalHook's actual drain behaviour.
   async function drainPostHookActions(event: {
-    postHookActions: Array<() => Promise<void> | void>;
+    postHookActions?: Array<() => Promise<void> | void>;
   }) {
-    for (const action of event.postHookActions) {
+    for (const action of event.postHookActions ?? []) {
       try {
         await action();
       } catch {

@@ -176,29 +176,6 @@ export type SessionPatchHookEvent = InternalHookEvent & {
   context: SessionPatchHookContext;
 };
 
-export interface InternalHookEvent {
-  /** The type of event (command, session, agent, gateway, etc.) */
-  type: InternalHookEventType;
-  /** The specific action within the type (e.g., 'new', 'reset', 'stop') */
-  action: string;
-  /** The session key this event relates to */
-  sessionKey: string;
-  /** Additional context specific to the event */
-  context: Record<string, unknown>;
-  /** Timestamp when the event occurred */
-  timestamp: Date;
-  /** Messages to send back to the user (hooks can push to this array) */
-  messages: string[];
-  /** Deferred actions to run after all handlers complete.
-   *  Handlers push async callbacks here; triggerInternalHook drains them
-   *  sequentially after the main handler loop. This eliminates FIFO
-   *  registration-order dependencies: a handler that runs early can defer
-   *  work that depends on context set by later handlers. */
-  postHookActions: Array<() => Promise<void> | void>;
-}
-
-export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
-
 /**
  * Registry of hook handlers by event key.
  *
