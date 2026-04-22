@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/api.js";
 import type {
   ChannelMessagingAdapter,
   ChannelPlugin,
@@ -60,12 +59,17 @@ const slackMessaging: ChannelMessagingAdapter = {
   },
 };
 
-const slackThreading = (() => {
-  if (!slackPlugin.threading) {
-    throw new Error("slack threading unavailable");
-  }
-  return slackPlugin.threading satisfies ChannelThreadingAdapter;
-})();
+function resolveSlackThreadTsCandidate(value?: string | number | null): string | undefined {
+  const normalized = typeof value === "number" ? String(value).trim() : value?.trim();
+  return normalized && /^\d+\.\d+$/.test(normalized) ? normalized : undefined;
+}
+
+const slackThreading: ChannelThreadingAdapter = {
+  resolveReplyTransport: ({ threadId, replyToId }) => ({
+    replyToId: resolveSlackThreadTsCandidate(replyToId) ?? resolveSlackThreadTsCandidate(threadId),
+    threadId: null,
+  }),
+};
 
 const mattermostThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId }) => ({
