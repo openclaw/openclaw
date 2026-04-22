@@ -166,7 +166,7 @@ Compare my gateway auth config with the docs and suggest the smallest fix.
 
 3. Use local shell commands for exact evidence and validation:
 
-```bash
+```text
 !openclaw config file
 !openclaw docs gateway auth token secretref
 !openclaw config validate
