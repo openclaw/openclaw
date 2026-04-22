@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { saveMediaBuffer } from "./store.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 
@@ -17,6 +18,7 @@ let stateDir = "";
 let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
+const savedInboundMediaIds: string[] = [];
 
 beforeAll(async () => {
   ({ loadWebMedia } = await import("./web-media.js"));
@@ -49,6 +51,13 @@ afterAll(async () => {
       recursive: true,
       force: true,
     });
+    await Promise.all(
+      savedInboundMediaIds.map((id) =>
+        fs.rm(path.join(stateDir, "media", "inbound", id), {
+          force: true,
+        }),
+      ),
+    );
   }
 });
 
@@ -162,6 +171,19 @@ describe("loadWebMedia", () => {
       localRoots: [workspaceDir],
       workspaceDir,
     });
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("hydrates media://inbound claim-check URIs to managed inbound files", async () => {
+    const saved = await saveMediaBuffer(Buffer.from(TINY_PNG_BASE64, "base64"), "image/png");
+
+    savedInboundMediaIds.push(saved.id);
+
+    const result = await loadWebMedia(`media://inbound/${saved.id}`, {
+      maxBytes: 1024 * 1024,
+    });
+
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
   });

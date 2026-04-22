@@ -27,6 +27,7 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "./mime.js";
+import { resolveMediaBufferPath } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -346,6 +347,15 @@ async function loadWebMediaInternal(
     readFile: readFileOverride,
     hostReadCapability = false,
   } = options;
+  if (/^media:\/\//i.test(mediaUrl)) {
+    const withoutScheme = mediaUrl.slice("media://".length);
+    const firstSlash = withoutScheme.indexOf("/");
+    const subdir = firstSlash >= 0 ? withoutScheme.slice(0, firstSlash) : withoutScheme;
+    const mediaId = firstSlash >= 0 ? withoutScheme.slice(firstSlash + 1) : "";
+    if (subdir === "inbound" && mediaId) {
+      mediaUrl = await resolveMediaBufferPath(mediaId, "inbound");
+    }
+  }
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
   mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
