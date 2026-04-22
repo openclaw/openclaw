@@ -347,6 +347,8 @@ node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budge
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackProvider '"azure-openai-responses"'
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackModel '"gpt-4o"'
 # Azure OpenAI provider for token budget fallback
+node --require /tmp/patch.js openclaw.mjs config set models.providers.azure-openai-responses.api '"openai-responses"'
+node --require /tmp/patch.js openclaw.mjs config set models.providers.azure-openai-responses.models '["gpt-4o"]'
 node --require /tmp/patch.js openclaw.mjs config set models.providers.azure-openai-responses.baseUrl "$AZURE_OPENAI_BASE_URL"
 node --require /tmp/patch.js openclaw.mjs config set models.providers.azure-openai-responses.apiKey "$AZURE_OPENAI_API_KEY"
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
