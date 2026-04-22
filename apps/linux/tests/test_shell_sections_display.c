@@ -28,6 +28,25 @@ DEFINE_SECTION_GETTER(section_sessions_get)
 DEFINE_SECTION_GETTER(section_cron_get)
 
 static void test_display_order_matches_expected_blocks(void) {
+    const ShellSectionGroup expected_groups[] = {
+        [SECTION_DASHBOARD] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_AGENTS] = SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL,
+        [SECTION_ABOUT] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_USAGE] = SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL,
+        [SECTION_GENERAL] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_CONFIG] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_CHANNELS] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_SKILLS] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_WORKFLOWS] = SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL,
+        [SECTION_CONTROL_ROOM] = SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL,
+        [SECTION_ENVIRONMENT] = SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC,
+        [SECTION_DIAGNOSTICS] = SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC,
+        [SECTION_LOGS] = SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC,
+        [SECTION_INSTANCES] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_DEBUG] = SHELL_SECTION_GROUP_EXTRAS_DEBUG,
+        [SECTION_SESSIONS] = SHELL_SECTION_GROUP_PARITY,
+        [SECTION_CRON] = SHELL_SECTION_GROUP_PARITY,
+    };
     const AppSection expected_order[] = {
         SECTION_DASHBOARD,
         SECTION_GENERAL,
@@ -50,7 +69,6 @@ static void test_display_order_matches_expected_blocks(void) {
     g_assert_cmpuint(shell_sections_display_count(), ==, G_N_ELEMENTS(expected_order));
 
     gboolean seen[SECTION_COUNT] = {FALSE};
-    gboolean extras_started = FALSE;
     for (gsize i = 0; i < shell_sections_display_count(); i++) {
         const ShellSectionDisplayEntry *entry = shell_sections_display_at(i);
         g_assert_nonnull(entry);
@@ -59,15 +77,9 @@ static void test_display_order_matches_expected_blocks(void) {
         g_assert_false(seen[entry->section]);
         seen[entry->section] = TRUE;
 
-        if (i < 9) {
-            g_assert_cmpint(entry->group, ==, SHELL_SECTION_GROUP_PARITY);
-        } else {
-            extras_started = TRUE;
-            g_assert_cmpint(entry->group, ==, SHELL_SECTION_GROUP_EXTRAS);
-        }
+        g_assert_cmpint(entry->group, ==, expected_groups[entry->section]);
     }
 
-    g_assert_true(extras_started);
     g_assert_false(seen[SECTION_CHAT]);
     for (int i = 0; i < SECTION_COUNT; i++) {
         if (i == SECTION_CHAT) continue;
@@ -85,6 +97,13 @@ static void test_display_entries_have_controllers(void) {
         g_assert_nonnull(entry);
         g_assert_nonnull(shell_sections_controller(entry->section));
     }
+}
+
+static void test_group_heading_contract(void) {
+    g_assert_null(shell_sections_group_heading(SHELL_SECTION_GROUP_PARITY));
+    g_assert_cmpstr(shell_sections_group_heading(SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL), ==, "Operational");
+    g_assert_cmpstr(shell_sections_group_heading(SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC), ==, "Diagnostics");
+    g_assert_cmpstr(shell_sections_group_heading(SHELL_SECTION_GROUP_EXTRAS_DEBUG), ==, "Developer");
 }
 
 static void test_debug_pane_gate(void) {
@@ -118,6 +137,8 @@ int main(int argc, char **argv) {
                     test_display_order_out_of_range_returns_null);
     g_test_add_func("/shell_sections_display/entries_have_controllers",
                     test_display_entries_have_controllers);
+    g_test_add_func("/shell_sections_display/group_heading_contract",
+                    test_group_heading_contract);
     g_test_add_func("/shell_sections_display/debug_pane_gate",
                     test_debug_pane_gate);
 

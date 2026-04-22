@@ -151,6 +151,24 @@ static GtkWidget* build_sidebar_separator_row(void) {
     return row;
 }
 
+static GtkWidget* build_sidebar_heading_row(const char *title) {
+    GtkWidget *label = gtk_label_new(title);
+    gtk_widget_add_css_class(label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gtk_widget_set_margin_start(label, 16);
+    gtk_widget_set_margin_end(label, 8);
+    gtk_widget_set_margin_top(label, 8);
+    gtk_widget_set_margin_bottom(label, 4);
+
+    GtkWidget *row = gtk_list_box_row_new();
+    gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(row), FALSE);
+    gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), FALSE);
+    gtk_widget_set_focusable(row, FALSE);
+    gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), label);
+
+    return row;
+}
+
 static GtkWidget* build_sidebar(void) {
     GtkWidget *sidebar_shell = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
@@ -175,8 +193,19 @@ static GtkWidget* build_sidebar(void) {
         if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) continue;
 
         if (have_previous_group && previous_group != entry->group) {
-            GtkWidget *separator_row = build_sidebar_separator_row();
-            gtk_list_box_append(GTK_LIST_BOX(sidebar_list), separator_row);
+            if (previous_group == SHELL_SECTION_GROUP_PARITY) {
+                GtkWidget *separator_row = build_sidebar_separator_row();
+                gtk_list_box_append(GTK_LIST_BOX(sidebar_list), separator_row);
+            }
+        }
+
+        if ((!have_previous_group || previous_group != entry->group)
+            && entry->group != SHELL_SECTION_GROUP_PARITY) {
+            const char *heading = shell_sections_group_heading(entry->group);
+            if (heading && heading[0] != '\0') {
+                GtkWidget *heading_row = build_sidebar_heading_row(heading);
+                gtk_list_box_append(GTK_LIST_BOX(sidebar_list), heading_row);
+            }
         }
 
         GtkWidget *row_content = build_sidebar_row(section);
