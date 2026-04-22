@@ -80,6 +80,9 @@ function listChannelDoctorEntries(
   channelIds: readonly string[],
   context: ChannelDoctorLookupContext,
 ): ChannelDoctorEntry[] {
+  if (channelIds.length === 0) {
+    return [];
+  }
   const byId = new Map<string, ChannelDoctorEntry>();
   const selectedIds = new Set(channelIds);
   const readOnlyPlugins = safeListReadOnlyChannelPlugins(context).filter((plugin) =>

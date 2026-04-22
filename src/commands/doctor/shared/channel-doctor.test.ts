@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorEmptyAllowlistExtraWarnings,
+  collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
 } from "./channel-doctor.js";
 
@@ -47,6 +48,22 @@ describe("channel doctor compatibility mutations", () => {
 
     expect(result).toEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
+  });
+
+  it("skips plugin discovery when only channel defaults are configured", async () => {
+    const result = await collectChannelDoctorStaleConfigMutations({
+      channels: {
+        defaults: {
+          enabled: true,
+        },
+      },
+    } as never);
+
+    expect(result).toEqual([]);
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
+    expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
+    expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
   it("uses read-only doctor adapters for configured channel ids", () => {
