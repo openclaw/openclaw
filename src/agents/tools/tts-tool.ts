@@ -10,7 +10,7 @@ import { readStringParam } from "./common.js";
 const TtsToolSchema = Type.Object({
   text: Type.String({ description: "Text to convert to speech." }),
   channel: Type.Optional(
-    Type.String({ description: "Optional channel id to pick output format (e.g. telegram)." }),
+    Type.String({ description: "Optional channel id to pick output format." }),
   ),
 });
 
