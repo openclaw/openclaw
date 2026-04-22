@@ -16,6 +16,12 @@
 
 import { describe, expect, it } from "vitest";
 import { qqbotPlugin } from "./channel.js";
+import { registerQQBotFrameworkCommands } from "./bridge/commands/framework-registration.js";
+import {
+  getFrameworkCommands,
+  matchSlashCommand,
+  registerApproveRuntimeGetter,
+} from "./engine/commands/slash-commands-impl.js";
 
 // ---------------------------------------------------------------------------
 // qqbot: prefix normalization for inbound commandAuthorized
@@ -58,5 +64,100 @@ describe("qqbot: prefix normalization for inbound commandAuthorized", () => {
 
   it("authorizes any sender when allowFrom contains wildcard *", () => {
     expect(resolveInboundCommandAuthorized(["*"], "ANYONE")).toBe(true);
+  });
+});
+
+describe("qqbot sensitive slash commands", () => {
+  type CapturedFrameworkCommand = {
+    name: string;
+    handler: (ctx: {
+      args?: string;
+      from?: string;
+      config: Record<string, unknown>;
+      accountId?: string;
+      senderId?: string;
+      messageId?: string;
+      channel?: string;
+    }) => Promise<{ text: string }>;
+  };
+
+  it("/bot-approve is framework-registered and does not execute in pre-dispatch", async () => {
+    const frameworkCommands = getFrameworkCommands().map((cmd) => cmd.name);
+    expect(frameworkCommands).toContain("bot-approve");
+
+    const configState: Record<string, unknown> = {};
+    registerApproveRuntimeGetter(() => ({
+      config: {
+        loadConfig: () => configState,
+        writeConfigFile: async (cfg) => {
+          for (const key of Object.keys(configState)) {
+            delete configState[key];
+          }
+          Object.assign(configState, cfg as Record<string, unknown>);
+        },
+      },
+    }));
+
+    const result = await matchSlashCommand({
+      type: "c2c",
+      senderId: "USER123",
+      messageId: "msg-1",
+      eventTimestamp: new Date(0).toISOString(),
+      receivedAt: 0,
+      rawContent: "/bot-approve off",
+      args: "",
+      accountId: "account-1",
+      appId: "app-1",
+      commandAuthorized: false,
+      queueSnapshot: {
+        totalPending: 0,
+        activeUsers: 0,
+        maxConcurrentUsers: 0,
+        senderPending: 0,
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(configState).toEqual({});
+  });
+
+  it("/bot-approve keeps usage help on the framework-auth path", async () => {
+    let registeredFrameworkCommand: CapturedFrameworkCommand | undefined;
+
+    registerApproveRuntimeGetter(() => ({
+      config: {
+        loadConfig: () => ({}),
+        writeConfigFile: async () => {},
+      },
+    }));
+
+    registerQQBotFrameworkCommands({
+      registerCommand(command: CapturedFrameworkCommand) {
+        if (command.name === "bot-approve") {
+          registeredFrameworkCommand = command;
+        }
+      },
+    } as never);
+
+    expect(registeredFrameworkCommand).toBeTruthy();
+
+    const result = await registeredFrameworkCommand?.handler({
+      args: "?",
+      from: "qqbot:c2c:USER123",
+      config: {
+        channels: {
+          qqbot: {
+            appId: "123456",
+          },
+        },
+      },
+      accountId: "default",
+      senderId: "USER123",
+      messageId: "msg-1",
+      channel: "qqbot",
+    });
+
+    expect(result?.text).toContain("/bot-approve on");
+    expect(result?.text).toContain("/bot-approve status");
   });
 });

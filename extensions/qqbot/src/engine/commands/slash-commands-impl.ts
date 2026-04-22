@@ -746,6 +746,7 @@ export function registerApproveRuntimeGetter(
 registerCommand({
   name: "bot-approve",
   description: "管理命令执行审批配置",
+  requireAuth: true,
   usage: [
     `/bot-approve            查看操作指引`,
     `/bot-approve on         开启审批（白名单模式，推荐）`,
@@ -756,6 +757,20 @@ registerCommand({
   ].join("\n"),
   handler: async (ctx) => {
     const arg = ctx.args.trim().toLowerCase();
+    const formatUsage = () =>
+      [
+        `🔐 命令执行审批配置`,
+        ``,
+        `<qqbot-cmd-input text="/bot-approve on" show="/bot-approve on"/> 开启审批（白名单模式）`,
+        `<qqbot-cmd-input text="/bot-approve off" show="/bot-approve off"/> 关闭审批`,
+        `<qqbot-cmd-input text="/bot-approve always" show="/bot-approve always"/> 严格模式`,
+        `<qqbot-cmd-input text="/bot-approve reset" show="/bot-approve reset"/> 恢复默认`,
+        `<qqbot-cmd-input text="/bot-approve status" show="/bot-approve status"/> 查看当前配置`,
+      ].join("\n");
+
+    if (arg === "?") {
+      return formatUsage();
+    }
 
     let runtime: ReturnType<NonNullable<typeof _runtimeGetter>>;
     try {
@@ -827,15 +842,7 @@ registerCommand({
 
     // 无参数：操作指引
     if (!arg) {
-      return [
-        `🔐 命令执行审批配置`,
-        ``,
-        `<qqbot-cmd-input text="/bot-approve on" show="/bot-approve on"/> 开启审批（白名单模式）`,
-        `<qqbot-cmd-input text="/bot-approve off" show="/bot-approve off"/> 关闭审批`,
-        `<qqbot-cmd-input text="/bot-approve always" show="/bot-approve always"/> 严格模式`,
-        `<qqbot-cmd-input text="/bot-approve reset" show="/bot-approve reset"/> 恢复默认`,
-        `<qqbot-cmd-input text="/bot-approve status" show="/bot-approve status"/> 查看当前配置`,
-      ].join("\n");
+      return formatUsage();
     }
 
     // status: 查看当前配置
