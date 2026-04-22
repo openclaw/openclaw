@@ -53,6 +53,7 @@ export const BOUNDARY_CHECKS = [
   ],
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
   ["check:no-large-files", "pnpm", ["check:no-large-files"]],
+  ["check:no-unjustified-exec", "pnpm", ["check:no-unjustified-exec"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
 export function resolveConcurrency(value, fallback = 4) {
