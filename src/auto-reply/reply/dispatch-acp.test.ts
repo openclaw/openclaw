@@ -98,7 +98,14 @@ const ttsMocks = vi.hoisted(() => ({
       };
     },
   ),
-  resolveStatusTtsSnapshot: vi.fn((_params: { cfg: OpenClawConfig; sessionAuto?: string }) => ({
+  resolveStatusTtsSnapshot: vi.fn<
+    (params: { cfg: OpenClawConfig; sessionAuto?: string }) => {
+      autoMode: string;
+      provider: string;
+      maxLength: number;
+      summarize: boolean;
+    } | null
+  >((_params: { cfg: OpenClawConfig; sessionAuto?: string }) => ({
     autoMode: "always",
     provider: "auto",
     maxLength: 1500,

@@ -89,6 +89,7 @@ export type MaybeApplyTtsToPayloadParams = {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   channel?: string;
+  accountId?: string;
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;

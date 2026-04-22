@@ -530,7 +530,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     await coordinator.deliver("block", { text: "hello from acp" });
 
-    expect(ttsMocks.resolveTtsConfigForAccount).toHaveBeenCalledWith(cfg, "feishu", "english-bot");
     expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "block",

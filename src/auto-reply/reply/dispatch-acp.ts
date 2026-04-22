@@ -189,7 +189,7 @@ async function finalizeAcpTurnOutput(params: {
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
   const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
-    cfg: ttsConfig.sourceConfig,
+    cfg: ttsConfig.sourceConfig ?? params.cfg,
     sessionAuto: params.sessionTtsAuto,
   });
   const canAttemptFinalTts =

@@ -100,7 +100,7 @@ async function maybeApplyAcpTts(params: {
   }
   const ttsConfig = resolveTtsConfigForAccount(params.cfg, params.channel, params.accountId);
   const ttsStatus = resolveStatusTtsSnapshot({
-    cfg: ttsConfig.sourceConfig,
+    cfg: ttsConfig.sourceConfig ?? params.cfg,
     sessionAuto: params.ttsAuto,
   });
   if (!ttsStatus) {
