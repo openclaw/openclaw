@@ -294,6 +294,97 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("recomputes group model-selection callback auth from runtime command config", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-group-model-authz-runtime-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      let currentConfig = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+        commands: {
+          allowFrom: {
+            telegram: ["999"],
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            capabilities: { inlineButtons: "group" },
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      loadConfig.mockImplementation(() => currentConfig);
+      createTelegramBot({
+        token: "tok",
+        config: currentConfig,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      currentConfig = {
+        ...currentConfig,
+        commands: {
+          allowFrom: {
+            telegram: ["9"],
+          },
+        },
+      };
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-group-model-authz-runtime-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 999, first_name: "Mallory", username: "mallory" },
+          message: {
+            chat: { id: -100999, type: "supergroup", title: "Test Group" },
+            date: 1736380800,
+            message_id: 22,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).not.toHaveBeenCalled();
+      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-runtime-1");
+    } finally {
+      loadConfig.mockReset();
+      loadConfig.mockReturnValue({
+        agents: {
+          defaults: {
+            envelopeTimezone: "utc",
+          },
+        },
+        channels: {
+          telegram: { dmPolicy: "open", allowFrom: ["*"] },
+        },
+      });
+      await rm(storePath, { force: true });
+    }
+  });
+
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();

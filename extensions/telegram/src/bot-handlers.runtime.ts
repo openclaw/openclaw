@@ -17,7 +17,7 @@ import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "openclaw/plugin-sdk/config-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -794,8 +794,9 @@ export const registerTelegramHandlers = ({
     senderId: string;
     senderUsername: string;
     context: TelegramEventAuthorizationContext;
+    cfg: OpenClawConfig;
   }): boolean => {
-    const { chatId, isGroup, senderId, senderUsername, context } = params;
+    const { chatId, isGroup, senderId, senderUsername, context, cfg } = params;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
     const dmAllowFrom = context.groupAllowOverride ?? allowFrom;
     const commandsAllowFrom = cfg.commands?.allowFrom;
@@ -1534,6 +1535,7 @@ export const registerTelegramHandlers = ({
             senderId,
             senderUsername,
             context: eventAuthContext,
+            cfg: runtimeCfg,
           })
         ) {
           logVerbose(
