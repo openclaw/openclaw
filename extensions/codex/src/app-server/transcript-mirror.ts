@@ -52,7 +52,10 @@ export async function mirrorCodexAppServerTranscript(params: {
       const messageToAppend =
         idempotencyKey &&
         (!("idempotencyKey" in nextMessage) || typeof nextMessage.idempotencyKey !== "string")
-          ? ({ ...nextMessage, idempotencyKey } as Parameters<SessionManager["appendMessage"]>[0])
+          ? ({
+              ...(nextMessage as unknown as Record<string, unknown>),
+              idempotencyKey,
+            } as unknown as Parameters<SessionManager["appendMessage"]>[0])
           : (nextMessage as Parameters<SessionManager["appendMessage"]>[0]);
       sessionManager.appendMessage(messageToAppend);
       if (idempotencyKey) {

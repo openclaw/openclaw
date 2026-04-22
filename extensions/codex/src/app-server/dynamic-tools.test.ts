@@ -191,6 +191,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const bridge = createBridgeWithToolResult("exec", {
       content: [{ type: "text", text: "raw output" }],
+      details: {},
     });
 
     const result = await bridge.handleToolCall({
@@ -212,6 +213,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const bridge = createBridgeWithToolResult("exec", {
       content: [{ type: "text", text: "done" }],
+      details: {},
     });
 
     await bridge.handleToolCall({
@@ -228,9 +230,10 @@ describe("createCodexDynamicToolBridge", () => {
           toolName: "exec",
           toolCallId: "call-1",
           params: { command: "pwd" },
-          result: {
+          result: expect.objectContaining({
             content: [{ type: "text", text: "done" }],
-          },
+            details: {},
+          }),
         }),
         expect.objectContaining({
           toolName: "exec",

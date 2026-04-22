@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../../../../src/agents/test-helpers/agent-message-fixtures.js";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../../../src/plugins/hook-runner-global.js";
@@ -32,17 +37,23 @@ describe("mirrorCodexAppServerTranscript", () => {
       sessionFile,
       sessionKey: "session-1",
       messages: [
-        { role: "user", content: "hello", timestamp: Date.now() },
-        { role: "assistant", content: "hi there", timestamp: Date.now() + 1 },
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "hello" }],
+          timestamp: Date.now(),
+        }),
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "hi there" }],
+          timestamp: Date.now() + 1,
+        }),
       ],
       idempotencyScope: "scope-1",
     });
 
     const raw = await fs.readFile(sessionFile, "utf8");
     expect(raw).toContain('"role":"user"');
-    expect(raw).toContain('"content":"hello"');
+    expect(raw).toContain('"content":[{"type":"text","text":"hello"}]');
     expect(raw).toContain('"role":"assistant"');
-    expect(raw).toContain('"content":"hi there"');
+    expect(raw).toContain('"content":[{"type":"text","text":"hi there"}]');
     expect(raw).toContain('"idempotencyKey":"scope-1:user:0"');
     expect(raw).toContain('"idempotencyKey":"scope-1:assistant:1"');
   });
@@ -50,8 +61,14 @@ describe("mirrorCodexAppServerTranscript", () => {
   it("deduplicates app-server turn mirrors by idempotency scope", async () => {
     const sessionFile = await createTempSessionFile();
     const messages = [
-      { role: "user", content: "hello", timestamp: Date.now() },
-      { role: "assistant", content: "hi there", timestamp: Date.now() + 1 },
+      makeAgentUserMessage({
+        content: [{ type: "text", text: "hello" }],
+        timestamp: Date.now(),
+      }),
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "hi there" }],
+        timestamp: Date.now() + 1,
+      }),
     ] as const;
 
     await mirrorCodexAppServerTranscript({
@@ -80,8 +97,11 @@ describe("mirrorCodexAppServerTranscript", () => {
       createMockPluginRegistry([
         {
           hookName: "before_message_write",
-          handler: (event: { message: { role: string; content: string } }) => ({
-            message: { ...event.message, content: `${event.message.content} [hooked]` },
+          handler: (event) => ({
+            message: castAgentMessage({
+              ...((event as { message: unknown }).message as Record<string, unknown>),
+              content: [{ type: "text", text: "hello [hooked]" }],
+            }),
           }),
         },
       ]),
@@ -91,12 +111,17 @@ describe("mirrorCodexAppServerTranscript", () => {
     await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "session-1",
-      messages: [{ role: "assistant", content: "hello", timestamp: Date.now() }],
+      messages: [
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "hello" }],
+          timestamp: Date.now(),
+        }),
+      ],
       idempotencyScope: "scope-1",
     });
 
     const raw = await fs.readFile(sessionFile, "utf8");
-    expect(raw).toContain('"content":"hello [hooked]"');
+    expect(raw).toContain('"content":[{"type":"text","text":"hello [hooked]"}]');
     expect(raw).toContain('"idempotencyKey":"scope-1:assistant:0"');
   });
 
@@ -114,7 +139,12 @@ describe("mirrorCodexAppServerTranscript", () => {
     await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "session-1",
-      messages: [{ role: "assistant", content: "should not persist", timestamp: Date.now() }],
+      messages: [
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "should not persist" }],
+          timestamp: Date.now(),
+        }),
+      ],
       idempotencyScope: "scope-1",
     });
 
