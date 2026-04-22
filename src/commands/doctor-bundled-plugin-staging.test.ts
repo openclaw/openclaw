@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
@@ -20,7 +21,8 @@ type WriteExtensionParams = {
   id: string;
   stageRuntimeDependencies: boolean;
   dependencies?: Record<string, string>;
-  hasNodeModules?: boolean;
+  optionalDependencies?: Record<string, string>;
+  stagedSentinels?: string[];
   packageJsonBody?: string;
 };
 
@@ -34,6 +36,9 @@ function writeExtension(params: WriteExtensionParams): void {
         name: `@openclaw/${params.id}`,
         version: "2026.4.21",
         dependencies: params.dependencies ?? { "example-dep": "^1.0.0" },
+        ...(params.optionalDependencies
+          ? { optionalDependencies: params.optionalDependencies }
+          : {}),
         openclaw: {
           bundle: { stageRuntimeDependencies: params.stageRuntimeDependencies },
         },
@@ -42,38 +47,47 @@ function writeExtension(params: WriteExtensionParams): void {
       2,
     );
   fs.writeFileSync(path.join(extDir, "package.json"), body);
-  if (params.hasNodeModules) {
-    fs.mkdirSync(path.join(extDir, "node_modules"), { recursive: true });
+  if (params.stagedSentinels && params.stagedSentinels.length > 0) {
+    for (const depName of params.stagedSentinels) {
+      const segments = depName.split("/");
+      const sentinelDir = path.join(extDir, "node_modules", ...segments);
+      fs.mkdirSync(sentinelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sentinelDir, "package.json"),
+        JSON.stringify({ name: depName, version: "1.0.0" }),
+      );
+    }
   }
 }
 
 describe("discoverMissingBundledPluginStaging", () => {
-  it("reports extensions that declare stageRuntimeDependencies:true but have no node_modules", () => {
+  it("reports extensions that declare stageRuntimeDependencies:true but have no staged deps", () => {
     const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
     writeExtension({
       extensionsDir,
       id: "slack",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
+      dependencies: { "@slack/web-api": "^7.0.0" },
     });
     writeExtension({
       extensionsDir,
       id: "discord",
       stageRuntimeDependencies: true,
-      hasNodeModules: true,
+      dependencies: { "discord.js": "^14.0.0" },
+      stagedSentinels: ["discord.js"],
     });
     writeExtension({
       extensionsDir,
       id: "qa-channel",
       stageRuntimeDependencies: false,
-      hasNodeModules: false,
     });
 
     const result = discoverMissingBundledPluginStaging({ extensionsDir });
 
     expect(result.missing.map((entry) => entry.id)).toEqual(["slack"]);
-    // Extensions that don't declare stageRuntimeDependencies are not checked.
     expect(result.checked.map((entry) => entry.id).toSorted()).toEqual(["discord", "slack"]);
+    expect(result.checked.find((entry) => entry.id === "discord")?.hasStagedDeps).toBe(true);
+    expect(result.checked.find((entry) => entry.id === "slack")?.hasStagedDeps).toBe(false);
   });
 
   it("skips stage=true extensions that declare zero runtime dependencies", () => {
@@ -83,13 +97,48 @@ describe("discoverMissingBundledPluginStaging", () => {
       id: "no-deps",
       stageRuntimeDependencies: true,
       dependencies: {},
-      hasNodeModules: false,
     });
 
     const result = discoverMissingBundledPluginStaging({ extensionsDir });
 
     expect(result.missing).toEqual([]);
     expect(result.checked.map((entry) => entry.id)).toEqual(["no-deps"]);
+  });
+
+  it("counts optionalDependencies toward the declared runtime-dep set", () => {
+    const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
+    writeExtension({
+      extensionsDir,
+      id: "with-optional",
+      stageRuntimeDependencies: true,
+      dependencies: {},
+      optionalDependencies: { "only-optional-dep": "^1.0.0" },
+    });
+
+    const result = discoverMissingBundledPluginStaging({ extensionsDir });
+
+    // Plugin with zero `dependencies` but non-zero `optionalDependencies`
+    // is still eligible for staging.
+    expect(result.missing.map((entry) => entry.id)).toEqual(["with-optional"]);
+    expect(result.checked[0]?.dependencyCount).toBe(1);
+  });
+
+  it("treats a plugin with node_modules but no dep sentinels as not staged", () => {
+    // Simulates a failed/partial install that left an empty `node_modules/`
+    // behind: `existsSync(node_modules)` is true but the declared deps'
+    // `package.json` sentinels are missing.
+    const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
+    writeExtension({
+      extensionsDir,
+      id: "partial",
+      stageRuntimeDependencies: true,
+      dependencies: { "@slack/web-api": "^7.0.0" },
+    });
+    fs.mkdirSync(path.join(extensionsDir, "partial", "node_modules"), { recursive: true });
+
+    const result = discoverMissingBundledPluginStaging({ extensionsDir });
+
+    expect(result.missing.map((entry) => entry.id)).toEqual(["partial"]);
   });
 
   it("returns empty result when extensions dir does not exist", () => {
@@ -108,7 +157,6 @@ describe("discoverMissingBundledPluginStaging", () => {
       extensionsDir,
       id: "slack",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
     const brokenDir = path.join(extensionsDir, "broken");
     fs.mkdirSync(brokenDir, { recursive: true });
@@ -125,9 +173,7 @@ describe("discoverMissingBundledPluginStaging", () => {
       extensionsDir,
       id: "slack",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
-    // Craft an oversize package.json: 1.5MB of padding inside a large string field.
     const padding = "x".repeat(1_500_000);
     const oversize = JSON.stringify({
       name: "@openclaw/giant",
@@ -140,7 +186,6 @@ describe("discoverMissingBundledPluginStaging", () => {
       extensionsDir,
       id: "giant",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
       packageJsonBody: oversize,
     });
 
@@ -148,6 +193,36 @@ describe("discoverMissingBundledPluginStaging", () => {
 
     expect(result.missing.map((entry) => entry.id)).toEqual(["slack"]);
     expect(result.checked.map((entry) => entry.id)).toEqual(["slack"]);
+  });
+
+  it("skips symlinked entries that point outside the extensions directory", () => {
+    if (process.platform === "win32") {
+      return; // Symlink creation on Windows needs admin; skip there.
+    }
+    const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
+    const outsideTarget = path.join(os.tmpdir(), `ocl-outside-${Date.now()}`);
+    fs.mkdirSync(outsideTarget, { recursive: true });
+    tempDirs.push(outsideTarget);
+    // Make the outside target look like a real extension dir.
+    fs.writeFileSync(
+      path.join(outsideTarget, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/attacker",
+        dependencies: { evil: "^1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      }),
+    );
+    fs.symlinkSync(outsideTarget, path.join(extensionsDir, "attacker"), "dir");
+    writeExtension({
+      extensionsDir,
+      id: "slack",
+      stageRuntimeDependencies: true,
+    });
+
+    const result = discoverMissingBundledPluginStaging({ extensionsDir });
+
+    expect(result.missing.map((entry) => entry.id)).toEqual(["slack"]);
+    expect(result.checked.map((entry) => entry.id)).not.toContain("attacker");
   });
 });
 
@@ -158,13 +233,11 @@ describe("repairBundledPluginStaging", () => {
       extensionsDir,
       id: "codex",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
     writeExtension({
       extensionsDir,
       id: "google",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
 
     const invocations: Array<{ command: string; args: string[]; cwd: string }> = [];
@@ -184,6 +257,7 @@ describe("repairBundledPluginStaging", () => {
     expect(invocations.map((i) => path.basename(i.cwd)).toSorted()).toEqual(["codex", "google"]);
     expect(result.repaired.map((entry) => entry.id).toSorted()).toEqual(["codex", "google"]);
     expect(result.failed).toEqual([]);
+    expect(result.skipped).toEqual([]);
   });
 
   it("passes --ignore-scripts to npm (via install --omit=dev)", async () => {
@@ -192,7 +266,6 @@ describe("repairBundledPluginStaging", () => {
       extensionsDir,
       id: "slack",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
 
     const invocations: Array<{ command: string; args: string[] }> = [];
@@ -216,7 +289,6 @@ describe("repairBundledPluginStaging", () => {
       extensionsDir,
       id: "codex",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
 
     const invocations: Array<{ command: string; args: string[] }> = [];
@@ -232,17 +304,15 @@ describe("repairBundledPluginStaging", () => {
     });
 
     expect(invocations[0].command).toBe("/opt/homebrew/bin/npm");
-    // Args are still manager-specific (npm omits dev via --omit=dev).
     expect(invocations[0].args).toContain("--omit=dev");
   });
 
-  it("passes lockfile-disabling env vars to the install subprocess", async () => {
+  it("passes deterministic npm_config_* env to the install subprocess including audit/fund off", async () => {
     const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
     writeExtension({
       extensionsDir,
       id: "codex",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
 
     const received: Array<NodeJS.ProcessEnv | undefined> = [];
@@ -261,6 +331,8 @@ describe("repairBundledPluginStaging", () => {
     expect(env?.npm_config_package_lock).toBe("false");
     expect(env?.npm_config_save).toBe("false");
     expect(env?.npm_config_legacy_peer_deps).toBe("true");
+    expect(env?.npm_config_audit).toBe("false");
+    expect(env?.npm_config_fund).toBe("false");
   });
 
   it("composes baseEnv under the staging env overlays so caller-provided PATH/corepack settings flow through", async () => {
@@ -269,7 +341,6 @@ describe("repairBundledPluginStaging", () => {
       extensionsDir,
       id: "codex",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
 
     const received: Array<NodeJS.ProcessEnv | undefined> = [];
@@ -279,7 +350,6 @@ describe("repairBundledPluginStaging", () => {
       baseEnv: {
         PATH: "/trusted/bin:/usr/bin",
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        npm_config_global: "true",
       },
       runCommand: async ({ cwd, env }) => {
         received.push(env);
@@ -289,12 +359,8 @@ describe("repairBundledPluginStaging", () => {
     });
 
     const env = received[0];
-    // Base env PATH / corepack settings survive.
     expect(env?.PATH).toBe("/trusted/bin:/usr/bin");
     expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
-    // Nested-install leakage still gets stripped from the base env.
-    expect(env?.npm_config_global).toBeUndefined();
-    // Staging-specific overlays are applied on top.
     expect(env?.npm_config_package_lock).toBe("false");
   });
 
@@ -304,20 +370,17 @@ describe("repairBundledPluginStaging", () => {
       extensionsDir,
       id: "slack",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
     writeExtension({
       extensionsDir,
       id: "codex",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
 
     const invocations: string[] = [];
     await repairBundledPluginStaging({
       extensionsDir,
       packageManager: "pnpm",
-      // Explicit list with only one entry; repair should not rescan and find the second.
       missing: [
         {
           id: "codex",
@@ -335,13 +398,44 @@ describe("repairBundledPluginStaging", () => {
     expect(invocations).toEqual(["codex"]);
   });
 
+  it("skips caller-provided entries whose path escapes the extensions directory", async () => {
+    const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
+    writeExtension({
+      extensionsDir,
+      id: "codex",
+      stageRuntimeDependencies: true,
+    });
+    const outsideDir = makeTrackedTempDir("doctor-outside", tempDirs);
+
+    const invocations: string[] = [];
+    const result = await repairBundledPluginStaging({
+      extensionsDir,
+      packageManager: "pnpm",
+      missing: [
+        {
+          id: "attacker",
+          // Path that resolves outside the extensionsDir — must be rejected.
+          expectedPath: path.join(outsideDir, "node_modules"),
+          dependencyCount: 1,
+        },
+      ],
+      runCommand: async ({ cwd }) => {
+        invocations.push(cwd);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(invocations).toEqual([]);
+    expect(result.repaired).toEqual([]);
+    expect(result.skipped.map((entry) => entry.id)).toEqual(["attacker"]);
+  });
+
   it("records a failed repair when the installer exits non-zero", async () => {
     const extensionsDir = makeTrackedTempDir("doctor-bundled-plugin-staging", tempDirs);
     writeExtension({
       extensionsDir,
       id: "codex",
       stageRuntimeDependencies: true,
-      hasNodeModules: false,
     });
 
     const result = await repairBundledPluginStaging({
@@ -361,12 +455,17 @@ describe("repairBundledPluginStaging", () => {
 });
 
 describe("createBundledPluginStagingInstallEnv", () => {
-  it("strips nested npm install context and sets deterministic install flags", () => {
+  it("shadows nested npm install context even when baseEnv has those keys set", () => {
+    // runCommandWithTimeout's resolveCommandEnv merges process.env under the
+    // caller's env. A plain `delete` would be silently restored. Setting the
+    // stripped keys to `undefined` shadows the inherited value so the merge's
+    // undefined-filter drops them from the final subprocess env.
     const sourceEnv: NodeJS.ProcessEnv = {
       PATH: "/usr/bin",
       npm_config_global: "true",
       npm_config_location: "global",
       npm_config_prefix: "/opt/homebrew",
+      NPM_CONFIG_GLOBAL: "true",
     };
 
     const result = createBundledPluginStagingInstallEnv(sourceEnv);
@@ -375,9 +474,12 @@ describe("createBundledPluginStagingInstallEnv", () => {
     expect(result.npm_config_global).toBeUndefined();
     expect(result.npm_config_location).toBeUndefined();
     expect(result.npm_config_prefix).toBeUndefined();
+    expect(result.NPM_CONFIG_GLOBAL).toBeUndefined();
     expect(result.npm_config_package_lock).toBe("false");
     expect(result.npm_config_save).toBe("false");
     expect(result.npm_config_legacy_peer_deps).toBe("true");
+    expect(result.npm_config_audit).toBe("false");
+    expect(result.npm_config_fund).toBe("false");
   });
 });
 
@@ -388,6 +490,7 @@ describe("summarizeRepairForUpdateStep", () => {
       repair: {
         repaired: [{ id: "codex" }, { id: "google" }],
         failed: [],
+        skipped: [],
       },
     });
 
@@ -396,10 +499,10 @@ describe("summarizeRepairForUpdateStep", () => {
     expect(result.stdoutTail).toBe("staged 2 of 2: codex, google");
   });
 
-  it("reports step OK with failed entries in stderrTail when repair was partial", () => {
-    // Partial success: core binary is installed, some plugins couldn't be
-    // staged. Failed plugins are no worse off than pre-update, so the update
-    // as a whole should not flip to `status: "error"`.
+  it("reports step OK with failures visible in stdoutTail on partial success", () => {
+    // Partial-success → stepExitCode=0 to avoid flipping the whole update to
+    // error. But the progress renderer hides stderrTail on success, so the
+    // failure summary must go into stdoutTail to stay visible on TTY.
     const result = summarizeRepairForUpdateStep({
       attempted: 3,
       repair: {
@@ -408,12 +511,31 @@ describe("summarizeRepairForUpdateStep", () => {
           { id: "google", exitCode: 1, detail: "network timeout" },
           { id: "webhooks", exitCode: 1, detail: "ENOSPC" },
         ],
+        skipped: [],
       },
     });
 
     expect(result.stepExitCode).toBe(0);
-    expect(result.stdoutTail).toBe("staged 1 of 3: codex");
-    expect(result.stderrTail).toBe("google: network timeout\nwebhooks: ENOSPC");
+    expect(result.stderrTail).toBeNull();
+    expect(result.stdoutTail).toContain("staged 1 of 3: codex");
+    expect(result.stdoutTail).toContain("2 plugin(s) not staged");
+    expect(result.stdoutTail).toContain("google: network timeout");
+    expect(result.stdoutTail).toContain("webhooks: ENOSPC");
+    expect(result.stdoutTail).toContain("openclaw doctor");
+  });
+
+  it("surfaces skipped entries (e.g. symlink refusals) alongside failures", () => {
+    const result = summarizeRepairForUpdateStep({
+      attempted: 2,
+      repair: {
+        repaired: [{ id: "codex" }],
+        failed: [],
+        skipped: [{ id: "attacker", reason: "not contained within extensionsDir" }],
+      },
+    });
+
+    expect(result.stepExitCode).toBe(0);
+    expect(result.stdoutTail).toContain("attacker: skipped");
   });
 
   it("reports step error when work was attempted and zero plugins were repaired", () => {
@@ -425,6 +547,7 @@ describe("summarizeRepairForUpdateStep", () => {
           { id: "codex", exitCode: 1, detail: "network timeout" },
           { id: "google", exitCode: 1, detail: "network timeout" },
         ],
+        skipped: [],
       },
     });
 
