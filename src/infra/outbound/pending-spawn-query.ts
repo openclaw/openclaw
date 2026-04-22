@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 /**
@@ -19,6 +20,21 @@ export function registerPendingSpawnedChildrenQuery(
   pendingSpawnedChildrenQuery = query;
 }
 
+function summarizeError(err: unknown): { name: string; message: string } {
+  if (err instanceof Error) {
+    return { name: err.name, message: err.message };
+  }
+  return { name: "Unknown", message: typeof err === "string" ? err : "non-error throw" };
+}
+
+function hashSessionKey(key: string | undefined): string | undefined {
+  const trimmed = key?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+}
+
 export function resolvePendingSpawnedChildren(sessionKey: string | undefined): boolean {
   if (!pendingSpawnedChildrenQuery) {
     return false;
@@ -29,7 +45,10 @@ export function resolvePendingSpawnedChildren(sessionKey: string | undefined): b
     const now = Date.now();
     if (now - lastThrowLogAt >= THROW_LOG_INTERVAL_MS) {
       lastThrowLogAt = now;
-      log.warn("pending-spawn query threw; defaulting to false", { err, sessionKey });
+      log.warn("pending-spawn query threw; defaulting to false", {
+        err: summarizeError(err),
+        sessionKeyHash: hashSessionKey(sessionKey),
+      });
     }
     return false;
   }

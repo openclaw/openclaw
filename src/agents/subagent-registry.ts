@@ -929,11 +929,16 @@ export function initSubagentRegistry() {
 // Let the shared outbound plan treat bare silent replies as dropped (instead
 // of rewriting them to visible fallback text) when the parent session has at
 // least one pending spawned child whose completion will deliver the real
-// reply. Runtime-enforced, so it does not rely on agent prompt compliance.
+// reply. Uses the pending-descendant count so runs that have ended but whose
+// announce/cleanup is still in flight continue to suppress rewriting; without
+// this the window between `completeSubagentRun` setting `endedAt` and
+// `startSubagentAnnounceCleanupFlow` finishing could briefly re-enable
+// fallback chatter. Runtime-enforced, so it does not rely on agent prompt
+// compliance.
 registerPendingSpawnedChildrenQuery((sessionKey) => {
   const key = sessionKey?.trim();
   if (!key) {
     return false;
   }
-  return countActiveRunsForSession(key) > 0;
+  return countPendingDescendantRuns(key) > 0;
 });
