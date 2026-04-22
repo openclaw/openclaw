@@ -1,6 +1,6 @@
 ## VI Dashboard Port Manifest
 
-Target branch: `integration/v2026.4.20-vi-dashboard`
+Target branch: `integration/v2026.4.21-vi-dashboard`
 
 Source branch: `manhhai999/release/v2026.4.15-vi-dashboard`
 
@@ -9,9 +9,9 @@ Source delta basis: final tree diff against `v2026.4.15`
 Goals:
 
 - Keep the new work fully isolated from the currently running runtime.
-- Rebuild the VI dashboard customizations on top of upstream `v2026.4.20`.
+- Rebuild the VI dashboard customizations on top of upstream `v2026.4.21`.
 - Preserve the review surface first, then preserve supporting runtime/status behavior.
-- Regenerate generated artifacts on the `v2026.4.20` codebase instead of copying stale generated outputs from `v2026.4.15`.
+- Regenerate generated artifacts on the `v2026.4.21` codebase instead of copying stale generated outputs from `v2026.4.15`.
 
 Rules:
 
@@ -24,7 +24,7 @@ Rules:
 
 Intent:
 
-- Recreate the dashboard review surface and VI localization behavior on top of the new UI/runtime contracts in `v2026.4.20`.
+- Recreate the dashboard review surface and VI localization behavior on top of the new UI/runtime contracts in `v2026.4.21`.
 
 Primary source-of-truth files:
 
@@ -78,7 +78,7 @@ Status: completed
 
 Completed notes:
 
-- Restored the VI-first control UI locale flow on top of `v2026.4.20`, including generated locale/meta outputs regenerated on the new codebase.
+- Restored the VI-first control UI locale flow on top of `v2026.4.21`, including generated locale/meta outputs regenerated on the new codebase.
 - Forward-ported the broader dashboard localization sweep instead of replaying the old tree verbatim, then aligned tests with the new VI default surface.
 - Reapplied dashboard review UX fixes that matter before runtime rollout: persisted text scale, chat typography scaling, reconnect queue resume, config view fixes, and review-surface parity fixes.
 - Fixed post-port drift against new UI contracts in `chat.ts`, `config.ts`, `app-settings.ts`, `app-gateway.node.test.ts`, `app-render.helpers.node.test.ts`, `navigation.test.ts`, `cron.test.ts`, and `dreaming.test.ts`.
@@ -120,9 +120,9 @@ Status: completed
 
 Completed notes:
 
-- Forward-ported the status fast-path/channel snapshot behavior the dashboard depends on, keeping the `v2026.4.20` structure instead of copying legacy implementations.
+- Forward-ported the status fast-path/channel snapshot behavior the dashboard depends on, keeping the `v2026.4.21` structure instead of copying legacy implementations.
 - Reconciled new helper/data-shape contracts in `src/infra/channel-summary.ts`, `src/plugins/status.ts`, and `src/commands/status-all/channels.ts`.
-- Updated status command/status link/status scan tests to match the release surface now shipped by `v2026.4.20`.
+- Updated status command/status link/status scan tests to match the release surface now shipped by `v2026.4.21`.
 
 ## Bucket 3: Compatibility, Ops, And Guardrails
 
@@ -153,13 +153,13 @@ Completed notes:
 
 - Reapplied the sandbox safety guard that requires the built default Docker image before use.
 - Fixed gateway/runtime-config test isolation so local env vars like `OPENCLAW_GATEWAY_TOKEN` do not poison parity/startup/runtime-config suites.
-- Aligned CLI/preaction route expectations with the newer `status` preload behavior in `v2026.4.20`.
+- Aligned CLI/preaction route expectations with the newer `status` preload behavior in `v2026.4.21`.
 - Carried forward compatibility fixes in `extensions/telegram/src/bot.ts` and hardened `extensions/browser/src/browser/chrome.internal.test.ts` so launch tests no longer depend on host OS browser auto-detection.
 
 ## Migration Order
 
 1. Port bucket 1 source-of-truth UI/i18n files.
-2. Regenerate UI generated artifacts on the `v2026.4.20` branch.
+2. Regenerate UI generated artifacts on the `v2026.4.21` branch.
 3. Port bucket 2 runtime/status behavior.
 4. Port bucket 3 compatibility and ops deltas.
 5. Run targeted tests, then broader build/check on the new branch only.
@@ -182,4 +182,4 @@ Verification snapshot on this branch:
 ## Runtime Safety
 
 - No config writes, service restarts, or runtime changes against the currently running environment are allowed during this migration.
-- All verification stays inside `/home/manhhai/openclaw-v2026.4.20-vi-dashboard`.
+- All verification stays inside `/home/manhhai/worktrees/openclaw-v2026.4.21-vi-dashboard-review`.

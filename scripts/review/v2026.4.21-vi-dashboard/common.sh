@@ -4,13 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
 
-REVIEW_ID="v2026.4.20-vi-dashboard"
-REVIEW_BRANCH="review/v2026.4.20-vi-dashboard"
-REVIEW_PROFILE="review-v2026-4-20-vi-dashboard"
-REVIEW_PORT="19789"
+REVIEW_ID="v2026.4.21-vi-dashboard"
+REVIEW_BRANCH="review/v2026.4.21-vi-dashboard"
+REVIEW_PROFILE="review-v2026-4-21-vi-dashboard"
+REVIEW_PORT="19821"
 REVIEW_HOST="127.0.0.1"
 REVIEW_BASE_URL="http://${REVIEW_HOST}:${REVIEW_PORT}/"
-REVIEW_SYSTEMD_UNIT_NAME="openclaw-gateway-review-v2026-4-20"
+REVIEW_SYSTEMD_UNIT_NAME="openclaw-gateway-review-v2026-4-21"
 REVIEW_SYSTEMD_UNIT="${REVIEW_SYSTEMD_UNIT_NAME}.service"
 
 REVIEW_STATE_DIR="${OPENCLAW_REVIEW_STATE_DIR:-$HOME/.openclaw-${REVIEW_PROFILE}}"
