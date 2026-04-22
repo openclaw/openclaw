@@ -7,6 +7,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
@@ -190,6 +191,7 @@ describe("runCodexAppServerAttempt", () => {
             modelProvider: "openai",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
+            developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
           }),
         },
         {
@@ -440,6 +442,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
+      developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
   });
@@ -472,6 +475,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
+      developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
     expect(requests).toEqual(
@@ -513,6 +517,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
+      developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
     expect(
