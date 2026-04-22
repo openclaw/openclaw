@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -1659,13 +1659,27 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await context.loadGatewayModelCatalog();
-      thinkingLevel = resolveThinkingDefault({
-        cfg,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
-        catalog,
-      });
+      // Per-agent thinkingDefault (cfg.agents.list[].thinkingDefault) takes
+      // precedence over the model-centric fallback: reasoning models like
+      // openai-codex/gpt-5.4 would otherwise default to "low" via
+      // resolveThinkingDefaultForModel, so chat.history (and therefore the
+      // TUI / CLI) would drift below the agent's configured level. Go through
+      // resolveAgentConfig so the same id normalization as the rest of the
+      // agent-scope logic applies.
+      const perAgentThinkingDefault = sessionAgentId
+        ? resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault
+        : undefined;
+      if (perAgentThinkingDefault) {
+        thinkingLevel = perAgentThinkingDefault;
+      } else {
+        const catalog = await context.loadGatewayModelCatalog();
+        thinkingLevel = resolveThinkingDefault({
+          cfg,
+          provider: resolvedSessionModel.provider,
+          model: resolvedSessionModel.model,
+          catalog,
+        });
+      }
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
