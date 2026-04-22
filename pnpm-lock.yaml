@@ -1215,10 +1215,6 @@ importers:
       tokenjuice:
         specifier: 0.6.1
         version: 0.6.1
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
 
   extensions/together:
     devDependencies:
