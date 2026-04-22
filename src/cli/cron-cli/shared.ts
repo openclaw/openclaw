@@ -115,17 +115,64 @@ export function parseCronToolsAllow(input: unknown): string[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+const TIME_ONLY_RE = /^(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+function getUtcDateString(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getTodayDateInTimeZone(timeZone: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  } catch {
+    return null;
+  }
+}
+
+function isValidTimeOnlyParts(hour: string, minute: string, second: string): boolean {
+  const hh = Number.parseInt(hour, 10);
+  const mm = Number.parseInt(minute, 10);
+  const ss = Number.parseInt(second, 10);
+  return hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 && ss >= 0 && ss <= 59;
+}
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *
- * When `tz` is provided and the input is an offset-less datetime
- * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
- * that IANA timezone instead of UTC.
+ * When `tz` is provided and the input is an offset-less datetime or a time-only
+ * string, the wall-clock value is interpreted in that IANA timezone instead of UTC.
  */
 export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
     return null;
+  }
+
+  const timeOnlyMatch = TIME_ONLY_RE.exec(raw);
+  if (timeOnlyMatch) {
+    const hh = timeOnlyMatch[1] ?? "00";
+    const mm = timeOnlyMatch[2] ?? "00";
+    const ss = timeOnlyMatch[3] ?? "00";
+    if (!isValidTimeOnlyParts(hh, mm, ss)) {
+      return null;
+    }
+    const todayStr = tz ? getTodayDateInTimeZone(tz) : getUtcDateString();
+    if (todayStr === null) {
+      return null;
+    }
+    const offsetlessDateTime = `${todayStr}T${hh}:${mm}:${ss}`;
+    if (tz) {
+      return parseOffsetlessIsoDateTimeInTimeZone(offsetlessDateTime, tz);
+    }
+    const ms = Date.parse(`${offsetlessDateTime}Z`);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
   }
 
   // If a timezone is provided and the input looks like an offset-less ISO datetime,
