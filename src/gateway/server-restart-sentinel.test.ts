@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RestartSentinel } from "../infra/restart-sentinel.js";
+import type { RestartTransaction } from "../infra/restart-transaction.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
-  consumeRestartSentinel: vi.fn(async () => ({
+  consumeRestartSentinel: vi.fn<() => Promise<RestartSentinel | null>>(async () => ({
+    version: 1,
     payload: {
+      kind: "restart",
+      status: "ok",
+      ts: 0,
       sessionKey: "agent:main:main",
       deliveryContext: {
         channel: "whatsapp",
@@ -13,8 +19,16 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
+  formatDoctorNonInteractiveHint: vi.fn(() => "doctor hint"),
   formatRestartSentinelMessage: vi.fn(() => "restart message"),
   summarizeRestartSentinel: vi.fn(() => "restart summary"),
+  readRestartTransaction: vi.fn<() => Promise<RestartTransaction | null>>(async () => null),
+  updateRestartTransaction: vi.fn<
+    (
+      updater: (current: RestartTransaction | null) => RestartTransaction | null,
+    ) => Promise<RestartTransaction | null>
+  >(async () => null),
+  isPendingRestartTransaction: vi.fn((value: unknown) => Boolean(value)),
   resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
   parseSessionThreadInfo: vi.fn(
     (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
@@ -53,8 +67,15 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../infra/restart-sentinel.js", () => ({
   consumeRestartSentinel: mocks.consumeRestartSentinel,
+  formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
+}));
+
+vi.mock("../infra/restart-transaction.js", () => ({
+  readRestartTransaction: mocks.readRestartTransaction,
+  updateRestartTransaction: mocks.updateRestartTransaction,
+  isPendingRestartTransaction: mocks.isPendingRestartTransaction,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -137,7 +158,11 @@ describe("scheduleRestartSentinelWake", () => {
   beforeEach(() => {
     vi.useRealTimers();
     mocks.consumeRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 0,
         sessionKey: "agent:main:main",
         deliveryContext: {
           channel: "whatsapp",
@@ -146,6 +171,12 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     });
+    mocks.readRestartTransaction.mockReset();
+    mocks.readRestartTransaction.mockResolvedValue(null);
+    mocks.updateRestartTransaction.mockReset();
+    mocks.updateRestartTransaction.mockResolvedValue(null);
+    mocks.isPendingRestartTransaction.mockReset();
+    mocks.isPendingRestartTransaction.mockImplementation((value: unknown) => Boolean(value));
     mocks.parseSessionThreadInfo.mockReset();
     mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
     mocks.loadSessionEntry.mockReset();
@@ -267,7 +298,11 @@ describe("scheduleRestartSentinelWake", () => {
   it("prefers top-level sentinel threadId for wake routing context", async () => {
     // Legacy or malformed sentinel JSON can still carry a nested threadId.
     mocks.consumeRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 0,
         sessionKey: "agent:main:main",
         deliveryContext: {
           channel: "whatsapp",
@@ -294,7 +329,11 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("does not wake the main session when the sentinel has no sessionKey", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 0,
         message: "restart message",
       },
     } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
@@ -310,7 +349,11 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("skips outbound restart notice when no canonical delivery context survives restart", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 0,
         sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
       },
     } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
@@ -335,7 +378,11 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("resolves session routing before queueing the heartbeat wake", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 0,
         sessionKey: "agent:main:qa-channel:channel:qa-room",
       },
     } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
@@ -377,7 +424,11 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("merges base session routing into partial thread metadata", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 0,
         sessionKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
       },
     } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
@@ -425,5 +476,41 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "$thread-event",
       }),
     );
+  });
+
+  it("falls back to a pending restart transaction when the sentinel file is gone", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue(null);
+    mocks.readRestartTransaction.mockResolvedValue({
+      restartId: "restart-1",
+      requestedAt: Date.now(),
+      sessionKey: "agent:main:main",
+      mode: "terminal-handoff",
+      state: "handoff_pending",
+      note: "resume later",
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "+15550002",
+        accountId: "acct-2",
+      },
+      interruptedTurn: {
+        sessionKey: "agent:main:main",
+        phase: "running",
+        interruptionCause: "gateway_restart",
+        resumeEligible: false,
+      },
+      requester: { entryPoint: "gateway.restart" },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transaction: expect.objectContaining({
+          restartId: "restart-1",
+          state: "boot_recovered",
+        }),
+      }),
+    );
+    expect(mocks.updateRestartTransaction).toHaveBeenCalledTimes(2);
   });
 });

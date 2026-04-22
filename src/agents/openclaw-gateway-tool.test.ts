@@ -1,8 +1,4 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -94,48 +90,26 @@ describe("gateway tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
-  it("schedules SIGUSR1 restart", async () => {
-    vi.useFakeTimers();
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+  it("routes restart through gateway.restart", async () => {
+    const tool = requireGatewayTool("agent:main:whatsapp:dm:+15555550123");
 
-    try {
-      await withEnvAsync(
-        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
-        async () => {
-          const tool = requireGatewayTool();
+    await tool.execute("call1", {
+      action: "restart",
+      delayMs: 0,
+      reason: "test-restart",
+      note: "Restarting now",
+    });
 
-          const result = await tool.execute("call1", {
-            action: "restart",
-            delayMs: 0,
-          });
-          expect(result.details).toMatchObject({
-            ok: true,
-            pid: process.pid,
-            signal: "SIGUSR1",
-            delayMs: 0,
-          });
-
-          const sentinelPath = path.join(stateDir, "restart-sentinel.json");
-          const raw = await fs.readFile(sentinelPath, "utf-8");
-          const parsed = JSON.parse(raw) as {
-            payload?: { kind?: string; doctorHint?: string | null };
-          };
-          expect(parsed.payload?.kind).toBe("restart");
-          expect(parsed.payload?.doctorHint).toBe(
-            "Run: openclaw --profile isolated doctor --non-interactive",
-          );
-
-          expect(kill).not.toHaveBeenCalled();
-          await vi.runAllTimersAsync();
-          expect(kill).toHaveBeenCalledWith(process.pid, "SIGUSR1");
-        },
-      );
-    } finally {
-      kill.mockRestore();
-      vi.useRealTimers();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "gateway.restart",
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey: "agent:main:whatsapp:dm:+15555550123",
+        note: "Restarting now",
+        reason: "test-restart",
+        restartDelayMs: 0,
+      }),
+    );
   });
 
   it("passes config.apply through gateway call", async () => {

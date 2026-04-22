@@ -108,6 +108,21 @@ function resolveBundledDirFromPackageRoot(
   return undefined;
 }
 
+function preferCurrentSourceCheckout(params: {
+  packageRoots: string[];
+  cwd: string;
+  preferSourceCheckout: boolean;
+}): string[] {
+  if (!params.preferSourceCheckout) {
+    return params.packageRoots;
+  }
+  const cwdPackageRoot = resolveOpenClawPackageRootSync({ cwd: params.cwd });
+  if (!cwdPackageRoot || !isSourceCheckoutRoot(cwdPackageRoot)) {
+    return params.packageRoots;
+  }
+  return [cwdPackageRoot, ...params.packageRoots.filter((root) => root !== cwdPackageRoot)];
+}
+
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (bundledPluginsDisabled(env)) {
     return resolveDisabledBundledPluginsDir();
@@ -139,13 +154,17 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   const preferSourceCheckout = Boolean(env.VITEST) || runningSourceTypeScriptProcess();
 
   try {
-    const packageRoots = [
-      resolveOpenClawPackageRootSync({ argv1: process.argv[1] }),
-      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
-      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-    ].filter(
-      (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
-    );
+    const packageRoots = preferCurrentSourceCheckout({
+      packageRoots: [
+        resolveOpenClawPackageRootSync({ argv1: process.argv[1] }),
+        resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
+        resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+      ].filter(
+        (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
+      ),
+      cwd: process.cwd(),
+      preferSourceCheckout,
+    });
     for (const packageRoot of packageRoots) {
       const bundledDir = resolveBundledDirFromPackageRoot(packageRoot, preferSourceCheckout);
       if (bundledDir) {

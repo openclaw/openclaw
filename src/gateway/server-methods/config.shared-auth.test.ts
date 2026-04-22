@@ -10,10 +10,15 @@ const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
 const validateConfigObjectWithPluginsMock = vi.fn();
 const prepareSecretsRuntimeSnapshotMock = vi.fn();
-const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
-  scheduled: true,
-  delayMs: 1_000,
-  coalesced: false,
+const requestGatewayRestartTransactionMock = vi.fn(async () => ({
+  mode: "drain-then-restart",
+  restart: {
+    scheduled: true,
+    delayMs: 1_000,
+    coalesced: false,
+  },
+  transaction: { restartId: "restart-1", state: "restarting" },
+  sentinelPath: "/tmp/restart-sentinel.json",
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -36,8 +41,8 @@ vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
 }));
 
-vi.mock("../../infra/restart.js", () => ({
-  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+vi.mock("../restart-transaction.js", () => ({
+  requestGatewayRestartTransaction: requestGatewayRestartTransactionMock,
 }));
 
 const { configHandlers } = await import("./config.js");
@@ -87,7 +92,7 @@ describe("config shared auth disconnects", () => {
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, {});
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(requestGatewayRestartTransactionMock).not.toHaveBeenCalled();
   });
 
   it("lets the config reloader own hybrid-mode auth restarts", async () => {
@@ -113,7 +118,7 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.patch"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(requestGatewayRestartTransactionMock).not.toHaveBeenCalled();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
   });
 
@@ -140,7 +145,7 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.patch"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(requestGatewayRestartTransactionMock).not.toHaveBeenCalled();
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
@@ -166,6 +171,6 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.patch"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(requestGatewayRestartTransactionMock).toHaveBeenCalledTimes(1);
   });
 });

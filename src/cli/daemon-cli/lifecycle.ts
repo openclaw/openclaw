@@ -1,6 +1,8 @@
 import { isRestartEnabled } from "../../config/commands.flags.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { createConfigIO, readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { callGateway } from "../../gateway/call.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
@@ -28,17 +30,33 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
+import {
+  parsePortFromArgs,
+  pickProbeHostForBind,
+  renderGatewayServiceStartHints,
+} from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
-const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
+const DEFAULT_RPC_TIMEOUT_MS = 10_000;
 
-function postRestartHealthAttempts(): number {
-  return process.platform === "win32"
-    ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
-    : POST_RESTART_HEALTH_ATTEMPTS;
+type RestartPostCheckContext = {
+  json: boolean;
+  stdout: NodeJS.WritableStream;
+  warnings: string[];
+  fail: (message: string, hints?: string[]) => void;
+};
+
+function resolveRpcTimeoutMs(raw: string | undefined): number {
+  if (!raw?.trim()) {
+    return DEFAULT_RPC_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_RPC_TIMEOUT_MS;
+  }
+  return Math.floor(parsed);
 }
 
 function formatRestartFailure(params: {
@@ -76,6 +94,62 @@ function resolveGatewayPortFallback(): Promise<number> {
   return readBestEffortConfig()
     .then((cfg) => resolveGatewayPort(cfg, process.env))
     .catch(() => resolveGatewayPort(undefined, process.env));
+}
+
+async function requestManagedGatewayRestartViaRpc(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  opts: DaemonLifecycleOptions;
+}): Promise<boolean> {
+  const urlOverride = normalizeOptionalString(params.opts.rpc?.url);
+  if (urlOverride) {
+    return false;
+  }
+
+  const command = await params.service.readCommand(process.env).catch(() => null);
+  if (!command) {
+    return false;
+  }
+
+  const mergedEnv = {
+    ...(process.env as Record<string, string | undefined>),
+    ...command.environment,
+  } as NodeJS.ProcessEnv;
+  const cfg = await createConfigIO({ env: mergedEnv })
+    .readBestEffortConfig()
+    .catch(() => readBestEffortConfig());
+  if (cfg.gateway?.mode === "remote") {
+    return false;
+  }
+
+  const portFromArgs = parsePortFromArgs(command.programArguments);
+  const port = portFromArgs ?? resolveGatewayPort(cfg, mergedEnv);
+  const scheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const host = pickProbeHostForBind(
+    cfg.gateway?.bind ?? "loopback",
+    undefined,
+    cfg.gateway?.customBindHost,
+  );
+  const auth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+    cfg,
+    mode: "local",
+    env: mergedEnv,
+    explicitAuth: {
+      token: params.opts.rpc?.token,
+      password: params.opts.rpc?.password,
+    },
+  });
+
+  await callGateway({
+    url: `${scheme}://${host}:${port}`,
+    token: auth.auth.token,
+    password: auth.auth.password,
+    method: "gateway.restart",
+    params: {
+      reason: "openclaw gateway restart",
+    },
+    timeoutMs: resolveRpcTimeoutMs(params.opts.rpc?.timeout),
+  });
+  return true;
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
@@ -139,6 +213,112 @@ async function restartGatewayWithoutServiceManager(port: number) {
   };
 }
 
+async function runGatewayRestartPostCheck(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  restartPort: number;
+  restartWaitSeconds: number;
+  restartedWithoutServiceManager: boolean;
+  ctx: RestartPostCheckContext;
+}) {
+  const { service, restartPort, restartWaitSeconds, restartedWithoutServiceManager, ctx } = params;
+  const { json, stdout, warnings, fail } = ctx;
+
+  if (restartedWithoutServiceManager) {
+    const health = await waitForGatewayHealthyListener({
+      port: restartPort,
+      attempts: POST_RESTART_HEALTH_ATTEMPTS,
+      delayMs: POST_RESTART_HEALTH_DELAY_MS,
+    });
+    if (health.healthy) {
+      return undefined;
+    }
+
+    const diagnostics = renderGatewayPortHealthDiagnostics(health);
+    const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+    if (!json) {
+      defaultRuntime.log(theme.warn(timeoutLine));
+      for (const line of diagnostics) {
+        defaultRuntime.log(theme.muted(line));
+      }
+    } else {
+      warnings.push(timeoutLine);
+      warnings.push(...diagnostics);
+    }
+
+    fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
+      formatCliCommand("openclaw gateway status --deep"),
+      formatCliCommand("openclaw doctor"),
+    ]);
+    throw new Error("unreachable after gateway restart health failure");
+  }
+
+  let health = await waitForGatewayHealthyRestart({
+    service,
+    port: restartPort,
+    attempts: POST_RESTART_HEALTH_ATTEMPTS,
+    delayMs: POST_RESTART_HEALTH_DELAY_MS,
+    includeUnknownListenersAsStale: process.platform === "win32",
+  });
+
+  if (!health.healthy && health.staleGatewayPids.length > 0) {
+    const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
+    warnings.push(staleMsg);
+    if (!json) {
+      defaultRuntime.log(theme.warn(staleMsg));
+      defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
+    }
+
+    await terminateStaleGatewayPids(health.staleGatewayPids);
+    const retryRestart = await service.restart({ env: process.env, stdout });
+    if (retryRestart.outcome === "scheduled") {
+      return retryRestart;
+    }
+    health = await waitForGatewayHealthyRestart({
+      service,
+      port: restartPort,
+      attempts: POST_RESTART_HEALTH_ATTEMPTS,
+      delayMs: POST_RESTART_HEALTH_DELAY_MS,
+      includeUnknownListenersAsStale: process.platform === "win32",
+    });
+  }
+
+  if (health.healthy) {
+    return undefined;
+  }
+
+  const diagnostics = renderRestartDiagnostics(health);
+  const failure = formatRestartFailure({
+    health,
+    port: restartPort,
+    timeoutSeconds: restartWaitSeconds,
+  });
+  const runningNoPortLine =
+    health.runtime.status === "running" && health.portUsage.status === "free"
+      ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
+      : null;
+  if (!json) {
+    defaultRuntime.log(theme.warn(failure.statusLine));
+    if (runningNoPortLine) {
+      defaultRuntime.log(theme.warn(runningNoPortLine));
+    }
+    for (const line of diagnostics) {
+      defaultRuntime.log(theme.muted(line));
+    }
+  } else {
+    warnings.push(failure.statusLine);
+    if (runningNoPortLine) {
+      warnings.push(runningNoPortLine);
+    }
+    warnings.push(...diagnostics);
+  }
+
+  fail(failure.failMessage, [
+    formatCliCommand("openclaw gateway status --deep"),
+    formatCliCommand("openclaw doctor"),
+  ]);
+  throw new Error("unreachable after gateway restart failure");
+}
+
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -190,9 +370,34 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
-  const restartHealthAttempts = postRestartHealthAttempts();
-  const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
+  const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
+
+  const fail = (message: string, hints?: string[]) => {
+    const err = new Error(message) as Error & { hints?: string[] };
+    err.hints = hints;
+    throw err;
+  };
+
+  const rpcRestartTriggered = await requestManagedGatewayRestartViaRpc({
+    service,
+    opts,
+  }).catch(() => false);
+  if (rpcRestartTriggered) {
+    await runGatewayRestartPostCheck({
+      service,
+      restartPort,
+      restartWaitSeconds,
+      restartedWithoutServiceManager: false,
+      ctx: {
+        json,
+        stdout: process.stdout,
+        warnings: [],
+        fail,
+      },
+    });
+    return true;
+  }
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
@@ -208,101 +413,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return await recoverInstalledLaunchAgent({ result: "restarted" });
     },
-    postRestartCheck: async ({ warnings, fail, stdout }) => {
-      if (restartedWithoutServiceManager) {
-        const health = await waitForGatewayHealthyListener({
-          port: restartPort,
-          attempts: restartHealthAttempts,
-          delayMs: POST_RESTART_HEALTH_DELAY_MS,
-        });
-        if (health.healthy) {
-          return undefined;
-        }
-
-        const diagnostics = renderGatewayPortHealthDiagnostics(health);
-        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
-        if (!json) {
-          defaultRuntime.log(theme.warn(timeoutLine));
-          for (const line of diagnostics) {
-            defaultRuntime.log(theme.muted(line));
-          }
-        } else {
-          warnings.push(timeoutLine);
-          warnings.push(...diagnostics);
-        }
-
-        fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
-          formatCliCommand("openclaw gateway status --deep"),
-          formatCliCommand("openclaw doctor"),
-        ]);
-        throw new Error("unreachable after gateway restart health failure");
-      }
-
-      let health = await waitForGatewayHealthyRestart({
+    postRestartCheck: async (ctx) =>
+      await runGatewayRestartPostCheck({
         service,
-        port: restartPort,
-        attempts: restartHealthAttempts,
-        delayMs: POST_RESTART_HEALTH_DELAY_MS,
-        includeUnknownListenersAsStale: process.platform === "win32",
-      });
-
-      if (!health.healthy && health.staleGatewayPids.length > 0) {
-        const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
-        warnings.push(staleMsg);
-        if (!json) {
-          defaultRuntime.log(theme.warn(staleMsg));
-          defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
-        }
-
-        await terminateStaleGatewayPids(health.staleGatewayPids);
-        const retryRestart = await service.restart({ env: process.env, stdout });
-        if (retryRestart.outcome === "scheduled") {
-          return retryRestart;
-        }
-        health = await waitForGatewayHealthyRestart({
-          service,
-          port: restartPort,
-          attempts: restartHealthAttempts,
-          delayMs: POST_RESTART_HEALTH_DELAY_MS,
-          includeUnknownListenersAsStale: process.platform === "win32",
-        });
-      }
-
-      if (health.healthy) {
-        return undefined;
-      }
-
-      const diagnostics = renderRestartDiagnostics(health);
-      const failure = formatRestartFailure({
-        health,
-        port: restartPort,
-        timeoutSeconds: restartWaitSeconds,
-      });
-      const runningNoPortLine =
-        health.runtime.status === "running" && health.portUsage.status === "free"
-          ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
-          : null;
-      if (!json) {
-        defaultRuntime.log(theme.warn(failure.statusLine));
-        if (runningNoPortLine) {
-          defaultRuntime.log(theme.warn(runningNoPortLine));
-        }
-        for (const line of diagnostics) {
-          defaultRuntime.log(theme.muted(line));
-        }
-      } else {
-        warnings.push(failure.statusLine);
-        if (runningNoPortLine) {
-          warnings.push(runningNoPortLine);
-        }
-        warnings.push(...diagnostics);
-      }
-
-      fail(failure.failMessage, [
-        formatCliCommand("openclaw gateway status --deep"),
-        formatCliCommand("openclaw doctor"),
-      ]);
-      throw new Error("unreachable after gateway restart failure");
-    },
+        restartPort,
+        restartWaitSeconds,
+        restartedWithoutServiceManager,
+        ctx,
+      }),
   });
 }

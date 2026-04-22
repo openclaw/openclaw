@@ -65,6 +65,7 @@ export type ConfigGetParams = SchemaType<"ConfigGetParams">;
 export type ConfigSetParams = SchemaType<"ConfigSetParams">;
 export type ConfigApplyParams = SchemaType<"ConfigApplyParams">;
 export type ConfigPatchParams = SchemaType<"ConfigPatchParams">;
+export type GatewayRestartParams = SchemaType<"GatewayRestartParams">;
 export type ConfigSchemaParams = SchemaType<"ConfigSchemaParams">;
 export type ConfigSchemaLookupParams = SchemaType<"ConfigSchemaLookupParams">;
 export type ConfigSchemaResponse = SchemaType<"ConfigSchemaResponse">;

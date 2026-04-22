@@ -10,9 +10,16 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   consumeRestartSentinel,
+  formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
   summarizeRestartSentinel,
+  type RestartSentinelPayload,
 } from "../infra/restart-sentinel.js";
+import {
+  isPendingRestartTransaction,
+  readRestartTransaction,
+  updateRestartTransaction,
+} from "../infra/restart-transaction.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -126,12 +133,54 @@ async function deliverRestartSentinelNotice(params: {
   }
 }
 
+function synthesizeRestartPayloadFromTransaction(
+  transaction: NonNullable<Awaited<ReturnType<typeof readRestartTransaction>>>,
+): RestartSentinelPayload {
+  return {
+    kind: "restart",
+    status: "ok",
+    ts: transaction.requestedAt,
+    sessionKey: transaction.sessionKey,
+    deliveryContext: transaction.deliveryContext ?? undefined,
+    threadId: transaction.threadId,
+    message: transaction.note ?? null,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: transaction.requester?.entryPoint ?? transaction.mode,
+      reason: transaction.reason ?? null,
+    },
+    transaction,
+  };
+}
+
 export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
-  if (!sentinel) {
+  const transaction = await readRestartTransaction();
+  const pendingTransaction = isPendingRestartTransaction(transaction) ? transaction : null;
+  const payload =
+    sentinel?.payload ??
+    (pendingTransaction ? synthesizeRestartPayloadFromTransaction(pendingTransaction) : null);
+  if (!payload) {
     return;
   }
-  const payload = sentinel.payload;
+  if (pendingTransaction && payload.transaction?.restartId === pendingTransaction.restartId) {
+    await updateRestartTransaction((current) => {
+      if (!current || current.restartId !== pendingTransaction.restartId) {
+        return current;
+      }
+      return {
+        ...current,
+        state: "boot_recovered",
+        finalOutcome: current.finalOutcome ?? "boot_recovered",
+      };
+    });
+    payload.transaction = {
+      ...pendingTransaction,
+      state: "boot_recovered",
+      finalOutcome: pendingTransaction.finalOutcome ?? "boot_recovered",
+    };
+  }
+
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);
@@ -145,6 +194,19 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   if (!sessionKey) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(message, { sessionKey: mainSessionKey });
+    if (pendingTransaction && payload.transaction?.restartId === pendingTransaction.restartId) {
+      await updateRestartTransaction((current) => {
+        if (!current || current.restartId !== pendingTransaction.restartId) {
+          return current;
+        }
+        return {
+          ...current,
+          state: "completed",
+          finalOutcome: current.finalOutcome ?? "post_boot_followup_sent",
+          finalizedAt: Date.now(),
+        };
+      });
+    }
     return;
   }
 
@@ -176,6 +238,19 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
   const to = origin?.to;
   if (!channel || !to) {
+    if (pendingTransaction && payload.transaction?.restartId === pendingTransaction.restartId) {
+      await updateRestartTransaction((current) => {
+        if (!current || current.restartId !== pendingTransaction.restartId) {
+          return current;
+        }
+        return {
+          ...current,
+          state: "completed",
+          finalOutcome: current.finalOutcome ?? "post_boot_followup_sent",
+          finalizedAt: Date.now(),
+        };
+      });
+    }
     return;
   }
 
@@ -226,6 +301,20 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     threadId: resolvedThreadId,
     session: outboundSession,
   });
+
+  if (pendingTransaction && payload.transaction?.restartId === pendingTransaction.restartId) {
+    await updateRestartTransaction((current) => {
+      if (!current || current.restartId !== pendingTransaction.restartId) {
+        return current;
+      }
+      return {
+        ...current,
+        state: "completed",
+        finalOutcome: current.finalOutcome ?? "post_boot_followup_sent",
+        finalizedAt: Date.now(),
+      };
+    });
+  }
 }
 
 export function shouldWakeFromRestartSentinel() {
