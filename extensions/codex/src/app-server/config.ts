@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
@@ -156,7 +157,7 @@ export function codexAppServerStartOptionsKey(options: CodexAppServerStartOption
     command: options.command,
     args: options.args,
     url: options.url ?? null,
-    authToken: options.authToken ? "<set>" : null,
+    authToken: hashSecretForKey(options.authToken),
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
@@ -221,6 +222,13 @@ function readNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function hashSecretForKey(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function splitShellWords(value: string): string[] {

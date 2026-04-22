@@ -102,4 +102,46 @@ describe("shared Codex app-server client", () => {
       }),
     );
   });
+
+  it("restarts the shared client when the bridged auth token changes", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+
+    const firstList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      startOptions: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "tok-first",
+        headers: {},
+      },
+    });
+    await sendInitializeResult(first, "openclaw/0.118.0 (macOS; test)");
+    await sendEmptyModelList(first);
+    await expect(firstList).resolves.toEqual({ models: [] });
+
+    const secondList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      startOptions: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "tok-second",
+        headers: {},
+      },
+    });
+    await sendInitializeResult(second, "openclaw/0.118.0 (macOS; test)");
+    await sendEmptyModelList(second);
+    await expect(secondList).resolves.toEqual({ models: [] });
+
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(first.process.kill).toHaveBeenCalledWith("SIGTERM");
+  });
 });

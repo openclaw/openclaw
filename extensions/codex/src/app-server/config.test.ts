@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
+  codexAppServerStartOptionsKey,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
 } from "./config.js";
@@ -73,6 +74,29 @@ describe("Codex app-server config", () => {
         approvalsReviewer: "user",
       }),
     );
+  });
+
+  it("derives distinct shared-client keys for distinct auth tokens without exposing them", () => {
+    const first = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      authToken: "tok_first",
+      headers: {},
+    });
+    const second = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      authToken: "tok_second",
+      headers: {},
+    });
+
+    expect(first).not.toEqual(second);
+    expect(first).not.toContain("tok_first");
+    expect(second).not.toContain("tok_second");
   });
 
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
