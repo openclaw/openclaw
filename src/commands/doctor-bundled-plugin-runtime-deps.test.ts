@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { scanBundledPluginRuntimeDeps } from "../plugins/bundled-runtime-deps.js";
+import {
+  resolveBundledRuntimeDependencyPackageInstallRoot,
+  scanBundledPluginRuntimeDeps,
+} from "../plugins/bundled-runtime-deps.js";
 import { maybeRepairBundledPluginRuntimeDeps } from "./doctor-bundled-plugin-runtime-deps.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -214,6 +217,59 @@ describe("doctor bundled plugin runtime deps", () => {
         installSpecs: ["grammy@1.37.0"],
       },
     ]);
+  });
+
+  it("repairs missing deps into an external stage dir when configured", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-stage-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.4.22" });
+    writeBundledChannelPlugin(root, "slack", { "@slack/web-api": "7.15.1" });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installed: Array<{
+      installRoot: string;
+      missingSpecs: string[];
+      installSpecs: string[];
+    }> = [];
+    const prompter = {
+      shouldRepair: false,
+      shouldForce: false,
+      repairMode: {
+        shouldRepair: false,
+        shouldForce: false,
+        nonInteractive: true,
+        canPrompt: false,
+        updateInProgress: false,
+      },
+      confirm: async () => false,
+      confirmAutoFix: async () => false,
+      confirmAggressiveAutoFix: async () => false,
+      confirmRuntimeRepair: async () => false,
+      select: async (_params: unknown, fallback: unknown) => fallback,
+    } as DoctorPrompter;
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter,
+      env,
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        channels: { slack: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root, { env });
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["@slack/web-api@7.15.1"],
+        installSpecs: ["@slack/web-api@7.15.1"],
+      },
+    ]);
+    expect(installRoot).toContain(stageDir);
   });
 
   it("retains configured bundled deps when repairing a subset", async () => {

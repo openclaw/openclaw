@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   installBundledRuntimeDeps,
+  resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
 } from "../plugins/bundled-runtime-deps.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -37,6 +38,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     packageRoot,
     config: params.config,
     includeConfiguredChannels: params.includeConfiguredChannels,
+    env: params.env ?? process.env,
   });
   if (conflicts.length > 0) {
     const conflictLines = conflicts.flatMap((conflict) =>
@@ -84,6 +86,9 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   try {
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
+      env: params.env ?? process.env,
+    });
     const install =
       params.installDeps ??
       ((installParams) =>
@@ -92,7 +97,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
           missingSpecs: installParams.installSpecs,
           env: params.env ?? process.env,
         }));
-    install({ installRoot: packageRoot, missingSpecs, installSpecs });
+    install({ installRoot, missingSpecs, installSpecs });
     note(`Installed bundled plugin deps: ${installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);

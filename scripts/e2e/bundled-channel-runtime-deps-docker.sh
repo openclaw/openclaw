@@ -6,7 +6,9 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 IMAGE_NAME="${OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE:-openclaw-bundled-channel-deps-e2e}"
 UPDATE_BASELINE_VERSION="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION:-2026.4.20}"
+RUN_CHANNEL_SCENARIOS="${OPENCLAW_BUNDLED_CHANNEL_SCENARIOS:-1}"
 RUN_UPDATE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO:-1}"
+RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
 
 echo "Building Docker image..."
 run_logged bundled-channel-deps-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
@@ -288,6 +290,195 @@ assert_channel_status "$CHANNEL"
 stop_gateway
 
 echo "bundled $CHANNEL runtime deps Docker E2E passed"
+EOF
+  then
+    cat "$run_log"
+    rm -f "$run_log"
+    exit 1
+  fi
+
+  cat "$run_log"
+  rm -f "$run_log"
+}
+
+run_root_owned_global_scenario() {
+  local run_log
+  run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-root-owned.XXXXXX")"
+
+  echo "Running bundled channel root-owned global install Docker E2E..."
+  if ! docker run --rm --user root \
+    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+set -euo pipefail
+
+export HOME="/root"
+export OPENAI_API_KEY="sk-openclaw-bundled-channel-root-owned-e2e"
+export OPENCLAW_NO_ONBOARD=1
+export OPENCLAW_PLUGIN_STAGE_DIR="/var/lib/openclaw/plugin-runtime-deps"
+
+TOKEN="bundled-channel-root-owned-token"
+PORT="18791"
+CHANNEL="slack"
+DEP_SENTINEL="@slack/web-api"
+gateway_pid=""
+
+package_root() {
+  printf "%s/openclaw" "$(npm root -g)"
+}
+
+cleanup() {
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    kill "$gateway_pid" 2>/dev/null || true
+    wait "$gateway_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+echo "Packing and installing current OpenClaw build into root-owned global npm..."
+pack_dir="$(mktemp -d "/tmp/openclaw-root-owned-pack.XXXXXX")"
+npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-root-owned-pack.log 2>&1
+package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
+if [ -z "$package_tgz" ]; then
+  cat /tmp/openclaw-root-owned-pack.log
+  echo "missing packed OpenClaw tarball" >&2
+  exit 1
+fi
+npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-root-owned-install.log 2>&1
+
+root="$(package_root)"
+test -d "$root/dist/extensions/$CHANNEL"
+rm -rf "$root/dist/extensions/$CHANNEL/node_modules"
+chmod -R a-w "$root"
+mkdir -p "$OPENCLAW_PLUGIN_STAGE_DIR" /home/appuser/.openclaw
+chown -R appuser:appuser /home/appuser/.openclaw /var/lib/openclaw
+
+if runuser -u appuser -- test -w "$root"; then
+  echo "expected package root to be unwritable for appuser" >&2
+  exit 1
+fi
+
+node - <<'NODE' "$TOKEN" "$PORT"
+const fs = require("node:fs");
+const path = require("node:path");
+const token = process.argv[2];
+const port = Number(process.argv[3]);
+const configPath = "/home/appuser/.openclaw/openclaw.json";
+const config = {
+  gateway: {
+    port,
+    auth: { mode: "token", token },
+    controlUi: { enabled: false },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-4.1-mini" },
+    },
+  },
+  models: {
+    providers: {
+      openai: {
+        apiKey: process.env.OPENAI_API_KEY,
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+      },
+    },
+  },
+  plugins: { enabled: true },
+  channels: {
+    slack: {
+      enabled: true,
+      botToken: "xoxb-bundled-channel-root-owned-token",
+      appToken: "xapp-bundled-channel-root-owned-token",
+    },
+  },
+};
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+chown appuser:appuser /home/appuser/.openclaw/openclaw.json
+
+start_gateway() {
+  local log_file="$1"
+  : >"$log_file"
+  chown appuser:appuser "$log_file"
+  runuser -u appuser -- env \
+    HOME=/home/appuser \
+    OPENAI_API_KEY="$OPENAI_API_KEY" \
+    OPENCLAW_NO_ONBOARD=1 \
+    OPENCLAW_PLUGIN_STAGE_DIR="$OPENCLAW_PLUGIN_STAGE_DIR" \
+    npm_config_cache=/tmp/openclaw-root-owned-npm-cache \
+    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  gateway_pid="$!"
+
+  for _ in $(seq 1 240); do
+    if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
+      return 0
+    fi
+    if ! kill -0 "$gateway_pid" 2>/dev/null; then
+      echo "gateway exited unexpectedly" >&2
+      cat "$log_file" >&2
+      exit 1
+    fi
+    sleep 0.25
+  done
+
+  echo "timed out waiting for gateway" >&2
+  cat "$log_file" >&2
+  exit 1
+}
+
+wait_for_gateway_health() {
+  for _ in $(seq 1 120); do
+    if runuser -u appuser -- env HOME=/home/appuser openclaw gateway health --url "ws://127.0.0.1:$PORT" --token "$TOKEN" --json >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "timed out waiting for gateway health" >&2
+  return 1
+}
+
+assert_channel_status() {
+  local out="/tmp/openclaw-root-owned-channel-status.json"
+  runuser -u appuser -- env HOME=/home/appuser openclaw gateway call channels.status \
+    --url "ws://127.0.0.1:$PORT" \
+    --token "$TOKEN" \
+    --timeout 30000 \
+    --json \
+    --params '{"probe":false}' >"$out"
+  if ! node - <<'NODE' "$out" "$CHANNEL"
+const fs = require("node:fs");
+const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const payload = raw.result ?? raw.data ?? raw;
+const channel = process.argv[3];
+if (!payload.channels || !payload.channels[channel]) {
+  throw new Error(`missing channels.${channel}\n${JSON.stringify(raw, null, 2).slice(0, 4000)}`);
+}
+console.log(`${channel} channel plugin visible`);
+NODE
+  then
+    cat /tmp/openclaw-root-owned-gateway.log >&2
+    exit 1
+  fi
+}
+
+start_gateway /tmp/openclaw-root-owned-gateway.log
+wait_for_gateway_health
+assert_channel_status
+
+if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
+  echo "root-owned package tree was mutated" >&2
+  find "$root/dist/extensions/$CHANNEL/node_modules" -maxdepth 4 -type f | sort | head -80 >&2 || true
+  exit 1
+fi
+if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$DEP_SENTINEL/package.json" -type f | grep -q .; then
+  echo "missing external staged dependency sentinel for $DEP_SENTINEL" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -120 >&2 || true
+  cat /tmp/openclaw-root-owned-gateway.log >&2
+  exit 1
+fi
+
+echo "root-owned global install Docker E2E passed"
 EOF
   then
     cat "$run_log"
@@ -600,9 +791,14 @@ EOF
   rm -f "$run_log"
 }
 
-run_channel_scenario telegram grammy
-run_channel_scenario discord discord-api-types
-run_channel_scenario slack @slack/web-api
+if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
+  run_channel_scenario telegram grammy
+  run_channel_scenario discord discord-api-types
+  run_channel_scenario slack @slack/web-api
+fi
 if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
   run_update_scenario
+fi
+if [ "$RUN_ROOT_OWNED_SCENARIO" != "0" ]; then
+  run_root_owned_global_scenario
 fi
