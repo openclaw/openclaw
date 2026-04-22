@@ -148,9 +148,9 @@ export function createClackPrompter(): WizardPrompter {
         stop: (message) => {
           osc.done();
           if (message === undefined) {
-            spin.clear();
+            spin?.clear();
           } else {
-            spin.stop(message);
+            spin?.stop(message);
           }
         },
       };
