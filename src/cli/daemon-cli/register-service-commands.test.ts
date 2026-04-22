@@ -84,6 +84,32 @@ describe("addGatewayServiceCommands", () => {
         );
       },
     },
+    {
+      name: "forwards restart RPC override options",
+      argv: [
+        "restart",
+        "--url",
+        "ws://remote.example:18789",
+        "--token",
+        "tok_restart",
+        "--password",
+        "pw_restart",
+        "--timeout",
+        "9000",
+      ],
+      assert: () => {
+        expect(runDaemonRestart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            rpc: expect.objectContaining({
+              url: "ws://remote.example:18789",
+              token: "tok_restart",
+              password: "pw_restart",
+              timeout: "9000",
+            }),
+          }),
+        );
+      },
+    },
   ])("$name", async ({ argv, assert }) => {
     const gateway = createGatewayParentLikeCommand();
     await gateway.parseAsync(argv, { from: "user" });
