@@ -384,6 +384,14 @@ describe("diagnostic support export", () => {
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
         "connect wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
       ],
+      [
+        "connect https://gateway.example/ws?access-token=short-token",
+        "connect https://gateway.example/ws?access-token=<redacted>",
+      ],
+      [
+        "connect https://gateway.example/ws?hook-token=hook-secret",
+        "connect https://gateway.example/ws?hook-token=<redacted>",
+      ],
       ["connect https://token@gateway.example/ws", "connect https://<redacted>@gateway.example/ws"],
       ["auth Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==", "auth Basic <redacted>"],
       ["Cookie: sid=secret; theme=light", "Cookie: <redacted>"],

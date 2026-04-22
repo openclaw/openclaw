@@ -1,4 +1,6 @@
 import path from "node:path";
+import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
+import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
 import { redactSensitiveText } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
@@ -17,8 +19,7 @@ const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
-const SENSITIVE_URL_PARAM_RE =
-  /([?&](?:api[-_]?key|access[-_]?token|auth[-_]?token|hook[-_]?token|password|passwd|refresh[-_]?token|secret|token)=)[^&#\s]+/giu;
+const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
 const MATRIX_USER_ID_RE = /@[A-Za-z0-9._=-]+:[A-Za-z0-9.-]+/gu;
 const MATRIX_ROOM_ID_RE = /![A-Za-z0-9._=-]+:[A-Za-z0-9.-]+/gu;
@@ -56,10 +57,6 @@ function isPrivateSupportField(key: string): boolean {
 
 function isPrivateConfigField(key: string): boolean {
   return isPrivateSupportField(key) || CONFIG_PRIVATE_FIELD_RE.test(key);
-}
-
-function isSecretRefShape(value: Record<string, unknown>): boolean {
-  return typeof value.source === "string" && typeof value.id === "string";
 }
 
 function sanitizeSecretRefForSupport(value: Record<string, unknown>): Record<string, unknown> {
@@ -143,7 +140,9 @@ function redactUrlSecretsForSupport(value: string): string {
     .replace(URL_USERINFO_RE, (_match, scheme: string, _username: string, password?: string) =>
       password ? `${scheme}<redacted>:<redacted>@` : `${scheme}<redacted>@`,
     )
-    .replace(SENSITIVE_URL_PARAM_RE, "$1<redacted>");
+    .replace(URL_PARAM_RE, (match, prefix: string, key: string) =>
+      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=<redacted>` : match,
+    );
 }
 
 function redactContactIdentifiersForSupport(value: string): string {
