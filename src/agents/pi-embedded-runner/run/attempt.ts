@@ -167,7 +167,7 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
-import { collectAllowedToolNames } from "../tool-name-allowlist.js";
+import { collectAllowedToolNames, toSessionToolAllowlist } from "../tool-name-allowlist.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -1121,6 +1121,11 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
+      // Pi's `tools` option is a name allowlist, not the tool definitions.
+      // OpenClaw registers local tools through `customTools`, so passing the
+      // same names here keeps custom tools executable instead of silently
+      // filtering them out with an empty allowlist.
+      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
 
       ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
         createAgentSession: async (options) =>
@@ -1132,7 +1137,7 @@ export async function runEmbeddedAttempt(
           modelRegistry: params.modelRegistry,
           model: params.model,
           thinkingLevel: mapThinkingLevel(params.thinkLevel),
-          tools: builtInTools,
+          tools: sessionToolAllowlist,
           customTools: allCustomTools,
           sessionManager,
           settingsManager,

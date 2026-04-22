@@ -132,7 +132,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
-import { collectAllowedToolNames } from "./tool-name-allowlist.js";
+import { collectAllowedToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -839,10 +839,14 @@ export async function compactEmbeddedPiSessionDirect(
         contextTokenBudget: ctxInfo.tokens,
       });
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
+      // Pi treats `tools` as a name allowlist. Compaction uses the same custom
+      // tool path as normal turns, so pass names here to keep those tools active
+      // across compaction retries.
+      const sessionToolAllowlist = toSessionToolAllowlist(allowedToolNames);
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
@@ -880,7 +884,7 @@ export async function compactEmbeddedPiSessionDirect(
             modelRegistry,
             model: effectiveModel,
             thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: builtInTools,
+            tools: sessionToolAllowlist,
             customTools,
             sessionManager,
             settingsManager,

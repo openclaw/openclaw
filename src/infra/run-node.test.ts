@@ -209,7 +209,10 @@ async function runStatusCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void | Promise<void>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
@@ -232,7 +235,10 @@ async function runQaCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void | Promise<void>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
@@ -568,6 +574,37 @@ describe("run-node script", () => {
           "mock-openai",
         ],
       ]);
+    });
+  });
+
+  it("passes the synthesized private QA env into runtime postbuild staging", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runQaCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
+
+      expect(exitCode).toBe(0);
+      expect(runRuntimePostBuild).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: tmp,
+          env: expect.objectContaining({
+            OPENCLAW_BUILD_PRIVATE_QA: "1",
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+          }),
+        }),
+      );
     });
   });
 
