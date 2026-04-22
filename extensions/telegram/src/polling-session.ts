@@ -217,6 +217,14 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
+      if (isRecoverableTelegramNetworkError(err, { context: "webhook" })) {
+        this.opts.log(
+          `[telegram] Webhook cleanup encountered a network error: ${formatErrorMessage(err)}. Proceeding to polling cycle anyway.`,
+        );
+        this.#webhookCleared = true;
+        return "ready";
+      }
+
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
         "Telegram webhook cleanup failed",

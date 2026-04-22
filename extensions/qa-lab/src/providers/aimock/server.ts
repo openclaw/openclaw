@@ -70,7 +70,7 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
   return requestMessages(body)
-    .map((message: any) => stringifyContent(message.content))
+    .map((message: unknown) => stringifyContent((message as { content: unknown }).content))
     .filter(Boolean)
     .join("\n");
 }

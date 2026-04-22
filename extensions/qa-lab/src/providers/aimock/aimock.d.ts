@@ -10,24 +10,24 @@ declare module "@copilotkit/aimock" {
     });
     getRequests(): JournalEntry[];
     mount(path: string, mountable: Mountable): void;
-    onMessage(pattern: RegExp | string, response: any): void;
+    onMessage(pattern: RegExp | string, response: unknown): void;
     start(): Promise<void>;
     stop(): Promise<void>;
     baseUrl: string;
   }
 
   export interface JournalEntry {
-    body?: any;
+    body?: unknown;
     path: string;
     response: {
       fixture?: {
-        response: any;
+        response: unknown;
       };
     };
   }
 
   export interface ChatCompletionRequest {
-    messages?: any[];
+    messages?: unknown[];
     model?: string;
   }
 
