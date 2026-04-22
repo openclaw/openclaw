@@ -42,6 +42,8 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  includeUntrustedWorkspacePlugins?: boolean;
+  requireCompleteDiscoveryEntryCoverage?: boolean;
 }): ProviderPlugin[] {
   const pluginIds = resolveDiscoveredProviderPluginIds(params);
   const pluginIdSet = new Set(pluginIds);
@@ -51,16 +53,18 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   if (records.length === 0) {
     return [];
   }
+  if (params.requireCompleteDiscoveryEntryCoverage && records.length < pluginIdSet.size) {
+    return [];
+  }
   const loadSource = createPluginSourceLoader();
   const providers: ProviderPlugin[] = [];
   for (const manifest of records) {
     try {
       const moduleExport = loadSource(manifest.providerDiscoverySource!) as ProviderDiscoveryModule;
       providers.push(
-        ...normalizeDiscoveryModule(moduleExport).map((provider) => ({
-          ...provider,
-          pluginId: manifest.id,
-        })),
+        ...normalizeDiscoveryModule(moduleExport).map((provider) =>
+          Object.assign({}, provider, { pluginId: manifest.id }),
+        ),
       );
     } catch {
       // Discovery fast path is optional. Fall back to the full plugin loader
@@ -76,6 +80,8 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  includeUntrustedWorkspacePlugins?: boolean;
+  requireCompleteDiscoveryEntryCoverage?: boolean;
 }): ProviderPlugin[] {
   const entryProviders = resolveProviderDiscoveryEntryPlugins(params);
   if (entryProviders.length > 0) {

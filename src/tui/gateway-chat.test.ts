@@ -30,6 +30,7 @@ vi.mock("../gateway/net.js", async () => {
 });
 
 const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayClientRequestError } = await import("../gateway/client.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -109,6 +110,7 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
@@ -125,10 +127,12 @@ describe("resolveGatewayConnection", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
   });
 
   afterEach(() => {
     envSnapshot.restore();
+    vi.useRealTimers();
   });
 
   it("throws when url override is missing explicit credentials", async () => {
@@ -195,6 +199,74 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({});
     expect(result.password).toBe("config-password");
     expect(result.token).toBeUndefined();
+  });
+
+  it("keeps normal TUI local password mode env precedence by default", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: "config-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
+      const result = await resolveGatewayConnection({});
+      expect(result.password).toBe("env-password");
+    });
+  });
+
+  it("uses configured local password for setup-launched TUI despite stale gateway password env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: "config-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.password).toBe("config-password");
+      },
+    );
+  });
+
+  it("still resolves env SecretRefs for setup-launched TUI config auth", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "resolved-ref-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.password).toBe("resolved-ref-password");
+      },
+    );
   });
 
   it("fails when both local token and password are configured but gateway.auth.mode is unset", async () => {
@@ -423,6 +495,10 @@ describe("resolveGatewayConnection", () => {
 });
 
 describe("GatewayChatClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
@@ -442,5 +518,35 @@ describe("GatewayChatClient", () => {
       (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
         .deviceIdentity,
     ).toBeUndefined();
+  });
+
+  it("retries startup-unavailable chat history until the gateway finishes booting", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "chat.history unavailable during gateway startup",
+          details: { method: "chat.history" },
+          retryable: true,
+          retryAfterMs: 250,
+        }),
+      )
+      .mockResolvedValueOnce({ messages: [] });
+
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const historyPromise = client.loadHistory({ sessionKey: "main", limit: 200 });
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(historyPromise).resolves.toEqual({ messages: [] });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ModelRef = {
@@ -22,6 +22,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4-1-fast-non-reasoning",
   "zai/glm-4.7",
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "minimax-portal/minimax-m2.7",
 ] as const;
@@ -100,36 +101,6 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   return isHighSignalClaudeModelId(id);
 }
 
-function sharesOwningPlugin(params: {
-  left: string;
-  right: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  ownerCache: Map<string, readonly string[]>;
-}): boolean {
-  const resolveOwners = (provider: string): readonly string[] => {
-    const normalized = normalizeProviderId(provider);
-    const cached = params.ownerCache.get(normalized);
-    if (cached) {
-      return cached;
-    }
-    const owners =
-      resolveOwningPluginIdsForProvider({
-        provider: normalized,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ?? [];
-    params.ownerCache.set(normalized, owners);
-    return owners;
-  };
-
-  const leftOwners = resolveOwners(params.left);
-  const rightOwners = resolveOwners(params.right);
-  return leftOwners.some((owner) => rightOwners.includes(owner));
-}
-
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   provider?: string | null;
   useExplicitModels: boolean;
@@ -153,9 +124,7 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
     }
     if (
       requestedProvider &&
-      sharesOwningPlugin({
-        left: requestedProvider,
-        right: provider,
+      liveProvidersShareOwningPlugin(requestedProvider, provider, {
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,

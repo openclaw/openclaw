@@ -3274,6 +3274,16 @@ describe("createTelegramBot", () => {
     expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls[0]?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries command pagination callbacks after a bubbled edit failure", async () => {
@@ -3326,6 +3336,99 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Commands (2/");
+  });
+
+  it("treats permanent command pagination edit failures as completed updates", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 776,
+        onUpdateId,
+      },
+    });
+
+    const callbackHandler = getOnHandler("callback_query");
+    const ctx = {
+      update: { update_id: 777 },
+      callbackQuery: {
+        id: "cbq-commands-permanent-edit-1",
+        data: "commands_page_2:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 20,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    editMessageTextSpy.mockRejectedValueOnce(
+      new Error("400: Bad Request: message can't be edited"),
+    );
+
+    await expect(
+      runTelegramMiddlewareChain({
+        ctx,
+        finalHandler: callbackHandler,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(onUpdateId).toHaveBeenCalledWith(777);
+    });
+
+    await runTelegramMiddlewareChain({
+      ctx,
+      finalHandler: callbackHandler,
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not swallow unprefixed command pagination edit failures", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+
+    const ctx = {
+      update: { update_id: 778 },
+      callbackQuery: {
+        id: "cbq-commands-non-telegram-edit-1",
+        data: "commands_page_2:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 21,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    editMessageTextSpy.mockRejectedValueOnce(new Error("message can't be edited"));
+
+    await expect(
+      runTelegramMiddlewareChain({
+        ctx,
+        finalHandler: callbackHandler,
+      }),
+    ).rejects.toThrow("message can't be edited");
+
+    await runTelegramMiddlewareChain({
+      ctx,
+      finalHandler: callbackHandler,
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
   });
 
   it("retries command pagination callbacks after a bubbled preflight failure", async () => {
@@ -3561,6 +3664,16 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls.at(-1)?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {

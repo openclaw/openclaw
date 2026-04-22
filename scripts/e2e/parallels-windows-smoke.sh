@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-package-common.sh"
+
 VM_NAME="Windows 11"
 SNAPSHOT_HINT="pre-openclaw-native-e2e-2026-03-12"
 MODE="both"
@@ -41,14 +44,15 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_GIT_SETUP_S=1200
 TIMEOUT_INSTALL_S=420
-TIMEOUT_UPDATE_S=300
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S:-1200}"
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
-TIMEOUT_ONBOARD_S=240
-TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
+TIMEOUT_ONBOARD_S=600
+TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
 # verify_gateway_reachable runs six 30s probes plus short retry sleeps.
-TIMEOUT_GATEWAY_S=240
-TIMEOUT_AGENT_S=180
+TIMEOUT_GATEWAY_S=420
+TIMEOUT_AGENT_S=600
+PHASE_STALE_WARN_S=60
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -691,10 +695,11 @@ phase_run() {
   local timeout_s="$2"
   shift 2
 
-  local log_path pid start rc timed_out
+  local log_path pid start rc timed_out next_warn summary
   log_path="$(phase_log_path "$phase_id")"
   say "$phase_id"
   start=$SECONDS
+  next_warn=$((start + PHASE_STALE_WARN_S))
   timed_out=0
 
   (
@@ -703,6 +708,12 @@ phase_run() {
   pid=$!
 
   while child_job_running "$pid"; do
+    if (( SECONDS >= next_warn )); then
+      summary="$(parallels_log_progress_extract python3 "$log_path")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      warn "$phase_id still running after $((SECONDS - start))s: $summary"
+      next_warn=$((SECONDS + PHASE_STALE_WARN_S))
+    fi
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
       kill "$pid" >/dev/null 2>&1 || true
@@ -848,54 +859,58 @@ PY
 }
 
 current_build_commit() {
-  python3 - <<'PY'
-import json
-import pathlib
+  parallels_package_current_build_commit
+}
 
-path = pathlib.Path("dist/build-info.json")
-if not path.exists():
-    print("")
-else:
-    print(json.loads(path.read_text()).get("commit", ""))
-PY
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
 }
 
 acquire_build_lock() {
-  local owner_pid=""
-  while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
-    if [[ -f "$BUILD_LOCK_DIR/pid" ]]; then
-      owner_pid="$(cat "$BUILD_LOCK_DIR/pid" 2>/dev/null || true)"
-      if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" >/dev/null 2>&1; then
-        warn "Removing stale Parallels build lock"
-        rm -rf "$BUILD_LOCK_DIR"
-        continue
-      fi
-    fi
-    sleep 1
-  done
-  printf '%s\n' "$$" >"$BUILD_LOCK_DIR/pid"
+  parallels_package_acquire_build_lock "$BUILD_LOCK_DIR"
 }
 
 release_build_lock() {
-  if [[ -d "$BUILD_LOCK_DIR" ]]; then
-    rm -rf "$BUILD_LOCK_DIR"
-  fi
+  parallels_package_release_build_lock "$BUILD_LOCK_DIR"
 }
 
 ensure_current_build() {
-  local head build_commit
-  acquire_build_lock
+  local head build_commit rc lock_owned
+  lock_owned=0
+  if [[ "${OPENCLAW_PARALLELS_BUILD_LOCK_HELD:-0}" != "1" ]]; then
+    acquire_build_lock
+    lock_owned=1
+  fi
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
-  if [[ "$build_commit" == "$head" ]]; then
-    release_build_lock
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
+    if [[ "$lock_owned" -eq 1 ]]; then
+      release_build_lock
+    fi
     return
   fi
   say "Build dist for current head"
+  set +e
   pnpm build
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    parallels_package_assert_no_generated_drift
+    rc=$?
+  fi
   build_commit="$(current_build_commit)"
-  release_build_lock
-  [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
+  set -e
+  if [[ "$lock_owned" -eq 1 ]]; then
+    release_build_lock
+  fi
+  [[ $rc -eq 0 ]] || return "$rc"
+  if [[ "$build_commit" != "$head" ]]; then
+    warn "dist/build-info.json still does not match HEAD after build"
+    return 1
+  fi
+}
+
+write_package_dist_inventory() {
+  parallels_package_write_dist_inventory
 }
 
 ensure_guest_git() {
@@ -928,10 +943,11 @@ EOF
 }
 
 ensure_mingit_zip() {
-  local mingit_name mingit_url
-  mapfile -t mingit_meta < <(resolve_mingit_download)
-  mingit_name="${mingit_meta[0]}"
-  mingit_url="${mingit_meta[1]}"
+  local mingit_name mingit_url mingit_meta
+  mingit_meta="$(resolve_mingit_download)"
+  mingit_name="${mingit_meta%%$'\n'*}"
+  mingit_url="${mingit_meta#*$'\n'}"
+  [[ "$mingit_name" != "$mingit_url" ]] || die "failed to resolve MinGit download metadata"
   MINGIT_ZIP_NAME="$mingit_name"
   MINGIT_ZIP_PATH="$MAIN_TGZ_DIR/$mingit_name"
   if [[ ! -f "$MINGIT_ZIP_PATH" ]]; then
@@ -941,7 +957,7 @@ ensure_mingit_zip() {
 }
 
 pack_main_tgz() {
-  local short_head pkg packed_commit
+  local short_head pkg packed_commit rc
   ensure_mingit_zip
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
@@ -956,12 +972,21 @@ pack_main_tgz() {
     return
   fi
   say "Pack current main tgz"
-  ensure_current_build
-  short_head="$(git rev-parse --short HEAD)"
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
+  acquire_build_lock
+  set +e
+  {
+    OPENCLAW_PARALLELS_BUILD_LOCK_HELD=1 ensure_current_build &&
+      write_package_dist_inventory &&
+      short_head="$(git rev-parse --short HEAD)" &&
+      pkg="$(
+        npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+          | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      )"
+  }
+  rc=$?
+  set -e
+  release_build_lock
+  [[ $rc -eq 0 ]] || return "$rc"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
@@ -1997,8 +2022,10 @@ param(
 
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  Set-Content -Path \$LogPath -Value 'onboard.start'
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json >> "{1}" 2>&1' -f \$openclaw, \$LogPath)
   & cmd.exe /d /s /c \$cmdLine
+  Add-Content -Path \$LogPath -Value ('onboard.exit={0}' -f \$LASTEXITCODE)
   Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
 } catch {
   if (Test-Path \$LogPath) {
@@ -2015,6 +2042,7 @@ run_ref_onboard() {
   local api_key_env_q api_key_value_q script_url
   local runner_name log_name done_name done_status launcher_state
   local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  local guest_log log_state_path
   api_key_env_q="$(ps_single_quote "$API_KEY_ENV")"
   api_key_value_q="$(ps_single_quote "$API_KEY_VALUE")"
   write_onboard_runner_script
@@ -2025,6 +2053,8 @@ run_ref_onboard() {
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
   startup_checked=0
+  log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-onboard-log-state.XXXXXX")"
+  : >"$log_state_path"
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -2036,6 +2066,34 @@ curl.exe -fsSL '$script_url' -o \$runner
 Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner, '-LogPath', \$log, '-DonePath', \$done) -WindowStyle Hidden | Out-Null
 EOF
 )"
+
+  stream_windows_onboard_log() {
+    set +e
+    guest_log="$(
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+    )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
+      return "$log_rc"
+    fi
+    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    sys.stdout.write(current[len(previous):])
+else:
+    sys.stdout.write(current)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+  }
 
   while :; do
     set +e
@@ -2049,19 +2107,24 @@ EOF
       warn "windows onboard helper poll failed; retrying"
       if (( SECONDS >= poll_deadline )); then
         warn "windows onboard helper timed out while polling done file"
+        rm -f "$log_state_path"
         return 1
       fi
       sleep 2
       continue
     fi
+    set +e
+    stream_windows_onboard_log
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows onboard helper live log poll failed; retrying"
+    fi
     if [[ -n "$done_status" ]]; then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_onboard_log; then
         warn "windows onboard helper log drain failed after completion"
       fi
+      rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -2076,18 +2139,16 @@ EOF
       startup_checked=1
       if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
         warn "windows onboard helper failed to materialize guest files"
+        rm -f "$log_state_path"
         return 1
       fi
     fi
     if (( SECONDS >= poll_deadline )); then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_onboard_log; then
         warn "windows onboard helper log drain failed after timeout"
       fi
       warn "windows onboard helper timed out waiting for done file"
+      rm -f "$log_state_path"
       return 1
     fi
     sleep 2
@@ -2313,6 +2374,7 @@ run_fresh_main_lane() {
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path "$install_log_phase")")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
+  phase_run "fresh.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?

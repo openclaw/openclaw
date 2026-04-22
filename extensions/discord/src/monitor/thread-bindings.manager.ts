@@ -15,6 +15,7 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import {
   createThreadForBinding,
   createWebhookForChannel,
@@ -65,6 +66,18 @@ import {
 
 function registerManager(manager: ThreadBindingManager) {
   MANAGERS_BY_ACCOUNT_ID.set(manager.accountId, manager);
+}
+
+function normalizeChildBindingParentChannelId(raw?: string | null): string | undefined {
+  const trimmed = normalizeOptionalString(raw) ?? "";
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return resolveDiscordChannelId(trimmed);
+  } catch {
+    return undefined;
+  }
 }
 
 function unregisterManager(accountId: string, manager: ThreadBindingManager) {
@@ -491,7 +504,7 @@ export function createThreadBindingManager(
       }
 
       const introText = bindParams.introText?.trim();
-      if (introText) {
+      if (introText && cfg) {
         void maybeSendBindingMessage({ cfg, record, text: introText });
       }
       return record;
@@ -532,12 +545,14 @@ export function createThreadBindingManager(
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound turns when allowBots is enabled.
-        void maybeSendBindingMessage({
-          cfg,
-          record: removed,
-          text: farewell,
-          preferWebhook: false,
-        });
+        if (cfg) {
+          void maybeSendBindingMessage({
+            cfg,
+            record: removed,
+            text: farewell,
+            preferWebhook: false,
+          });
+        }
       }
       return removed;
     },
@@ -630,11 +645,12 @@ export function createThreadBindingManager(
           ? normalizeOptionalString(metadata.agentId)
           : undefined;
       let threadId: string | undefined;
-      let channelId = normalizeOptionalString(input.conversation.parentConversationId);
+      let channelId: string | undefined;
       let createThread = false;
 
       if (placement === "child") {
         createThread = true;
+        channelId = normalizeChildBindingParentChannelId(input.conversation.parentConversationId);
         if (!channelId && conversationId) {
           const cfg = resolveCurrentCfg();
           channelId =

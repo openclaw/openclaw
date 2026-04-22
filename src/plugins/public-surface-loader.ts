@@ -7,7 +7,6 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
 import {
-  buildPluginLoaderAliasMap,
   isBundledPluginExtensionPath,
   resolvePluginLoaderJitiTryNative,
   resolveLoaderPackageRoot,
@@ -129,18 +128,17 @@ function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolea
     return null;
   }
   const cacheKey = tryNative ? "bundled:native" : "bundled:source";
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
   return getCachedPluginJitiLoader({
     cache: sharedBundledPublicSurfaceJitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
     jitiFilename: import.meta.url,
     cacheScopeKey: cacheKey,
-    aliasMap,
     tryNative,
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
