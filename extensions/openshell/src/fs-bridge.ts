@@ -2,7 +2,6 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity } from "../../../src/infra/file-identity.js";
 import { writeFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
 import type {
   SandboxFsBridge,
@@ -364,14 +363,18 @@ async function openPinnedReadableFile(params: {
   rootPath: string;
   containerPath: string;
 }): Promise<FileHandle> {
-  const canonicalRoot = await fsPromises
-    .realpath(params.rootPath)
-    .catch(() => path.resolve(params.rootPath));
+  // The literal root is what `resolveTarget` joins caller-provided relative
+  // paths against, so pre-open containment must be checked in literal form.
+  // The canonical root is derived separately and used for the post-open
+  // path checks (fd-path readlink and realpath cross-check), so a workspace
+  // that is itself configured as a symlink still works.
+  const literalRoot = path.resolve(params.rootPath);
+  const canonicalRoot = await fsPromises.realpath(literalRoot).catch(() => literalRoot);
   const literalPath = path.resolve(params.absolutePath);
   // Cheap string-prefix check on the caller-provided absolute path; no
   // filesystem state is read here, so there is no TOCTOU window. Deeper
   // checks run after the fd is pinned.
-  if (!isPathInside(canonicalRoot, literalPath)) {
+  if (!isPathInside(literalRoot, literalPath)) {
     throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`);
   }
   const openCloseOnExecFlag = (fs.constants as Record<string, number>).O_CLOEXEC ?? 0;
@@ -408,10 +411,11 @@ async function openPinnedReadableFile(params: {
     // there is no `/proc` equivalent. With no kernel-backed path readback we
     // must prove the pinned fd is in-root without trusting a separate
     // `realpath` lookup of the caller-provided path (that pair races). Walk
-    // every ancestor between `canonicalRoot` and `literalPath` and reject if
-    // any ancestor is a symlink; then realpath the path and cross-check the
-    // resolved path and file identity against the pinned fd.
-    await assertAncestorChainHasNoSymlinks(canonicalRoot, literalPath, params.containerPath);
+    // every ancestor between `literalRoot` and `literalPath` — the actual
+    // on-disk chain — and reject if any ancestor is a symlink; then realpath
+    // the path and cross-check the canonical resolved path and file identity
+    // against the pinned fd.
+    await assertAncestorChainHasNoSymlinks(literalRoot, literalPath, params.containerPath);
     const currentResolvedPath = await fsPromises.realpath(literalPath);
     if (!isPathInside(canonicalRoot, currentResolvedPath)) {
       throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
@@ -477,4 +481,31 @@ function normalizeOpenedReadablePath(openedPath: string): string {
     ? openedPath.slice(0, -deletedSuffix.length)
     : openedPath;
   return path.resolve(withoutDeletedSuffix);
+}
+
+// File identity comparison with win32-aware `dev=0` handling, matching the
+// shared `src/infra/file-identity.ts` contract. Kept local because extension
+// production code is not allowed to reach into core `src/**` by relative
+// import, and this helper is not yet part of the `openclaw/plugin-sdk/*`
+// public surface.
+function isZeroStatField(value: number | bigint): boolean {
+  return value === 0 || value === 0n;
+}
+
+function sameFileIdentity(
+  left: { dev: number | bigint; ino: number | bigint },
+  right: { dev: number | bigint; ino: number | bigint },
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (left.ino !== right.ino) {
+    return false;
+  }
+  if (left.dev === right.dev) {
+    return true;
+  }
+  // On Windows, path-based stat can report `dev=0` while fd-based stat reports
+  // a real volume serial. Treat either side `dev=0` as "unknown device"
+  // rather than a mismatch so legitimate Windows fallback reads are not
+  // rejected.
+  return platform === "win32" && (isZeroStatField(left.dev) || isZeroStatField(right.dev));
 }

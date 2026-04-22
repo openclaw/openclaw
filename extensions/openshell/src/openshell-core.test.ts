@@ -347,14 +347,15 @@ describe("openshell fs bridges", () => {
     let swapped = false;
     const openSpy = vi
       .spyOn(nodeFs, "open")
-      .mockImplementation((filePath, flags, mode, cb) => {
+      .mockImplementation(((...args: unknown[]) => {
+        const filePath = args[0];
         if (!swapped && filePath === targetPath) {
           swapped = true;
           nodeFs.rmSync(path.join(workspaceDir, "subdir"), { recursive: true, force: true });
           nodeFs.symlinkSync(outsideDir, path.join(workspaceDir, "subdir"));
         }
-        return (originalOpen as (...args: unknown[]) => unknown)(filePath, flags, mode, cb);
-      });
+        return (originalOpen as (...delegated: unknown[]) => unknown)(...args);
+      }) as unknown as typeof nodeFs.open);
 
     try {
       await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
@@ -459,14 +460,15 @@ describe("openshell fs bridges", () => {
     let swapped = false;
     const openSpy = vi
       .spyOn(nodeFs, "open")
-      .mockImplementation((filePath, flags, mode, cb) => {
+      .mockImplementation(((...args: unknown[]) => {
+        const filePath = args[0];
         if (!swapped && filePath === targetPath) {
           swapped = true;
           nodeFs.rmSync(path.join(workspaceDir, "subdir"), { recursive: true, force: true });
           nodeFs.symlinkSync(outsideDir, path.join(workspaceDir, "subdir"));
         }
-        return (originalOpen as (...args: unknown[]) => unknown)(filePath, flags, mode, cb);
-      });
+        return (originalOpen as (...delegated: unknown[]) => unknown)(...args);
+      }) as unknown as typeof nodeFs.open);
     // Force the fallback verification path even on Linux so the ancestor-walk
     // guard is exercised directly.
     const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
