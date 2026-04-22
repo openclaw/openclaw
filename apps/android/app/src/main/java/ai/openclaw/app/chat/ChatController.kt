@@ -484,7 +484,11 @@ class ChatController(
 
   private fun isCronDeliveryNoise(content: List<ChatMessageContent>): Boolean {
     val text = content.filter { it.type == "text" }.joinToString("") { it.text ?: "" }.trim()
-    return text.contains("A cron job") && text.contains("just completed successfully")
+    // Anchor to the start of the message and cap length so legitimate user
+    // content that merely mentions cron output (pasted logs, support
+    // questions, etc.) is not silently dropped from history.
+    if (text.length > CRON_DELIVERY_NOISE_MAX_CHARS) return false
+    return text.startsWith("A cron job") && text.contains("just completed successfully")
   }
 
   private fun parseHistory(
@@ -501,7 +505,8 @@ class ChatController(
       array.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
-        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseMessageContent) ?: emptyList()
+        val content =
+          obj["content"].asArrayOrNull()?.mapNotNull { parseMessageContent(it, role) } ?: emptyList()
         if (role == "user" && isCronDeliveryNoise(content)) return@mapNotNull null
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
@@ -520,12 +525,18 @@ class ChatController(
     )
   }
 
-  private fun parseMessageContent(el: JsonElement): ChatMessageContent? {
+  private fun parseMessageContent(el: JsonElement, role: String): ChatMessageContent? {
     val obj = el.asObjectOrNull() ?: return null
     val type = obj["type"].asStringOrNull() ?: "text"
     return if (type == "text") {
       val raw = obj["text"].asStringOrNull()
-      val cleaned = raw?.let { Regex("""^<final>([\s\S]*)</final>$""").find(it.trim())?.groupValues?.get(1) ?: it }
+      // Only strip <final>…</final> wrappers on model/system output. User
+      // messages may legitimately contain those tags (e.g. XML examples).
+      val cleaned = if (raw != null && (role == "assistant" || role == "system")) {
+        stripFinalWrapperIfAny(raw)
+      } else {
+        raw
+      }
       ChatMessageContent(type = "text", text = cleaned)
     } else {
       ChatMessageContent(
@@ -565,6 +576,24 @@ class ChatController(
       "high" -> "high"
       else -> "off"
     }
+  }
+
+  private fun stripFinalWrapperIfAny(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.length < FINAL_OPEN.length + FINAL_CLOSE.length) return raw
+    if (!trimmed.startsWith(FINAL_OPEN) || !trimmed.endsWith(FINAL_CLOSE)) return raw
+    val inner = trimmed.substring(FINAL_OPEN.length, trimmed.length - FINAL_CLOSE.length)
+    // Refuse to unwrap when the payload looks like multiple or nested <final>
+    // blocks — keeping the original text preserves structure for anything the
+    // simple top-level wrapper cannot safely normalize.
+    if (inner.contains(FINAL_OPEN) || inner.contains(FINAL_CLOSE)) return raw
+    return inner
+  }
+
+  companion object {
+    private const val CRON_DELIVERY_NOISE_MAX_CHARS = 512
+    private const val FINAL_OPEN = "<final>"
+    private const val FINAL_CLOSE = "</final>"
   }
 }
 
