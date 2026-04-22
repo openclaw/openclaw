@@ -10,6 +10,7 @@ import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
@@ -238,6 +239,12 @@ export async function describeImagesWithModel(
       images: params.images,
     });
   }
+
+  registerProviderStreamForModel({
+    model,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
 
   const context = buildImageContext(prompt, params.images);
   const controller = new AbortController();

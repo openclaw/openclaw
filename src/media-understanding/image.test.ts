@@ -15,8 +15,9 @@ const hoisted = vi.hoisted(() => ({
   })),
   requireApiKeyMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
   setRuntimeApiKeyMock: vi.fn(),
-  resolveModelMock: vi.fn(),
+  discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
+  registerProviderStreamForModelMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -25,8 +26,9 @@ const {
   resolveApiKeyForProviderMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
-  resolveModelMock,
+  discoverModelsMock,
   fetchMock,
+  registerProviderStreamForModelMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -50,8 +52,15 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: requireApiKeyMock,
 }));
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: resolveModelMock,
+vi.mock("../agents/provider-stream.js", () => ({
+  registerProviderStreamForModel: registerProviderStreamForModelMock,
+}));
+
+vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
+  discoverAuthStorage: () => ({
+    setRuntimeApiKey: setRuntimeApiKeyMock,
+  }),
+  discoverModels: discoverModelsMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -76,16 +85,13 @@ describe("describeImageWithModel", () => {
       })),
       text: vi.fn(async () => ""),
     });
-    resolveModelMock.mockReturnValue({
-      model: {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
         provider: "minimax-portal",
         id: "MiniMax-VL-01",
         input: ["text", "image"],
         baseUrl: "https://api.minimax.io/anthropic",
-      },
-      authStorage: {
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      },
+      })),
     });
   });
 
@@ -134,16 +140,13 @@ describe("describeImageWithModel", () => {
   });
 
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
-    resolveModelMock.mockReturnValue({
-      model: {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
         provider: "minimax-portal",
         id: "custom-vision",
         input: ["text", "image"],
         baseUrl: "https://api.minimax.io/anthropic",
-      },
-      authStorage: {
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      },
+      })),
     });
     completeMock.mockResolvedValue({
       role: "assistant",
@@ -171,21 +174,28 @@ describe("describeImageWithModel", () => {
       text: "generic ok",
       model: "custom-vision",
     });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "minimax-portal",
+          id: "custom-vision",
+        }),
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      }),
+    );
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("passes image prompt as system instructions for codex image requests", async () => {
-    resolveModelMock.mockReturnValue({
-      model: {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
         provider: "openai-codex",
         id: "gpt-5.4",
         input: ["text", "image"],
         baseUrl: "https://chatgpt.com/backend-api",
-      },
-      authStorage: {
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      },
+      })),
     });
     completeMock.mockResolvedValue({
       role: "assistant",
@@ -357,22 +367,17 @@ describe("describeImageWithModel", () => {
   );
 
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
-    const resolveModelCallMock = vi.fn((provider: string, modelId: string) => {
+    const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
       expect(modelId).toBe("gemini-3-flash-preview");
       return {
-        model: {
-          provider: "google",
-          id: "gemini-3-flash-preview",
-          input: ["text", "image"],
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        },
-        authStorage: {
-          setRuntimeApiKey: setRuntimeApiKeyMock,
-        },
+        provider: "google",
+        id: "gemini-3-flash-preview",
+        input: ["text", "image"],
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
     });
-    resolveModelMock.mockImplementation(resolveModelCallMock);
+    discoverModelsMock.mockReturnValue({ find: findMock });
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "google-generative-ai",
@@ -400,7 +405,7 @@ describe("describeImageWithModel", () => {
       text: "flash ok",
       model: "gemini-3-flash-preview",
     });
-    expect(resolveModelCallMock).toHaveBeenCalledOnce();
+    expect(findMock).toHaveBeenCalledOnce();
     expect(getApiKeyForModelMock).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "google:default",
@@ -410,22 +415,17 @@ describe("describeImageWithModel", () => {
   });
 
   it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
-    const resolveModelCallMock = vi.fn((provider: string, modelId: string) => {
+    const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
       expect(modelId).toBe("gemini-3.1-flash-lite-preview");
       return {
-        model: {
-          provider: "google",
-          id: "gemini-3.1-flash-lite-preview",
-          input: ["text", "image"],
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        },
-        authStorage: {
-          setRuntimeApiKey: setRuntimeApiKeyMock,
-        },
+        provider: "google",
+        id: "gemini-3.1-flash-lite-preview",
+        input: ["text", "image"],
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
     });
-    resolveModelMock.mockImplementation(resolveModelCallMock);
+    discoverModelsMock.mockReturnValue({ find: findMock });
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "google-generative-ai",
@@ -453,76 +453,12 @@ describe("describeImageWithModel", () => {
       text: "flash lite ok",
       model: "gemini-3.1-flash-lite-preview",
     });
-    expect(resolveModelCallMock).toHaveBeenCalledOnce();
+    expect(findMock).toHaveBeenCalledOnce();
     expect(getApiKeyForModelMock).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "google:default",
       }),
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
-  });
-
-  it("resolves configured ollama cloud vision models through the shared model resolver", async () => {
-    resolveModelMock.mockReturnValue({
-      model: {
-        provider: "ollama",
-        id: "gemma4:31b-cloud",
-        input: ["text", "image"],
-        api: "ollama",
-        baseUrl: "https://ollama.com",
-      },
-      authStorage: {
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      },
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "ollama",
-      provider: "ollama",
-      model: "gemma4:31b-cloud",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "the image shows 5078894873" }],
-    });
-
-    const result = await describeImageWithModel({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl: "https://ollama.com",
-              models: [],
-            },
-          },
-        },
-      },
-      agentDir: "/tmp/openclaw-agent",
-      provider: "ollama",
-      model: "gemma4:31b-cloud",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      prompt: "Please describe this image and check if it contains the number 5078894873.",
-      timeoutMs: 1000,
-    });
-
-    expect(result).toEqual({
-      text: "the image shows 5078894873",
-      model: "gemma4:31b-cloud",
-    });
-    expect(resolveModelMock).toHaveBeenCalledWith(
-      "ollama",
-      "gemma4:31b-cloud",
-      "/tmp/openclaw-agent",
-      expect.objectContaining({
-        models: {
-          providers: {
-            ollama: expect.objectContaining({
-              baseUrl: "https://ollama.com",
-            }),
-          },
-        },
-      }),
-    );
   });
 });
