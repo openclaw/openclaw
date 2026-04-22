@@ -179,6 +179,10 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
+function sanitizeGeminiText(text: string): string {
+  return text.replace(/<(?:final|thought|reasoning)(?:\/?)>/g, "");
+}
+
 function resolveGoogleModelPath(modelId: string): string {
   if (modelId.startsWith("models/") || modelId.startsWith("tunedModels/")) {
     return modelId;
@@ -686,7 +690,8 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
                     partial: output as never,
                   });
                 } else if (activeBlock?.type === "text") {
-                  activeBlock.text += part.text;
+                  const sanitizedDelta = sanitizeGeminiText(part.text);
+                  activeBlock.text += sanitizedDelta;
                   activeBlock.textSignature = retainThoughtSignature(
                     activeBlock.textSignature,
                     part.thoughtSignature,
@@ -694,7 +699,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
                   stream.push({
                     type: "text_delta",
                     contentIndex: currentBlockIndex,
-                    delta: part.text,
+                    delta: sanitizedDelta,
                     partial: output as never,
                   });
                 }

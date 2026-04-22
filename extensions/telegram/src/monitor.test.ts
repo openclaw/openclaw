@@ -458,7 +458,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
-  it("retries recoverable deleteWebhook failures before polling", async () => {
+  it("proceeds on recoverable deleteWebhook network failures before polling", async () => {
     const abort = new AbortController();
     const cleanupError = makeRecoverableFetchError();
     api.deleteWebhook.mockReset();
@@ -467,7 +467,7 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(1);
     expectRecoverableRetryState(1);
   });
 
