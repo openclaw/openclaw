@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - Configure: skip generic CLI startup bootstrap for `openclaw configure` and bound hint-only gateway probes so the onboarding TUI reaches its first prompt faster when the Gateway is unavailable. (#69984) Thanks @obviyus.
 - Agents/harness: surface selected plugin harness failures directly instead of replaying the same turn through embedded PI, preventing misleading secondary PI auth errors and avoiding duplicate side effects.
 - OpenAI Codex: add a ChatGPT device-code auth option beside browser OAuth, so headless or callback-hostile setups can sign in without relying on the localhost browser callback. (#69557) Thanks @vincentkoc.
+- CLI sessions: keep provider-owned CLI sessions through implicit daily expiry while preserving explicit reset behavior, and retain Claude CLI binding metadata across gateway agent requests. (#70106) Thanks @obviyus.
 
 ## 2026.4.21
 
