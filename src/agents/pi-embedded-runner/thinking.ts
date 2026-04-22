@@ -56,6 +56,70 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
 }
 
 /**
+ * Strip thinking blocks that have obviously invalid `thinkingSignature` from
+ * assistant messages. This prevents Anthropic API rejection errors like
+ * "Invalid signature in thinking block" caused by empty signatures that were
+ * persisted from Bedrock streaming responses.
+ *
+ * Only strips thinking blocks with missing, empty, or non-string signatures —
+ * the clearly broken cases. Does NOT attempt length-based heuristics to guess
+ * whether a signature is valid; the API itself is the authoritative validator.
+ *
+ * Unlike `dropThinkingBlocks` which removes ALL thinking blocks, this function
+ * preserves thinking blocks that have a non-empty string signature.
+ *
+ * Returns the original array reference when nothing was changed.
+ */
+export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!isAssistantMessageWithContent(msg)) {
+      out.push(msg);
+      continue;
+    }
+    const nextContent: AssistantContentBlock[] = [];
+    let changed = false;
+    for (const block of msg.content) {
+      if (!block || typeof block !== "object") {
+        nextContent.push(block);
+        continue;
+      }
+      const rec = block as { type?: unknown; thinkingSignature?: unknown };
+      if (rec.type !== "thinking") {
+        nextContent.push(block);
+        continue;
+      }
+      const sig = rec.thinkingSignature;
+      if (typeof sig === "string" && sig.length > 0) {
+        nextContent.push(block);
+        continue;
+      }
+      touched = true;
+      changed = true;
+    }
+    if (!changed) {
+      out.push(msg);
+      continue;
+    }
+    const content =
+      nextContent.length > 0 ? nextContent : [{ type: "text", text: "" } as AssistantContentBlock];
+    out.push({ ...msg, content });
+  }
+  return touched ? out : messages;
+}
+
+/**
+ * Returns true if the given error message indicates an Anthropic
+ * "Invalid signature in thinking block" rejection. Useful for callers that
+ * want to apply `dropThinkingBlocks` and retry once when this specific error
+ * surfaces despite `stripInvalidThinkingSignatures` running on replay.
+ */
+export function isInvalidThinkingSignatureError(errorText: string): boolean {
+  return /invalid signature in thinking block/i.test(errorText);
+}
+
+/**
  * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
  * all assistant messages except the latest one.
  *

@@ -40,7 +40,7 @@ import {
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropThinkingBlocks, stripInvalidThinkingSignatures } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -476,9 +476,17 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
+  // Strip thinking blocks with empty/invalid signatures before replay.
+  // Bedrock can return thinking blocks with empty thinkingSignature; these
+  // cause "Invalid signature in thinking block" API errors on subsequent turns.
+  // This runs before dropThinkingBlocks so it also catches cases where
+  // preserveSignatures is true (Anthropic/Bedrock providers). See #45010.
+  const validatedSignatures = policy.preserveSignatures
+    ? stripInvalidThinkingSignatures(sanitizedImages)
     : sanitizedImages;
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(validatedSignatures)
+    : validatedSignatures;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
