@@ -119,16 +119,17 @@ export async function promptAuthConfig(
   if (authChoice === "custom-api-key") {
     const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
     next = customResult.config;
-  } else if (authChoice !== "skip") {
-    const applied = await applyAuthChoice({
-      authChoice,
-      config: next,
-      prompter,
-      runtime,
-      setDefaultModel: true,
-    });
-    next = applied.config;
   } else {
+    if (authChoice !== "skip") {
+      const applied = await applyAuthChoice({
+        authChoice,
+        config: next,
+        prompter,
+        runtime,
+        setDefaultModel: true,
+      });
+      next = applied.config;
+    }
     const modelSelection = await promptDefaultModel({
       config: next,
       prompter,

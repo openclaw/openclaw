@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -114,6 +115,15 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
 }
 
 describe("promptAuthConfig", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.promptDefaultModel.mockResolvedValue({});
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+  });
+
   it("keeps Kilo provider models while applying allowlist defaults", async () => {
     const result = await runPromptAuthConfigWithAllowlist();
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
@@ -174,5 +184,22 @@ describe("promptAuthConfig", () => {
         preferredProvider: "openai",
       }),
     );
+  });
+
+  it("keeps the user selected OpenRouter default model after auth", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openrouter-api-key");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/auto" },
+          },
+        },
+      },
+    });
+    mocks.promptDefaultModel.mockResolvedValue({ model: "openrouter/free" });
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+    expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openrouter/free");
   });
 });
