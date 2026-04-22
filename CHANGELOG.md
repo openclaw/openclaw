@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - fix(config): accept truncateAfterCompaction (#68395). Thanks @MonkeyLeeT
 - CLI/Claude: keep Claude CLI session bindings stable across OAuth access-token refreshes, so gateway restarts continue the same Claude conversation instead of minting a fresh one. (#70132) Thanks @obviyus.
 - QQBot: add `INTERACTION` intent (`1 << 26`) to the gateway constants and include it in the `FULL_INTENTS` mask so interaction events are received. (#70143) Thanks @cxyhhhhh.
+- CLI/cron: coerce the cron-list `pad()` helper to stringify non-string `job.id` values so `openclaw cron list` no longer crashes with `TypeError: value.padEnd is not a function` on older-schema or corrupted cron entries. Fixes #70128. (#70183) Thanks @truffle-dev.
 
 ## 2026.4.21
 
