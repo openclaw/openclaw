@@ -424,6 +424,32 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("retries host suite runs once for qa-channel readiness timeouts", async () => {
+    runQaSuiteFromRuntime
+      .mockRejectedValueOnce(
+        new Error(
+          "timed out after 180000ms waiting for qa-channel ready; last status: no qa-channel accounts reported",
+        ),
+      )
+      .mockResolvedValueOnce({
+        watchUrl: "http://127.0.0.1:43124",
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [],
+      });
+
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[qa-suite] infra retry 1/1: timed out after 180000ms waiting for qa-channel ready",
+      ),
+    );
+  });
+
   it("does not retry host suite runs for generic timeout wording", async () => {
     runQaSuiteFromRuntime.mockRejectedValueOnce(
       new Error("approval-turn timed out waiting for post-approval read"),
@@ -531,7 +557,7 @@ describe("qa cli runtime", () => {
     ).rejects.toThrow("QA parity preflight failed with 1 failing scenario.");
   });
 
-  it("honors --allow-failures during parity preflight", async () => {
+  it("keeps parity preflight exit code clear when --allow-failures is set", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
     await fs.writeFile(
@@ -559,7 +585,7 @@ describe("qa cli runtime", () => {
         preflight: true,
         allowFailures: true,
       });
-      expect(process.exitCode).toBe(1);
+      expect(process.exitCode).toBeUndefined();
     } finally {
       process.exitCode = priorExitCode;
     }

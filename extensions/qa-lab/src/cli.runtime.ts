@@ -162,6 +162,7 @@ function isQaSuiteInfraRetryableError(error: unknown) {
     message.includes("readyz") ||
     message.includes("gateway healthy") ||
     message.includes("transport ready") ||
+    message.includes("waiting for qa-channel ready") ||
     message.includes("econnreset") ||
     message.includes("econnrefused") ||
     message.includes("socket hang up") ||
@@ -237,7 +238,6 @@ async function runQaParityPreflight(params: {
   const failedScenarioCount = await readQaFailedScenarioCountFromSummary(result.summaryPath);
   if (failedScenarioCount > 0) {
     if (params.allowFailures === true) {
-      process.exitCode = 1;
       return;
     }
     throw new Error(
