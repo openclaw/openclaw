@@ -1330,6 +1330,45 @@ describe("AcpSessionManager", () => {
     });
   });
 
+  it("preserves runtimeOptions cwd when initializeSession cwd is omitted", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-cwd-runtime-options",
+      storeSessionKey: "agent:codex:acp:session-cwd-runtime-options",
+      acp: readySessionMeta({
+        runtimeOptions: {
+          cwd: "/workspace/from-runtime-options",
+        },
+        cwd: "/workspace/from-runtime-options",
+      }),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-cwd-runtime-options",
+      agent: "codex",
+      mode: "persistent",
+      runtimeOptions: {
+        cwd: "/workspace/from-runtime-options",
+      },
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-cwd-runtime-options",
+        cwd: "/workspace/from-runtime-options",
+      }),
+    );
+    expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
+      cwd: "/workspace/from-runtime-options",
+    });
+  });
+
   it("drops cached runtime handles after tolerated close failures", async () => {
     const closeFailures = [
       {

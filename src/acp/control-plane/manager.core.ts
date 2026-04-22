@@ -313,7 +313,7 @@ export class AcpSessionManager {
       const runtime = backend.runtime;
       const initialRuntimeOptions = validateRuntimeOptionPatch({
         ...input.runtimeOptions,
-        cwd: input.cwd,
+        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       });
       const requestedCwd = initialRuntimeOptions.cwd;
       this.enforceConcurrentSessionLimit({
