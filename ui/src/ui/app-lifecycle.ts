@@ -42,6 +42,7 @@ type LifecycleHost = {
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  sessionsChangedReloadTimer: number | null;
 };
 
 export function handleConnected(host: LifecycleHost) {
@@ -58,7 +59,9 @@ export function handleConnected(host: LifecycleHost) {
     }
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   });
-  startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  if (host.tab === "nodes") {
+    startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  }
   if (host.tab === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   }
@@ -77,6 +80,10 @@ export function handleDisconnected(host: LifecycleHost) {
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  if (host.sessionsChangedReloadTimer != null) {
+    clearTimeout(host.sessionsChangedReloadTimer);
+    host.sessionsChangedReloadTimer = null;
+  }
   host.client?.stop();
   host.client = null;
   host.connected = false;

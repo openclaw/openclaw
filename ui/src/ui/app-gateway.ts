@@ -93,6 +93,7 @@ type GatewayHost = {
   sessionKey: string;
   chatRunId: string | null;
   refreshSessionsAfterChat: Set<string>;
+  sessionsChangedReloadTimer: number | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
@@ -311,8 +312,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
       void loadAgents(host as unknown as AgentsState);
       void loadHealthState(host as unknown as HealthState);
-      void loadNodes(host as unknown as NodesState, { quiet: true });
-      void loadDevices(host as unknown as DevicesState, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason, error }) => {
@@ -415,6 +414,20 @@ function handleTerminalChatEvent(
   resetToolStream(toolHost);
   flushQueue();
   return false;
+}
+
+function shouldReloadSessionsForEvent(host: GatewayHost): boolean {
+  return host.tab === "overview" || host.tab === "sessions";
+}
+
+function scheduleSessionsReload(host: GatewayHost, delayMs = 750) {
+  if (!shouldReloadSessionsForEvent(host) || host.sessionsChangedReloadTimer != null) {
+    return;
+  }
+  host.sessionsChangedReloadTimer = window.setTimeout(() => {
+    host.sessionsChangedReloadTimer = null;
+    void loadSessions(host as unknown as SessionsState);
+  }, delayMs);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -548,7 +561,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    void loadSessions(host as unknown as SessionsState);
+    scheduleSessionsReload(host);
     return;
   }
 

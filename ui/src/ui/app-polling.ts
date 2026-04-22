@@ -16,10 +16,12 @@ export function startNodesPolling(host: PollingHost) {
   if (host.nodesPollInterval != null) {
     return;
   }
-  host.nodesPollInterval = window.setInterval(
-    () => void loadNodes(host as unknown as NodesState, { quiet: true }),
-    5000,
-  );
+  host.nodesPollInterval = window.setInterval(() => {
+    if (host.tab !== "nodes") {
+      return;
+    }
+    void loadNodes(host as unknown as NodesState, { quiet: true });
+  }, 5000);
 }
 
 export function stopNodesPolling(host: PollingHost) {

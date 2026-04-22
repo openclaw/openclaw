@@ -532,12 +532,16 @@ export async function handleControlUiAvatarRequest(
   }
 }
 
+function controlUiCacheControlForPath(filePath: string): string {
+  return path.basename(filePath).toLowerCase() === "index.html"
+    ? "no-store"
+    : "no-cache";
+}
+
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
-  // Static UI should never be cached aggressively while iterating; allow the
-  // browser to revalidate.
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", controlUiCacheControlForPath(filePath));
 }
 
 function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
@@ -554,7 +558,7 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
     );
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-store");
   res.end(body);
 }
 

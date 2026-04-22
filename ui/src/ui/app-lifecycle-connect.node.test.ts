@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
+const {
+  applySettingsFromUrlMock,
+  connectGatewayMock,
+  loadBootstrapMock,
+  startNodesPollingMock,
+} = vi.hoisted(() => ({
   applySettingsFromUrlMock: vi.fn(),
   connectGatewayMock: vi.fn(),
   loadBootstrapMock: vi.fn(),
+  startNodesPollingMock: vi.fn(),
 }));
 
 vi.mock("./app-gateway.ts", () => ({
@@ -25,7 +31,7 @@ vi.mock("./app-settings.ts", () => ({
 
 vi.mock("./app-polling.ts", () => ({
   startLogsPolling: vi.fn(),
-  startNodesPolling: vi.fn(),
+  startNodesPolling: startNodesPollingMock,
   stopLogsPolling: vi.fn(),
   stopNodesPolling: vi.fn(),
   startDebugPolling: vi.fn(),
@@ -62,6 +68,7 @@ function createHost() {
     logsEntries: [],
     popStateHandler: vi.fn(),
     topbarObserver: null,
+    sessionsChangedReloadTimer: null,
   };
 }
 
@@ -70,6 +77,7 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
+    startNodesPollingMock.mockReset();
   });
 
   it("waits for bootstrap load before first gateway connect", async () => {
@@ -121,5 +129,17 @@ describe("handleConnected", () => {
     expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
+  });
+
+  it("starts node polling only when the active tab is nodes", () => {
+    loadBootstrapMock.mockResolvedValue(undefined);
+    const host = createHost();
+
+    handleConnected(host as never);
+    expect(startNodesPollingMock).not.toHaveBeenCalled();
+
+    host.tab = "nodes";
+    handleConnected(host as never);
+    expect(startNodesPollingMock).toHaveBeenCalledTimes(1);
   });
 });

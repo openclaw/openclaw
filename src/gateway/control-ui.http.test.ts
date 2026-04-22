@@ -397,6 +397,20 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves control-ui index with no-store cache headers", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const getRes = runControlUiRequest({ url: "/", method: "GET", rootPath: tmp });
+        expect(getRes.handled).toBe(true);
+        expect(getRes.res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+
+        const headRes = runControlUiRequest({ url: "/", method: "HEAD", rootPath: tmp });
+        expect(headRes.handled).toBe(true);
+        expect(headRes.res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      },
+    });
+  });
+
   it("includes CSP hash for inline scripts in index.html", async () => {
     const scriptContent = "(function(){ var x = 1; })();";
     const html = `<html><head><script>${scriptContent}</script></head><body></body></html>\n`;

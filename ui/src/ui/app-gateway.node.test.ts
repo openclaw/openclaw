@@ -5,6 +5,8 @@ import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts"
 import type { GatewayHelloOk } from "./gateway.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadNodesMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadDevicesMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
@@ -91,6 +93,22 @@ vi.mock("./controllers/chat.ts", async (importOriginal) => {
   return {
     ...actual,
     loadChatHistory: loadChatHistoryMock,
+  };
+});
+
+vi.mock("./controllers/nodes.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/nodes.ts")>();
+  return {
+    ...actual,
+    loadNodes: loadNodesMock,
+  };
+});
+
+vi.mock("./controllers/devices.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/devices.ts")>();
+  return {
+    ...actual,
+    loadDevices: loadDevicesMock,
   };
 });
 
@@ -192,6 +210,32 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    loadNodesMock.mockClear();
+    loadDevicesMock.mockClear();
+  });
+
+  it("skips node and device loading on hello outside the nodes tab", () => {
+    const { host, client } = connectHostGateway();
+    host.tab = "overview";
+
+    client.emitHello();
+
+    expect(loadNodesMock).not.toHaveBeenCalled();
+    expect(loadDevicesMock).not.toHaveBeenCalled();
+  });
+
+  it("loads node and device data via tab refresh for the nodes tab", async () => {
+    const { host, client } = connectHostGateway();
+    host.tab = "nodes";
+
+    client.emitHello();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(loadNodesMock).toHaveBeenCalledTimes(1);
+    expect(loadNodesMock).toHaveBeenCalledWith(host);
+    expect(loadDevicesMock).toHaveBeenCalledTimes(1);
+    expect(loadDevicesMock).toHaveBeenCalledWith(host);
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {

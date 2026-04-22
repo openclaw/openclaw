@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
@@ -102,6 +102,7 @@ function createHost() {
     sessionKey: "main",
     chatRunId: null,
     refreshSessionsAfterChat: new Set<string>(),
+    sessionsChangedReloadTimer: null,
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
@@ -109,7 +110,12 @@ function createHost() {
 }
 
 describe("handleGatewayEvent sessions.changed", () => {
-  it("reloads sessions when the gateway pushes a sessions.changed event", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("debounces session reloads on overview and sessions tabs", () => {
+    vi.useFakeTimers();
     loadSessionsMock.mockReset();
     const host = createHost();
 
@@ -119,9 +125,38 @@ describe("handleGatewayEvent sessions.changed", () => {
       payload: { sessionKey: "agent:main:main", reason: "patch" },
       seq: 1,
     });
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:main", reason: "patch" },
+      seq: 2,
+    });
 
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(749);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
+    expect(host.sessionsChangedReloadTimer).toBeNull();
+  });
+
+  it("ignores sessions.changed reloads on chat tab", () => {
+    vi.useFakeTimers();
+    loadSessionsMock.mockReset();
+    const host = createHost();
+    host.tab = "chat";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:main", reason: "patch" },
+      seq: 1,
+    });
+
+    vi.advanceTimersByTime(1000);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+    expect(host.sessionsChangedReloadTimer).toBeNull();
   });
 });
 
