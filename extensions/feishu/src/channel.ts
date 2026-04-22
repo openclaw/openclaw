@@ -704,6 +704,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
+            const card =
+              presentation !== undefined
+                ? buildFeishuPresentationCard({ presentation, fallbackText: text })
+                : ctx.params.card && typeof ctx.params.card === "object"
+                  ? (ctx.params.card as Record<string, unknown>)
+                  : undefined;
             const hasValidCard = isValidFeishuCard(card);
             if (hasValidCard && mediaUrl) {
               throw new Error(`Feishu ${ctx.action} does not support card with media.`);
