@@ -37,15 +37,27 @@ function resolveConfiguredLitellmBaseUrl(cfg: OpenClawConfig | undefined): strin
 // private LAN address, so allow private network by default when the configured
 // baseUrl resolves to one. Public baseUrls keep the normal SSRF defaults.
 function shouldAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
-  const lower = baseUrl.toLowerCase();
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
+
+  const lower = parsed.hostname.toLowerCase();
   return (
-    lower.startsWith("http://127.0.0.1") ||
-    lower.startsWith("http://localhost") ||
-    lower.startsWith("http://[::1]") ||
-    lower.startsWith("http://10.") ||
-    lower.startsWith("http://192.168.") ||
-    /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\./.test(lower) ||
-    lower.includes("host.docker.internal")
+    lower === "127.0.0.1" ||
+    lower === "localhost" ||
+    lower === "::1" ||
+    lower === "[::1]" ||
+    lower.startsWith("10.") ||
+    lower.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(lower) ||
+    lower === "host.docker.internal"
   );
 }
 
@@ -103,7 +115,8 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
         throw new Error("LiteLLM API key missing");
       }
       const resolvedBaseUrl = resolveConfiguredLitellmBaseUrl(req.cfg);
-      const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        resolveProviderHttpRequestConfig({
         baseUrl: resolvedBaseUrl,
         defaultBaseUrl: LITELLM_BASE_URL,
         allowPrivateNetwork: shouldAllowPrivateLitellmEndpoint(resolvedBaseUrl),
@@ -145,6 +158,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
         timeoutMs: req.timeoutMs,
         fetchFn: fetch,
         allowPrivateNetwork,
+        dispatcherPolicy,
       });
       try {
         await assertOkOrThrowHttpError(

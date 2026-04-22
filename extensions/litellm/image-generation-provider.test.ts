@@ -39,6 +39,8 @@ function mockGeneratedPngResponse() {
   });
 }
 
+const dispatcherPolicy = { mode: "test-dispatcher" };
+
 describe("litellm image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
@@ -61,6 +63,12 @@ describe("litellm image generation provider", () => {
 
   it("defaults to the loopback proxy and allows private network for localhost", async () => {
     mockGeneratedPngResponse();
+    resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
+      baseUrl: "http://localhost:4000",
+      allowPrivateNetwork: true,
+      headers: new Headers({ Authorization: "Bearer litellm-key" }),
+      dispatcherPolicy,
+    });
 
     const provider = buildLitellmImageGenerationProvider();
     await provider.generateImage({
@@ -80,6 +88,7 @@ describe("litellm image generation provider", () => {
       expect.objectContaining({
         url: "http://localhost:4000/images/generations",
         allowPrivateNetwork: true,
+        dispatcherPolicy,
       }),
     );
   });
@@ -113,6 +122,40 @@ describe("litellm image generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://proxy.example.com/v1/images/generations",
+      }),
+    );
+  });
+
+  it("allows https private-network LiteLLM endpoints", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildLitellmImageGenerationProvider();
+    await provider.generateImage({
+      provider: "litellm",
+      model: "gpt-image-2",
+      prompt: "campaign hero",
+      cfg: {
+        models: {
+          providers: {
+            litellm: {
+              baseUrl: "https://192.168.1.10/v1",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://192.168.1.10/v1",
+        allowPrivateNetwork: true,
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://192.168.1.10/v1/images/generations",
+        allowPrivateNetwork: true,
       }),
     );
   });
