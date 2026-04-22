@@ -487,19 +487,18 @@ describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
     packageRoot: string,
     pluginId: string,
     packageJson: Record<string, unknown>,
-  ): string {
+  ): void {
     const pluginRoot = join(packageRoot, "dist", "extensions", pluginId);
     mkdirSync(pluginRoot, { recursive: true });
     writeFileSync(join(pluginRoot, "package.json"), JSON.stringify(packageJson, null, 2));
-    return pluginRoot;
   }
 
-  function stagePluginRuntimeDependency(
-    pluginRoot: string,
+  function installRuntimeDependencyAtPackageRoot(
+    packageRoot: string,
     dependencyName: string,
     version: string,
   ): void {
-    const dependencyRoot = join(pluginRoot, "node_modules", ...dependencyName.split("/"));
+    const dependencyRoot = join(packageRoot, "node_modules", ...dependencyName.split("/"));
     mkdirSync(dependencyRoot, { recursive: true });
     writeFileSync(
       join(dependencyRoot, "package.json"),
@@ -507,15 +506,15 @@ describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
     );
   }
 
-  it("returns no errors when declared runtime deps are staged under the installed plugin", () => {
+  it("returns no errors when declared deps are installed at the openclaw package root", () => {
     const packageRoot = createPackageRoot();
     try {
-      const pluginRoot = writeBundledPluginPackageJson(packageRoot, "whatsapp", {
+      writeBundledPluginPackageJson(packageRoot, "whatsapp", {
         name: "@openclaw/whatsapp",
         dependencies: { "@whiskeysockets/baileys": "7.0.0-rc.9" },
         openclaw: { bundle: { stageRuntimeDependencies: true } },
       });
-      stagePluginRuntimeDependency(pluginRoot, "@whiskeysockets/baileys", "7.0.0-rc.9");
+      installRuntimeDependencyAtPackageRoot(packageRoot, "@whiskeysockets/baileys", "7.0.0-rc.9");
 
       expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([]);
     } finally {
@@ -523,7 +522,7 @@ describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
     }
   });
 
-  it("surfaces an error naming the plugin and missing dependency", () => {
+  it("surfaces an error naming the owning plugin and missing dependency", () => {
     const packageRoot = createPackageRoot();
     try {
       writeBundledPluginPackageJson(packageRoot, "whatsapp", {
@@ -533,7 +532,7 @@ describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
       });
 
       expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([
-        "built bundled plugin 'whatsapp' is missing staged runtime dependency '@whiskeysockets/baileys: 7.0.0-rc.9' under dist/extensions/whatsapp/node_modules.",
+        "bundled plugin runtime dependency '@whiskeysockets/baileys@7.0.0-rc.9' (owners: whatsapp) is missing at node_modules/@whiskeysockets/baileys/package.json.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

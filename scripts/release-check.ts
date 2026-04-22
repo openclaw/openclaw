@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -27,6 +27,7 @@ import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import { discoverBundledPluginRuntimeDeps } from "./postinstall-bundled-plugins.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -223,9 +224,18 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
 }
 
 export function collectInstalledBundledPluginRuntimeDepErrors(packageRoot: string): string[] {
-  return collectBuiltBundledPluginStagedRuntimeDependencyErrors({
-    bundledPluginsDir: join(packageRoot, "dist", "extensions"),
-  });
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  if (!existsSync(extensionsDir)) {
+    return [];
+  }
+  const runtimeDeps = discoverBundledPluginRuntimeDeps({ extensionsDir });
+  return runtimeDeps
+    .filter((dep) => !existsSync(join(packageRoot, dep.sentinelPath)))
+    .map((dep) => {
+      const owners = dep.pluginIds.length > 0 ? dep.pluginIds.join(", ") : "unknown";
+      return `bundled plugin runtime dependency '${dep.name}@${dep.version}' (owners: ${owners}) is missing at ${dep.sentinelPath}.`;
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function assertInstalledBundledPluginRuntimeDepsResolved(packageRoot: string): void {
