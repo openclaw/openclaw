@@ -92,6 +92,7 @@ async function runFastModeCase(params: {
     provider: "openai",
     model: EXPECTED_OPENAI_MODEL,
     fastMode: params.expectedFastMode,
+    cleanupBundleMcpOnRunEnd: true,
     allowGatewaySubagentBinding: true,
   });
 }

@@ -160,6 +160,9 @@ export function createCronPromptExecutor(params: {
           sessionKey: params.agentSessionKey,
           agentId: params.agentId,
           trigger: "cron",
+          // Isolated cron runs should not keep per-run bundled MCP stdio
+          // servers alive after the scheduler turn completes.
+          cleanupBundleMcpOnRunEnd: true,
           allowGatewaySubagentBinding: true,
           senderIsOwner: false,
           messageChannel: params.messageChannel,
