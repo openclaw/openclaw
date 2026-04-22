@@ -1,6 +1,9 @@
 import os from "node:os";
 import { runExec } from "../process/exec.js";
+import { getLogger } from "../logging/logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
+const logger = getLogger();
 
 export type ExecFn = typeof runExec;
 
@@ -278,10 +281,7 @@ async function resolveCurrentUserSid(exec: ExecFn): Promise<string | null> {
   } catch (err) {
     // Log but do not propagate — SID resolution is best-effort.
     // Callers fall back to env-based resolution when this returns null.
-    console.warn("[windows-acl] resolveCurrentUserSid failed:", String(err));
-    // TODO: replace with a structured logger call once a lightweight per-module
-    // logger is available; console.warn can be noisy on constrained Windows hosts
-    // (e.g. strict output-capture environments or CI runners with limited stdio).
+    logger.warn({ subsystem: "windows-acl" }, "resolveCurrentUserSid failed: " + String(err));
     return null;
   }
 }
