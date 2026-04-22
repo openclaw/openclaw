@@ -554,11 +554,11 @@ export async function clickViaPlaywright(opts: {
           ACT_MAX_CLICK_DELAY_MS,
         );
         if (delayMs > 0) {
-          await awaitEvalWithAbort(locator.hover({ timeout }), abortPromise);
+          await awaitActionWithAbort(locator.hover({ timeout }), abortPromise);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
         if (opts.doubleClick) {
-          await awaitEvalWithAbort(
+          await awaitActionWithAbort(
             locator.dblclick({
               timeout,
               button: opts.button,
@@ -568,7 +568,7 @@ export async function clickViaPlaywright(opts: {
           );
           return;
         }
-        await awaitEvalWithAbort(
+        await awaitActionWithAbort(
           locator.click({
             timeout,
             button: opts.button,
