@@ -206,4 +206,96 @@ describe("runtime TaskFlow", () => {
       }),
     ]);
   });
+
+  it("syncs an attached durable job back to running when a managed flow resumes", () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Resume linked TaskFlow",
+      goal: "Mirror TaskFlow resume state into durable jobs",
+      status: "running",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      currentStep: "triage",
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Resume after waiting",
+      currentStep: "triage",
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+
+    const waiting = taskFlow.setWaiting({
+      flowId: createdFlow.flowId,
+      expectedRevision: createdFlow.revision,
+      currentStep: "await_next_wake",
+      waitJson: {
+        kind: "wake",
+        nextWakeAt: 500,
+      },
+      updatedAt: 50,
+    });
+    expect(waiting).toMatchObject({ applied: true });
+    if (!waiting.applied) {
+      throw new Error("expected waiting transition to succeed");
+    }
+
+    const resumed = taskFlow.resume({
+      flowId: createdFlow.flowId,
+      expectedRevision: waiting.flow.revision,
+      status: "running",
+      currentStep: "continue_work",
+      updatedAt: 75,
+    });
+
+    expect(resumed).toMatchObject({
+      applied: true,
+      flow: expect.objectContaining({
+        status: "running",
+        currentStep: "continue_work",
+        waitJson: null,
+      }),
+    });
+
+    expect(jobs.get(createdJob.jobId)).toMatchObject({
+      status: "running",
+      currentStep: "continue_work",
+      nextWakeAt: undefined,
+      backing: expect.objectContaining({ taskFlowId: createdFlow.flowId }),
+    });
+    expect(jobs.history(createdJob.jobId)).toEqual([
+      expect.objectContaining({
+        from: "running",
+        to: "waiting",
+        reason: "Awaiting next wake",
+        disposition: {
+          kind: "schedule_only",
+          wake: { status: "scheduled", nextWakeAt: 500 },
+        },
+      }),
+      expect.objectContaining({
+        from: "waiting",
+        to: "running",
+        reason: "Resumed linked TaskFlow",
+        disposition: {
+          kind: "clear_wake_only",
+          wake: { status: "cleared", detail: "TaskFlow resumed into running." },
+        },
+      }),
+    ]);
+  });
 });

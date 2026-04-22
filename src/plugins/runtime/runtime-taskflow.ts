@@ -171,6 +171,55 @@ function syncLinkedDurableJobWaiting(params: {
   });
 }
 
+function syncLinkedDurableJobResume(params: {
+  ownerKey: string;
+  flowId: string;
+  flowStatus: Extract<TaskFlowRecord["status"], "queued" | "running">;
+  currentStep?: string | null;
+  updatedAt?: number;
+}): void {
+  const job = getDurableJobByTaskFlowIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.ownerKey,
+  });
+  if (!job) {
+    return;
+  }
+
+  const jobs = createRuntimeJobs().bindSession({
+    sessionKey: params.ownerKey,
+  });
+
+  if (job.status === "waiting") {
+    jobs.transition({
+      jobId: job.jobId,
+      expectedRevision: job.audit.revision,
+      from: "waiting",
+      to: "running",
+      reason: "Resumed linked TaskFlow",
+      at: params.updatedAt,
+      wake: { status: "cleared", detail: `TaskFlow resumed into ${params.flowStatus}.` },
+      patch: {
+        currentStep: params.currentStep,
+        nextWakeAt: null,
+      },
+    });
+    return;
+  }
+
+  if (job.status === "running") {
+    jobs.update({
+      jobId: job.jobId,
+      expectedRevision: job.audit.revision,
+      patch: {
+        currentStep: params.currentStep,
+        nextWakeAt: null,
+      },
+      updatedAt: params.updatedAt,
+    });
+  }
+}
+
 function createBoundTaskFlowRuntime(params: {
   sessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
@@ -276,7 +325,7 @@ function createBoundTaskFlowRuntime(params: {
           ...(flow.current ? { current: flow.current } : {}),
         };
       }
-      return mapFlowUpdateResult(
+      const result = mapFlowUpdateResult(
         resumeFlow({
           flowId: flow.flow.flowId,
           expectedRevision: input.expectedRevision,
@@ -286,6 +335,16 @@ function createBoundTaskFlowRuntime(params: {
           updatedAt: input.updatedAt,
         }),
       );
+      if (result.applied && (result.flow.status === "queued" || result.flow.status === "running")) {
+        syncLinkedDurableJobResume({
+          ownerKey,
+          flowId: result.flow.flowId,
+          flowStatus: result.flow.status,
+          currentStep: input.currentStep,
+          updatedAt: input.updatedAt,
+        });
+      }
+      return result;
     },
     finish: (input) => {
       const flow = resolveManagedFlowForOwner({
