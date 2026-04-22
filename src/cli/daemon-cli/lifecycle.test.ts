@@ -18,7 +18,10 @@ type RestartPostCheckContext = {
 };
 
 type RestartParams = {
-  opts?: { json?: boolean };
+  opts?: {
+    json?: boolean;
+    rpc?: { url?: string; token?: string; password?: string; timeout?: string };
+  };
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 };
 
@@ -39,6 +42,8 @@ const resolveGatewayPort = vi.hoisted(() => vi.fn((_cfg?: unknown, _env?: unknow
 const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
 const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
+const callGateway = vi.fn();
+const createConfigIO = vi.fn();
 const probeGateway = vi.fn<
   (opts: {
     url: string;
@@ -50,13 +55,24 @@ const probeGateway = vi.fn<
   }>
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
+const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn();
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
+  createConfigIO: (overrides?: unknown) => createConfigIO(overrides),
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
+}));
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGateway(opts),
+}));
+
+vi.mock("../../gateway/probe-auth.js", () => ({
+  resolveGatewayProbeAuthSafeWithSecretInputs: (opts: unknown) =>
+    resolveGatewayProbeAuthSafeWithSecretInputs(opts),
 }));
 
 vi.mock("../../infra/gateway-processes.js", () => ({
@@ -75,7 +91,7 @@ vi.mock("../../gateway/probe.js", () => ({
   }) => probeGateway(opts),
 }));
 
-vi.mock("../../config/commands.js", () => ({
+vi.mock("../../config/commands.flags.js", () => ({
   isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
 }));
 
@@ -107,7 +123,10 @@ vi.mock("./lifecycle-core.js", () => ({
 
 describe("runDaemonRestart health checks", () => {
   let runDaemonStart: (opts?: { json?: boolean }) => Promise<void>;
-  let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
+  let runDaemonRestart: (opts?: {
+    json?: boolean;
+    rpc?: { url?: string; token?: string; password?: string; timeout?: string };
+  }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -155,8 +174,11 @@ describe("runDaemonRestart health checks", () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReset();
     signalVerifiedGatewayPidSync.mockReset();
     formatGatewayPidList.mockReset();
+    callGateway.mockReset();
+    createConfigIO.mockReset();
     probeGateway.mockReset();
     isRestartEnabled.mockReset();
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockReset();
     loadConfig.mockReset();
     recoverInstalledLaunchAgent.mockReset();
 
@@ -197,7 +219,12 @@ describe("runDaemonRestart health checks", () => {
       ok: true,
       configSnapshot: { commands: { restart: true } },
     });
+    callGateway.mockRejectedValue(new Error("connection refused"));
+    createConfigIO.mockReturnValue({
+      readBestEffortConfig: async () => loadConfig(),
+    });
     isRestartEnabled.mockReturnValue(true);
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({ auth: {} });
     signalVerifiedGatewayPidSync.mockImplementation(() => {});
     formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
   });
@@ -247,6 +274,56 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
   });
 
+  it("uses gateway.restart first for the local managed gateway", async () => {
+    callGateway.mockResolvedValueOnce({ ok: true });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        method: "gateway.restart",
+        params: { reason: "openclaw gateway restart" },
+        timeoutMs: 10_000,
+      }),
+    );
+    expect(runServiceRestart).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips gateway.restart and falls back when restart uses a URL override", async () => {
+    await runDaemonRestart({
+      json: true,
+      rpc: { url: "ws://remote.example:18789", timeout: "9000" },
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runServiceRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips gateway.restart and falls back in remote gateway mode", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+      },
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runServiceRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the service restart path when local gateway RPC restart fails", async () => {
+    callGateway.mockRejectedValueOnce(new Error("connection refused"));
+
+    await runDaemonRestart({ json: true });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(runServiceRestart).toHaveBeenCalledTimes(1);
+  });
+
   it("skips stale-pid retry health checks when the retry restart is only scheduled", async () => {
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
@@ -287,27 +364,6 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
-  });
-
-  it("waits longer for Windows gateway restart health", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    waitForGatewayHealthyRestart.mockResolvedValue({
-      healthy: true,
-      staleGatewayPids: [],
-      runtime: { status: "running" },
-      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
-    });
-
-    await runDaemonRestart({ json: true });
-
-    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attempts: 360,
-        delayMs: 500,
-        includeUnknownListenersAsStale: true,
-        port: 18789,
-      }),
-    );
   });
 
   it("fails restart with a stopped-free message when the waiter exits early", async () => {

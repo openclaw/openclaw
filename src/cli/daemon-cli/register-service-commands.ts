@@ -37,21 +37,23 @@ function resolveInstallOptions(
 }
 
 function resolveRpcOptions(cmdOpts: GatewayRpcOpts, command?: Command): GatewayRpcOpts {
+  const parentUrl = inheritOptionFromParent<string>(command, "url");
   const parentToken = inheritOptionFromParent<string>(command, "token");
   const parentPassword = inheritOptionFromParent<string>(command, "password");
+  const parentTimeout = inheritOptionFromParent<string>(command, "timeout");
   return {
     ...cmdOpts,
+    url: cmdOpts.url ?? parentUrl,
     token: cmdOpts.token ?? parentToken,
     password: cmdOpts.password ?? parentPassword,
+    timeout: cmdOpts.timeout ?? parentTimeout,
   };
 }
 
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
     .command("status")
-    .description(
-      opts?.statusDescription ?? "Show gateway service status + probe connectivity/capability",
-    )
+    .description(opts?.statusDescription ?? "Show gateway service status + probe the Gateway")
     .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
@@ -114,9 +116,16 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--url <url>", "Gateway WebSocket URL override (skips local RPC-first restart)")
+    .option("--token <token>", "Gateway token (for local RPC-first restart)")
+    .option("--password <password>", "Gateway password (for local RPC-first restart)")
+    .option("--timeout <ms>", "Timeout in ms for the RPC-first attempt", "10000")
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonRestart } = await loadDaemonLifecycleModule();
-      await runDaemonRestart(cmdOpts);
+      await runDaemonRestart({
+        json: Boolean(cmdOpts.json),
+        rpc: resolveRpcOptions(cmdOpts, command),
+      });
     });
 }
