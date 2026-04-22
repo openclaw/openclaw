@@ -68,9 +68,23 @@ export function resolveMergedWhatsAppAccountConfig(params: {
     accountId === DEFAULT_ACCOUNT_ID
       ? base
       : resolveMergedNamedWhatsAppAccountConfig({ cfg: params.cfg, accountId });
+  // Multi-account setups must not silently inherit channel-level `groups`
+  // (including the wildcard systemPrompt form shipped in #59553). Mirrors
+  // the `isMultiAccount` guard in `extensions/telegram/src/account-config.ts`
+  // (#30673). Single-account setups keep their existing inheritance.
+  const configuredAccountIds = Object.keys(rootCfg?.accounts ?? {});
+  const isMultiAccount = configuredAccountIds.length > 1;
+  const accountGroups = _resolveWhatsAppAccountConfig(params.cfg, accountId)?.groups;
+  const sharedDefaultGroups =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? undefined
+      : resolveWhatsAppDefaultAccountSharedConfig(params.cfg)?.groups;
+  const groups =
+    accountGroups ?? sharedDefaultGroups ?? (isMultiAccount ? undefined : rootCfg?.groups);
   return {
     accountId,
     ...merged,
+    groups,
     chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
     blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
   };

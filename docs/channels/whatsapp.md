@@ -485,7 +485,7 @@ The effective `direct` map is determined first: if the account defines its own `
 
 Note: `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
 
-**Difference from Telegram multi-account behavior:** In Telegram, root `groups` is intentionally suppressed for all accounts in a multi-account setup — even accounts that define no `groups` of their own — to prevent a bot from receiving group messages for groups it does not belong to. WhatsApp does not apply this guard: root `groups` and root `direct` are always inherited by accounts that define no account-level override, regardless of how many accounts are configured. In a multi-account WhatsApp setup, if you want per-account group or direct prompts, define the full map under each account explicitly rather than relying on root-level defaults.
+**Multi-account `groups` inheritance:** WhatsApp now mirrors Telegram's `isMultiAccount` guard for `groups` (#69874). When `channels.whatsapp.accounts` has more than one entry, root `channels.whatsapp.groups` is **not** silently inherited by accounts that define no `groups` of their own — including `accounts.default`. Accounts that explicitly set `groups` still get that map, and `accounts.default.groups` is still inherited as a shared baseline by named accounts. Single-account setups are unchanged: root `groups` still inherits when the account defines none. Root `direct` is intentionally **not** guarded (matches Telegram's scope); if you run multiple accounts and want per-account DM prompts, define `direct` under each account explicitly.
 
 Important behavior:
 
@@ -502,7 +502,8 @@ Example:
     whatsapp: {
       groups: {
         // Use only if all groups should be admitted at the root scope.
-        // Applies to all accounts that do not define their own groups map.
+        // Inherited by the sole account in single-account setups; suppressed
+        // for all accounts when `accounts` has more than one entry.
         "*": { systemPrompt: "Default prompt for all groups." },
       },
       direct: {

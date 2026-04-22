@@ -180,3 +180,87 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.selfChatMode).toBeUndefined();
   });
 });
+
+describe("resolveWhatsAppAccount groups multi-account inheritance (#69874)", () => {
+  const rootGroups = {
+    "*": { systemPrompt: "Default prompt for all groups." },
+  } as const;
+  const workGroups = {
+    "120363406415684625@g.us": { systemPrompt: "Work-only prompt." },
+  } as const;
+
+  function buildCfg(accounts: Record<string, Record<string, unknown>>) {
+    return {
+      channels: {
+        whatsapp: {
+          groups: rootGroups,
+          accounts,
+        },
+      },
+    } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+  }
+
+  it("single-account: inherits channel-level groups when account defines none", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: buildCfg({ default: {} }),
+      accountId: "default",
+    });
+    expect(resolved.groups).toEqual(rootGroups);
+  });
+
+  it("single-account: account-level groups fully replaces channel-level groups", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: buildCfg({ default: { groups: workGroups } }),
+      accountId: "default",
+    });
+    expect(resolved.groups).toEqual(workGroups);
+  });
+
+  it("multi-account: channel-level groups is NOT inherited by a secondary account with no own groups", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: buildCfg({ default: {}, work: {} }),
+      accountId: "work",
+    });
+    expect(resolved.groups).toBeUndefined();
+  });
+
+  it("multi-account: channel-level groups is NOT inherited by the default account with no own groups", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: buildCfg({ default: {}, work: {} }),
+      accountId: "default",
+    });
+    expect(resolved.groups).toBeUndefined();
+  });
+
+  it("multi-account: account-level groups still wins over channel-level", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: buildCfg({ default: {}, work: { groups: workGroups } }),
+      accountId: "work",
+    });
+    expect(resolved.groups).toEqual(workGroups);
+  });
+
+  it("multi-account: accounts.default.groups shared defaults still flow to named accounts", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: buildCfg({ default: { groups: rootGroups }, work: {} }),
+      accountId: "work",
+    });
+    expect(resolved.groups).toEqual(rootGroups);
+  });
+
+  it("multi-account: root `direct` is not guarded (matches Telegram scope)", () => {
+    const rootDirect = { "*": { systemPrompt: "DM default." } } as const;
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            direct: rootDirect,
+            accounts: { default: {}, work: {} },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+    expect(resolved.direct).toEqual(rootDirect);
+  });
+});
