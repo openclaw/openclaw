@@ -1,5 +1,16 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+/**
+ * Synchronous predicate: does `sessionKey` have pending spawned subagent runs?
+ * Runs on the outbound plan hot path, so implementations must be cheap/bounded
+ * (default in `subagent-registry.ts` is an in-memory map lookup). Internal to
+ * core; not re-exported through `openclaw/plugin-sdk`.
+ */
 export type PendingSpawnedChildrenQuery = (sessionKey?: string) => boolean;
 
+const log = createSubsystemLogger("outbound/pending-spawn");
+const THROW_LOG_INTERVAL_MS = 60_000;
+let lastThrowLogAt = 0;
 let pendingSpawnedChildrenQuery: PendingSpawnedChildrenQuery | undefined;
 
 export function registerPendingSpawnedChildrenQuery(
@@ -14,7 +25,12 @@ export function resolvePendingSpawnedChildren(sessionKey: string | undefined): b
   }
   try {
     return pendingSpawnedChildrenQuery(sessionKey);
-  } catch {
+  } catch (err) {
+    const now = Date.now();
+    if (now - lastThrowLogAt >= THROW_LOG_INTERVAL_MS) {
+      lastThrowLogAt = now;
+      log.warn("pending-spawn query threw; defaulting to false", { err, sessionKey });
+    }
     return false;
   }
 }

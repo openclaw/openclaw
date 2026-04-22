@@ -276,7 +276,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
-  it("drops bare silent replies when the session has pending spawned children", () => {
+  describe("pending spawned subagent children", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -285,43 +285,43 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         },
       },
     };
-
-    expect(
+    const planSilent = (sessionKey: string, hasPendingSpawnedChildren?: boolean) =>
       projectOutboundPayloadPlanForDelivery(
         createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
           cfg,
-          sessionKey: "agent:main:telegram:direct:123",
+          sessionKey,
           surface: "telegram",
-          hasPendingSpawnedChildren: true,
+          hasPendingSpawnedChildren,
         }),
-      ),
-    ).toEqual([]);
-  });
+      );
 
-  it("drops bare silent replies via registered pending-spawn runtime query", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          silentReply: { direct: "disallow", group: "allow", internal: "allow" },
-          silentReplyRewrite: { direct: true },
-        },
-      },
-    };
-    const sessionKey = "agent:main:telegram:direct:456";
-    registerPendingSpawnedChildrenQuery((key) => key === sessionKey);
-    try {
-      expect(
-        projectOutboundPayloadPlanForDelivery(
-          createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-            cfg,
-            sessionKey,
-            surface: "telegram",
-          }),
-        ),
-      ).toEqual([]);
-    } finally {
-      registerPendingSpawnedChildrenQuery(undefined);
-    }
+    it("drops bare silent replies when the context flag is set", () => {
+      expect(planSilent("agent:main:telegram:direct:123", true)).toEqual([]);
+    });
+
+    it("drops bare silent replies via the registered runtime query", () => {
+      const sessionKey = "agent:main:telegram:direct:456";
+      registerPendingSpawnedChildrenQuery((key) => key === sessionKey);
+      try {
+        expect(planSilent(sessionKey)).toEqual([]);
+      } finally {
+        registerPendingSpawnedChildrenQuery(undefined);
+      }
+    });
+
+    it("falls back to the rewrite path when the query throws", () => {
+      registerPendingSpawnedChildrenQuery(() => {
+        throw new Error("registry unavailable");
+      });
+      try {
+        const delivery = planSilent("agent:main:telegram:direct:789");
+        expect(delivery).toHaveLength(1);
+        expect(delivery[0]?.text).toBeTruthy();
+        expect(delivery[0]?.text).not.toMatch(/NO_REPLY/i);
+      } finally {
+        registerPendingSpawnedChildrenQuery(undefined);
+      }
+    });
   });
 
   it("keeps bare NO_REPLY visible when silence is disallowed but rewrite is off", () => {
