@@ -53,7 +53,7 @@ if ($Uninstall) {
     
     # Remove Registry
     Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "OpenClaw" -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "OpenClaw" -ErrorAction SilentlyContinue
     
     # Remove Firewall
     Remove-NetFirewallRule -DisplayName "OpenClaw Gateway" -ErrorAction SilentlyContinue
@@ -172,7 +172,7 @@ Set-ItemProperty $RegPath "UninstallString" "powershell.exe -ExecutionPolicy Byp
 Write-OK "Registry updated."
 
 # 6. Autostart
-$RunPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+$RunPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 Set-ItemProperty -Path $RunPath -Name "OpenClaw" -Value "`"$ExePath`""
 
 # 7. Firewall Rules

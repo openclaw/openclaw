@@ -80,8 +80,10 @@ jobs:
           fetch-depth: 0
 
       - name: Sync local actions from workflow ref
-        # Обеспечивает наличие локальных действий даже при проверке старого тега/SHA
-        run: git checkout ${{ github.sha }} -- .github/actions
+        # Ensures local actions are available even when checking out an older tag/SHA
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: git checkout "$WORKFLOW_SHA" -- .github/actions
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -314,8 +316,10 @@ jobs:
           fetch-depth: 0
 
       - name: Sync local actions from workflow ref
-        # Обеспечивает наличие локальных действий даже при проверке старого тега/SHA
-        run: git checkout ${{ github.sha }} -- .github/actions
+        # Ensures local actions are available even when checking out an older tag/SHA
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: git checkout "$WORKFLOW_SHA" -- .github/actions
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

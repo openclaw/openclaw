@@ -31,7 +31,7 @@
       }
     },
     "updater": {
-      "active": true,
+      "active": false,
       "endpoints": [
         "https://raw.githubusercontent.com/openclaw/openclaw/main/apps/windows/update.json"
       ],

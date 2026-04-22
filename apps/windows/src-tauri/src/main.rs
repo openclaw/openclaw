@@ -466,7 +466,7 @@ fn handle_uninstall() {
     }
     // Remove Run registry key
     let _ = Command::new("powershell")
-        .args(&["-NoProfile", "-Command", "Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'OpenClaw' -ErrorAction SilentlyContinue"])
+        .args(&["-NoProfile", "-Command", "Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'OpenClaw' -ErrorAction SilentlyContinue"])
         .output();
     std::process::exit(0);
 }
