@@ -2,7 +2,7 @@
 // The spinner() from @clack/prompts can return undefined in certain environments
 // The fix uses optional chaining (spin?.clear() / spin?.stop()) to prevent TypeError
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Track spinner mock instances for assertions
 const spinnerInstances: Array<{
