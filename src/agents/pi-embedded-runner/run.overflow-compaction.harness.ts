@@ -188,6 +188,9 @@ export const mockedGetApiKeyForModel = vi.fn(
 );
 export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
+export const mockedBuildEmbeddedRunPayloads = vi.fn<
+  (...args: unknown[]) => Array<{ text?: string; isError?: boolean }>
+>((..._args: unknown[]) => []);
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",
@@ -334,6 +337,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveAuthProfileOrder.mockReturnValue([]);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
+  mockedBuildEmbeddedRunPayloads.mockReset();
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
   mockedRunPostCompactionSideEffects.mockReset();
   mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
 }
@@ -505,7 +510,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./run/payloads.js", () => ({
-    buildEmbeddedRunPayloads: vi.fn(() => []),
+    buildEmbeddedRunPayloads: mockedBuildEmbeddedRunPayloads,
   }));
 
   vi.doMock("./compaction-hooks.js", () => ({

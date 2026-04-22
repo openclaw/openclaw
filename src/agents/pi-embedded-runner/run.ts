@@ -1,5 +1,8 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
@@ -136,6 +139,8 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const EMPTY_RESPONSE_RECOVERY_POLL_MS = 750;
+const EMPTY_RESPONSE_RECOVERY_MAX_POLLS = 3;
 
 function buildTraceToolSummary(params: {
   toolMetas: Array<{ toolName: string; meta?: string }>;
@@ -159,6 +164,42 @@ function buildTraceToolSummary(params: {
     tools,
     failures: params.hadFailure ? 1 : 0,
   };
+}
+
+function readSessionMessages(sessionFile: string): AgentMessage[] {
+  return SessionManager.open(sessionFile)
+    .getEntries()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => (entry as { message: AgentMessage }).message);
+}
+
+async function recoverLateAssistantFromSessionFile(params: {
+  sessionFile: string;
+  previousSnapshotLength: number;
+  abortSignal?: AbortSignal;
+}): Promise<AssistantMessage | undefined> {
+  let previousSnapshotLength = Math.max(0, params.previousSnapshotLength);
+
+  for (let poll = 0; poll < EMPTY_RESPONSE_RECOVERY_MAX_POLLS; poll += 1) {
+    if (poll > 0) {
+      await sleepWithAbort(EMPTY_RESPONSE_RECOVERY_POLL_MS, params.abortSignal);
+    }
+    const refreshedMessages = readSessionMessages(params.sessionFile);
+    if (refreshedMessages.length <= previousSnapshotLength) {
+      continue;
+    }
+    const lateAssistant = refreshedMessages
+      .slice(previousSnapshotLength)
+      .toReversed()
+      .find((message): message is AssistantMessage => message.role === "assistant");
+    previousSnapshotLength = refreshedMessages.length;
+    if (!lateAssistant || !resolveFinalAssistantVisibleText(lateAssistant)) {
+      continue;
+    }
+    return lateAssistant;
+  }
+
+  return undefined;
 }
 
 /**
@@ -785,7 +826,7 @@ export async function runEmbeddedPiAgent(
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           });
 
-          const {
+          let {
             aborted,
             externalAbort,
             promptError,
@@ -798,6 +839,30 @@ export async function runEmbeddedPiAgent(
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
+          if (
+            attempt.assistantTexts.length === 0 &&
+            !aborted &&
+            !timedOut &&
+            !attempt.lastToolError &&
+            !attempt.clientToolCall &&
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !resolveFinalAssistantVisibleText(currentAttemptAssistant ?? sessionLastAssistant)
+          ) {
+            const recoveredAssistant = await recoverLateAssistantFromSessionFile({
+              sessionFile: params.sessionFile,
+              previousSnapshotLength: attempt.messagesSnapshot.length,
+              abortSignal: params.abortSignal,
+            });
+            if (recoveredAssistant) {
+              sessionLastAssistant = recoveredAssistant;
+              currentAttemptAssistant ??= recoveredAssistant;
+              log.warn(
+                `recovered late assistant turn after empty snapshot: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${recoveredAssistant.provider ?? provider}/${recoveredAssistant.model ?? modelId}`,
+              );
+            }
+          }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
             (attempt.bootstrapPromptWarningSignature
@@ -1636,7 +1701,7 @@ export async function runEmbeddedPiAgent(
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
-            lastAssistant: attempt.lastAssistant,
+            lastAssistant: sessionLastAssistant,
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
