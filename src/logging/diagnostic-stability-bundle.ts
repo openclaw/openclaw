@@ -12,6 +12,7 @@ import {
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
 export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
+export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const BUNDLE_PREFIX = "openclaw-stability-";
@@ -246,12 +247,18 @@ export function readDiagnosticStabilityBundleFileSync(
   file: string,
 ): ReadDiagnosticStabilityBundleResult {
   try {
+    const stat = fs.statSync(file);
+    if (stat.size > MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES) {
+      throw new Error(
+        `Stability bundle is too large: ${stat.size} bytes exceeds ${MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES}`,
+      );
+    }
     const raw = fs.readFileSync(file, "utf8");
     const bundle = parseDiagnosticStabilityBundle(JSON.parse(raw));
     return {
       status: "found",
       path: file,
-      mtimeMs: fs.statSync(file).mtimeMs,
+      mtimeMs: stat.mtimeMs,
       bundle,
     };
   } catch (error) {

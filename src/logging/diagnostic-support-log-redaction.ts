@@ -1,14 +1,15 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   redactSupportString,
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 
 const LOG_STRING_FIELD_RE =
-  /^(?:action|channel|code|component|endpoint|event|handshake|kind|level|localAddr|logger|method|model|module|msg|name|outcome|phase|pluginId|provider|reason|remoteAddr|requestId|runId|service|sessionId|sessionKey|source|status|subsystem|surface|target|time|traceId|type)$/iu;
+  /^(?:action|channel|code|component|endpoint|event|handshake|kind|level|localAddr|logger|method|model|module|msg|name|outcome|phase|pluginId|provider|reason|remoteAddr|requestId|runId|service|source|status|subsystem|surface|target|time|traceId|type)$/iu;
 const LOG_SCALAR_FIELD_RE =
   /^(?:active|attempt|bytes|count|durationMs|enabled|exitCode|intervalMs|jobs|limitBytes|localPort|nextWakeAtMs|pid|port|queueDepth|queued|remotePort|statusCode|waitMs|waiting)$/iu;
 const OMITTED_LOG_FIELD_RE =
-  /(?:authorization|body|chat|content|cookie|credential|detail|error|header|instruction|message|password|payload|prompt|result|secret|text|token|tool|transcript|url)/iu;
+  /(?:authorization|body|chat|content|cookie|credential|detail|error|header|instruction|message|password|payload|prompt|result|secret|session[-_]?id|session[-_]?key|text|token|tool|transcript|url)/iu;
 const UNSAFE_LOG_MESSAGE_RE =
   /(?:\b(?:ai response|assistant said|chat text|message contents|prompt|raw webhook body|tool output|tool result|transcript|user said|webhook body)\b|auto-responding\b.*:\s*["']|partial for\b.*:)/iu;
 const MAX_LOG_STRING_LENGTH = 240;
@@ -29,6 +30,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     return undefined;
   }
   return value as Record<string, unknown>;
+}
+
+function createLogRecord(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>;
 }
 
 export function sanitizeSupportLogRecord(
@@ -53,7 +58,7 @@ export function sanitizeSupportLogRecord(
     };
   }
 
-  const sanitized: Record<string, unknown> = {};
+  const sanitized = createLogRecord();
   addNamedLogFields(sanitized, source, redaction);
   addLogTapeMetaFields(sanitized, source, redaction);
   addLogTapeArgFields(sanitized, source, redaction);
@@ -181,6 +186,9 @@ function addSafeLogField(
   redaction: SupportRedactionContext,
 ): void {
   if (OMITTED_LOG_FIELD_RE.test(key)) {
+    return;
+  }
+  if (isBlockedObjectKey(key)) {
     return;
   }
   if (!isSafeLogField(key, value)) {

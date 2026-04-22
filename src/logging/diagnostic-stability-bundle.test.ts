@@ -6,6 +6,7 @@ import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diag
 import { resetFatalErrorHooksForTest, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
+  MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
   readDiagnosticStabilityBundleFileSync,
   readLatestDiagnosticStabilityBundleSync,
   resetDiagnosticStabilityBundleForTest,
@@ -215,6 +216,19 @@ describe("diagnostic stability bundles", () => {
     expect(result.status).toBe("failed");
     expect(result.status === "failed" ? String(result.error) : "").toContain(
       "Unsupported stability bundle version",
+    );
+  });
+
+  it("rejects oversized bundle files before reading them", () => {
+    const file = path.join(tempDir, "oversized.json");
+    fs.closeSync(fs.openSync(file, "w"));
+    fs.truncateSync(file, MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES + 1);
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+
+    expect(result.status).toBe("failed");
+    expect(result.status === "failed" ? String(result.error) : "").toContain(
+      "Stability bundle is too large",
     );
   });
 

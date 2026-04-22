@@ -134,6 +134,8 @@ describe("diagnostic support export", () => {
           subsystem: "gateway",
           component: "gateway/server",
           channel: "telegram",
+          sessionId: "gateway-session-15555551212",
+          sessionKey: "matrix:!supportRoom:matrix.example.com:$supportEventSecret",
           msg: `gateway websocket listening at ${credentialUrl} Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ== ${fakeAwsKey} ${fakeJwt} Cookie: sid=secret`,
           hostname: "support-host",
           message: privateChat,
@@ -263,6 +265,8 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain("QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
     expect(combined).not.toContain("sid=secret");
     expect(combined).not.toContain("structured secret payload");
+    expect(combined).not.toContain("gateway-session-15555551212");
+    expect(combined).not.toContain("supportEventSecret");
     expect(combined).not.toContain(fakeAwsKey);
     expect(combined).not.toContain(fakeJwt);
     expect(combined).toContain("payload.large");
@@ -277,6 +281,8 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain('"subsystem":"gateway"');
     expect(sanitizedLogs).toContain('"component":"gateway/server"');
     expect(sanitizedLogs).toContain('"channel":"telegram"');
+    expect(sanitizedLogs).not.toContain("sessionId");
+    expect(sanitizedLogs).not.toContain("sessionKey");
     expect(sanitizedLogs).toContain("gateway websocket listening");
     expect(sanitizedLogs).toContain(
       "wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
@@ -400,6 +406,53 @@ describe("diagnostic support export", () => {
     expect(sanitizeSupportSnapshotValue(200, redaction, "statusCode")).toBe(200);
     expect(sanitizeSupportConfigValue(15555551212, redaction, "ownerId")).toBe("<redacted>");
     expect(sanitizeSupportConfigValue(18789, redaction, "port")).toBe(18789);
+  });
+
+  it("blocks prototype keys and caps support sanitizer width", () => {
+    const redaction = {
+      env: {
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+    };
+    const wideSnapshot: Record<string, unknown> = {
+      ["__proto__"]: "polluted",
+      constructor: "polluted",
+      prototype: "polluted",
+    };
+    for (let index = 0; index < 1005; index += 1) {
+      wideSnapshot[`field${String(index).padStart(4, "0")}`] = index;
+    }
+
+    const snapshot = sanitizeSupportSnapshotValue(wideSnapshot, redaction) as Record<
+      string,
+      unknown
+    >;
+
+    expect(Object.getPrototypeOf(snapshot)).toBe(null);
+    expect(snapshot.__proto__).toBeUndefined();
+    expect(snapshot.constructor).toBeUndefined();
+    expect(snapshot.prototype).toBeUndefined();
+    expect(snapshot.field0000).toBe(0);
+    expect(snapshot.field0999).toBe(999);
+    expect(snapshot.field1000).toBeUndefined();
+    expect(snapshot["<truncated>"]).toEqual({
+      truncated: true,
+      count: 1008,
+      limit: 1000,
+    });
+
+    const array = sanitizeSupportConfigValue(
+      Array.from({ length: 1005 }, (_entry, index) => ({ name: `item-${index}` })),
+      redaction,
+    ) as Record<string, unknown>;
+
+    expect(Array.isArray(array)).toBe(false);
+    expect((array.items as unknown[]).length).toBe(1000);
+    expect(array.truncated).toBe(true);
+    expect(array.count).toBe(1005);
+    expect(array.limit).toBe(1000);
   });
 
   it("redacts support text identifiers without hiding useful URL hosts", () => {

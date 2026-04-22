@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
 import { redactSensitiveText } from "./redact.js";
 
@@ -28,7 +29,10 @@ const HANDLE_RE = /(^|[^\w:/])@[A-Za-z0-9_]{5,}\b(?!\.)/gu;
 const LONG_DECIMAL_ID_RE = /\b\d{9,}\b/gu;
 const MAX_SUPPORT_STRING_LENGTH = 2000;
 const MAX_SUPPORT_SNAPSHOT_DEPTH = 10;
+const MAX_SUPPORT_ARRAY_ITEMS = 1000;
+const MAX_SUPPORT_OBJECT_ENTRIES = 1000;
 const DEFAULT_TRUNCATION_SUFFIX = "...<truncated>";
+const TRUNCATED_SUPPORT_FIELD = "<truncated>";
 
 export type SupportRedactionContext = {
   env: NodeJS.ProcessEnv;
@@ -44,6 +48,11 @@ type PathRedactionPrefix = {
   prefix: string;
   label: string;
   caseInsensitive: boolean;
+};
+
+type SupportObjectEntry = {
+  key: string;
+  value: unknown;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -66,7 +75,7 @@ function isPrivateConfigField(key: string): boolean {
 }
 
 function sanitizeSecretRefForSupport(value: Record<string, unknown>): Record<string, unknown> {
-  const sanitized: Record<string, unknown> = {};
+  const sanitized = createSupportRecord();
   if (typeof value.source === "string") {
     sanitized.source = value.source;
   }
@@ -80,6 +89,62 @@ function sanitizeSecretRefForSupport(value: Record<string, unknown>): Record<str
 function privateMapEntryLabel(key: string): string {
   const normalized = key.toLowerCase();
   return normalized.endsWith("s") ? normalized.slice(0, -1) : normalized;
+}
+
+function createSupportRecord(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>;
+}
+
+function countOwnObjectEntries(record: Record<string, unknown>): number {
+  let count = 0;
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function limitedSupportObjectEntries(record: Record<string, unknown>): {
+  count: number;
+  entries: SupportObjectEntry[];
+} {
+  let count = 0;
+  const entries: SupportObjectEntry[] = [];
+  for (const key in record) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      continue;
+    }
+    count += 1;
+    if (isBlockedObjectKey(key) || entries.length >= MAX_SUPPORT_OBJECT_ENTRIES) {
+      continue;
+    }
+    entries.push({ key, value: record[key] });
+  }
+  entries.sort((a, b) => a.key.localeCompare(b.key));
+  return { count, entries };
+}
+
+function addTruncationMetadata(sanitized: Record<string, unknown>, count: number): void {
+  if (count > MAX_SUPPORT_OBJECT_ENTRIES) {
+    sanitized[TRUNCATED_SUPPORT_FIELD] = {
+      truncated: true,
+      count,
+      limit: MAX_SUPPORT_OBJECT_ENTRIES,
+    };
+  }
+}
+
+function supportArrayResult(items: unknown[], count: number): unknown[] | Record<string, unknown> {
+  if (count <= MAX_SUPPORT_ARRAY_ITEMS) {
+    return items;
+  }
+  return {
+    items,
+    truncated: true,
+    count,
+    limit: MAX_SUPPORT_ARRAY_ITEMS,
+  };
 }
 
 function isWindowsAbsolutePath(value: string): boolean {
@@ -303,25 +368,33 @@ export function sanitizeSupportSnapshotValue(
   }
   if (Array.isArray(value)) {
     if (key === "programArguments") {
-      return sanitizeCommandArguments(value, redaction);
+      return supportArrayResult(
+        sanitizeCommandArguments(value.slice(0, MAX_SUPPORT_ARRAY_ITEMS), redaction),
+        value.length,
+      );
     }
-    return value.map((entry) => sanitizeSupportSnapshotValue(entry, redaction, key, depth + 1));
+    return supportArrayResult(
+      value
+        .slice(0, MAX_SUPPORT_ARRAY_ITEMS)
+        .map((entry) => sanitizeSupportSnapshotValue(entry, redaction, key, depth + 1)),
+      value.length,
+    );
   }
   const record = asRecord(value);
   if (!record) {
     return "<unsupported>";
   }
   if (PRIVATE_MAP_SUPPORT_FIELD_RE.test(key)) {
-    return { count: Object.keys(record).length };
+    return { count: countOwnObjectEntries(record) };
   }
-  const sanitized: Record<string, unknown> = {};
-  for (const [entryKey, entryValue] of Object.entries(record).toSorted((a, b) =>
-    a[0].localeCompare(b[0]),
-  )) {
+  const sanitized = createSupportRecord();
+  const { count, entries } = limitedSupportObjectEntries(record);
+  for (const { key: entryKey, value: entryValue } of entries) {
     sanitized[entryKey] = isPrivateSupportField(entryKey)
       ? "<redacted>"
       : sanitizeSupportSnapshotValue(entryValue, redaction, entryKey, depth + 1);
   }
+  addTruncationMetadata(sanitized, count);
   return sanitized;
 }
 
@@ -350,7 +423,12 @@ export function sanitizeSupportConfigValue(
         count: value.length,
       };
     }
-    return value.map((entry) => sanitizeSupportConfigValue(entry, redaction, key, depth + 1));
+    return supportArrayResult(
+      value
+        .slice(0, MAX_SUPPORT_ARRAY_ITEMS)
+        .map((entry) => sanitizeSupportConfigValue(entry, redaction, key, depth + 1)),
+      value.length,
+    );
   }
   const record = asRecord(value);
   if (!record) {
@@ -360,13 +438,12 @@ export function sanitizeSupportConfigValue(
     return isSecretRefShape(record) ? sanitizeSecretRefForSupport(record) : "<redacted>";
   }
 
-  const sanitized: Record<string, unknown> = {};
+  const sanitized = createSupportRecord();
   let privateEntryIndex = 0;
   const redactEntryKeys = PRIVATE_MAP_SUPPORT_FIELD_RE.test(key);
   const privateEntryLabel = redactEntryKeys ? privateMapEntryLabel(key) : "";
-  for (const [entryKey, entryValue] of Object.entries(record).toSorted((a, b) =>
-    a[0].localeCompare(b[0]),
-  )) {
+  const { count, entries } = limitedSupportObjectEntries(record);
+  for (const { key: entryKey, value: entryValue } of entries) {
     let outputKey = entryKey;
     if (redactEntryKeys) {
       privateEntryIndex += 1;
@@ -374,5 +451,6 @@ export function sanitizeSupportConfigValue(
     }
     sanitized[outputKey] = sanitizeSupportConfigValue(entryValue, redaction, entryKey, depth + 1);
   }
+  addTruncationMetadata(sanitized, count);
   return sanitized;
 }
