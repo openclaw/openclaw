@@ -223,19 +223,31 @@ export async function runCodexAppServerAttempt(
     return toolBridge.handleToolCall(call) as Promise<JsonValue>;
   });
 
+  const hookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    messageProvider: params.messageProvider ?? undefined,
+    trigger: params.trigger,
+    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+  };
+  const llmInputEvent = {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.modelId,
+    systemPrompt: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
+    historyMessages,
+    imagesCount: params.images?.length ?? 0,
+  };
+
   let turn: CodexTurnStartResponse;
   try {
     runAgentHarnessLlmInputHook({
-      event: {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        provider: params.provider,
-        model: params.modelId,
-        systemPrompt: promptBuild.developerInstructions,
-        prompt: promptBuild.prompt,
-        historyMessages,
-        imagesCount: params.images?.length ?? 0,
-      },
+      event: llmInputEvent,
       ctx: hookContext,
     });
     turn = await client.request<CodexTurnStartResponse>(

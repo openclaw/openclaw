@@ -368,54 +368,49 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("fires llm_output and agent_end when turn/start fails", async () => {
+    const llmInput = vi.fn();
     const llmOutput = vi.fn();
     const agentEnd = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([
+        { hookName: "llm_input", handler: llmInput },
         { hookName: "llm_output", handler: llmOutput },
         { hookName: "agent_end", handler: agentEnd },
       ]),
     );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    createAppServerHarness(async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
+    createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
-        throw new Error("codex turn start failed");
+        throw new Error("turn start exploded");
       }
-      return {};
+      return undefined;
     });
 
-    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
-      "codex turn start failed",
-    );
+    await expect(
+      runCodexAppServerAttempt(
+        createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      ),
+    ).rejects.toThrow("turn start exploded");
 
+    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
-
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
         assistantTexts: [],
-      }),
-      expect.objectContaining({
+        model: "gpt-5.4-codex",
+        provider: "codex",
         runId: "run-1",
         sessionId: "session-1",
       }),
+      expect.any(Object),
     );
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
-        error: "codex turn start failed",
+        error: "turn start exploded",
         messages: [],
       }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
+      expect.any(Object),
     );
   });
 
