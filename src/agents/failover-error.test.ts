@@ -408,6 +408,19 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
+  it("does not treat generic abort codes as explicit failover metadata over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        name: "AbortError",
+        code: "ABORT_ERR",
+        message: "The operation was aborted",
+        cause: new Error(
+          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
+        ),
+      }),
+    ).toBeNull();
+  });
+
   it("classifies provider-scoped generic upstream errors for failover", () => {
     expect(
       resolveFailoverReasonFromError({

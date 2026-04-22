@@ -345,8 +345,12 @@ function resolveFailoverClassificationFromErrorInternal(
     };
   }
   const signal = normalizeErrorSignal(err);
+  const codeReason = signal.code
+    ? failoverReasonFromClassification(classifyFailoverSignal({ code: signal.code }))
+    : null;
   const hasExplicitFailoverMetadata =
-    typeof inferSignalStatus(signal) === "number" || typeof signal.code === "string";
+    typeof inferSignalStatus(signal) === "number" ||
+    (codeReason !== null && codeReason !== "timeout");
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);
 
