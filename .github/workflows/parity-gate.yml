@@ -41,6 +41,7 @@ jobs:
       # followthrough gate that expects a fast post-approval read within a 30s
       # agent.wait timeout.
       QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       OPENCLAW_LIVE_OPENAI_KEY: ""
