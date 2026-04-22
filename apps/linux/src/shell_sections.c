@@ -79,6 +79,18 @@ gboolean shell_sections_is_embedded(AppSection section) {
     return section != SECTION_CHAT;
 }
 
+gboolean shell_sections_is_visible(AppSection section) {
+    if (!shell_sections_is_embedded(section)) {
+        return FALSE;
+    }
+
+    if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 const ShellSectionMeta* shell_sections_meta(AppSection section) {
     if (section < 0 || section >= SECTION_COUNT) {
         return NULL;

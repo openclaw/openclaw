@@ -83,23 +83,6 @@ static void on_shell_pairing_button_clicked(GtkButton *button, gpointer user_dat
 
 /* ── Sidebar construction ── */
 
-/*
- * Returns TRUE when a given AppSection should appear in the main settings
- * window. Sections whose UX lives in their own dedicated window (like
- * Chat, which ships as a standalone AdwApplicationWindow) are filtered
- * out here so the main window stays focused on management / diagnostics.
- */
-static gboolean section_is_embedded_in_main_window(AppSection section) {
-    return shell_sections_is_embedded(section);
-}
-
-/*
- * Pure section-tag encode/decode helpers live in
- * `app_window_section_tag.c` so a headless test can link them without
- * dragging the full GTK/Adwaita main-window TU. See that file for the
- * NULL-collision rationale (SECTION_DASHBOARD == 0).
- */
-
 static GtkWidget* build_sidebar_row(AppSection section) {
     const ShellSectionMeta *meta = shell_sections_meta(section);
 
@@ -189,8 +172,7 @@ static GtkWidget* build_sidebar(void) {
         if (!entry) continue;
 
         AppSection section = entry->section;
-        if (!section_is_embedded_in_main_window(section)) continue;
-        if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) continue;
+        if (!shell_sections_is_visible(section)) continue;
 
         if (have_previous_group && previous_group != entry->group) {
             if (previous_group == SHELL_SECTION_GROUP_PARITY) {
@@ -431,24 +413,13 @@ static GtkWidget* build_content_stack(void) {
         if (!entry) continue;
 
         AppSection section = entry->section;
-        if (!section_is_embedded_in_main_window(section)) continue;
-        if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) continue;
+        if (!shell_sections_is_visible(section)) continue;
 
-        section_controllers[section] = shell_sections_controller(section);
-    }
+        const SectionController *controller = shell_sections_controller(section);
+        section_controllers[section] = controller;
 
-    for (gsize i = 0; i < shell_sections_display_count(); i++) {
-        const ShellSectionDisplayEntry *entry = shell_sections_display_at(i);
-        if (!entry) continue;
-
-        AppSection section = entry->section;
-        if (!section_is_embedded_in_main_window(section)) continue;
-        if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) continue;
-
-        GtkWidget *page;
-        if (section_controllers[section]) {
-            page = section_controllers[section]->build();
-        } else {
+        GtkWidget *page = section_controller_build_safe(controller);
+        if (!page) {
             page = build_placeholder_section(section);
         }
         gtk_stack_add_named(GTK_STACK(content_stack), page, shell_sections_meta(section)->id);
@@ -460,16 +431,14 @@ static GtkWidget* build_content_stack(void) {
 /* ── Sidebar row activation ── */
 
 static void refresh_active_section(AppSection section) {
-    if (section >= 0 && section < SECTION_COUNT && section_controllers[section] && section_controllers[section]->refresh) {
-        section_controllers[section]->refresh();
+    if (section >= 0 && section < SECTION_COUNT) {
+        section_controller_refresh_safe(section_controllers[section]);
     }
 }
 
 static void invalidate_all_rpc_sections(void) {
     for (int i = 0; i < SECTION_COUNT; i++) {
-        if (section_controllers[i] && section_controllers[i]->invalidate) {
-            section_controllers[i]->invalidate();
-        }
+        section_controller_invalidate_safe(section_controllers[i]);
     }
 }
 
@@ -553,9 +522,7 @@ static gboolean on_refresh_tick(gpointer user_data) {
 
 static void destroy_all_section_controllers(void) {
     for (int i = 0; i < SECTION_COUNT; i++) {
-        if (section_controllers[i] && section_controllers[i]->destroy) {
-            section_controllers[i]->destroy();
-        }
+        section_controller_destroy_safe(section_controllers[i]);
     }
 }
 
@@ -681,17 +648,18 @@ void app_window_show(void) {
 
 void app_window_navigate_to(AppSection section) {
     if (section < 0 || section >= SECTION_COUNT) return;
-    if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) return;
 
     /* Sections that live in their own window (Chat) must not drag the
      * main window open; route them to the dedicated surface instead. */
-    if (!section_is_embedded_in_main_window(section)) {
+    if (!shell_sections_is_embedded(section)) {
         if (section == SECTION_CHAT) {
             chat_window_show();
         }
         return;
     }
 
+    if (!shell_sections_is_visible(section)) return;
+ 
     app_window_show();
 
     active_section = section;
