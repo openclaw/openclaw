@@ -209,6 +209,8 @@ async function resolveModelOverride(params: {
 
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
+  currentModelProvider?: string;
+  currentModelId?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
 }): AnyAgentTool {
@@ -405,6 +407,13 @@ export function createSessionStatusTool(opts?: {
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
+      const currentModelProvider = opts?.currentModelProvider?.trim();
+      const currentModelId = opts?.currentModelId?.trim();
+      const shouldUseRequesterLiveModel =
+        Boolean(currentModelProvider && currentModelId) &&
+        resolved.key === visibilityRequesterKey &&
+        !resolved.entry.providerOverride?.trim() &&
+        !resolved.entry.modelOverride?.trim();
       const modelRaw = readStringParam(params, "model");
       let changedModel = false;
       if (typeof modelRaw === "string") {
@@ -441,9 +450,22 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
-      const modelForCard = resolved.entry.modelOverride?.trim() || configured.model;
-      const statusSessionEntry = resolved.entry;
+      const providerForCard =
+        resolved.entry.providerOverride?.trim() ||
+        (shouldUseRequesterLiveModel ? currentModelProvider : undefined) ||
+        configured.provider;
+      const modelForCard =
+        resolved.entry.modelOverride?.trim() ||
+        (shouldUseRequesterLiveModel ? currentModelId : undefined) ||
+        configured.model;
+      const statusSessionEntry =
+        shouldUseRequesterLiveModel && currentModelProvider && currentModelId
+          ? {
+              ...resolved.entry,
+              modelProvider: currentModelProvider,
+              model: currentModelId,
+            }
+          : resolved.entry;
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||

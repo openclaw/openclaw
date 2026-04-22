@@ -570,6 +570,7 @@ export async function prepareCliRunContext(
             OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
             OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
             OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+            OPENCLAW_MCP_MODEL: `${params.provider}/${modelId}`,
             OPENCLAW_MCP_RUN_ID: params.runId,
             OPENCLAW_MCP_CURRENT_CHANNEL: params.currentChannelId ?? "",
           }

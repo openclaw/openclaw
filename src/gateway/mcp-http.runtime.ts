@@ -31,10 +31,16 @@ export class McpLoopbackToolCache {
     sessionKey: string;
     messageProvider: string | undefined;
     accountId: string | undefined;
+    currentModelProvider?: string;
+    currentModelId?: string;
   }): CachedScopedTools {
-    const cacheKey = [params.sessionKey, params.messageProvider ?? "", params.accountId ?? ""].join(
-      "\u0000",
-    );
+    const cacheKey = [
+      params.sessionKey,
+      params.messageProvider ?? "",
+      params.accountId ?? "",
+      params.currentModelProvider ?? "",
+      params.currentModelId ?? "",
+    ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
     if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
@@ -46,6 +52,8 @@ export class McpLoopbackToolCache {
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
       accountId: params.accountId,
+      modelProvider: params.currentModelProvider,
+      modelId: params.currentModelId,
       excludeToolNames: NATIVE_TOOL_EXCLUDE,
     });
     const nextEntry: CachedScopedTools = {
@@ -90,6 +98,7 @@ export function createMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-model": "${OPENCLAW_MCP_MODEL}",
           "x-openclaw-run-id": "${OPENCLAW_MCP_RUN_ID}",
           "x-openclaw-current-channel": "${OPENCLAW_MCP_CURRENT_CHANNEL}",
         },

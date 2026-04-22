@@ -153,5 +153,8 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
     );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-model"]).toBe(
+      "${OPENCLAW_MCP_MODEL}",
+    );
   });
 });

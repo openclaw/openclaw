@@ -10,7 +10,11 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionFilePath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import { transcriptFindIdempotencyKey } from "../../config/sessions/transcript.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -70,6 +74,7 @@ import {
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -87,6 +92,23 @@ type TranscriptAppendResult = {
   message?: Record<string, unknown>;
   error?: string;
 };
+
+function extractModelSwitchPatchFromReceipt(receipt?: string): string | undefined {
+  const trimmed = receipt?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const match = trimmed.match(/Model switched to\s+(.+?)\.(?:\s|$)/im);
+  const switchedValue = match?.[1]?.trim();
+  if (!switchedValue) {
+    return undefined;
+  }
+  const parenMatch = switchedValue.match(/\(([^()]+\/[^()]+)\)\s*$/);
+  if (parenMatch?.[1]) {
+    return parenMatch[1].trim();
+  }
+  return switchedValue;
+}
 
 type AbortOrigin = "rpc" | "stop-command";
 
@@ -1337,6 +1359,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const p = params as {
       sessionKey: string;
       message: string;
+      model?: string;
       thinking?: string;
       deliver?: boolean;
       originatingChannel?: string;
@@ -1413,7 +1436,43 @@ export const chatHandlers: GatewayRequestHandlers = {
     // marker injection on the model's image capability. This prevents opaque
     // media:// markers from leaking into prompts for text-only model runs.
     const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const loadedSession = loadSessionEntry(rawSessionKey);
+    const cfg = loadedSession.cfg;
+    const storePath = loadedSession.storePath;
+    let entry = loadedSession.entry;
+    const sessionKey = loadedSession.canonicalKey;
+    const modelPatchRaw = (() => {
+      const explicitModel = typeof p.model === "string" ? p.model.trim() : "";
+      if (explicitModel) {
+        return explicitModel;
+      }
+      const receiptModel = extractModelSwitchPatchFromReceipt(systemProvenanceReceipt);
+      if (receiptModel) {
+        return receiptModel;
+      }
+      if (canInjectSystemProvenance(client)) {
+        return extractModelSwitchPatchFromReceipt(inboundMessage);
+      }
+      return undefined;
+    })();
+    if (modelPatchRaw) {
+      const store = loadSessionStore(storePath);
+      const patched = await applySessionsPatchToStore({
+        cfg,
+        store,
+        storeKey: sessionKey,
+        patch: { key: sessionKey, model: modelPatchRaw },
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+      });
+      if (!patched.ok) {
+        respond(false, undefined, patched.error);
+        return;
+      }
+      entry = patched.entry;
+      await updateSessionStore(storePath, (nextStore) => {
+        nextStore[sessionKey] = patched.entry;
+      });
+    }
 
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];

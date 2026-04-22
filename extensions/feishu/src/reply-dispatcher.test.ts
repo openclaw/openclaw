@@ -854,6 +854,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("starts the live thinking card as soon as claude-cli model selection is known", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const { result } = createDispatcherHarness({
+      runtime: runtime as never,
+      allowReasoningPreview: false,
+      onVisibleOutputStarted: vi.fn(),
+    });
+
+    result.replyOptions.onModelSelected?.({
+      provider: "claude-cli",
+      model: "sonnet",
+      thinkLevel: "high",
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenCalledWith(
+      expect.stringContaining("⏳ Thinking"),
+      { title: "💭 Thinking" },
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("visible output started"));
+  });
+
   it("does not animate a thinking panel for plain text-only streaming", async () => {
     vi.useFakeTimers();
     try {

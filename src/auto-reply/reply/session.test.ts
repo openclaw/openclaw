@@ -1574,7 +1574,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("preserves selected auth profile overrides across /new and /reset", async () => {
+  it("resets model and auth profile overrides across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-model-auth-");
     const sessionKey = "agent:main:telegram:dm:user-model-auth";
     const existingSessionId = "existing-session-model-auth";
@@ -1627,13 +1627,11 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry, testCase.name).toMatchObject({
-        providerOverride: overrides.providerOverride,
-        modelOverride: overrides.modelOverride,
-        authProfileOverride: overrides.authProfileOverride,
-        authProfileOverrideSource: overrides.authProfileOverrideSource,
-        authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
-      });
+      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBeUndefined();
     }
   });
 

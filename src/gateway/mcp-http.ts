@@ -43,6 +43,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
+          currentModelProvider: requestContext.currentModelProvider,
+          currentModelId: requestContext.currentModelId,
         });
 
         // Build a callback to detect when the model sends a message to its

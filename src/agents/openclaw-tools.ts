@@ -89,6 +89,8 @@ export function createOpenClawTools(
     modelHasVision?: boolean;
     /** Active model provider for provider-specific tool gating. */
     modelProvider?: string;
+    /** Active model id for the current run. */
+    modelId?: string;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -291,6 +293,8 @@ export function createOpenClawTools(
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
+      currentModelProvider: options?.modelProvider,
+      currentModelId: options?.modelId,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),

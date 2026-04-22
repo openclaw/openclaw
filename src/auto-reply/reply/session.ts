@@ -487,18 +487,14 @@ export async function initSessionState(params: {
     systemSent = false;
     abortedLastRun = false;
     // When a reset trigger (/new, /reset) starts a new session, carry over
-    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
-    // so the user doesn't have to re-enable them every time.
+    // behavior overrides (verbose, thinking, reasoning, ttsAuto) but reset
+    // session-scoped model selection back to the default. Explicit reset-time
+    // model hints are applied later by applyResetModelOverride().
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
-      persistedAuthProfileOverride = entry.authProfileOverride;
-      persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-      persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;

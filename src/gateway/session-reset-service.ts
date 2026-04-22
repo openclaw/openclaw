@@ -58,6 +58,21 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   };
 }
 
+function stripResetSessionSelectionState(entry?: SessionEntry): SessionEntry | undefined {
+  if (!entry) {
+    return entry;
+  }
+  return {
+    ...entry,
+    providerOverride: undefined,
+    modelOverride: undefined,
+    authProfileOverride: undefined,
+    authProfileOverrideSource: undefined,
+    authProfileOverrideCompactionCount: undefined,
+    liveModelSwitchPending: undefined,
+  };
+}
+
 export function archiveSessionTranscriptsForSession(params: {
   sessionId: string | undefined;
   storePath: string;
@@ -428,7 +443,7 @@ export async function performGatewaySessionReset(params: {
     });
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
-    const resetEntry = stripRuntimeModelState(currentEntry);
+    const resetEntry = stripResetSessionSelectionState(stripRuntimeModelState(currentEntry));
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
@@ -461,11 +476,6 @@ export async function performGatewaySessionReset(params: {
       execAsk: currentEntry?.execAsk,
       execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
-      providerOverride: currentEntry?.providerOverride,
-      modelOverride: currentEntry?.modelOverride,
-      authProfileOverride: currentEntry?.authProfileOverride,
-      authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
-      authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,

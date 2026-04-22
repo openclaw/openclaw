@@ -10,11 +10,31 @@ export type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
   accountId: string | undefined;
+  currentModelProvider: string | undefined;
+  currentModelId: string | undefined;
   /** Run ID for the current CLI agent run (used to correlate MCP sends back to the CLI runner). */
   runId: string | undefined;
   /** Origin channel ID of the session (e.g. Feishu chat_id). Used to detect self-replies. */
   currentChannelId: string | undefined;
 };
+
+function resolveCurrentModel(raw: string | undefined): {
+  provider: string | undefined;
+  model: string | undefined;
+} {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return { provider: undefined, model: undefined };
+  }
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
+    return { provider: undefined, model: undefined };
+  }
+  return {
+    provider: trimmed.slice(0, slashIndex).trim() || undefined,
+    model: trimmed.slice(slashIndex + 1).trim() || undefined,
+  };
+}
 
 function resolveScopedSessionKey(
   cfg: ReturnType<typeof loadConfig>,
@@ -95,11 +115,14 @@ export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: ReturnType<typeof loadConfig>,
 ): McpRequestContext {
+  const currentModel = resolveCurrentModel(getHeader(req, "x-openclaw-model"));
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: getHeader(req, "x-openclaw-account-id")?.trim() || undefined,
+    currentModelProvider: currentModel.provider,
+    currentModelId: currentModel.model,
     runId: getHeader(req, "x-openclaw-run-id")?.trim() || undefined,
     currentChannelId: getHeader(req, "x-openclaw-current-channel")?.trim() || undefined,
   };

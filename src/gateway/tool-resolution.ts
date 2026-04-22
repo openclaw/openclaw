@@ -25,6 +25,8 @@ export function resolveGatewayScopedTools(params: {
   sessionKey: string;
   messageProvider?: string;
   accountId?: string;
+  modelProvider?: string;
+  modelId?: string;
   agentTo?: string;
   agentThreadId?: string;
   allowGatewaySubagentBinding?: boolean;
@@ -68,6 +70,8 @@ export function resolveGatewayScopedTools(params: {
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,

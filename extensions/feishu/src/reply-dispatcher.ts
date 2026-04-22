@@ -185,6 +185,12 @@ export type CreateFeishuReplyDispatcherParams = {
     chatId: string;
     accountId?: string;
   }) => Promise<void> | void;
+  onVisibleOutputStarted?: (params: {
+    messageId?: string;
+    chatId: string;
+    accountId?: string;
+    agentId: string;
+  }) => Promise<void> | void;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -212,6 +218,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const dispatcherDebugId = `fd-${++replyDispatcherDebugSeq}`;
   const logDispatcher = (message: string) => {
     params.runtime.log?.(`feishu[${account.accountId}] ${dispatcherDebugId} ${message}`);
+  };
+  let visibleOutputStarted = false;
+  const emitVisibleOutputStarted = async (messageId?: string) => {
+    if (visibleOutputStarted) {
+      return;
+    }
+    visibleOutputStarted = true;
+    logDispatcher(`visible output started messageId=${messageId ?? "none"}`);
+    await params.onVisibleOutputStarted?.({
+      messageId,
+      chatId,
+      accountId: account.accountId,
+      agentId,
+    });
   };
   logDispatcher(
     `create chat=${chatId} replyTo=${sendReplyToMessageId ?? "none"} root=${rootId ?? "none"} threadReply=${threadReplyMode ? "true" : "false"} replyInThread=${replyInThread === true ? "true" : "false"} effectiveReplyInThread=${effectiveReplyInThread === true ? "true" : "false"} streamingInThread=${streamingInThread === true ? "true" : "false"} sessionKey=${sessionKey ?? "none"}`,
@@ -1087,7 +1107,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           header: cardHeader,
           note: cardNote,
         });
-        logDispatcher(`startStreaming active messageId=${streaming.getMessageId() ?? "unknown"}`);
+        const streamMessageId = streaming.getMessageId() ?? undefined;
+        logDispatcher(`startStreaming active messageId=${streamMessageId ?? "unknown"}`);
+        await emitVisibleOutputStarted(streamMessageId);
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
@@ -1568,6 +1590,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }) => {
         prefixContext.onModelSelected(ctx);
         claudeCliInitThinkingPanelEnabled = ctx.provider === "claude-cli";
+        if (claudeCliInitThinkingPanelEnabled && streamingEnabled) {
+          queueThinkingPrelude({ forcePreview: true });
+          startStreaming();
+          queueThinkingPanelUpdate();
+        }
       },
       onAgentEvent: async (evt: { stream: string; data: Record<string, unknown> }) => {
         if (evt.stream !== "tool") {
