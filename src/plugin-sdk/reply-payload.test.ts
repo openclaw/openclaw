@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./plugin-runtime.js", () => ({
+  getGlobalHookRunner: getGlobalHookRunnerMock,
+}));
 import {
   countOutboundMedia,
   createNormalizedOutboundDeliverer,
@@ -16,6 +21,11 @@ import {
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
+
+beforeEach(() => {
+  getGlobalHookRunnerMock.mockReset();
+  getGlobalHookRunnerMock.mockReturnValue(null);
+});
 
 describe("isReasoningReplyPayload", () => {
   it.each([
@@ -399,6 +409,126 @@ describe("deliverTextOrMediaReply", () => {
       mediaUrl: "https://a",
       caption: "hello",
     });
+  });
+
+  it("applies message_sending mutations to generic text replies", async () => {
+    const sendMedia = vi.fn(async () => undefined);
+    const sendText = vi.fn(async () => undefined);
+    const runMessageSending = vi.fn(async () => ({ content: "rewritten" }));
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: (name: string) => name === "message_sending",
+      runMessageSending,
+    });
+
+    await expect(
+      deliverTextOrMediaReply({
+        payload: { text: "hello" },
+        text: "hello",
+        sendText,
+        sendMedia,
+        messageSending: {
+          to: "chat-1",
+          channel: "signal",
+          accountId: "acct-1",
+          conversationId: "chat-1",
+          metadata: {
+            threadId: "t-1",
+          },
+        },
+      }),
+    ).resolves.toBe("text");
+
+    expect(runMessageSending).toHaveBeenCalledWith(
+      {
+        to: "chat-1",
+        content: "hello",
+        metadata: {
+          threadId: "t-1",
+          channel: "signal",
+          accountId: "acct-1",
+          mediaUrls: [],
+        },
+      },
+      {
+        channelId: "signal",
+        accountId: "acct-1",
+        conversationId: "chat-1",
+      },
+    );
+    expect(sendText).toHaveBeenCalledWith("rewritten");
+    expect(sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("applies message_sending mutations to generic media replies", async () => {
+    const sendMedia = vi.fn(async () => undefined);
+    const sendText = vi.fn(async () => undefined);
+    const runMessageSending = vi.fn(async () => ({ content: "rewritten" }));
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: (name: string) => name === "message_sending",
+      runMessageSending,
+    });
+
+    await expect(
+      deliverTextOrMediaReply({
+        payload: { text: "hello", mediaUrls: ["https://a", "https://b"] },
+        text: "hello",
+        sendText,
+        sendMedia,
+        messageSending: {
+          to: "chat-1",
+          channel: "signal",
+        },
+      }),
+    ).resolves.toBe("media");
+
+    expect(runMessageSending).toHaveBeenCalledWith(
+      {
+        to: "chat-1",
+        content: "hello",
+        metadata: {
+          channel: "signal",
+          mediaUrls: ["https://a", "https://b"],
+        },
+      },
+      {
+        channelId: "signal",
+      },
+    );
+    expect(sendMedia).toHaveBeenNthCalledWith(1, {
+      mediaUrl: "https://a",
+      caption: "rewritten",
+    });
+    expect(sendMedia).toHaveBeenNthCalledWith(2, {
+      mediaUrl: "https://b",
+      caption: undefined,
+    });
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("cancels generic reply delivery when message_sending blocks it", async () => {
+    const sendMedia = vi.fn(async () => undefined);
+    const sendText = vi.fn(async () => undefined);
+    const runMessageSending = vi.fn(async () => ({ cancel: true }));
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: (name: string) => name === "message_sending",
+      runMessageSending,
+    });
+
+    await expect(
+      deliverTextOrMediaReply({
+        payload: { text: "hello", mediaUrls: ["https://a"] },
+        text: "hello",
+        sendText,
+        sendMedia,
+        messageSending: {
+          to: "chat-1",
+          channel: "signal",
+        },
+      }),
+    ).resolves.toBe("empty");
+
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendMedia).not.toHaveBeenCalled();
   });
 });
 

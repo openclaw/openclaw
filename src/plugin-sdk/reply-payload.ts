@@ -1,6 +1,7 @@
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
+import { getGlobalHookRunner } from "./plugin-runtime.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
@@ -27,6 +28,14 @@ export type SendableOutboundReplyParts = {
   hasText: boolean;
   hasMedia: boolean;
   hasContent: boolean;
+};
+
+export type ReplyMessageSendingContext = {
+  to: string;
+  channel: string;
+  accountId?: string;
+  conversationId?: string;
+  metadata?: Record<string, unknown>;
 };
 
 type SendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
@@ -386,6 +395,7 @@ export async function deliverTextOrMediaReply(params: {
   chunkText?: (text: string) => readonly string[];
   sendText: (text: string) => Promise<void>;
   sendMedia: (payload: { mediaUrl: string; caption?: string }) => Promise<void>;
+  messageSending?: ReplyMessageSendingContext;
   onMediaError?: (params: {
     error: unknown;
     mediaUrl: string;
@@ -397,19 +407,28 @@ export async function deliverTextOrMediaReply(params: {
   const { mediaUrls } = resolveSendableOutboundReplyParts(params.payload, {
     text: params.text,
   });
+  const hookResult = await applyReplyMessageSendingHook({
+    text: params.text,
+    mediaUrls,
+    context: params.messageSending,
+  });
+  if (hookResult.cancelled) {
+    return "empty";
+  }
+  const effectiveText = hookResult.text;
   const sentMedia = await sendMediaWithLeadingCaption({
     mediaUrls,
-    caption: params.text,
+    caption: effectiveText,
     send: params.sendMedia,
     onError: params.onMediaError,
   });
   if (sentMedia) {
     return "media";
   }
-  if (!params.text) {
+  if (!effectiveText) {
     return "empty";
   }
-  const chunks = params.chunkText ? params.chunkText(params.text) : [params.text];
+  const chunks = params.chunkText ? params.chunkText(effectiveText) : [effectiveText];
   let sentText = false;
   for (const chunk of chunks) {
     if (!chunk) {
@@ -419,6 +438,52 @@ export async function deliverTextOrMediaReply(params: {
     sentText = true;
   }
   return sentText ? "text" : "empty";
+}
+
+async function applyReplyMessageSendingHook(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  context?: ReplyMessageSendingContext;
+}): Promise<{ cancelled: boolean; text: string }> {
+  if (!params.context) {
+    return { cancelled: false, text: params.text };
+  }
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sending")) {
+    return { cancelled: false, text: params.text };
+  }
+  try {
+    const metadata = {
+      ...params.context.metadata,
+      channel: params.context.channel,
+      ...(params.context.accountId === undefined ? {} : { accountId: params.context.accountId }),
+      mediaUrls: [...params.mediaUrls],
+    };
+    const hookContext = {
+      channelId: params.context.channel,
+      ...(params.context.accountId === undefined ? {} : { accountId: params.context.accountId }),
+      ...(params.context.conversationId === undefined
+        ? {}
+        : { conversationId: params.context.conversationId }),
+    };
+    const result = await hookRunner.runMessageSending(
+      {
+        to: params.context.to,
+        content: params.text,
+        metadata,
+      },
+      hookContext,
+    );
+    if (result?.cancel) {
+      return { cancelled: true, text: params.text };
+    }
+    if (typeof result?.content === "string") {
+      return { cancelled: false, text: result.content };
+    }
+  } catch {
+    // Hook failures should not block reply delivery.
+  }
+  return { cancelled: false, text: params.text };
 }
 
 export async function deliverFormattedTextWithAttachments(params: {
