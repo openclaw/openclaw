@@ -264,7 +264,8 @@ export async function runSubagentAnnounceFlow(params: {
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
-    if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
+    const hasFrozenReply = typeof reply === "string" && reply.trim().length > 0;
+    if (!hasFrozenReply && childSessionId && isEmbeddedPiRunActive(childSessionId)) {
       const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedPiRunActive(childSessionId)) {
         shouldDeleteChildSession = false;

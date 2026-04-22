@@ -31,7 +31,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Completion is push-driven: detached work can notify directly or wake the
   requester session/heartbeat when it finishes, so status polling loops are
   usually the wrong shape.
-- Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
+- Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session. Subagent browser cleanup runs in the background and does not block completion delivery.
 - Isolated cron delivery suppresses stale interim parent replies while descendant subagent work is still draining, and it prefers final descendant output when that arrives before delivery.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
 - `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
@@ -253,7 +253,7 @@ openclaw tasks notify <lookup> state_changes
 
     Completion cleanup is also runtime-aware:
 
-    - Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
+    - Subagent completion starts announce cleanup first, then best-effort closes tracked browser tabs/processes for the child session in the background so browser cleanup cannot delay completion delivery.
     - Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
     - Isolated cron delivery waits out descendant subagent follow-up when needed and suppresses stale parent acknowledgement text instead of announcing it.
     - Subagent completion delivery prefers the latest visible assistant text; if that is empty it falls back to sanitized latest tool/toolResult text, and timeout-only tool-call runs can collapse to a short partial-progress summary. Terminal failed runs announce failure status without replaying captured reply text.

@@ -76,7 +76,7 @@ requester chat when the run finishes.
     - The spawn command is non-blocking; it returns a run id immediately.
     - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
     - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; inspect status only on-demand for debugging or intervention.
-    - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
+    - On completion, OpenClaw starts the announce cleanup flow without waiting on tracked browser tab/process cleanup. Browser cleanup runs best-effort in the background so stale browser state does not delay completion delivery.
 
   </Accordion>
   <Accordion title="Manual-spawn delivery resilience">
@@ -276,7 +276,7 @@ app-server, and other configured native runtimes.
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
 - `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
-- Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
+- Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed after the run finishes, even if the transcript/session record is kept. This cleanup does not block completion delivery.
 
 ## Nested sub-agents
 
