@@ -178,6 +178,37 @@ describe("cli-session helpers", () => {
     ).toEqual({ invalidatedReason: "mcp" });
   });
 
+  it("falls back to legacy MCP config hashes when stored resume hashes are absent", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-config-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-config-a",
+        mcpResumeHash: "mcp-resume-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-config-b",
+        mcpResumeHash: "mcp-resume-a",
+      }),
+    ).toEqual({ invalidatedReason: "mcp" });
+  });
+
   it("clears provider-scoped and global CLI session state", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",

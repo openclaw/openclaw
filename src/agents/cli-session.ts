@@ -152,7 +152,7 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "system-prompt" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
-  if (storedMcpResumeHash || currentMcpResumeHash) {
+  if (storedMcpResumeHash && currentMcpResumeHash) {
     if (storedMcpResumeHash !== currentMcpResumeHash) {
       return { invalidatedReason: "mcp" };
     }
