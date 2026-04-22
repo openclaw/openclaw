@@ -95,7 +95,7 @@ function dailyLogFileNamesInRange(startDate: Date, endDate: Date): string[] {
   return names;
 }
 
-interface ParsedLogEntry {
+export interface ParsedLogEntry {
   timestamp: string;
   level: string;
   subsystem: string;
@@ -120,7 +120,7 @@ function parseEntryTimestampMs(entry: ParsedLogEntry): number | null {
 const RE_LOG_LINE_FALLBACK =
   /^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:[+-]\d{2}:\d{2}|Z)?)\s+\[(\w+)]\s+\[([^\]]*?)]\s+(.*)/;
 
-function parseLogLine(line: string): ParsedLogEntry | null {
+export function parseLogLine(line: string): ParsedLogEntry | null {
   const trimmed = line.trim();
   if (!trimmed) {
     return null;
@@ -133,14 +133,48 @@ function parseLogLine(line: string): ParsedLogEntry | null {
       const meta = obj._meta ?? {};
       const level = meta.logLevelName ?? "";
       const timestamp = obj.time ?? meta.date ?? "";
+
+      // tslog stores positional call arguments under numeric string keys
+      // ("0", "1", "2", ...). Any of them may be:
+      //   - a JSON string describing a bindings object (e.g. '{"subsystem":"x"}')
+      //   - a plain string message
+      //   - an already-serialised object
+      // We walk the numeric keys in order, pull out the first subsystem we
+      // find, and join everything else into the message.
       let subsystem = "";
-      try {
-        const sub = JSON.parse(obj["0"] ?? "{}");
-        subsystem = sub.subsystem ?? "";
-      } catch {
-        subsystem = String(obj["0"] ?? "");
+      const messageParts: string[] = [];
+      let idx = 0;
+      while (Object.hasOwn(obj, String(idx))) {
+        const value = obj[String(idx)];
+        if (typeof value === "string") {
+          const looksLikeJson = value.startsWith("{") && value.endsWith("}");
+          if (looksLikeJson) {
+            try {
+              const parsed = JSON.parse(value);
+              if (!subsystem && typeof parsed?.subsystem === "string") {
+                subsystem = parsed.subsystem;
+              } else {
+                messageParts.push(value);
+              }
+            } catch {
+              messageParts.push(value);
+            }
+          } else {
+            messageParts.push(value);
+          }
+        } else if (value && typeof value === "object") {
+          const maybeSub = (value as { subsystem?: unknown }).subsystem;
+          if (!subsystem && typeof maybeSub === "string") {
+            subsystem = maybeSub;
+          } else {
+            messageParts.push(JSON.stringify(value));
+          }
+        } else if (value !== undefined) {
+          messageParts.push(String(value));
+        }
+        idx++;
       }
-      const message = String(obj["1"] ?? "");
+      const message = messageParts.join(" ");
       if (!level && !message) {
         return null;
       }
@@ -309,17 +343,28 @@ function assembleRedactedConfig(): string {
 
 function assembleHealthData(): string {
   const stateDir = resolveStateDir();
-  const healthPath = path.join(stateDir, "workspace", "memory", "health.json");
+  // Authoritative location used by src/config/io.observe-recovery.ts.
+  // The file is written by the config-observe recovery path and is JSON5.
+  const healthPath = path.join(stateDir, "logs", "config-health.json");
 
   if (!fs.existsSync(healthPath)) {
-    return "## Watchdog Health Data\nhealth.json not found — watchdog may not have run.\n";
+    return "## Config Health Data\nconfig-health.json not found — observe-recovery may not have run.\n";
   }
 
   try {
     const raw = fs.readFileSync(healthPath, { encoding: "utf-8" });
-    return "## Watchdog Health Data (health.json)\n" + raw + "\n";
+    // Parse with JSON5 then re-serialise as strict JSON so the model sees a
+    // canonical shape. Fall back to the raw text if parsing fails.
+    let body = raw;
+    try {
+      const parsed = JSON5.parse(raw);
+      body = JSON.stringify(parsed, null, 2);
+    } catch {
+      // keep raw text
+    }
+    return "## Config Health Data (logs/config-health.json)\n" + body + "\n";
   } catch (err) {
-    return `## Watchdog Health Data\nError reading health.json: ${String(err)}\n`;
+    return `## Config Health Data\nError reading config-health.json: ${String(err)}\n`;
   }
 }
 

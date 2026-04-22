@@ -69,12 +69,21 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/diagnose", "docs.openclaw.ai/cli/
           return;
         }
 
+        const maxLogEntriesRaw = Number.parseInt(opts.maxLogEntries as string, 10);
+        if (Number.isNaN(maxLogEntriesRaw) || maxLogEntriesRaw <= 0) {
+          defaultRuntime.error(
+            `Invalid --max-log-entries value "${opts.maxLogEntries}" — expected a positive integer.`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+
         await diagnoseCommand(defaultRuntime, {
           output: opts.output as string | undefined,
           canvas: Boolean(opts.canvas),
           json: Boolean(opts.json),
           model: opts.model as string | undefined,
-          maxLogEntries: Number.parseInt(opts.maxLogEntries as string, 10) || 200,
+          maxLogEntries: maxLogEntriesRaw,
           sinceMs,
           sinceLabel,
         });
