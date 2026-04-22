@@ -666,7 +666,7 @@ function resolveHeartbeatRunPrompt(params: {
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
 
-  if (params.preflight.isExecEventReason && !hasExecCompletion) {
+  if (params.preflight.isExecEventReason && !hasExecCompletion && !hasCronEvents) {
     return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
   }
 
