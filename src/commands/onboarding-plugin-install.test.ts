@@ -80,7 +80,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
   });
 
-  it("allows local installs for real git worktrees and sanitizes prompt text", async () => {
+  it("allows local installs for real gitdir checkouts and sanitizes prompt text", async () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-gitdir-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
@@ -132,6 +132,59 @@ describe("ensureOnboardingPluginInstalled", () => {
       ]);
       expect(captured?.message).not.toContain("\x1b");
       expect(captured?.options[0]?.label).not.toContain("\x1b");
+    });
+  });
+
+  it("allows local installs for linked git worktrees", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-worktree-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      const commonGitDir = path.join(temp, "repo.git");
+      const worktreeGitDir = path.join(commonGitDir, "worktrees", "workspace");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.mkdir(path.join(commonGitDir, "objects"), { recursive: true });
+      await fs.mkdir(path.join(commonGitDir, "refs"), { recursive: true });
+      await fs.mkdir(worktreeGitDir, { recursive: true });
+      await fs.writeFile(path.join(worktreeGitDir, "HEAD"), "ref: refs/heads/main\n", "utf8");
+      await fs.writeFile(path.join(worktreeGitDir, "commondir"), "../..\n", "utf8");
+      await fs.writeFile(path.join(workspaceDir, ".git"), `gitdir: ${worktreeGitDir}\n`, "utf8");
+
+      let captured:
+        | {
+            message: string;
+            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+            initialValue: "npm" | "local" | "skip";
+          }
+        | undefined;
+
+      await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            localPath: "plugins/demo",
+          },
+        },
+        prompter: {
+          select: vi.fn(async (input) => {
+            captured = input;
+            return "skip";
+          }),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      expect(captured?.options).toEqual([
+        {
+          value: "local",
+          label: "Use local plugin path",
+          hint: path.join(workspaceDir, "plugins", "demo"),
+        },
+        { value: "skip", label: "Skip for now" },
+      ]);
+      expect(captured?.initialValue).toBe("local");
     });
   });
 });

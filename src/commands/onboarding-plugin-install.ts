@@ -29,12 +29,29 @@ export type OnboardingPluginInstallResult = {
   pluginId: string;
 };
 
+function hasGitHead(gitDir: string): boolean {
+  return fs.existsSync(path.join(gitDir, "HEAD"));
+}
+
+function hasGitObjectStore(gitDir: string): boolean {
+  return fs.existsSync(path.join(gitDir, "objects")) && fs.existsSync(path.join(gitDir, "refs"));
+}
+
 function looksLikeGitDir(gitDir: string): boolean {
-  return (
-    fs.existsSync(path.join(gitDir, "HEAD")) &&
-    fs.existsSync(path.join(gitDir, "objects")) &&
-    fs.existsSync(path.join(gitDir, "refs"))
-  );
+  return hasGitHead(gitDir) && hasGitObjectStore(gitDir);
+}
+
+function resolveGitCommonDir(gitDir: string): string | null {
+  const commondirPath = path.join(gitDir, "commondir");
+  try {
+    const raw = fs.readFileSync(commondirPath, "utf8").trim();
+    if (!raw) {
+      return null;
+    }
+    return path.resolve(gitDir, raw);
+  } catch {
+    return null;
+  }
 }
 
 function hasGitWorkspace(workspaceDir?: string): boolean {
@@ -43,7 +60,12 @@ function hasGitWorkspace(workspaceDir?: string): boolean {
   if (!headPath) {
     return false;
   }
-  return looksLikeGitDir(path.dirname(headPath));
+  const gitDir = path.dirname(headPath);
+  if (looksLikeGitDir(gitDir)) {
+    return true;
+  }
+  const commonDir = resolveGitCommonDir(gitDir);
+  return commonDir ? hasGitHead(gitDir) && hasGitObjectStore(commonDir) : false;
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
