@@ -408,6 +408,26 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
   });
 
+  it("shows 1M context window for claude opus 4.7 variants", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "claude-cli/claude-opus-4.7-20260219",
+      },
+      sessionEntry: {
+        sessionId: "opus47",
+        updatedAt: 0,
+        totalTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 200k/1.0m");
+    expect(normalized).not.toContain("Context: 200k/200k");
+  });
+
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
     const sessionEntry = {
       sessionId: "switch-back",
@@ -1684,6 +1704,7 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
+    expect(text).toContain("/models - List model providers/models or add a model.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });

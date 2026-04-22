@@ -17,9 +17,31 @@ const compilerArgs = [buildScript, "--no-clean"];
 const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
+const runtimePostBuildStampFile = ".runtime-postbuildstamp";
+const runtimePostBuildWatchedPaths = [
+  "scripts/copy-bundled-plugin-metadata.mjs",
+  "scripts/copy-plugin-sdk-root-alias.mjs",
+  "scripts/lib",
+  "scripts/npm-runner.mjs",
+  "scripts/runtime-postbuild-shared.mjs",
+  "scripts/runtime-postbuild.mjs",
+  "scripts/stage-bundled-plugin-runtime-deps.mjs",
+  "scripts/stage-bundled-plugin-runtime.mjs",
+  "scripts/windows-cmd-helpers.mjs",
+  "scripts/write-official-channel-catalog.mjs",
+  "src/plugin-sdk/root-alias.cjs",
+  BUNDLED_PLUGIN_ROOT_DIR,
+];
 const ignoredRunNodeRepoPaths = new Set([
   "src/canvas-host/a2ui/.bundle.hash",
   "src/canvas-host/a2ui/a2ui.bundle.js",
+]);
+const runtimePostBuildScriptPaths = new Set(
+  runtimePostBuildWatchedPaths.filter((entry) => entry.startsWith("scripts/")),
+);
+const runtimePostBuildStaticAssetPaths = new Set([
+  "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
+  "extensions/diffs/assets/viewer-runtime.js",
 ]);
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
@@ -40,23 +62,6 @@ const isBuildRelevantSourcePath = (relativePath) => {
   return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
 };
 
-export const isBuildRelevantRunNodePath = (repoPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
 const isRestartRelevantExtensionPath = (relativePath) => {
   const normalizedPath = normalizePath(relativePath);
   if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
@@ -65,7 +70,7 @@ const isRestartRelevantExtensionPath = (relativePath) => {
   return isBuildRelevantSourcePath(normalizedPath);
 };
 
-export const isRestartRelevantRunNodePath = (repoPath) => {
+const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
   if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
     return false;
@@ -77,10 +82,16 @@ export const isRestartRelevantRunNodePath = (repoPath) => {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
   if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
+    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
+
+export const isBuildRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
+
+export const isRestartRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -141,11 +152,11 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
   return latest;
 };
 
-const readGitStatus = (deps) => {
+const readGitStatus = (deps, paths = runNodeWatchedPaths) => {
   try {
     const result = deps.spawnSync(
       "git",
-      ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
+      ["status", "--porcelain", "--untracked-files=normal", "--", ...paths],
       {
         cwd: deps.cwd,
         encoding: "utf8",
@@ -176,6 +187,38 @@ const hasDirtySourceTree = (deps) => {
   return parseGitStatusPaths(output).some((repoPath) => isBuildRelevantRunNodePath(repoPath));
 };
 
+const isRuntimePostBuildRelevantPath = (repoPath) => {
+  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (normalizedPath === "src/plugin-sdk/root-alias.cjs") {
+    return true;
+  }
+  if (runtimePostBuildStaticAssetPaths.has(normalizedPath)) {
+    return true;
+  }
+  if (
+    normalizedPath.startsWith("scripts/") &&
+    (runtimePostBuildScriptPaths.has(normalizedPath) || normalizedPath.startsWith("scripts/lib/"))
+  ) {
+    return true;
+  }
+  if (!normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return false;
+  }
+  const pluginRelativePath = normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length);
+  if (pluginRelativePath.startsWith("skills/")) {
+    return true;
+  }
+  return extensionRestartMetadataFiles.has(path.posix.basename(pluginRelativePath));
+};
+
+const hasDirtyRuntimePostBuildInputs = (deps) => {
+  const output = readGitStatus(deps, runtimePostBuildWatchedPaths);
+  if (output === null) {
+    return null;
+  }
+  return parseGitStatusPaths(output).some((repoPath) => isRuntimePostBuildRelevantPath(repoPath));
+};
+
 const readBuildStamp = (deps) => {
   const mtime = statMtime(deps.buildStampPath, deps.fs);
   if (mtime == null) {
@@ -183,6 +226,24 @@ const readBuildStamp = (deps) => {
   }
   try {
     const raw = deps.fs.readFileSync(deps.buildStampPath, "utf8").trim();
+    if (!raw.startsWith("{")) {
+      return { mtime, head: null };
+    }
+    const parsed = JSON.parse(raw);
+    const head = typeof parsed?.head === "string" && parsed.head.trim() ? parsed.head.trim() : null;
+    return { mtime, head };
+  } catch {
+    return { mtime, head: null };
+  }
+};
+
+const readRuntimePostBuildStamp = (deps) => {
+  const mtime = statMtime(deps.runtimePostBuildStampPath, deps.fs);
+  if (mtime == null) {
+    return { mtime: null, head: null };
+  }
+  try {
+    const raw = deps.fs.readFileSync(deps.runtimePostBuildStampPath, "utf8").trim();
     if (!raw.startsWith("{")) {
       return { mtime, head: null };
     }
@@ -207,6 +268,43 @@ const hasSourceMtimeChanged = (stampMtime, deps) => {
     }
   }
   return latestSourceMtime != null && latestSourceMtime > stampMtime;
+};
+
+const findLatestRuntimePostBuildInputMtime = (absolutePath, relativePath, deps) => {
+  const normalizedRelativePath = normalizePath(relativePath);
+  const statsMtime = statMtime(absolutePath, deps.fs);
+  if (statsMtime == null) {
+    return null;
+  }
+  let stat;
+  try {
+    stat = deps.fs.statSync(absolutePath);
+  } catch {
+    return null;
+  }
+  if (!stat.isDirectory()) {
+    return isRuntimePostBuildRelevantPath(normalizedRelativePath) ? statsMtime : null;
+  }
+  return findLatestMtime(
+    absolutePath,
+    (candidate) => {
+      const candidateRelativePath = path.relative(deps.cwd, candidate);
+      return !isRuntimePostBuildRelevantPath(candidateRelativePath);
+    },
+    deps,
+  );
+};
+
+const hasRuntimePostBuildInputMtimeChanged = (stampMtime, deps) => {
+  let latestInputMtime = null;
+  for (const relativePath of runtimePostBuildWatchedPaths) {
+    const absolutePath = path.join(deps.cwd, relativePath);
+    const inputMtime = findLatestRuntimePostBuildInputMtime(absolutePath, relativePath, deps);
+    if (inputMtime != null && (latestInputMtime == null || inputMtime > latestInputMtime)) {
+      latestInputMtime = inputMtime;
+    }
+  }
+  return latestInputMtime != null && latestInputMtime > stampMtime;
 };
 
 export const resolveBuildRequirement = (deps) => {
@@ -259,6 +357,48 @@ export const resolveBuildRequirement = (deps) => {
   return { shouldBuild: false, reason: "clean" };
 };
 
+export const resolveRuntimePostBuildRequirement = (deps) => {
+  if (deps.env.OPENCLAW_FORCE_RUNTIME_POSTBUILD === "1") {
+    return { shouldSync: true, reason: "force_runtime_postbuild" };
+  }
+
+  const stamp = readRuntimePostBuildStamp(deps);
+  if (stamp.mtime == null) {
+    return { shouldSync: true, reason: "missing_runtime_postbuild_stamp" };
+  }
+
+  const buildStamp = readBuildStamp(deps);
+  if (buildStamp.mtime == null) {
+    return { shouldSync: true, reason: "missing_build_stamp" };
+  }
+  if (buildStamp.mtime > stamp.mtime) {
+    return { shouldSync: true, reason: "build_stamp_newer" };
+  }
+
+  const currentHead = resolveGitHead(deps);
+  if (currentHead && !stamp.head) {
+    return { shouldSync: true, reason: "runtime_postbuild_stamp_missing_head" };
+  }
+  if (currentHead && stamp.head && currentHead !== stamp.head) {
+    return { shouldSync: true, reason: "git_head_changed" };
+  }
+  if (currentHead) {
+    const dirty = hasDirtyRuntimePostBuildInputs(deps);
+    if (dirty === true) {
+      return { shouldSync: true, reason: "dirty_runtime_postbuild_inputs" };
+    }
+    if (dirty === false) {
+      return { shouldSync: false, reason: "clean" };
+    }
+  }
+
+  if (hasRuntimePostBuildInputMtimeChanged(stamp.mtime, deps)) {
+    return { shouldSync: true, reason: "runtime_postbuild_input_mtime_newer" };
+  }
+
+  return { shouldSync: false, reason: "clean" };
+};
+
 const BUILD_REASON_LABELS = {
   force_build: "forced by OPENCLAW_FORCE_BUILD",
   missing_build_stamp: "build stamp missing",
@@ -272,7 +412,20 @@ const BUILD_REASON_LABELS = {
   clean: "clean",
 };
 
+const RUNTIME_POSTBUILD_REASON_LABELS = {
+  force_runtime_postbuild: "forced by OPENCLAW_FORCE_RUNTIME_POSTBUILD",
+  missing_runtime_postbuild_stamp: "runtime postbuild stamp missing",
+  missing_build_stamp: "build stamp missing",
+  build_stamp_newer: "build stamp newer than runtime postbuild stamp",
+  runtime_postbuild_stamp_missing_head: "runtime postbuild stamp missing git head",
+  git_head_changed: "git head changed",
+  dirty_runtime_postbuild_inputs: "dirty runtime postbuild inputs",
+  runtime_postbuild_input_mtime_newer: "runtime postbuild input mtime newer than stamp",
+  clean: "clean",
+};
+
 const formatBuildReason = (reason) => BUILD_REASON_LABELS[reason] ?? reason;
+const formatRuntimePostBuildReason = (reason) => RUNTIME_POSTBUILD_REASON_LABELS[reason] ?? reason;
 
 const SIGNAL_EXIT_CODES = {
   SIGINT: 130,
@@ -284,6 +437,23 @@ const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
 const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
+const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
+const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
+const DEFAULT_BUILD_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_BUILD_LOCK_POLL_MS = 100;
+const DEFAULT_BUILD_LOCK_STALE_MS = 10 * 60 * 1000;
+
+const parsePositiveIntegerEnv = (env, name, fallback) => {
+  const raw = env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
@@ -440,9 +610,115 @@ const closeRunNodeOutputTee = async (deps, exitCode) => {
   return exitCode;
 };
 
-const syncRuntimeArtifacts = (deps) => {
+const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   try {
-    deps.runRuntimePostBuild({ cwd: deps.cwd });
+    const stats = deps.fs.statSync(lockDir);
+    if (Date.now() - stats.mtimeMs < staleMs) {
+      return false;
+    }
+    deps.fs.rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const acquireRunNodeBuildLock = async (deps) => {
+  const lockRoot = path.join(deps.cwd, ".artifacts");
+  const lockDir = path.join(lockRoot, "run-node-build.lock");
+  const timeoutMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_TIMEOUT_ENV,
+    DEFAULT_BUILD_LOCK_TIMEOUT_MS,
+  );
+  const pollMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_POLL_ENV,
+    DEFAULT_BUILD_LOCK_POLL_MS,
+  );
+  const staleMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_STALE_ENV,
+    DEFAULT_BUILD_LOCK_STALE_MS,
+  );
+  const startedAt = Date.now();
+  let loggedWait = false;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      deps.fs.mkdirSync(lockRoot, { recursive: true });
+      deps.fs.mkdirSync(lockDir);
+      try {
+        deps.fs.writeFileSync(
+          path.join(lockDir, "owner.json"),
+          `${JSON.stringify(
+            {
+              pid: deps.process.pid,
+              startedAt: new Date().toISOString(),
+              args: deps.args,
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+      } catch {
+        // Owner metadata is diagnostic only; the directory itself is the lock.
+      }
+      let released = false;
+      const removeLockDir = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        try {
+          deps.fs.rmSync(lockDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup; a follow-up waiter will fall back to staleness
+          // detection if the directory is still present.
+        }
+      };
+      const onSignal = () => removeLockDir();
+      const onExit = () => removeLockDir();
+      deps.process.on("SIGINT", onSignal);
+      deps.process.on("SIGTERM", onSignal);
+      deps.process.on("exit", onExit);
+      return () => {
+        deps.process.off("SIGINT", onSignal);
+        deps.process.off("SIGTERM", onSignal);
+        deps.process.off("exit", onExit);
+        removeLockDir();
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      if (removeStaleBuildLock(deps, lockDir, staleMs)) {
+        continue;
+      }
+      if (!loggedWait) {
+        logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
+        loggedWait = true;
+      }
+      await sleep(pollMs);
+    }
+  }
+
+  throw new Error(`timed out waiting for ${path.relative(deps.cwd, lockDir)}`);
+};
+
+const withRunNodeBuildLock = async (deps, callback) => {
+  const release = await acquireRunNodeBuildLock(deps);
+  try {
+    return await callback();
+  } finally {
+    release();
+  }
+};
+
+const syncRuntimeArtifacts = async (deps) => {
+  try {
+    await deps.runRuntimePostBuild({ cwd: deps.cwd, env: deps.env });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -451,6 +727,38 @@ const syncRuntimeArtifacts = (deps) => {
     return false;
   }
   return true;
+};
+
+const writeRuntimePostBuildStamp = (deps) => {
+  try {
+    deps.fs.mkdirSync(path.dirname(deps.runtimePostBuildStampPath), { recursive: true });
+    const head = resolveGitHead(deps);
+    deps.fs.writeFileSync(
+      deps.runtimePostBuildStampPath,
+      `${JSON.stringify(
+        {
+          syncedAt: Date.now(),
+          ...(head ? { head } : {}),
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    logRunner(
+      `Failed to write runtime postbuild stamp: ${error?.message ?? "unknown error"}`,
+      deps,
+    );
+  }
+};
+
+const syncRuntimeArtifactsAndStamp = async (deps) => {
+  const synced = await syncRuntimeArtifacts(deps);
+  if (synced) {
+    writeRuntimePostBuildStamp(deps);
+  }
+  return synced;
 };
 
 const writeBuildStamp = (deps) => {
@@ -486,6 +794,7 @@ export async function runNodeMain(params = {}) {
   deps.distRoot = path.join(deps.cwd, "dist");
   deps.distEntry = path.join(deps.distRoot, "/entry.js");
   deps.buildStampPath = path.join(deps.distRoot, ".buildstamp");
+  deps.runtimePostBuildStampPath = path.join(deps.distRoot, runtimePostBuildStampFile);
   deps.sourceRoots = runNodeSourceRoots.map((sourceRoot) => ({
     name: sourceRoot,
     path: path.join(deps.cwd, sourceRoot),
@@ -502,38 +811,74 @@ export async function runNodeMain(params = {}) {
     let exitCode = 1;
     const buildRequirement = resolveBuildRequirement(deps);
     if (!buildRequirement.shouldBuild) {
-      if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
-        return await closeRunNodeOutputTee(deps, 1);
+      if (!shouldSkipCleanWatchRuntimeSync(deps)) {
+        const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+        if (runtimePostBuildRequirement.shouldSync) {
+          const synced = await withRunNodeBuildLock(deps, async () => {
+            const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+            if (!lockedRuntimePostBuildRequirement.shouldSync) {
+              return true;
+            }
+            logRunner(
+              `Syncing runtime artifacts (${lockedRuntimePostBuildRequirement.reason} - ${formatRuntimePostBuildReason(lockedRuntimePostBuildRequirement.reason)}).`,
+              deps,
+            );
+            return await syncRuntimeArtifactsAndStamp(deps);
+          });
+          if (!synced) {
+            return await closeRunNodeOutputTee(deps, 1);
+          }
+        }
       }
       exitCode = await runOpenClaw(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
     }
 
-    logRunner(
-      `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
-      deps,
-    );
-    const buildCmd = deps.execPath;
-    const buildArgs = compilerArgs;
-    const build = deps.spawn(buildCmd, buildArgs, {
-      cwd: deps.cwd,
-      env: deps.env,
-      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
-    });
-    pipeSpawnedOutput(build, deps);
+    const buildExitCode = await withRunNodeBuildLock(deps, async () => {
+      const lockedBuildRequirement = resolveBuildRequirement(deps);
+      if (!lockedBuildRequirement.shouldBuild) {
+        const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+        if (!runtimePostBuildRequirement.shouldSync) {
+          return 0;
+        }
+        logRunner(
+          `Syncing runtime artifacts (${runtimePostBuildRequirement.reason} - ${formatRuntimePostBuildReason(runtimePostBuildRequirement.reason)}).`,
+          deps,
+        );
+        return (await syncRuntimeArtifactsAndStamp(deps)) ? 0 : 1;
+      }
 
-    const buildRes = await waitForSpawnedProcess(build, deps);
-    const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
-    if (interruptedExitCode !== null) {
-      return await closeRunNodeOutputTee(deps, interruptedExitCode);
+      logRunner(
+        `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
+        deps,
+      );
+      const buildCmd = deps.execPath;
+      const buildArgs = compilerArgs;
+      const build = deps.spawn(buildCmd, buildArgs, {
+        cwd: deps.cwd,
+        env: deps.env,
+        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+      });
+      pipeSpawnedOutput(build, deps);
+
+      const buildRes = await waitForSpawnedProcess(build, deps);
+      const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
+      if (interruptedExitCode !== null) {
+        return interruptedExitCode;
+      }
+      if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
+        return buildRes.exitCode;
+      }
+      if (!(await syncRuntimeArtifacts(deps))) {
+        return 1;
+      }
+      writeBuildStamp(deps);
+      writeRuntimePostBuildStamp(deps);
+      return 0;
+    });
+    if (buildExitCode !== 0) {
+      return await closeRunNodeOutputTee(deps, buildExitCode);
     }
-    if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
-      return await closeRunNodeOutputTee(deps, buildRes.exitCode);
-    }
-    if (!syncRuntimeArtifacts(deps)) {
-      return await closeRunNodeOutputTee(deps, 1);
-    }
-    writeBuildStamp(deps);
     exitCode = await runOpenClaw(deps);
     return await closeRunNodeOutputTee(deps, exitCode);
   } catch (error) {
