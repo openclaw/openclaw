@@ -1306,8 +1306,17 @@ async function collectDailyIngestionBatches(params: {
       };
       continue;
     }
+    const fullyIngested = results.length >= chunks.length;
     batches.push({ day: candidate.day, results });
     total += results.length;
+    if (!fullyIngested) {
+      if (candidate.previous) {
+        nextFiles[candidate.relativePath] = candidate.previous;
+      }
+      pendingPaths.add(candidate.relativePath);
+      exhausted = true;
+      continue;
+    }
     nextFiles[candidate.relativePath] = {
       ...candidate.fingerprint,
       lastDreamingDayIngested: params.ingestionDreamingDay,

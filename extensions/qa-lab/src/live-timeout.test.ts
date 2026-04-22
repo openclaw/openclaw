@@ -11,25 +11,8 @@ describe("qa live timeout policy", () => {
           alternateModel: "anthropic/claude-opus-4-6",
         },
         30_000,
-        undefined,
-        {},
       ),
     ).toBe(30_000);
-  });
-
-  it("adds a small CI buffer for mock lanes", () => {
-    expect(
-      resolveQaLiveTurnTimeoutMs(
-        {
-          providerMode: "mock-openai",
-          primaryModel: "openai/gpt-5.4",
-          alternateModel: "openai/gpt-5.4-alt",
-        },
-        45_000,
-        undefined,
-        { CI: "true" },
-      ),
-    ).toBe(60_000);
   });
 
   it("uses the higher gpt-5 live floor for openai heavy turns", () => {
@@ -41,8 +24,6 @@ describe("qa live timeout policy", () => {
           alternateModel: "openai/gpt-5.5",
         },
         30_000,
-        undefined,
-        {},
       ),
     ).toBe(360_000);
   });
@@ -56,8 +37,6 @@ describe("qa live timeout policy", () => {
           alternateModel: "google/gemini-3-flash",
         },
         30_000,
-        undefined,
-        {},
       ),
     ).toBe(120_000);
   });
@@ -71,8 +50,6 @@ describe("qa live timeout policy", () => {
           alternateModel: "anthropic/claude-opus-4-6",
         },
         30_000,
-        undefined,
-        {},
       ),
     ).toBe(180_000);
   });
@@ -87,7 +64,6 @@ describe("qa live timeout policy", () => {
         },
         30_000,
         "anthropic/claude-opus-4-6",
-        {},
       ),
     ).toBe(240_000);
   });

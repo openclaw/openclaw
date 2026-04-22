@@ -966,8 +966,9 @@ describe("memory-core dreaming phases", () => {
       "memory/2026-04-03.md",
     ]);
     expect(first.batches[3]?.results).toHaveLength(2);
+    expect(Object.keys(first.nextState.files)).not.toContain("memory/2026-04-03.md");
     expect(Object.keys(first.nextState.files)).not.toContain("memory/2026-04-02.md");
-    expect(first.nextState.pendingPaths).toEqual(["memory/2026-04-02.md"]);
+    expect(first.nextState.pendingPaths).toEqual(["memory/2026-04-02.md", "memory/2026-04-03.md"]);
 
     const second = await __testing.collectDailyIngestionBatches({
       workspaceDir,
@@ -977,9 +978,12 @@ describe("memory-core dreaming phases", () => {
       state: first.nextState,
     });
 
-    expect(second.batches).toHaveLength(1);
-    expect(second.batches[0]?.results[0]?.path).toBe("memory/2026-04-02.md");
+    expect(second.batches.map((batch) => batch.results[0]?.path)).toEqual([
+      "memory/2026-04-02.md",
+      "memory/2026-04-03.md",
+    ]);
     expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-02.md");
+    expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-03.md");
     expect(second.nextState.pendingPaths).toBeUndefined();
   });
 
@@ -1005,7 +1009,7 @@ describe("memory-core dreaming phases", () => {
       state: { version: 1, files: {} },
     });
 
-    expect(first.nextState.pendingPaths).toEqual(["memory/2026-04-02.md"]);
+    expect(first.nextState.pendingPaths).toEqual(["memory/2026-04-02.md", "memory/2026-04-03.md"]);
 
     const second = await __testing.collectDailyIngestionBatches({
       workspaceDir,
@@ -1015,9 +1019,12 @@ describe("memory-core dreaming phases", () => {
       state: first.nextState,
     });
 
-    expect(second.batches).toHaveLength(1);
-    expect(second.batches[0]?.results[0]?.path).toBe("memory/2026-04-02.md");
+    expect(second.batches.map((batch) => batch.results[0]?.path)).toEqual([
+      "memory/2026-04-02.md",
+      "memory/2026-04-03.md",
+    ]);
     expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-02.md");
+    expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-03.md");
     expect(second.nextState.pendingPaths).toBeUndefined();
   });
 
@@ -1049,9 +1056,11 @@ describe("memory-core dreaming phases", () => {
       nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
       state: seeded.nextState,
     });
+    const updatedMtime = new Date("2026-04-06T10:11:00.000Z");
 
+    const updated20260402Path = path.join(workspaceDir, "memory", "2026-04-02.md");
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-02.md"),
+      updated20260402Path,
       [
         "# 2026-04-02",
         "",
@@ -1059,9 +1068,11 @@ describe("memory-core dreaming phases", () => {
       ].join("\n"),
       "utf-8",
     );
+    await fs.utimes(updated20260402Path, updatedMtime, updatedMtime);
     for (const day of ["2026-04-06", "2026-04-05", "2026-04-04", "2026-04-03"]) {
+      const notePath = path.join(workspaceDir, "memory", `${day}.md`);
       await fs.writeFile(
-        path.join(workspaceDir, "memory", `${day}.md`),
+        notePath,
         [
           `# ${day}`,
           "",
@@ -1069,6 +1080,7 @@ describe("memory-core dreaming phases", () => {
         ].join("\n"),
         "utf-8",
       );
+      await fs.utimes(notePath, updatedMtime, updatedMtime);
     }
 
     const capped = await __testing.collectDailyIngestionBatches({
@@ -1079,7 +1091,7 @@ describe("memory-core dreaming phases", () => {
       state: baseline.nextState,
     });
 
-    expect(capped.nextState.pendingPaths).toEqual(["memory/2026-04-02.md"]);
+    expect(capped.nextState.pendingPaths).toEqual(["memory/2026-04-02.md", "memory/2026-04-03.md"]);
 
     const retried = await __testing.collectDailyIngestionBatches({
       workspaceDir,
@@ -1089,8 +1101,10 @@ describe("memory-core dreaming phases", () => {
       state: capped.nextState,
     });
 
-    expect(retried.batches).toHaveLength(1);
-    expect(retried.batches[0]?.results[0]?.path).toBe("memory/2026-04-02.md");
+    expect(retried.batches.map((batch) => batch.results[0]?.path)).toEqual([
+      "memory/2026-04-02.md",
+      "memory/2026-04-03.md",
+    ]);
     expect(
       retried.batches[0]?.results.some((result) => result.snippet.includes("Updated 2026-04-02")),
     ).toBe(true);

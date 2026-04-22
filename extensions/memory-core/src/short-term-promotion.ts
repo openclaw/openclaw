@@ -436,11 +436,15 @@ function isCrossPlatformAbsoluteMemoryPath(normalizedPath: string): boolean {
   );
 }
 
+function isWindowsStyleAbsoluteMemoryPath(normalizedPath: string): boolean {
+  return WINDOWS_ABSOLUTE_PATH_RE.test(normalizedPath);
+}
+
 function normalizeMemoryWorkspaceComparablePath(normalizedPath: string): string {
-  if (!path.win32.isAbsolute(normalizedPath)) {
+  if (!isWindowsStyleAbsoluteMemoryPath(normalizedPath)) {
     return normalizedPath;
   }
-  return normalizedPath.replace(/^([a-z]):/i, (_, drive: string) => `${drive.toLowerCase()}:`);
+  return normalizedPath.toLowerCase();
 }
 
 function normalizeIsoDay(isoLike: string): string | null {
@@ -1341,7 +1345,10 @@ async function isSessionSummaryShortTermPath(params: {
   startLine?: number;
   recordDependency?: (dependency: SessionSummaryDailyMemoryDependency) => void;
 }): Promise<boolean> {
-  return await isSessionSummaryDailyMemoryPath(params);
+  return await isSessionSummaryDailyMemoryPath({
+    ...params,
+    allowLegacySemanticSlugTranscriptFallback: true,
+  });
 }
 
 async function shortTermRecallSourceExists(params: {

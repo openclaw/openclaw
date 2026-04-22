@@ -1579,6 +1579,49 @@ describe("short-term promotion", () => {
     }
   });
 
+  it("treats Windows workspace path segments case-insensitively for legacy exact matches", () => {
+    const claimHash = __testing.buildClaimHash("same snippet");
+    const resolveSpy = vi
+      .spyOn(path, "resolve")
+      .mockImplementation(((...segments: string[]) =>
+        path.win32.resolve(...segments)) as typeof path.resolve);
+
+    try {
+      const matchedKey = __testing.findExistingDailyVariantEntryKey({
+        entries: {
+          same: {
+            key: "same",
+            path: "C:/Repo/memory/2026-04-03.md",
+            startLine: 3,
+            endLine: 3,
+            source: "memory",
+            snippet: "same snippet",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 0.9,
+            maxScore: 0.9,
+            firstRecalledAt: "2026-04-03T10:00:00.000Z",
+            lastRecalledAt: "2026-04-03T10:00:00.000Z",
+            queryHashes: ["a"],
+            recallDays: ["2026-04-03"],
+            conceptTags: [],
+            claimHash,
+          },
+        },
+        workspaceDir: "C:/repo",
+        claimHash,
+        candidatePath: "memory/2026-04-03.md",
+        candidateStartLine: 3,
+        candidateEndLine: 3,
+      });
+
+      expect(matchedKey).toBe("same");
+    } finally {
+      resolveSpy.mockRestore();
+    }
+  });
+
   it("does not probe local source aliases for migrated Windows absolute paths", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await fs.writeFile(
@@ -3399,7 +3442,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("keeps deleted semantic LLM slug recalls without remembered bookkeeping provenance", async () => {
+  it("purges deleted semantic LLM slug recalls when legacy transcript evidence starts in the summary body", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       await fs.writeFile(
@@ -3414,6 +3457,51 @@ describe("short-term promotion", () => {
                 path: "memory/2026-04-03-vendor-pitch.md",
                 startLine: 9,
                 endLine: 9,
+                source: "memory",
+                snippet: "assistant: bookkeeping only",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("keeps deleted semantic LLM slug recalls without remembered bookkeeping provenance before the summary-body threshold", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-vendor-pitch.md",
+                startLine: 3,
+                endLine: 3,
                 source: "memory",
                 snippet: "assistant: bookkeeping only",
                 recallCount: 3,
@@ -3499,7 +3587,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("keeps deleted transcript-like semantic slugs without remembered bookkeeping provenance", async () => {
+  it("keeps deleted transcript-like semantic slugs without remembered bookkeeping provenance before the summary-body threshold", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       await fs.writeFile(
@@ -3512,8 +3600,8 @@ describe("short-term promotion", () => {
               durable: {
                 key: "durable",
                 path: "memory/2026-04-03-vendor-pitch.md",
-                startLine: 9,
-                endLine: 9,
+                startLine: 3,
+                endLine: 3,
                 source: "memory",
                 snippet: "assistant: bookkeeping only",
                 recallCount: 3,

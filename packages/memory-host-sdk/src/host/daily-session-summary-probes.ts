@@ -43,9 +43,13 @@ function isPathInside(parentPath: string, candidatePath: string): boolean {
   );
 }
 
+function isWindowsStyleSessionSummaryAbsolutePath(normalizedPath: string): boolean {
+  return /^[a-z]:\//i.test(normalizedPath);
+}
+
 function normalizeSessionSummaryWorkspaceComparablePath(rawPath: string): string {
   const normalizedPath = normalizeSessionSummaryPath(rawPath);
-  if (!path.win32.isAbsolute(normalizedPath)) {
+  if (!isWindowsStyleSessionSummaryAbsolutePath(normalizedPath)) {
     return normalizedPath;
   }
   return normalizedPath.toLowerCase();
@@ -221,10 +225,9 @@ export function buildSessionSummaryDailyMemoryProbePaths(
   if (!normalizedPath) {
     return [];
   }
-  const relativePaths = [normalizedPath];
-  if (!normalizedPath.includes("/")) {
-    relativePaths.push(path.posix.join("memory", path.posix.basename(normalizedPath)));
-  }
+  const relativePaths = normalizedPath.includes("/")
+    ? [normalizedPath]
+    : [path.posix.join("memory", path.posix.basename(normalizedPath)), normalizedPath];
   const seenRelativePaths = new Set<string>();
   const candidates: Array<{ absolutePath: string; relativePath: string }> = [];
   for (const relativePath of relativePaths) {

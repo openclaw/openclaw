@@ -669,6 +669,44 @@ describe("daily-content", () => {
     ).resolves.toBe(false);
   });
 
+  it("prefers memory aliases before same-named workspace-root basename probes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-bare-order-"));
+    tmpDirs.push(root);
+    const memoryDir = path.join(root, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(root, "2026-04-19-reset-summary.md"),
+      "ordinary durable note\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "2026-04-19-reset-summary.md"),
+      [
+        "# Session: 2026-04-19 10:00:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    expect(
+      buildSessionSummaryDailyMemoryProbePaths(root, "2026-04-19-reset-summary.md").map(
+        (candidate) => candidate.relativePath,
+      ),
+    ).toEqual(["memory/2026-04-19-reset-summary.md", "2026-04-19-reset-summary.md"]);
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "2026-04-19-reset-summary.md",
+        cache: new Map(),
+        snippet: "assistant: bookkeeping only",
+        startLine: 9,
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("does not let stale remembered bookkeeping provenance override live same-day siblings", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-daily-content-remembered-sibling-"),
@@ -859,6 +897,15 @@ describe("daily-content", () => {
     } finally {
       resolveSpy.mockRestore();
     }
+  });
+
+  it("keeps POSIX absolute probe paths case-sensitive", () => {
+    expect(
+      buildSessionSummaryDailyMemoryProbePaths(
+        "/workspace/repo",
+        "/WORKSPACE/repo/memory/2026-04-19-vendor-pitch.md",
+      ),
+    ).toEqual([]);
   });
 
   it("does not probe unrelated local files for foreign absolute-path aliases", async () => {
