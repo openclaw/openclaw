@@ -1,3 +1,4 @@
+import { getDurableJobByTaskFlowIdForOwner } from "../../tasks/durable-job-owner-access.js";
 import {
   cancelFlowByIdForOwner,
   getFlowTaskSummary,
@@ -9,7 +10,7 @@ import {
   listTaskFlowsForOwner,
   resolveTaskFlowForLookupTokenForOwner,
 } from "../../tasks/task-flow-owner-access.js";
-import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
+import type { JsonValue, TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import {
   createManagedTaskFlow,
   failFlow,
@@ -21,6 +22,7 @@ import {
 } from "../../tasks/task-flow-runtime-internal.js";
 import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { createRuntimeJobs } from "./runtime-jobs.js";
 import type {
   BoundTaskFlowRuntime,
   ManagedTaskFlowMutationResult,
@@ -85,6 +87,88 @@ function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutat
     code: result.reason,
     ...(result.current ? { current: result.current } : {}),
   };
+}
+
+function findNextWakeAtFromWaitJson(waitJson: JsonValue | null | undefined): number | undefined {
+  if (!waitJson || typeof waitJson !== "object" || Array.isArray(waitJson)) {
+    return undefined;
+  }
+  const record = waitJson as Record<string, unknown>;
+  if (typeof record.nextWakeAt === "number" && Number.isFinite(record.nextWakeAt)) {
+    return record.nextWakeAt;
+  }
+  if (typeof record.nextWakeAtMs === "number" && Number.isFinite(record.nextWakeAtMs)) {
+    return record.nextWakeAtMs;
+  }
+  const wake = record.wake;
+  if (wake && typeof wake === "object" && !Array.isArray(wake)) {
+    const wakeRecord = wake as Record<string, unknown>;
+    if (typeof wakeRecord.nextWakeAt === "number" && Number.isFinite(wakeRecord.nextWakeAt)) {
+      return wakeRecord.nextWakeAt;
+    }
+    if (typeof wakeRecord.nextWakeAtMs === "number" && Number.isFinite(wakeRecord.nextWakeAtMs)) {
+      return wakeRecord.nextWakeAtMs;
+    }
+  }
+  return undefined;
+}
+
+function syncLinkedDurableJobWaiting(params: {
+  ownerKey: string;
+  flowId: string;
+  flowStatus: TaskFlowRecord["status"];
+  currentStep?: string | null;
+  waitJson?: JsonValue | null;
+  blockedSummary?: string | null;
+  updatedAt?: number;
+}): void {
+  if (params.flowStatus !== "waiting") {
+    return;
+  }
+  const job = getDurableJobByTaskFlowIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.ownerKey,
+  });
+  if (!job) {
+    return;
+  }
+
+  const jobs = createRuntimeJobs().bindSession({
+    sessionKey: params.ownerKey,
+  });
+  const nextWakeAt = findNextWakeAtFromWaitJson(params.waitJson);
+
+  if (job.status === "waiting") {
+    jobs.update({
+      jobId: job.jobId,
+      expectedRevision: job.audit.revision,
+      patch: {
+        currentStep: params.currentStep,
+        ...(nextWakeAt !== undefined ? { nextWakeAt } : {}),
+        ...(params.blockedSummary ? { summary: params.blockedSummary } : {}),
+      },
+      updatedAt: params.updatedAt,
+    });
+    return;
+  }
+
+  jobs.transition({
+    jobId: job.jobId,
+    expectedRevision: job.audit.revision,
+    from: job.status,
+    to: "waiting",
+    reason: nextWakeAt !== undefined ? "Awaiting next wake" : "Waiting on linked TaskFlow",
+    at: params.updatedAt,
+    wake:
+      nextWakeAt !== undefined
+        ? { status: "scheduled", nextWakeAt }
+        : { status: "unchanged", detail: "TaskFlow waiting without explicit next wake." },
+    patch: {
+      currentStep: params.currentStep,
+      ...(nextWakeAt !== undefined ? { nextWakeAt } : {}),
+      ...(params.blockedSummary ? { summary: params.blockedSummary } : {}),
+    },
+  });
 }
 
 function createBoundTaskFlowRuntime(params: {
@@ -155,7 +239,7 @@ function createBoundTaskFlowRuntime(params: {
           ...(flow.current ? { current: flow.current } : {}),
         };
       }
-      return mapFlowUpdateResult(
+      const result = mapFlowUpdateResult(
         setFlowWaiting({
           flowId: flow.flow.flowId,
           expectedRevision: input.expectedRevision,
@@ -167,6 +251,18 @@ function createBoundTaskFlowRuntime(params: {
           updatedAt: input.updatedAt,
         }),
       );
+      if (result.applied) {
+        syncLinkedDurableJobWaiting({
+          ownerKey,
+          flowId: result.flow.flowId,
+          flowStatus: result.flow.status,
+          currentStep: input.currentStep,
+          waitJson: input.waitJson,
+          blockedSummary: input.blockedSummary,
+          updatedAt: input.updatedAt,
+        });
+      }
+      return result;
     },
     resume: (input) => {
       const flow = resolveManagedFlowForOwner({

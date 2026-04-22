@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById } from "../../tasks/task-registry.js";
+import { createRuntimeJobs } from "./runtime-jobs.js";
 import {
   installRuntimeTaskDeliveryMock,
   resetRuntimeTaskTestState,
@@ -134,5 +135,75 @@ describe("runtime TaskFlow", () => {
       total: 1,
       active: 1,
     });
+  });
+
+  it("syncs an attached durable job when a managed flow moves into waiting with a next wake", () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Watch linked TaskFlow",
+      goal: "Mirror TaskFlow waiting state into durable jobs",
+      status: "running",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      currentStep: "triage",
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Wait for the next wake",
+      currentStep: "triage",
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+
+    const waiting = taskFlow.setWaiting({
+      flowId: createdFlow.flowId,
+      expectedRevision: createdFlow.revision,
+      currentStep: "await_next_wake",
+      waitJson: {
+        kind: "wake",
+        nextWakeAt: 500,
+      },
+      updatedAt: 50,
+    });
+
+    expect(waiting).toMatchObject({
+      applied: true,
+      flow: expect.objectContaining({
+        status: "waiting",
+        currentStep: "await_next_wake",
+      }),
+    });
+
+    expect(jobs.get(createdJob.jobId)).toMatchObject({
+      status: "waiting",
+      currentStep: "await_next_wake",
+      nextWakeAt: 500,
+      backing: expect.objectContaining({ taskFlowId: createdFlow.flowId }),
+    });
+    expect(jobs.history(createdJob.jobId)).toEqual([
+      expect.objectContaining({
+        from: "running",
+        to: "waiting",
+        reason: "Awaiting next wake",
+        disposition: {
+          kind: "schedule_only",
+          wake: { status: "scheduled", nextWakeAt: 500 },
+        },
+      }),
+    ]);
   });
 });

@@ -34,6 +34,19 @@ export function listDurableJobTransitionsForOwner(params: {
   return getDurableJobByIdForOwner(params) ? listDurableJobTransitions(params.jobId) : [];
 }
 
+export function getDurableJobByTaskFlowIdForOwner(params: {
+  flowId: string;
+  callerOwnerKey: string;
+}): DurableJobRecord | undefined {
+  const flowId = normalizeOptionalString(params.flowId);
+  if (!flowId) {
+    return undefined;
+  }
+  return listDurableJobsForOwner({ callerOwnerKey: params.callerOwnerKey }).find(
+    (job) => normalizeOptionalString(job.backing.taskFlowId) === flowId,
+  );
+}
+
 export function canAttachTaskFlowForDurableJob(params: {
   flowId: string;
   callerOwnerKey: string;
