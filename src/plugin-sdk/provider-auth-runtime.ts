@@ -271,7 +271,7 @@ export async function prepareCodexAuthBridge(params: {
   const material = resolveCodexAuthBridgeMaterial({
     credential,
     sourceCodexHome: params.sourceCodexHome,
-    env: params.env,
+    env: { ...process.env, ...params.env },
   });
   await writePrivateSecretFileAtomic({
     rootDir: params.agentDir,

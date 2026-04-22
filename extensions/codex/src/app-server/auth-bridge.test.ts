@@ -202,6 +202,66 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
+  it("hydrates from inherited CODEX_HOME when start options do not override it", async () => {
+    const sourceCodexHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-source-home-"));
+    tempDirs.push(sourceCodexHome);
+    await fs.writeFile(
+      path.join(sourceCodexHome, "auth.json"),
+      `${JSON.stringify(
+        {
+          auth_mode: "chatgpt",
+          tokens: {
+            id_token: "source-id-token",
+            access_token: "access-token",
+            refresh_token: "refresh-token",
+            account_id: "acct-123",
+          },
+          last_refresh: "2026-04-22T00:00:00.000Z",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = sourceCodexHome;
+    try {
+      const agentDir = await createAgentDirWithDefaultProfile({
+        accountId: "acct-123",
+      });
+
+      const result = await bridgeCodexAppServerStartOptions({
+        startOptions: {
+          transport: "stdio",
+          command: "codex",
+          args: ["app-server"],
+          headers: {},
+        },
+        agentDir,
+      });
+
+      expect(result.env?.CODEX_HOME).not.toBe(sourceCodexHome);
+      const authFile = JSON.parse(
+        await fs.readFile(path.join(result.env?.CODEX_HOME ?? "", "auth.json"), "utf8"),
+      );
+      expect(authFile).toEqual({
+        auth_mode: "chatgpt",
+        tokens: {
+          id_token: "source-id-token",
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          account_id: "acct-123",
+        },
+        last_refresh: "2026-04-22T00:00:00.000Z",
+      });
+    } finally {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+    }
+  });
+
   it("leaves start options unchanged when canonical oauth is unavailable", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     tempDirs.push(agentDir);
