@@ -78,6 +78,90 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
 };
 
+/**
+ * Post-approval permissions granted to the agent after a plan was
+ * approved. Scoped by `approvalId` so a permission granted for cycle A
+ * can't leak into cycle B. Cleared on new plan-mode cycle, close-on-
+ * complete, or explicit reset.
+ *
+ * Currently tracks only `acceptEdits` (Claude-Code-style auto-edit
+ * permission: the agent may self-modify the plan during execution at
+ * ≥95% confidence, subject to three hard constraints — no destructive
+ * actions, no self-restart, no config changes). Runtime enforcement of
+ * the three constraints lives in
+ * `src/agents/plan-mode/accept-edits-gate.ts`; the prompt injection
+ * that teaches the agent the semantics is
+ * `buildAcceptEditsPlanInjection` in `src/agents/plan-mode/approval.ts`.
+ */
+export interface PostApprovalPermissions {
+  acceptEdits: boolean;
+  grantedAt: number;
+  approvalId: string;
+}
+
+export type PendingInteractionStatus = "pending" | "resolved";
+
+export type PendingInteraction =
+  | {
+      kind: "plan";
+      approvalId: string;
+      title: string;
+      createdAt: number;
+      status: PendingInteractionStatus;
+      cycleId?: string;
+    }
+  | {
+      kind: "question";
+      approvalId: string;
+      questionId?: string;
+      title: string;
+      prompt: string;
+      options: string[];
+      allowFreetext: boolean;
+      createdAt: number;
+      status: PendingInteractionStatus;
+      cycleId?: string;
+    };
+
+/**
+ * Classification of a pending-agent-injection queue entry. Each writer
+ * stamps its kind so the consumer (or future filters) can reason about
+ * what was injected without parsing the text.
+ *
+ * See `src/agents/plan-mode/injections.ts` for the enqueue / consume
+ * helpers and `DEFAULT_INJECTION_PRIORITY` for the default drain order.
+ */
+export type PendingAgentInjectionKind =
+  | "plan_decision"
+  | "question_answer"
+  | "plan_complete"
+  | "plan_intro"
+  | "plan_nudge"
+  | "subagent_return";
+
+/**
+ * A single entry in the `SessionEntry.pendingAgentInjections` queue.
+ *
+ * - `id` is the dedup key: enqueue of a same-id entry upserts rather
+ *   than appends a duplicate. Writers pick stable ids (e.g.
+ *   `plan-decision-${approvalId}`) so retries are idempotent.
+ * - `approvalId` links a plan-cycle-scoped entry to its approval round
+ *   so consumers can detect stale entries across cycles.
+ * - `priority` overrides the default drain order. Higher drains first;
+ *   ties broken by `createdAt` ascending.
+ * - `expiresAt` is an optional auto-cleanup deadline for nudges or
+ *   other time-sensitive signals that become irrelevant after N ms.
+ */
+export interface PendingAgentInjectionEntry {
+  id: string;
+  approvalId?: string;
+  kind: PendingAgentInjectionKind;
+  text: string;
+  createdAt: number;
+  priority?: number;
+  expiresAt?: number;
+}
+
 export type SessionCompactionCheckpointReason =
   | "manual"
   | "auto-threshold"
@@ -173,6 +257,248 @@ export type SessionEntry = {
   execSecurity?: string;
   execAsk?: string;
   execNode?: string;
+  /**
+   * Plan-mode session state (PR-8). When `mode === "plan"`, the runtime
+   * mutation gate (src/agents/plan-mode/mutation-gate.ts) blocks
+   * write/edit/exec/etc. Read-only tools remain available. Set via
+   * `sessions.patch { planMode: "plan" | "normal" }` from the UI mode
+   * switcher OR by the `enter_plan_mode` agent tool. Clearing back to
+   * "normal" releases the gate.
+   *
+   * Stored as a structural type rather than importing
+   * `PlanModeSessionState` from `src/agents/plan-mode/types.ts` to avoid
+   * an `agents/*` → `config/sessions/*` dependency on what is still a
+   * transitional plan-mode lib (PR #67538). The shape mirrors that type
+   * and is enforced via Zod at sessions.patch time.
+   */
+  planMode?: {
+    mode: "plan" | "normal";
+    approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
+    /**
+     * Stable token for the active plan-mode cycle. Minted on each
+     * fresh enter_plan_mode transition so close-on-complete, pending
+     * approvals/questions, and cron nudges can reject stale work from
+     * an earlier cycle.
+     */
+    cycleId?: string;
+    enteredAt?: number;
+    confirmedAt?: number;
+    updatedAt?: number;
+    feedback?: string;
+    rejectionCount: number;
+    approvalId?: string;
+    /**
+     * Live-test iteration 1 Bug 2: persisted plan title from the
+     * agent's most-recent `exit_plan_mode(title=..., plan=[...])`
+     * call. Kept here so the Control UI side panel + future channel
+     * renderers can ANCHOR on the actual plan name throughout the
+     * lifecycle (planning → submitted → approved → executing →
+     * completed) instead of falling back to a generic "Active plan"
+     * label. Cleared on the next `enter_plan_mode` cycle.
+     *
+     * Pre-`exit_plan_mode` (only `update_plan` has fired): undefined.
+     * The UI shows `(planning)` until a real title arrives.
+     *
+     * Written by `plan-snapshot-persister.ts` on
+     * `agent_approval_event` ingest (where the title is in
+     * `evt.data.title` from the tool result).
+     */
+    title?: string;
+    /**
+     * Live-test iteration 1 Bug 3: parent run id captured from the
+     * `exit_plan_mode` tool call so the gateway-side approval handler
+     * (`sessions-patch.ts`) can look up the parent's
+     * `openSubagentRunIds` and reject `approve` / `edit` actions
+     * while subagents are still in flight. Cleared on the next
+     * `enter_plan_mode` cycle.
+     *
+     * Distinct from `approvalId` (which identifies the approval
+     * request itself for plugin-level routing) — `approvalRunId`
+     * identifies the agent run that owns the in-flight subagent set.
+     */
+    approvalRunId?: string;
+    /**
+     * PR-8 follow-up: most-recent plan snapshot written by `update_plan`.
+     * Persisted here so the Control UI can rebuild the live-plan sidebar
+     * after a hard refresh (in-memory `@state()` is lost otherwise). The
+     * runtime writes via `sessions.patch`; the UI reads on subscription
+     * mount. Deliberately persisted at the SessionEntry layer rather than
+     * in a separate store because it's session-scoped and follows the
+     * session's lifecycle.
+     *
+     * PR-9 Wave B1: optional `acceptanceCriteria` + `verifiedCriteria`
+     * carry the closure-gate state per step (see
+     * `src/agents/tools/update-plan-tool.ts` for the gate semantics).
+     * Both are optional and backwards-compatible.
+     */
+    lastPlanSteps?: Array<{
+      step: string;
+      status: string;
+      activeForm?: string;
+      acceptanceCriteria?: string[];
+      verifiedCriteria?: string[];
+    }>;
+    /** Unix ms timestamp of the last `lastPlanSteps` write. */
+    lastPlanUpdatedAt?: number;
+    /**
+     * Persisted subagent gate state for the current plan cycle. Mirrors
+     * the in-memory AgentRunContext set so approval gating can survive
+     * ctx cleanup / restart without failing open.
+     */
+    blockingSubagentRunIds?: string[];
+    /**
+     * Epoch ms timestamp of the most-recent transition where the
+     * blockingSubagentRunIds set drained to zero.
+     */
+    lastSubagentSettledAt?: number;
+    /**
+     * PR-9 Wave B3: cron job ids scheduled when this session entered
+     * plan mode, used to nudge the agent to keep working the plan. The
+     * exit-plan-mode handler (and the close-on-complete persister) call
+     * `cron.remove` on each id during cleanup so nudges stop firing
+     * once the plan resolves.
+     */
+    nudgeJobIds?: string[];
+    /**
+     * PR-10 auto-mode: when true, future `exit_plan_mode` submissions
+     * auto-resolve as "approve" without waiting for the user. The
+     * plan-snapshot-persister (gateway/plan-snapshot-persister.ts)
+     * detects this flag and, on receiving a plan approval event, fires
+     * a synthetic resolved-approve through `resolvePlanApproval`.
+     *
+     * Survives plan-mode → normal transitions so the user doesn't have
+     * to re-toggle every plan cycle. Cleared explicitly via
+     * sessions.patch { planApproval: { action: "auto", autoEnabled: false } }
+     * or via the `/plan auto` slash command (PR-11).
+     */
+    autoApprove?: boolean;
+  };
+  /**
+   * PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+   * timestamp (epoch ms) of the most-recent `approve`/`edit`
+   * transition. Stored at SessionEntry ROOT level (NOT under planMode)
+   * so it SURVIVES the `mode → "normal"` flip — sessions-patch.ts
+   * deletes the entire `planMode` object on close, which would lose
+   * any state stored within it.
+   *
+   * Downstream paths (e.g. `resolveYieldDuringApprovedPlanInstruction`
+   * in `pi-embedded-runner/run.ts`) detect "just approved" within a
+   * grace window by reading this field instead of depending on
+   * `planMode.approval` (cleared on transition).
+   *
+   * Cleared on the next `enter_plan_mode` cycle so a fresh approval
+   * cycle starts from scratch.
+   */
+  recentlyApprovedAt?: number;
+  /**
+   * Cycle token paired with `recentlyApprovedAt`. Lets follow-up
+   * close-on-complete / retry paths distinguish "the current cycle was
+   * just approved" from "some earlier cycle was approved recently".
+   */
+  recentlyApprovedCycleId?: string;
+  /**
+   * Post-approval permissions granted to the agent (currently just
+   * acceptEdits). Set when the approval action is "edit" (Claude-Code
+   * acceptEdits semantics: grants the agent permission to self-modify
+   * the plan during execution).
+   *
+   * Scoped by `approvalId` — a new plan cycle regenerates approvalId
+   * and invalidates the prior permission. Explicitly cleared on
+   * enter_plan_mode and close-on-complete.
+   */
+  postApprovalPermissions?: PostApprovalPermissions;
+  /**
+   * Live-test iteration 3 D2: marker timestamp set at the FIRST
+   * `sessions.patch { planMode: "plan" }` transition for this
+   * session. Used to gate the one-shot `[PLAN_MODE_INTRO]:` synthetic
+   * injection — the intro fires only when this field is undefined,
+   * then the field is set so subsequent enter_plan_mode calls in the
+   * same session skip the intro (avoiding repeat-noise on every
+   * planning cycle).
+   *
+   * Stored at SessionEntry ROOT (not under `planMode`) so it
+   * SURVIVES planMode deletion on approve/edit. Cleared only on
+   * `/new` (sessions.reset).
+   */
+  planModeIntroDeliveredAt?: number;
+  /**
+   * PR-11 review fix (Codex P1 #3105216364 / #3105247854 / #3105261556 —
+   * escalation cluster): when set, this synthetic user-message text is
+   * prepended to the next agent turn's user input by the runtime, then
+   * cleared. Used by gateway-side handlers to inject signals like
+   * `[QUESTION_ANSWER]: <text>` into the agent's context after a
+   * `sessions.patch { planApproval: { action: "answer" } }` transition.
+   *
+   * Single source of truth for inject-on-next-turn signals — replaces
+   * the prior pattern where each caller (webchat / Telegram / Discord
+   * / Slack `/plan answer` paths) had to manually inject via the
+   * channel's message-send infrastructure (which leaked the synthetic
+   * marker into user-visible chat history).
+   *
+   * Cleared by the runtime on first read.
+   *
+   * @deprecated Superseded by `pendingAgentInjections` (typed queue).
+   * Auto-migrated to a single-element queue on first read. Kept as an
+   * optional field so legacy sessions on disk continue to work; new
+   * writes always target the queue.
+   */
+  pendingAgentInjection?: string;
+  /**
+   * Priority-ordered queue of synthetic injections to prepend to the
+   * agent's next turn. Drained atomically per turn by the runtime. Each
+   * entry is upsert-dedup'd by `id` so a writer retry never duplicates.
+   *
+   * Supersedes the legacy `pendingAgentInjection: string` field which
+   * had last-write-wins semantics and clobbered concurrent writers
+   * (e.g. a `[QUESTION_ANSWER]` landing during a pending approval
+   * window would silently overwrite a fresh `[PLAN_DECISION]`).
+   *
+   * See `src/agents/plan-mode/injections.ts` for the enqueue / consume
+   * helpers.
+   */
+  pendingAgentInjections?: PendingAgentInjectionEntry[];
+  /**
+   * Persisted pending plan/question interaction. This is the durable
+   * source of truth for restart-safe approval/question resolution and
+   * web reconnect rehydration. Legacy question-only fields below remain
+   * as read-compat fallback for older sessions on disk.
+   */
+  pendingInteraction?: PendingInteraction;
+  /**
+   * Codex P1 review #68939 (2026-04-19): tracks the most recent
+   * `ask_user_question` approvalId so the gateway can validate
+   * incoming `/plan answer` patches against an actual pending
+   * question. Without this, a stale or accidental `/plan answer`
+   * would silently overwrite `pendingAgentInjection` with garbage
+   * (potentially clobbering a freshly-written `[PLAN_DECISION]` /
+   * `[PLAN_COMPLETE]`).
+   *
+   * Lifecycle:
+   * - WRITE: set by `plan-snapshot-persister.ts` when a question
+   *   approval event fires (the runtime intercept in
+   *   `pi-embedded-subscribe.handlers.tools.ts:1760` derives the
+   *   approvalId deterministically from the toolCallId).
+   * - VALIDATE: read by `sessions-patch.ts` in the answer branch —
+   *   the incoming `planApproval.approvalId` must match this field
+   *   exactly. Mismatched IDs (stale clicks, retried sends after a
+   *   newer question landed) get rejected with a friendly error.
+   * - CLEAR: superseded by `pendingInteraction`; retained as legacy
+   *   read-compat fallback only. New writes target `pendingInteraction`.
+   */
+  pendingQuestionApprovalId?: string;
+  /**
+   * Codex P2 review #68939 (2026-04-19): the original options the
+   * agent offered for the most recent `ask_user_question` call.
+   * Legacy read-compat mirror for older sessions. New writes target
+   * `pendingInteraction.options`.
+   */
+  pendingQuestionOptions?: string[];
+  /**
+   * Codex P2 review #68939 (2026-04-19): mirror of the
+   * Legacy read-compat mirror for older sessions. New writes target
+   * `pendingInteraction.allowFreetext`.
+   */
+  pendingQuestionAllowFreetext?: boolean;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
@@ -405,21 +731,11 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveSessionTotalTokens(
+export function resolveFreshSessionTotalTokens(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
-    return undefined;
-  }
-  return total;
-}
-
-export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): number | undefined {
-  const total = resolveSessionTotalTokens(entry);
-  if (total === undefined) {
     return undefined;
   }
   if (entry?.totalTokensFresh === false) {
