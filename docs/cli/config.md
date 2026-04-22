@@ -380,8 +380,13 @@ openclaw config validate
 openclaw config validate --json
 ```
 
-Use the local TUI when you want an embedded agent to compare the active config
-against the docs while you validate each change from the same terminal:
+After `openclaw config validate` is passing, you can use the local TUI to have
+an embedded agent compare the active config against the docs while you validate
+each change from the same terminal:
+
+If validation is already failing, start with `openclaw configure` or
+`openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config
+guard.
 
 ```bash
 openclaw chat

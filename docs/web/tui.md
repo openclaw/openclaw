@@ -142,9 +142,13 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 
 ## Repair configs from the local TUI
 
-Use local mode when you want the embedded agent to inspect the active config on
-the same machine, compare it against the docs, and help repair drift without
-depending on a running Gateway.
+Use local mode when the current config already validates and you want the
+embedded agent to inspect it on the same machine, compare it against the docs,
+and help repair drift without depending on a running Gateway.
+
+If `openclaw config validate` is already failing, start with `openclaw configure`
+or `openclaw doctor --fix` first. `openclaw chat` does not bypass the invalid-
+config guard.
 
 Typical loop:
 

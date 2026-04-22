@@ -41,8 +41,13 @@ openclaw tui --session bugfix
 
 ## Config repair loop
 
-Use local mode when you want the embedded agent to inspect the active config,
-compare it against the docs, and help repair it from the same terminal:
+Use local mode when the current config already validates and you want the
+embedded agent to inspect it, compare it against the docs, and help repair it
+from the same terminal:
+
+If `openclaw config validate` is already failing, use `openclaw configure` or
+`openclaw doctor --fix` first. `openclaw chat` does not bypass the invalid-
+config guard.
 
 ```bash
 openclaw chat
