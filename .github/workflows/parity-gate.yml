@@ -70,6 +70,13 @@ jobs:
       - name: Build private QA runtime
         run: pnpm build
 
+      - name: Run parity preflight
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --model openai/gpt-5.4 \
+            --alt-model anthropic/claude-opus-4-6 \
+            --preflight
       - name: Run GPT-5.4 lane
         run: |
           pnpm openclaw qa suite \

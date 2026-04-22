@@ -30,7 +30,7 @@ import {
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import { normalizeQaTransportId } from "./qa-transport-registry.js";
+import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -40,6 +40,8 @@ import {
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
+
+const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -150,6 +152,90 @@ async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
   throw new Error(
     `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
   );
+}
+
+function isQaSuiteInfraRetryableError(error: unknown) {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("readyz") ||
+    message.includes("gateway healthy") ||
+    message.includes("transport ready") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("socket hang up") ||
+    message.includes("could not read qa summary json") ||
+    message.includes("could not parse qa summary json") ||
+    message.includes("did not include counts.failed or scenarios[].status") ||
+    message.includes("did not produce report artifact")
+  );
+}
+
+async function assertQaSuiteArtifacts(result: { reportPath: string; summaryPath: string }) {
+  try {
+    await fs.access(result.reportPath);
+  } catch (error) {
+    throw new Error(
+      `QA suite did not produce report artifact at ${result.reportPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  await readQaFailedScenarioCountFromSummary(result.summaryPath);
+}
+
+async function runQaSuiteFromRuntimeWithInfraRetry(
+  params: Parameters<typeof runQaSuiteFromRuntime>[0],
+  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
+) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const result = await runQaSuiteFromRuntime(params);
+      await assertQaSuiteArtifacts(result);
+      return result;
+    } catch (error) {
+      const retryable = isQaSuiteInfraRetryableError(error);
+      if (!retryable || attempt >= maxRetries) {
+        throw error;
+      }
+      process.stderr.write(
+        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
+      );
+    }
+  }
+  throw new Error("unreachable qa suite retry state");
+}
+
+async function runQaParityPreflight(params: {
+  repoRoot: string;
+  transportId: QaTransportId;
+  providerMode: QaProviderMode;
+  primaryModel?: string;
+  alternateModel?: string;
+}) {
+  const outputDir = path.join(
+    params.repoRoot,
+    ".artifacts",
+    "qa-e2e",
+    "preflight",
+    `suite-${Date.now().toString(36)}`,
+  );
+  const result = await runQaSuiteFromRuntimeWithInfraRetry({
+    repoRoot: params.repoRoot,
+    outputDir,
+    transportId: params.transportId,
+    providerMode: params.providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+    scenarioIds: ["approval-turn-tool-followthrough"],
+    concurrency: 1,
+  });
+  process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
+  process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
+  process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
+  if ((await readQaFailedScenarioCountFromSummary(result.summaryPath)) > 0) {
+    process.exitCode = 1;
+  }
 }
 
 function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthMode | undefined {
@@ -365,6 +451,7 @@ export async function runQaSuiteCommand(opts: {
   cpus?: number;
   memory?: string;
   disk?: string;
+  preflight?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
@@ -379,6 +466,9 @@ export async function runQaSuiteCommand(opts: {
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
+  if (opts.preflight === true && runner !== "host") {
+    throw new Error("--preflight requires --runner host.");
+  }
   if (
     runner === "host" &&
     (opts.image !== undefined ||
@@ -423,7 +513,17 @@ export async function runQaSuiteCommand(opts: {
     }
     return;
   }
-  const result = await runQaSuiteFromRuntime({
+  if (opts.preflight === true) {
+    await runQaParityPreflight({
+      repoRoot,
+      transportId,
+      providerMode,
+      primaryModel: opts.primaryModel,
+      alternateModel: opts.alternateModel,
+    });
+    return;
+  }
+  const result = await runQaSuiteFromRuntimeWithInfraRetry({
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     transportId,
