@@ -415,6 +415,7 @@ export async function handleFeishuMessage(params: {
     : Date.now();
 
   let requireMention = false; // DMs never require mention; groups may override below
+  let forwardMentionTargets = true;
   if (isGroup) {
     if (groupConfig?.enabled === false) {
       log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
@@ -465,7 +466,7 @@ export async function handleFeishuMessage(params: {
       }
     }
 
-    ({ requireMention } = resolveFeishuReplyPolicy({
+    ({ requireMention, forwardMentionTargets } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
       cfg,
       accountId: account.accountId,
@@ -495,6 +496,15 @@ export async function handleFeishuMessage(params: {
       return;
     }
   } else {
+    ({ forwardMentionTargets } = resolveFeishuReplyPolicy({
+      isDirectMessage: true,
+      cfg,
+      accountId: account.accountId,
+    }));
+  }
+  const effectiveMentionTargets = forwardMentionTargets ? ctx.mentionTargets : undefined;
+  if (ctx.mentionTargets?.length && !forwardMentionTargets) {
+    log(`feishu[${account.accountId}]: mention forward request suppressed by mentionForwardMode`);
   }
 
   try {
@@ -773,7 +783,10 @@ export async function handleFeishuMessage(params: {
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
     const messageBody = buildFeishuAgentBody({
-      ctx,
+      ctx: {
+        ...ctx,
+        mentionTargets: effectiveMentionTargets,
+      },
       quotedContent,
       permissionErrorForAgent,
       botOpenId,
@@ -1105,7 +1118,7 @@ export async function handleFeishuMessage(params: {
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
-            mentionTargets: ctx.mentionTargets,
+            mentionTargets: effectiveMentionTargets,
             accountId: account.accountId,
             identity,
             messageCreateTimeMs,
@@ -1214,7 +1227,7 @@ export async function handleFeishuMessage(params: {
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
-        mentionTargets: ctx.mentionTargets,
+        mentionTargets: effectiveMentionTargets,
         accountId: account.accountId,
         identity,
         messageCreateTimeMs,

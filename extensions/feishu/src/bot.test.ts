@@ -306,11 +306,16 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   };
 });
 
-async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
+async function dispatchMessage(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuMessageEvent;
+  botOpenId?: string;
+}) {
   const runtime = createRuntimeEnv();
   await handleFeishuMessage({
     cfg: params.cfg,
     event: params.event,
+    botOpenId: params.botOpenId,
     runtime,
   });
   return runtime;
@@ -1380,6 +1385,105 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps auto mention forwarding enabled by default for group mention-forward requests", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group-chat": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-group-mention-forward-auto",
+        chat_id: "oc-group-chat",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_bot @_designer hello" }),
+        mentions: [
+          { key: "@_bot", id: { open_id: "ou_bot" }, name: "bot", tenant_key: "" },
+          {
+            key: "@_designer",
+            id: { open_id: "ou_designer" },
+            name: "designer",
+            tenant_key: "",
+          },
+        ],
+      },
+    };
+
+    await dispatchMessage({ cfg, event, botOpenId: "ou_bot" });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mentionTargets: [{ key: "@_designer", name: "designer", openId: "ou_designer" }],
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("Your reply will automatically @mention: designer"),
+      }),
+    );
+  });
+
+  it("disables auto mention forwarding when mentionForwardMode is none", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          mentionForwardMode: "none",
+          groups: {
+            "oc-group-chat": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-group-mention-forward-none",
+        chat_id: "oc-group-chat",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_bot @_designer hello" }),
+        mentions: [
+          { key: "@_bot", id: { open_id: "ou_bot" }, name: "bot", tenant_key: "" },
+          {
+            key: "@_designer",
+            id: { open_id: "ou_designer" },
+            name: "designer",
+            tenant_key: "",
+          },
+        ],
+      },
+    };
+
+    await dispatchMessage({ cfg, event, botOpenId: "ou_bot" });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mentionTargets: undefined,
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.not.stringContaining("Your reply will automatically @mention"),
+      }),
+    );
   });
 
   it("drops message when groupConfig.enabled is false", async () => {

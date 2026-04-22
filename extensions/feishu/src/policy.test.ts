@@ -30,7 +30,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: false });
+    ).toEqual({ requireMention: false, forwardMentionTargets: true });
   });
 
   it("keeps explicit top-level mention gating in open groups", () => {
@@ -41,7 +41,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, forwardMentionTargets: true });
   });
 
   it("keeps explicit account mention gating in open groups", () => {
@@ -62,7 +62,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, forwardMentionTargets: true });
   });
 
   it("keeps explicit per-group mention gating in open groups", () => {
@@ -76,7 +76,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, forwardMentionTargets: true });
   });
 
   it("defaults allowlist groups to require mentions", () => {
@@ -87,7 +87,53 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "allowlist",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, forwardMentionTargets: true });
+  });
+
+  it("disables mention forwarding when top-level mentionForwardMode is none", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        cfg: createCfg({ mentionForwardMode: "none" }),
+        groupPolicy: "allowlist",
+        groupId: "oc_1",
+      }),
+    ).toEqual({ requireMention: true, forwardMentionTargets: false });
+  });
+
+  it("disables mention forwarding for direct messages when account mentionForwardMode is none", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: true,
+        cfg: createCfg({
+          mentionForwardMode: "auto",
+          accounts: {
+            work: {
+              mentionForwardMode: "none",
+            },
+          },
+        }),
+        accountId: "work",
+      }),
+    ).toEqual({ requireMention: false, forwardMentionTargets: false });
+  });
+
+  it("prefers per-group mentionForwardMode over inherited config", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        cfg: createCfg({
+          mentionForwardMode: "auto",
+          groups: {
+            oc_1: {
+              mentionForwardMode: "none",
+            },
+          },
+        }),
+        groupPolicy: "allowlist",
+        groupId: "oc_1",
+      }),
+    ).toEqual({ requireMention: true, forwardMentionTargets: false });
   });
 });
 

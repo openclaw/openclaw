@@ -71,6 +71,12 @@ Default: `allowlist`
 - `false` — respond without @mention
 - Per-group override: `channels.feishu.groups.<chat_id>.requireMention`
 
+**Mention forwarding** (`channels.feishu.mentionForwardMode`):
+
+- `"auto"` — when a message mentions the bot and other entities, replies automatically @mention those other entities
+- `"none"` — do not forward other mentions into the bot's reply
+- Per-group override: `channels.feishu.groups.<chat_id>.mentionForwardMode`
+
 ---
 
 ## Group configuration examples
@@ -109,6 +115,18 @@ Default: `allowlist`
       groupPolicy: "allowlist",
       // Group IDs look like: oc_xxx
       groupAllowFrom: ["oc_xxx", "oc_yyy"],
+    },
+  },
+}
+```
+
+### Keep multi-bot group replies independent
+
+```json5
+{
+  channels: {
+    feishu: {
+      mentionForwardMode: "none",
     },
   },
 }
@@ -370,33 +388,35 @@ See [Get group/user IDs](#get-groupuser-ids) for lookup tips.
 
 Full configuration: [Gateway configuration](/gateway/configuration)
 
-| Setting                                           | Description                                | Default          |
-| ------------------------------------------------- | ------------------------------------------ | ---------------- |
-| `channels.feishu.enabled`                         | Enable/disable the channel                 | `true`           |
-| `channels.feishu.domain`                          | API domain (`feishu` or `lark`)            | `feishu`         |
-| `channels.feishu.connectionMode`                  | Event transport (`websocket` or `webhook`) | `websocket`      |
-| `channels.feishu.defaultAccount`                  | Default account for outbound routing       | `default`        |
-| `channels.feishu.verificationToken`               | Required for webhook mode                  | —                |
-| `channels.feishu.encryptKey`                      | Required for webhook mode                  | —                |
-| `channels.feishu.webhookPath`                     | Webhook route path                         | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook bind host                          | `127.0.0.1`      |
-| `channels.feishu.webhookPort`                     | Webhook bind port                          | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                     | —                |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                 | —                |
-| `channels.feishu.accounts.<id>.domain`            | Per-account domain override                | `feishu`         |
-| `channels.feishu.dmPolicy`                        | DM policy                                  | `allowlist`      |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                | [BotOwnerId]     |
-| `channels.feishu.groupPolicy`                     | Group policy                               | `allowlist`      |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                            | —                |
-| `channels.feishu.requireMention`                  | Require @mention in groups                 | `true`           |
-| `channels.feishu.groups.<chat_id>.requireMention` | Per-group @mention override                | inherited        |
-| `channels.feishu.groups.<chat_id>.enabled`        | Enable/disable a specific group            | `true`           |
-| `channels.feishu.textChunkLimit`                  | Message chunk size                         | `2000`           |
-| `channels.feishu.mediaMaxMb`                      | Media size limit                           | `30`             |
-| `channels.feishu.streaming`                       | Streaming card output                      | `true`           |
-| `channels.feishu.blockStreaming`                  | Block-level streaming                      | `true`           |
-| `channels.feishu.typingIndicator`                 | Send typing reactions                      | `true`           |
-| `channels.feishu.resolveSenderNames`              | Resolve sender display names               | `true`           |
+| Setting                                               | Description                                | Default          |
+| ----------------------------------------------------- | ------------------------------------------ | ---------------- |
+| `channels.feishu.enabled`                             | Enable/disable the channel                 | `true`           |
+| `channels.feishu.domain`                              | API domain (`feishu` or `lark`)            | `feishu`         |
+| `channels.feishu.connectionMode`                      | Event transport (`websocket` or `webhook`) | `websocket`      |
+| `channels.feishu.defaultAccount`                      | Default account for outbound routing       | `default`        |
+| `channels.feishu.verificationToken`                   | Required for webhook mode                  | —                |
+| `channels.feishu.encryptKey`                          | Required for webhook mode                  | —                |
+| `channels.feishu.webhookPath`                         | Webhook route path                         | `/feishu/events` |
+| `channels.feishu.webhookHost`                         | Webhook bind host                          | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                         | Webhook bind port                          | `3000`           |
+| `channels.feishu.accounts.<id>.appId`                 | App ID                                     | —                |
+| `channels.feishu.accounts.<id>.appSecret`             | App Secret                                 | —                |
+| `channels.feishu.accounts.<id>.domain`                | Per-account domain override                | `feishu`         |
+| `channels.feishu.dmPolicy`                            | DM policy                                  | `allowlist`      |
+| `channels.feishu.allowFrom`                           | DM allowlist (open_id list)                | [BotOwnerId]     |
+| `channels.feishu.groupPolicy`                         | Group policy                               | `allowlist`      |
+| `channels.feishu.groupAllowFrom`                      | Group allowlist                            | —                |
+| `channels.feishu.requireMention`                      | Require @mention in groups                 | `true`           |
+| `channels.feishu.mentionForwardMode`                  | Forward non-bot mentions into replies      | `auto`           |
+| `channels.feishu.groups.<chat_id>.requireMention`     | Per-group @mention override                | inherited        |
+| `channels.feishu.groups.<chat_id>.mentionForwardMode` | Per-group mention forwarding override      | inherited        |
+| `channels.feishu.groups.<chat_id>.enabled`            | Enable/disable a specific group            | `true`           |
+| `channels.feishu.textChunkLimit`                      | Message chunk size                         | `2000`           |
+| `channels.feishu.mediaMaxMb`                          | Media size limit                           | `30`             |
+| `channels.feishu.streaming`                           | Streaming card output                      | `true`           |
+| `channels.feishu.blockStreaming`                      | Block-level streaming                      | `true`           |
+| `channels.feishu.typingIndicator`                     | Send typing reactions                      | `true`           |
+| `channels.feishu.resolveSenderNames`                  | Resolve sender display names               | `true`           |
 
 ---
 

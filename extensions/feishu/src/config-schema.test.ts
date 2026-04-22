@@ -220,6 +220,32 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema mentionForwardMode", () => {
+  it("defaults mentionForwardMode to undefined when not set", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.mentionForwardMode).toBeUndefined();
+  });
+
+  it("accepts mentionForwardMode at top level", () => {
+    const result = FeishuConfigSchema.parse({ mentionForwardMode: "none" });
+    expect(result.mentionForwardMode).toBe("none");
+  });
+
+  it("accepts mentionForwardMode in group config", () => {
+    const result = FeishuGroupSchema.parse({ mentionForwardMode: "none" });
+    expect(result.mentionForwardMode).toBe("none");
+  });
+
+  it("accepts mentionForwardMode in account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: { mentionForwardMode: "none" },
+      },
+    });
+    expect(result.accounts?.main?.mentionForwardMode).toBe("none");
+  });
+});
+
 describe("FeishuConfigSchema actions", () => {
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({
