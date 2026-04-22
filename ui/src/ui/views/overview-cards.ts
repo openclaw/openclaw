@@ -5,6 +5,7 @@ import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts"
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
 import type {
+  CostUsageSummary,
   SessionsUsageResult,
   SessionsListResult,
   SkillStatusReport,
@@ -15,6 +16,7 @@ import type {
 
 export type OverviewCardsProps = {
   usageResult: SessionsUsageResult | null;
+  usageCostSummary: CostUsageSummary | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
   cronJobs: CronJob[];
@@ -71,17 +73,34 @@ function renderSkeletonCards() {
   `;
 }
 
+function sumRecentDailyCost(daily: CostUsageSummary["daily"] | undefined, days: number): number {
+  if (!daily?.length) {
+    return 0;
+  }
+  return daily
+    .slice()
+    .toSorted((a, b) => a.date.localeCompare(b.date))
+    .slice(-days)
+    .reduce((sum, entry) => sum + (entry.totalCost ?? 0), 0);
+}
+
 export function renderOverviewCards(props: OverviewCardsProps) {
   const dataLoaded =
-    props.usageResult != null || props.sessionsResult != null || props.skillsReport != null;
+    props.usageResult != null ||
+    props.usageCostSummary != null ||
+    props.sessionsResult != null ||
+    props.skillsReport != null;
   if (!dataLoaded) {
     return renderSkeletonCards();
   }
 
-  const totals = props.usageResult?.totals;
+  const totals = props.usageResult?.totals ?? props.usageCostSummary?.totals;
   const totalCost = formatCost(totals?.totalCost);
   const totalTokens = formatTokens(totals?.totalTokens);
   const totalMessages = totals ? String(props.usageResult?.aggregates?.messages?.total ?? 0) : "0";
+  const costDaily = props.usageCostSummary?.daily ?? [];
+  const recent7dCost = formatCost(sumRecentDailyCost(costDaily, 7));
+  const recent30dCost = formatCost(sumRecentDailyCost(costDaily, 30));
   const sessionCount = props.sessionsResult?.count ?? null;
 
   const skills = props.skillsReport?.skills ?? [];
@@ -114,7 +133,10 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       tab: "usage",
       label: t("overview.cards.cost"),
       value: totalCost,
-      hint: `${totalTokens} tokens · ${totalMessages} msgs`,
+      hint:
+        costDaily.length > 0
+          ? html`7d ${recent7dCost} · 30d ${recent30dCost}`
+          : `${totalTokens} tokens · ${totalMessages} msgs`,
     },
     {
       kind: "sessions",

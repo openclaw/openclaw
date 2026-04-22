@@ -9,6 +9,7 @@ import type { UiSettings } from "../storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   AttentionItem,
+  CostUsageSummary,
   CronJob,
   CronStatus,
   ModelAuthStatusResult,
@@ -44,6 +45,7 @@ export type OverviewProps = {
   // New dashboard data
   modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
+  usageCostSummary: CostUsageSummary | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
   cronJobs: CronJob[];
@@ -453,6 +455,7 @@ export function renderOverview(props: OverviewProps) {
 
     ${renderOverviewCards({
       usageResult: props.usageResult,
+      usageCostSummary: props.usageCostSummary,
       sessionsResult: props.sessionsResult,
       skillsReport: props.skillsReport,
       cronJobs: props.cronJobs,

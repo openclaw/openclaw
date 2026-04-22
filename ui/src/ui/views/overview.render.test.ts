@@ -38,6 +38,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     lastChannelsRefresh: null,
     modelAuthStatus: null,
     usageResult: null,
+    usageCostSummary: null,
     sessionsResult: null,
     skillsReport: null,
     cronJobs: [],

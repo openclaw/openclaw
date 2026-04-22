@@ -1460,6 +1460,7 @@ export function renderApp(state: AppViewState) {
               warnQueryToken,
               modelAuthStatus: state.modelAuthStatusResult,
               usageResult: state.usageResult,
+              usageCostSummary: state.usageCostSummary,
               sessionsResult: state.sessionsResult,
               skillsReport: state.skillsReport,
               cronJobs: state.cronJobs,

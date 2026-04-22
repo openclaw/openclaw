@@ -273,7 +273,7 @@ export const en: TranslationMap = {
       insecureHttpDocsLink: "Docs: Insecure HTTP",
     },
     cards: {
-      cost: "Cost",
+      cost: "Usage Cost",
       skills: "Skills",
       recentSessions: "Recent Sessions",
       modelAuth: "Model Auth",
@@ -427,7 +427,7 @@ export const en: TranslationMap = {
     },
     metrics: {
       tokens: "Tokens",
-      cost: "Cost",
+      cost: "Usage Cost",
       session: "session",
       sessions: "sessions",
     },
@@ -493,7 +493,7 @@ export const en: TranslationMap = {
       total: "Total",
       byType: "By Type",
       tokensTitle: "Daily Token Usage",
-      costTitle: "Daily Cost",
+      costTitle: "Daily Usage Cost",
     },
     breakdown: {
       output: "Output",
@@ -502,7 +502,7 @@ export const en: TranslationMap = {
       cacheRead: "Cache Read",
       total: "Total",
       tokensByType: "Tokens by Type",
-      costByType: "Cost by Type",
+      costByType: "Usage Cost by Type",
     },
     overview: {
       title: "Usage Overview",
@@ -519,10 +519,11 @@ export const en: TranslationMap = {
       toolResults: "tool results",
       avgTokens: "Avg Tokens / Msg",
       avgTokensHint: "Average tokens per message in this range.",
-      avgCost: "Avg Cost / Msg",
-      avgCostHint: "Average cost per message when providers report costs.",
+      avgCost: "Avg Usage Cost / Msg",
+      avgCostHint:
+        "Average estimated or provider-reported usage cost per message. This is not necessarily your actual bill.",
       avgCostHintMissing:
-        "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range.",
+        "Average estimated or provider-reported usage cost per message. This is not necessarily your actual bill, and cost data is missing for some or all sessions in this range.",
       acrossMessages: "Across {count} messages",
       sessions: "Sessions",
       sessionsHint: "Distinct sessions in the range.",
