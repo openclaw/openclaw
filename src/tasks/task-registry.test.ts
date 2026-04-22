@@ -1696,6 +1696,42 @@ describe("task-registry", () => {
     });
   });
 
+  it("uses startedAt as the createdAt floor for running tasks", async () => {
+    await withTaskRegistryTempDir(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-04-22T17:39:00.005Z"));
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "run-timestamp-floor",
+        task: "timestamp-floor",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        startedAt: Date.parse("2026-04-22T17:39:00.000Z"),
+        lastEventAt: Date.parse("2026-04-22T17:39:00.000Z"),
+      });
+
+      expect(task.createdAt).toBe(task.startedAt);
+      expect(getInspectableTaskAuditSummary()).toEqual({
+        total: 0,
+        warnings: 0,
+        errors: 0,
+        byCode: {
+          stale_queued: 0,
+          stale_running: 0,
+          lost: 0,
+          delivery_failed: 0,
+          missing_cleanup: 0,
+          inconsistent_timestamps: 0,
+        },
+      });
+      vi.useRealTimers();
+    });
+  });
+
   it("keeps background ACP progress off the foreground lane and only sends a terminal notify", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
