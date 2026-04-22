@@ -1,7 +1,7 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">
-  <img src="assets/readme-banner.png" alt="OpenClaw README Banner" width="100%">
+  <img src="docs/assets/readme-banner.webp" alt="OpenClaw README Banner" width="100%">
 </p>
 
 <p align="center">
