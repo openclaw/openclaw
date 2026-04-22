@@ -651,7 +651,10 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
   hardcoding the owning provider.
 - `channelEnvVars` is the cheap metadata path for shell-env fallback, setup
   prompts, and similar channel surfaces that should not boot plugin runtime
-  just to inspect env names.
+  just to inspect env names. Env names are metadata, not activation by
+  themselves: status, audit, cron delivery validation, and other read-only
+  surfaces still apply plugin trust and effective activation policy before they
+  treat an env var as a configured channel.
 - `providerAuthChoices` is the cheap metadata path for auth-choice pickers,
   `--auth-choice` resolution, preferred-provider mapping, and simple onboarding
   CLI flag registration before provider runtime loads. For runtime wizard

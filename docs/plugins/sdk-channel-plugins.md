@@ -176,6 +176,12 @@ surfaces:
 - `openclaw/plugin-sdk/outbound-media` and
   `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
   identity/send delegates and payload planning
+- `buildThreadAwareOutboundSessionRoute(...)` from
+  `openclaw/plugin-sdk/channel-core` when an outbound route should preserve an
+  explicit `replyToId`/`threadId` or recover the current `:thread:` session
+  after the base session key still matches. Provider plugins can override
+  precedence, suffix behavior, and thread id normalization when their platform
+  has native thread delivery semantics.
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
