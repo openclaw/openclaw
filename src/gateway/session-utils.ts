@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
@@ -16,6 +17,7 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -1275,7 +1277,23 @@ export function buildGatewaySessionRow(params: {
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
-    thinkingLevel: entry?.thinkingLevel,
+    // TUI footer reads state.sessionInfo.thinkingLevel, which is fed through
+    // sessions.list / sessions.changed → this SessionRow. If the session entry
+    // has no thinkingLevel yet (fresh session, post-restart), fall through in
+    // the same priority order as the chat.history handler: per-agent default
+    // first, then the shared resolveThinkingDefault chain (per-model → global
+    // default → anthropic heuristics → model-centric). Note: resolveThinkingDefault
+    // is intentionally called without a model catalog here because buildGatewaySessionRow
+    // is synchronous; the Claude-4.6 "adaptive" heuristic that depends on
+    // catalogCandidate.name therefore does not fire in this sync row-builder.
+    thinkingLevel:
+      entry?.thinkingLevel ??
+      resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault ??
+      resolveThinkingDefault({
+        cfg,
+        provider: resolvedModel.provider ?? DEFAULT_PROVIDER,
+        model: resolvedModel.model ?? DEFAULT_MODEL,
+      }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
