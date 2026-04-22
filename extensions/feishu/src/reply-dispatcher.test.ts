@@ -812,6 +812,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("renders the thinking panel on reply start when forced by bot-company", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: false,
+      forceThinkingPreviewOnReplyStart: true,
+    });
+
+    await options.onReplyStart?.();
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Thinking"),
+      { title: "💭 Thinking" },
+    );
+  });
+
   it("renders the thinking panel on assistant start for claude-cli even without reasoning preview", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
     const { result, options } = createDispatcherHarness({

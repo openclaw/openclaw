@@ -160,6 +160,8 @@ export type CreateFeishuReplyDispatcherParams = {
   runtime: RuntimeEnv;
   chatId: string;
   allowReasoningPreview?: boolean;
+  /** Force a generic thinking preview as soon as reply processing starts. */
+  forceThinkingPreviewOnReplyStart?: boolean;
   replyToMessageId?: string;
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
@@ -1293,6 +1295,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
+        }
+        if (streamingEnabled && params.forceThinkingPreviewOnReplyStart === true) {
+          startStreaming();
+          forcePendingThinkingPreview = true;
+          queueThinkingPrelude({ forcePreview: true });
+          queueThinkingPanelUpdate();
         }
         await typingCallbacks?.onReplyStart?.();
       },
