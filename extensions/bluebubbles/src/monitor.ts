@@ -24,6 +24,7 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -127,6 +128,14 @@ function safeEqualAuthToken(aRaw: string, bRaw: string): boolean {
   return safeEqualSecret(a, b);
 }
 
+function resolveWebhookAuthSecret(target: WebhookTarget): string {
+  const webhookSecret = normalizeSecretInputString(target.account.config.webhookSecret);
+  if (webhookSecret) {
+    return webhookSecret;
+  }
+  return normalizeSecretInputString(target.account.config.password) ?? "";
+}
+
 function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {
   const proxies = new Set<string>();
   for (const target of targets) {
@@ -194,7 +203,7 @@ export async function handleBlueBubblesWebhookRequest(
         targets,
         res,
         isMatch: (target) => {
-          const token = target.account.config.password?.trim() ?? "";
+          const token = resolveWebhookAuthSecret(target);
           return safeEqualAuthToken(guid, token);
         },
       });

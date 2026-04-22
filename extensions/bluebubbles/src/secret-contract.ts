@@ -8,10 +8,32 @@ import {
 
 export const secretTargetRegistryEntries = [
   {
+    id: "channels.bluebubbles.accounts.*.webhookSecret",
+    targetType: "channels.bluebubbles.accounts.*.webhookSecret",
+    configFile: "openclaw.json",
+    pathPattern: "channels.bluebubbles.accounts.*.webhookSecret",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "channels.bluebubbles.accounts.*.password",
     targetType: "channels.bluebubbles.accounts.*.password",
     configFile: "openclaw.json",
     pathPattern: "channels.bluebubbles.accounts.*.password",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
+    id: "channels.bluebubbles.webhookSecret",
+    targetType: "channels.bluebubbles.webhookSecret",
+    configFile: "openclaw.json",
+    pathPattern: "channels.bluebubbles.webhookSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
     includeInPlan: true,
@@ -41,6 +63,16 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: bluebubbles, surface } = resolved;
+  collectSimpleChannelFieldAssignments({
+    channelKey: "bluebubbles",
+    field: "webhookSecret",
+    channel: bluebubbles,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topInactiveReason: "no enabled account inherits this top-level BlueBubbles webhookSecret.",
+    accountInactiveReason: "BlueBubbles account is disabled.",
+  });
   collectSimpleChannelFieldAssignments({
     channelKey: "bluebubbles",
     field: "password",

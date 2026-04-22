@@ -98,6 +98,7 @@ function applyBlueBubblesSetupPatch(
   patch: {
     serverUrl?: string;
     password?: unknown;
+    webhookSecret?: unknown;
     webhookPath?: string;
   },
 ): OpenClawConfig {
@@ -209,6 +210,31 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
           password: value,
         }),
     },
+    {
+      inputKey: "webhookSecret",
+      providerHint: channel,
+      credentialLabel: "webhook secret",
+      helpTitle: "BlueBubbles webhook secret",
+      helpLines: [
+        "Set a dedicated secret for inbound webhook authentication.",
+        "Use a value distinct from the BlueBubbles server password so leaked webhook URLs cannot be reused against the BlueBubbles API.",
+      ],
+      envPrompt: "",
+      keepPrompt: "BlueBubbles webhook secret already set. Keep it?",
+      inputPrompt: "BlueBubbles webhook secret",
+      inspect: ({ cfg, accountId }) => {
+        const existingSecret = resolveBlueBubblesAccount({ cfg, accountId }).config.webhookSecret;
+        return {
+          accountConfigured: resolveBlueBubblesAccount({ cfg, accountId }).configured,
+          hasConfiguredValue: hasConfiguredSecretInput(existingSecret),
+          resolvedValue: normalizeSecretInputString(existingSecret) ?? undefined,
+        };
+      },
+      applySet: async ({ cfg, accountId, value }) =>
+        applyBlueBubblesSetupPatch(cfg, accountId, {
+          webhookSecret: value,
+        }),
+    },
   ],
   textInputs: [
     {
@@ -255,8 +281,8 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
     lines: [
       "Configure the webhook URL in BlueBubbles Server:",
       "1. Open BlueBubbles Server -> Settings -> Webhooks",
-      "2. Add your OpenClaw gateway URL + webhook path",
-      `   Example: https://your-gateway-host:3000${DEFAULT_WEBHOOK_PATH}`,
+      "2. Add your OpenClaw gateway URL + webhook path and append the webhook secret as guid",
+      `   Example: https://your-gateway-host:3000${DEFAULT_WEBHOOK_PATH}?guid=<webhook-secret>`,
       "3. Enable the webhook and save",
       "",
       `Docs: ${formatDocsLink("/channels/bluebubbles", "bluebubbles")}`,

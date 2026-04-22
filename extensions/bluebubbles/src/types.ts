@@ -49,6 +49,8 @@ export type BlueBubblesAccountConfig = {
   serverUrl?: string;
   /** Password for BlueBubbles API authentication. */
   password?: string;
+  /** Dedicated secret for authenticating inbound webhook requests. */
+  webhookSecret?: string;
   /** Webhook path for the gateway HTTP server. */
   webhookPath?: string;
   /** Direct message access policy (default: pairing). */

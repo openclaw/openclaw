@@ -1440,6 +1440,7 @@ export const BlueBubblesAccountSchemaBase = z
     enabled: z.boolean().optional(),
     serverUrl: z.string().optional(),
     password: SecretInputSchema.optional().register(sensitive),
+    webhookSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(BlueBubblesAllowFromEntry).optional(),

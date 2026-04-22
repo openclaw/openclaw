@@ -48,7 +48,7 @@ export const bluebubblesConfigAdapter =
     listAccountIds: listBlueBubblesAccountIds,
     resolveAccount: adaptScopedAccountAccessor(resolveBlueBubblesAccount),
     defaultAccountId: resolveDefaultBlueBubblesAccountId,
-    clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
+    clearBaseFields: ["serverUrl", "password", "webhookSecret", "name", "webhookPath"],
     resolveAllowFrom: (account: ResolvedBlueBubblesAccount) => account.config.allowFrom,
     formatAllowFrom: (allowFrom) =>
       formatNormalizedAllowFromEntries({

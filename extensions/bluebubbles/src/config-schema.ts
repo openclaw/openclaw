@@ -76,6 +76,7 @@ const bluebubblesAccountSchema = z
     actions: bluebubblesActionSchema,
     serverUrl: z.string().optional(),
     password: buildSecretInputSchema().optional(),
+    webhookSecret: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
     dmPolicy: DmPolicySchema.optional(),
     allowFrom: AllowFromListSchema,

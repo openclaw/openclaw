@@ -77,7 +77,7 @@ describe("bluebubbles setup surface", () => {
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true);
-    const text = vi.fn();
+    const text = vi.fn().mockResolvedValueOnce("webhook-secret");
 
     const result = await runBlueBubblesConfigure({
       cfg: {
@@ -94,6 +94,45 @@ describe("bluebubbles setup surface", () => {
 
     expect(result.cfg.channels?.bluebubbles?.password).toEqual(passwordRef);
     expect(result.cfg.channels?.bluebubbles?.webhookPath).toBe(DEFAULT_WEBHOOK_PATH);
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "BlueBubbles webhook secret",
+      }),
+    );
+  });
+
+  it("preserves an existing webhook SecretRef alongside the server password", async () => {
+    const passwordRef = { source: "env", provider: "default", id: "BLUEBUBBLES_PASSWORD" };
+    const webhookSecretRef = {
+      source: "env",
+      provider: "default",
+      id: "BLUEBUBBLES_WEBHOOK_SECRET",
+    };
+    const confirm = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+    const text = vi.fn();
+
+    const result = await runBlueBubblesConfigure({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            enabled: true,
+            serverUrl: "http://127.0.0.1:1234",
+            password: passwordRef,
+            webhookSecret: webhookSecretRef,
+          },
+        },
+      },
+      prompter: createTestWizardPrompter({ confirm, text }),
+    });
+
+    expect(result.cfg.channels?.bluebubbles?.password).toEqual(passwordRef);
+    expect(result.cfg.channels?.bluebubbles?.webhookSecret).toEqual(webhookSecretRef);
+    expect(result.cfg.channels?.bluebubbles?.webhookPath).toBe(DEFAULT_WEBHOOK_PATH);
     expect(text).not.toHaveBeenCalled();
   });
 
@@ -103,7 +142,10 @@ describe("bluebubbles setup surface", () => {
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true);
-    const text = vi.fn().mockResolvedValueOnce("/custom-bluebubbles");
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("/custom-bluebubbles")
+      .mockResolvedValueOnce("webhook-secret");
 
     const result = await runBlueBubblesConfigure({
       cfg: {
@@ -119,6 +161,7 @@ describe("bluebubbles setup surface", () => {
     });
 
     expect(result.cfg.channels?.bluebubbles?.webhookPath).toBe("/custom-bluebubbles");
+    expect(result.cfg.channels?.bluebubbles?.webhookSecret).toBe("webhook-secret");
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Webhook path",
@@ -129,7 +172,11 @@ describe("bluebubbles setup surface", () => {
 
   it("validates server URLs before accepting input", async () => {
     const confirm = vi.fn().mockResolvedValueOnce(false);
-    const text = vi.fn().mockResolvedValueOnce("127.0.0.1:1234").mockResolvedValueOnce("secret");
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("127.0.0.1:1234")
+      .mockResolvedValueOnce("secret")
+      .mockResolvedValueOnce("webhook-secret");
 
     await runBlueBubblesConfigure({
       cfg: { channels: { bluebubbles: {} } },

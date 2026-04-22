@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 type BlueBubblesConfigPatch = {
   serverUrl?: string;
   password?: unknown;
+  webhookSecret?: unknown;
   webhookPath?: string;
 };
 
@@ -26,6 +27,9 @@ function normalizePatch(
   }
   if (patch.password !== undefined) {
     next.password = patch.password;
+  }
+  if (patch.webhookSecret !== undefined) {
+    next.webhookSecret = patch.webhookSecret;
   }
   if (patch.webhookPath !== undefined) {
     next.webhookPath = patch.webhookPath;

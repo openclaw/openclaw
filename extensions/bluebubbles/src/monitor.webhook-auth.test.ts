@@ -425,6 +425,24 @@ describe("BlueBubbles webhook monitor", () => {
       );
     });
 
+    it("prefers webhookSecret over the BlueBubbles API password when configured", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "api-password",
+          webhookSecret: "webhook-secret",
+        }),
+      });
+
+      await expectWebhookRequestStatusForTest(
+        createPasswordQueryRequestParamsForTest({ password: "api-password" }),
+        401,
+      );
+      await expectWebhookRequestStatusForTest(
+        createPasswordQueryRequestParamsForTest({ password: "webhook-secret" }),
+        200,
+      );
+    });
+
     it("rejects unauthorized requests with wrong password", async () => {
       await expectProtectedWebhookRequestStatus(
         createProtectedPasswordQueryRequestParams("wrong-token"),

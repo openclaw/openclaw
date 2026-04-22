@@ -91,6 +91,7 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
       patch: {
         serverUrl: input.httpUrl,
         password: input.password,
+        webhookSecret: input.webhookSecret,
         webhookPath: input.webhookPath,
       },
       onlyDefinedFields: true,

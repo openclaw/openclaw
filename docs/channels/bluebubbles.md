@@ -40,19 +40,21 @@ need a separate `openclaw plugins install` step.
          enabled: true,
          serverUrl: "http://192.168.1.100:1234",
          password: "example-password",
+         webhookSecret: "example-webhook-secret",
          webhookPath: "/bluebubbles-webhook",
        },
      },
    }
    ```
 
-4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?guid=<webhook-secret>`).
 5. Start the gateway; it will register the webhook handler and start pairing.
 
 Security note:
 
-- Always set a webhook password.
-- Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.password` (for example `?password=<password>` or `x-password`), regardless of loopback/proxy topology.
+- Always set a dedicated webhook secret.
+- Set `channels.bluebubbles.webhookSecret` to a value distinct from `channels.bluebubbles.password` and use that secret on the public webhook URL.
+- Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.webhookSecret` when configured, or `channels.bluebubbles.password` as a legacy fallback (for example `?guid=<webhook-secret>` or `x-password`).
 - Password authentication is checked before reading/parsing full webhook bodies.
 
 ## Keeping Messages.app alive (VM / headless setups)
