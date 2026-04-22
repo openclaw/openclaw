@@ -38,6 +38,19 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
+// Non-interactive placeholder shells that reject "-c"-style invocations.
+// macOS LaunchDaemon service users commonly use /usr/bin/false so login sessions
+// cannot be opened; honoring SHELL in that case causes every exec to exit 1.
+// See https://github.com/openclaw/openclaw/issues/69077.
+const NON_INTERACTIVE_SHELLS = new Set(["false", "nologin"]);
+
+function isNonInteractiveShell(shellPath: string): boolean {
+  if (!shellPath) {
+    return false;
+  }
+  return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
+}
+
 function resolvePosixShellArgs(shellPath: string): string[] {
   const shellName = normalizeShellName(shellPath);
 
@@ -82,7 +95,15 @@ export function getShellConfig(): { shell: string; args: string[] } {
       return { shell: sh, args: resolvePosixShellArgs(sh) };
     }
   }
-  const shell = envShell && envShell.length > 0 ? envShell : "sh";
+
+  if (envShell) {
+    return { shell: envShell, args: resolvePosixShellArgs(envShell) };
+  }
+
+  // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
+  // re-invoke the placeholder and get a spurious exitCode=1.
+  const sh = resolveShellFromPath("sh") ?? resolveShellFromPath("bash");
+  const shell = sh ?? "sh";
   return { shell, args: resolvePosixShellArgs(shell) };
 }
 
