@@ -7,6 +7,7 @@ import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger } from "./logger.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
 import type { ConsoleStyle, LoggerSettings } from "./types.js";
@@ -241,7 +242,7 @@ export function enableConsoleCapture(): void {
         : "";
       try {
         const resolvedLogger = getLoggerLazy();
-        // Map console levels to file logger
+        // Pass unredacted `formatted` — file transport exit redacts at the sink boundary.
         if (level === "trace") {
           resolvedLogger.trace(formatted);
         } else if (level === "debug") {
@@ -261,7 +262,8 @@ export function enableConsoleCapture(): void {
       if (loggingState.forceConsoleToStderr) {
         // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
-          const line = timestamp ? `${timestamp} ${formatted}` : formatted;
+          const redacted = redactSensitiveText(formatted);
+          const line = timestamp ? `${timestamp} ${redacted}` : redacted;
           process.stderr.write(`${line}\n`);
         } catch (err) {
           if (isEpipeError(err)) {
@@ -272,18 +274,15 @@ export function enableConsoleCapture(): void {
       } else {
         try {
           if (!timestamp) {
-            orig.apply(console, args as []);
+            orig.call(console, redactSensitiveText(formatted));
             return;
           }
           if (args.length === 0) {
             orig.call(console, timestamp);
             return;
           }
-          if (typeof args[0] === "string") {
-            orig.call(console, `${timestamp} ${args[0]}`, ...args.slice(1));
-            return;
-          }
-          orig.call(console, timestamp, ...args);
+          orig.call(console, `${timestamp} ${redactSensitiveText(formatted)}`);
+          return;
         } catch (err) {
           if (isEpipeError(err)) {
             return;

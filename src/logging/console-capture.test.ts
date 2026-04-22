@@ -141,6 +141,112 @@ describe("enableConsoleCapture", () => {
     other.code = "EACCES";
     expect(() => process.stdout.emit("error", other)).toThrow("EACCES");
   });
+
+  describe("terminal redaction", () => {
+    const SECRET = "abcdef1234567890ghij"; // 20 chars — triggers mask
+    const MASKED = "abcdef\u2026ghij";
+
+    it("masks credential field in console.log output (stdout path)", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const log = vi.fn();
+      console.log = log;
+      enableConsoleCapture();
+      console.log(`apiKey=${SECRET}`);
+      expect(log).toHaveBeenCalledTimes(1);
+      const out = String(log.mock.calls[0]?.[0] ?? "");
+      expect(out).not.toContain(SECRET);
+      expect(out).toContain(MASKED);
+    });
+
+    it("masks Bearer token in console.error output (stdout path)", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const err = vi.fn();
+      console.error = err;
+      enableConsoleCapture();
+      console.error(`Authorization: Bearer ${SECRET}`);
+      expect(err).toHaveBeenCalledTimes(1);
+      const out = String(err.mock.calls[0]?.[0] ?? "");
+      expect(out).not.toContain(SECRET);
+      expect(out).toContain(MASKED);
+    });
+
+    it("masks credential in multi-argument console.log call (args[1] coverage)", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const log = vi.fn();
+      console.log = log;
+      enableConsoleCapture();
+      // Secret is in args[1] — the previous args[0]-only redaction would have leaked it.
+      console.log("apiKey:", SECRET);
+      expect(log).toHaveBeenCalledTimes(1);
+      const out = String(log.mock.calls[0]?.[0] ?? "");
+      expect(out).not.toContain(SECRET);
+      expect(out).toContain(MASKED);
+    });
+
+    it("masks credential when args[0] is non-string (object-serialized via util.format)", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const log = vi.fn();
+      console.log = log;
+      enableConsoleCapture();
+      // Non-string args[0]: util.format serialises this to a string before redaction.
+      // The previous typeof-string guard would have passed the object through unredacted.
+      console.log({ token: SECRET });
+      expect(log).toHaveBeenCalledTimes(1);
+      const out = String(log.mock.calls[0]?.[0] ?? "");
+      expect(out).not.toContain(SECRET);
+      expect(out).toContain(MASKED);
+    });
+
+    it("masks credential field written to stderr (forceConsoleToStderr path)", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      routeLogsToStderr();
+      enableConsoleCapture();
+      console.log(`token=${SECRET}`);
+      const written = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+      expect(written).not.toContain(SECRET);
+      expect(written).toContain(MASKED);
+    });
+
+    it("masks credential alongside timestamp prefix on stderr (forceConsoleToStderr path)", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      routeLogsToStderr();
+      setConsoleTimestampPrefix(true);
+      enableConsoleCapture();
+      console.log(`token=${SECRET}`);
+      const written = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+      expect(written).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+      expect(written).not.toContain(SECRET);
+      expect(written).toContain(MASKED);
+    });
+
+    it("passes non-credential output through unchanged", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const log = vi.fn();
+      console.log = log;
+      enableConsoleCapture();
+      console.log("hello world");
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0]?.[0]).toBe("hello world");
+    });
+
+    it("masks credential alongside timestamp prefix", () => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const log = vi.fn();
+      console.log = log;
+      setConsoleTimestampPrefix(true);
+      enableConsoleCapture();
+      console.log(`apiKey=${SECRET}`);
+      expect(log).toHaveBeenCalledTimes(1);
+      const out = String(log.mock.calls[0]?.[0] ?? "");
+      // timestamp prefix present
+      expect(out).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+      // secret masked
+      expect(out).not.toContain(SECRET);
+      expect(out).toContain(MASKED);
+    });
+  });
 });
 
 function tempLogPath() {
