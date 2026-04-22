@@ -40,7 +40,6 @@ import {
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { log } from "./logger.js";
 import { dropThinkingBlocks } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
@@ -232,23 +231,15 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
   let touched = false;
   const out = [...messages];
   for (let i = 0; i < out.length; i += 1) {
-    const message = out[i] as (AgentMessage & { role?: unknown; content?: unknown }) | undefined;
-    if (!message || message.role !== "assistant" || Array.isArray(message.content)) {
+    const message = out[i];
+    const replayContent = (message as { content?: unknown } | undefined)?.content;
+    if (!message || message.role !== "assistant" || typeof replayContent !== "string") {
       continue;
     }
-    if (typeof message.content !== "string") {
-      log.warn(
-        `normalizeAssistantReplayContent: repairing malformed assistant content ` +
-          `(index=${i}, type=${typeof message.content})`,
-      );
-    }
     out[i] = {
-      ...(message as unknown as Record<string, unknown>),
-      content:
-        typeof message.content === "string"
-          ? [{ type: "text", text: message.content }]
-          : [{ type: "text", text: "" }],
-    } as AgentMessage;
+      ...message,
+      content: [{ type: "text", text: replayContent }],
+    };
     touched = true;
   }
   return touched ? out : messages;
