@@ -213,7 +213,7 @@ describe("sessions-list-tool", () => {
               channel: "whatsapp",
               sessionId: "sess-whatsapp-group",
               subject: "فريق المنح 2026",
-              displayName: "whatsapp:g-fryq-almn7-2026",
+              displayName: "whatsapp:فريق المنح 2026",
             },
             {
               key: "agent:main:slack:channel:C123",
@@ -222,7 +222,7 @@ describe("sessions-list-tool", () => {
               sessionId: "sess-slack-channel",
               groupChannel: "#ops",
               space: "Acme",
-              displayName: "slack:acme#ops",
+              displayName: "slack:Acme#ops",
             },
           ],
         };
@@ -243,12 +243,12 @@ describe("sessions-list-tool", () => {
 
     expect(details.sessions?.[0]).toMatchObject({
       subject: "فريق المنح 2026",
-      displayName: "whatsapp:g-fryq-almn7-2026",
+      displayName: "whatsapp:فريق المنح 2026",
     });
     expect(details.sessions?.[1]).toMatchObject({
       groupChannel: "#ops",
       space: "Acme",
-      displayName: "slack:acme#ops",
+      displayName: "slack:Acme#ops",
     });
   });
 });

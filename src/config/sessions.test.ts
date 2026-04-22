@@ -142,16 +142,27 @@ describe("sessions", () => {
     });
   }
 
-  it("builds discord display name with guild+channel slugs", () => {
+  it("builds discord display names without slugifying human labels", () => {
     expect(
       buildGroupDisplayName({
         provider: "discord",
         groupChannel: "#general",
-        space: "friends-of-openclaw",
+        space: "Friends of OpenClaw",
         id: "123",
         key: "discord:group:123",
       }),
-    ).toBe("discord:friends-of-openclaw#general");
+    ).toBe("discord:Friends of OpenClaw#general");
+  });
+
+  it("preserves Arabic letters and symbols in group display names", () => {
+    expect(
+      buildGroupDisplayName({
+        provider: "whatsapp",
+        subject: "mn7_edu-2026 أهلاً",
+        id: "120363000000000000@g.us",
+        key: "whatsapp:group:120363000000000000@g.us",
+      }),
+    ).toBe("whatsapp:mn7_edu-2026 أهلاً");
   });
 
   const resolveSessionKeyCases = [
@@ -353,6 +364,26 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.label).toBe("Family id:123@g.us");
     expect(store[sessionKey]?.origin?.provider).toBe("whatsapp");
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
+  });
+
+  it("loadSessionStore upgrades legacy slugged group display names to the raw subject", async () => {
+    const sessionKey = "agent:main:whatsapp:group:120363000000000000@g.us";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "legacyGroupDisplayName",
+      entries: {
+        [sessionKey]: buildMainSessionEntry({
+          chatType: "group",
+          channel: "whatsapp",
+          groupId: "120363000000000000@g.us",
+          subject: "mn7_edu-2026 أهلاً",
+          displayName: "whatsapp:g-mn7_edu-2026",
+        }),
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+
+    expect(store[sessionKey]?.displayName).toBe("whatsapp:mn7_edu-2026 أهلاً");
   });
 
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {

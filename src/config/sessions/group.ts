@@ -5,7 +5,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
 
@@ -40,12 +39,33 @@ function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nul
   return null;
 }
 
-function normalizeGroupLabel(raw?: string) {
-  return normalizeHyphenSlug(raw);
+type GroupDisplayNameParams = {
+  provider?: string;
+  subject?: string;
+  groupChannel?: string;
+  space?: string;
+  id?: string;
+  key: string;
+};
+
+function normalizeGroupDisplayText(raw?: string | null) {
+  const trimmed = normalizeOptionalString(raw) ?? "";
+  return trimmed ? trimmed.replace(/\s+/g, " ") : "";
+}
+
+function buildGroupDisplayDetail(params: GroupDisplayNameParams) {
+  const groupChannel = normalizeGroupDisplayText(params.groupChannel);
+  const space = normalizeGroupDisplayText(params.space);
+  const subject = normalizeGroupDisplayText(params.subject);
+  return (
+    (groupChannel && space
+      ? `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`
+      : groupChannel || subject || space || "") || ""
+  );
 }
 
 function shortenGroupId(value?: string) {
-  const trimmed = normalizeOptionalString(value) ?? "";
+  const trimmed = normalizeGroupDisplayText(value);
   if (!trimmed) {
     return "";
   }
@@ -55,27 +75,19 @@ function shortenGroupId(value?: string) {
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
-export function buildGroupDisplayName(params: {
-  provider?: string;
-  subject?: string;
-  groupChannel?: string;
-  space?: string;
-  id?: string;
-  key: string;
-}) {
+function buildLegacyGroupDisplayName(params: GroupDisplayNameParams) {
   const providerKey = normalizeOptionalLowercaseString(params.provider) ?? "group";
-  const groupChannel = normalizeOptionalString(params.groupChannel);
-  const space = normalizeOptionalString(params.space);
-  const subject = normalizeOptionalString(params.subject);
-  const detail =
-    (groupChannel && space
-      ? `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`
-      : groupChannel || subject || space || "") || "";
-  const fallbackId = normalizeOptionalString(params.id) ?? params.key;
+  const detail = buildGroupDisplayDetail(params).toLowerCase();
+  const fallbackId = normalizeGroupDisplayText(params.id ?? params.key).toLowerCase();
   const rawLabel = detail || fallbackId;
-  let token = normalizeGroupLabel(rawLabel);
+  let token = rawLabel.replace(/\s+/g, "-").replace(/[^a-z0-9#@._+-]+/g, "-");
+  token = token.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
   if (!token) {
-    token = normalizeGroupLabel(shortenGroupId(rawLabel));
+    token = shortenGroupId(rawLabel)
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9#@._+-]+/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^[-.]+|[-.]+$/g, "");
   }
   if (!params.groupChannel && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
@@ -83,6 +95,25 @@ export function buildGroupDisplayName(params: {
   if (token && !/^[@#]/.test(token) && !token.startsWith("g-") && !token.includes("#")) {
     token = `g-${token}`;
   }
+  return token ? `${providerKey}:${token}` : providerKey;
+}
+
+export function isLegacyGroupDisplayName(
+  displayName: string | undefined,
+  params: GroupDisplayNameParams,
+) {
+  const normalized = normalizeOptionalString(displayName);
+  if (!normalized) {
+    return false;
+  }
+  return normalized === buildLegacyGroupDisplayName(params);
+}
+
+export function buildGroupDisplayName(params: GroupDisplayNameParams) {
+  const providerKey = normalizeOptionalLowercaseString(params.provider) ?? "group";
+  const detail = buildGroupDisplayDetail(params);
+  const fallbackId = normalizeGroupDisplayText(params.id) || normalizeGroupDisplayText(params.key);
+  const token = normalizeGroupDisplayText(detail || shortenGroupId(fallbackId));
   return token ? `${providerKey}:${token}` : providerKey;
 }
 

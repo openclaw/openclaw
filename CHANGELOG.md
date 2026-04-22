@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Notion/plugin: migrate the bundled Notion plugin fully onto the `2026-03-11` data-source model by using official `dataSources.*` SDK calls, switching deprecated `archived` writes to `in_trash`, and aligning the bundled skill and sample script with `data_source_id` page parents.
 - Agents/Anthropic: honor explicit `cacheRetention: "long"` for custom `anthropic-messages` endpoints by applying the 1-hour ephemeral cache TTL independently of the Anthropic/Vertex hostname allowlist. Implicit and env-driven long retention still require an allowlisted host. (#67800) Thanks @MonkeyLeeT.
 - fix(agents): honor explicit long Anthropic cache TTL on custom hosts (#67800). Thanks @MonkeyLeeT
 

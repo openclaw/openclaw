@@ -912,7 +912,7 @@ importers:
   extensions/notion:
     dependencies:
       '@notionhq/client':
-        specifier: ^5.12.0
+        specifier: 5.19.0
         version: 5.19.0
       '@sinclair/typebox':
         specifier: 0.34.49
