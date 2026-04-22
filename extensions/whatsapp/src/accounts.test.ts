@@ -249,4 +249,32 @@ describe("resolveWhatsAppAuthDir", () => {
       "*": { systemPrompt: "You are WorkBot." },
     });
   });
+
+  it("multi-account: accounts.default.groups flow to named accounts as the opt-in migration path", () => {
+    // Pins the contract advertised in the #69874 PR body: with root `channels.whatsapp.groups`
+    // suppressed in multi-account mode, users can share `groups` across accounts by setting
+    // them under `accounts.default` instead. If `resolveWhatsAppDefaultAccountSharedConfig`
+    // ever stops spreading `groups`, this regression surfaces here.
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: {
+                groups: {
+                  "*": { systemPrompt: "You are Aria." },
+                },
+              },
+              work: {},
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.groups).toEqual({
+      "*": { systemPrompt: "You are Aria." },
+    });
+  });
 });
