@@ -6,7 +6,7 @@ import { toToolDefinitions } from "../pi-tool-definition-adapter.js";
 type AnyAgentTool = AgentTool;
 
 export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: boolean }): {
-  builtInTools: AnyAgentTool[];
+  builtInTools: string[];
   customTools: ReturnType<typeof toToolDefinitions>;
 } {
   const { tools } = options;

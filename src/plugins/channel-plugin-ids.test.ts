@@ -958,6 +958,100 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual([]);
   });
 
+  it("treats disabled channel config as a hard read-only env suppressor", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    const config = {
+      channels: {
+        "Demo-Channel": {
+          enabled: false,
+          token: "stale-token",
+        },
+      },
+      plugins: {
+        entries: {
+          "demo-channel": {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "ambient",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "ambient",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("treats disabled channel config as a hard persisted-auth suppressor", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "persisted-auth" },
+    ]);
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          channels: {
+            "demo-channel": {
+              enabled: false,
+            },
+          },
+          plugins: {
+            entries: {
+              "demo-channel": {
+                enabled: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toEqual([]);
+  });
+
+  it("treats disabled channel config as a hard manifest-env suppressor", () => {
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config: {
+          channels: {
+            "external-env-channel": {
+              enabled: false,
+            },
+          },
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("lets explicit bundled channel config bypass restrictive allowlists", () => {
     const config = {
       channels: {
