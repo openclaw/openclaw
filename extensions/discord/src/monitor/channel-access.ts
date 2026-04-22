@@ -53,8 +53,12 @@ export function resolveDiscordChannelParentIdSafe(channel: unknown): string | un
   return resolveDiscordChannelStringPropertySafe(channel, "parentId");
 }
 
+export function resolveDiscordChannelParentSafe(channel: unknown): unknown {
+  return readDiscordChannelPropertySafe(channel, "parent");
+}
+
 export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {
-  const parent = readDiscordChannelPropertySafe(channel, "parent");
+  const parent = resolveDiscordChannelParentSafe(channel);
   return {
     name: resolveDiscordChannelNameSafe(channel),
     topic: resolveDiscordChannelTopicSafe(channel),

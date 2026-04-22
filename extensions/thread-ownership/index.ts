@@ -72,35 +72,56 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
   return { id, name };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function resolveThreadOwnershipPluginConfigFromConfig(
+  config: OpenClawConfig,
+): ThreadOwnershipConfig | undefined {
+  return asRecord(asRecord(config.plugins?.entries)?.["thread-ownership"])?.config as
+    | ThreadOwnershipConfig
+    | undefined;
+}
+
 export default definePluginEntry({
   id: "thread-ownership",
   name: "Thread Ownership",
   description: "Slack thread claim coordination for multi-agent setups",
   register(api: OpenClawPluginApi) {
-    const pluginCfg = (api.pluginConfig ?? {}) as ThreadOwnershipConfig;
-    const forwarderUrl = (
-      pluginCfg.forwarderUrl ??
-      process.env.SLACK_FORWARDER_URL ??
-      "http://slack-forwarder:8750"
-    ).replace(/\/$/, "");
-
-    const abTestChannels = new Set(
-      (
-        pluginCfg.abTestChannels ??
-        process.env.THREAD_OWNERSHIP_CHANNELS?.split(",").filter(Boolean) ??
-        []
-      )
-        .map((entry) => resolveSlackConversationId(entry))
-        .filter(Boolean),
-    );
-
-    const { id: agentId, name: agentName } = resolveOwnershipAgent(api.config);
-    const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
+    const resolveCurrentState = () => {
+      const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
+      const pluginCfg =
+        resolveThreadOwnershipPluginConfigFromConfig(currentConfig) ||
+        ((api.pluginConfig ?? {}) as ThreadOwnershipConfig);
+      return {
+        currentConfig,
+        forwarderUrl: (
+          pluginCfg.forwarderUrl ??
+          process.env.SLACK_FORWARDER_URL ??
+          "http://slack-forwarder:8750"
+        ).replace(/\/$/, ""),
+        abTestChannels: new Set(
+          (
+            pluginCfg.abTestChannels ??
+            process.env.THREAD_OWNERSHIP_CHANNELS?.split(",").filter(Boolean) ??
+            []
+          )
+            .map((entry) => resolveSlackConversationId(entry))
+            .filter(Boolean),
+        ),
+        botUserId: process.env.SLACK_BOT_USER_ID ?? "",
+        agent: resolveOwnershipAgent(currentConfig),
+      };
+    };
 
     api.on("message_received", async (event, ctx) => {
       if (ctx.channelId !== "slack") {
         return;
       }
+      const { agent, botUserId } = resolveCurrentState();
 
       const text = event.content ?? "";
       const threadTs =
@@ -116,7 +137,7 @@ export default definePluginEntry({
       }
 
       const mentioned =
-        containsAgentNameMention(text, agentName) ||
+        containsAgentNameMention(text, agent.name) ||
         (botUserId && text.includes(`<@${botUserId}>`));
       if (mentioned) {
         cleanExpiredMentions();
@@ -128,6 +149,7 @@ export default definePluginEntry({
       if (ctx.channelId !== "slack") {
         return undefined;
       }
+      const { abTestChannels, agent, forwarderUrl } = resolveCurrentState();
 
       const threadTs =
         resolveThreadToken(event.replyToId) ||
@@ -159,7 +181,7 @@ export default definePluginEntry({
           init: {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agent_id: agentId }),
+            body: JSON.stringify({ agent_id: agent.id }),
           },
           timeoutMs: 3000,
           policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),

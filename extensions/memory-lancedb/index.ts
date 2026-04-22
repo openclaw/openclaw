@@ -40,6 +40,12 @@ type MemorySearchResult = {
   score: number;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 // ============================================================================
 // LanceDB Provider
 // ============================================================================
@@ -65,7 +71,10 @@ class MemoryDB {
       return this.initPromise;
     }
 
-    this.initPromise = this.doInitialize();
+    this.initPromise = this.doInitialize().catch((error) => {
+      this.initPromise = null;
+      throw error;
+    });
     return this.initPromise;
   }
 
@@ -300,6 +309,33 @@ export default definePluginEntry({
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
     const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const resolveCurrentHookConfig = () => {
+      const runtimeConfig = api.runtime.config?.loadConfig?.();
+      const runtimePlugins = asRecord(asRecord(runtimeConfig)?.plugins);
+      const runtimeEntries = asRecord(runtimePlugins?.entries);
+      const runtimePluginConfig = asRecord(runtimeEntries?.["memory-lancedb"])?.config;
+      if (!runtimePluginConfig) {
+        return cfg;
+      }
+      return memoryConfigSchema.parse({
+        embedding: {
+          apiKey: cfg.embedding.apiKey,
+          model: cfg.embedding.model,
+          ...(cfg.embedding.baseUrl ? { baseUrl: cfg.embedding.baseUrl } : {}),
+          ...(typeof cfg.embedding.dimensions === "number"
+            ? { dimensions: cfg.embedding.dimensions }
+            : {}),
+          ...asRecord(asRecord(runtimePluginConfig)?.embedding),
+        },
+        ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
+        dbPath: cfg.dbPath,
+        autoCapture: cfg.autoCapture,
+        autoRecall: cfg.autoRecall,
+        captureMaxChars: cfg.captureMaxChars,
+        ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
+        ...asRecord(runtimePluginConfig),
+      });
+    };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
@@ -542,6 +578,10 @@ export default definePluginEntry({
     // Auto-recall: inject relevant memories during prompt build
     if (cfg.autoRecall) {
       api.on("before_prompt_build", async (event) => {
+        const currentCfg = resolveCurrentHookConfig();
+        if (!currentCfg.autoRecall) {
+          return undefined;
+        }
         if (!event.prompt || event.prompt.length < 5) {
           return undefined;
         }
@@ -571,6 +611,10 @@ export default definePluginEntry({
     // Auto-capture: analyze and store important information after agent ends
     if (cfg.autoCapture) {
       api.on("agent_end", async (event) => {
+        const currentCfg = resolveCurrentHookConfig();
+        if (!currentCfg.autoCapture) {
+          return;
+        }
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
@@ -618,7 +662,7 @@ export default definePluginEntry({
 
           // Filter for capturable content
           const toCapture = texts.filter(
-            (text) => text && shouldCapture(text, { maxChars: cfg.captureMaxChars }),
+            (text) => text && shouldCapture(text, { maxChars: currentCfg.captureMaxChars }),
           );
           if (toCapture.length === 0) {
             return;

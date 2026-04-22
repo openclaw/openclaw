@@ -6,27 +6,60 @@ import { createProposalFromMessages } from "./src/signals.js";
 import { createSkillWorkshopTool } from "./src/tool.js";
 import { applyOrStoreProposal, createStoreForContext } from "./src/workshop.js";
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 export default definePluginEntry({
   id: "skill-workshop",
   name: "Skill Workshop",
   description:
     "Captures repeatable workflows as workspace skills, with pending review and safe writes.",
   register(api) {
-    const config = resolveConfig(api.pluginConfig);
-    if (!config.enabled) {
+    const startupConfig = resolveConfig(api.pluginConfig);
+    if (!startupConfig.enabled) {
       return;
     }
+    const resolveCurrentConfig = () => {
+      const runtimeConfig = api.runtime.config?.loadConfig?.();
+      const runtimePlugins = asRecord(asRecord(runtimeConfig)?.plugins);
+      const runtimeEntries = asRecord(runtimePlugins?.entries);
+      const runtimePluginConfig =
+        asRecord(runtimeEntries?.["skill-workshop"])?.config ?? api.pluginConfig;
+      return resolveConfig(runtimePluginConfig);
+    };
 
-    api.registerTool((ctx) => createSkillWorkshopTool({ api, config, ctx }), {
-      name: "skill_workshop",
+    api.registerTool(
+      (ctx) => {
+        const config = resolveCurrentConfig();
+        if (!config.enabled) {
+          return null;
+        }
+        return createSkillWorkshopTool({ api, config, ctx });
+      },
+      {
+        name: "skill_workshop",
+      },
+    );
+
+    api.on("before_prompt_build", async () => {
+      const config = resolveCurrentConfig();
+      if (!config.enabled) {
+        return undefined;
+      }
+      return {
+        prependSystemContext: buildWorkshopGuidance(config),
+      };
     });
 
-    api.on("before_prompt_build", async () => ({
-      prependSystemContext: buildWorkshopGuidance(config),
-    }));
-
-    if (config.autoCapture) {
+    if (startupConfig.autoCapture && startupConfig.reviewMode !== "off") {
       api.on("agent_end", async (event, ctx) => {
+        const config = resolveCurrentConfig();
+        if (!config.enabled || !config.autoCapture || config.reviewMode === "off") {
+          return;
+        }
         if (!event.success) {
           return;
         }

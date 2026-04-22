@@ -450,4 +450,22 @@ describe("loadWebMedia", () => {
       await fs.rm(filePath, { force: true });
     }
   });
+
+  it("rejects unsupported media store URI locations", async () => {
+    await expect(loadWebMedia("media://outbound/tiny.png")).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it("rejects media store URI ids with encoded path separators", async () => {
+    await expect(loadWebMedia("media://inbound/nested%2Ftiny.png")).rejects.toMatchObject({
+      code: "invalid-path",
+    });
+  });
+
+  it("rejects media store URIs without an id", async () => {
+    await expect(loadWebMedia("media://inbound/")).rejects.toMatchObject({
+      code: "invalid-path",
+    });
+  });
 });

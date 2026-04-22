@@ -307,6 +307,7 @@ function shouldSkipPlanningOnlyRetry(params: {
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
@@ -319,6 +320,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -341,6 +343,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
@@ -354,6 +357,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -374,7 +378,11 @@ export function resolveEmptyResponseRetryInstruction(params: {
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
 }): boolean {
+  if (params.executionContract === "strict-agentic") {
+    return true;
+  }
   return isStrictAgenticSupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,
@@ -531,6 +539,7 @@ export function resolvePlanningOnlyRetryLimit(
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -547,6 +556,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||

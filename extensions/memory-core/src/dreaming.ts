@@ -638,6 +638,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeConfigKey: string | null = null;
   let lastRuntimeCronRef: CronServiceLike | null = null;
 
+  const resolveCurrentConfig = (): OpenClawConfig =>
+    api.runtime.config?.loadConfig?.() ?? api.config;
+
   const runtimeConfigKey = (config: ShortTermPromotionDreamingConfig): string =>
     [
       config.enabled ? "enabled" : "disabled",
@@ -660,7 +663,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     startupCron?: (() => CronServiceLike | null) | null;
   }): Promise<ShortTermPromotionDreamingConfig> => {
     const startupCfg =
-      params.reason === "startup" ? (params.startupConfig ?? api.config) : api.config;
+      params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
     const config = resolveShortTermPromotionDreamingConfig({
       pluginConfig:
         resolveMemoryCorePluginConfig(startupCfg) ??
@@ -733,6 +736,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       if (ctx.trigger !== "heartbeat") {
         return undefined;
       }
+      const currentConfig = resolveCurrentConfig();
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
       });
@@ -746,7 +750,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         cleanedBody: event.cleanedBody,
         trigger: ctx.trigger,
         workspaceDir: ctx.workspaceDir,
-        cfg: api.config,
+        cfg: currentConfig,
         config,
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,
