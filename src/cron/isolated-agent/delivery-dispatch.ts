@@ -1,3 +1,4 @@
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -103,6 +104,7 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  sessionId: string;
   runStartedAt: number;
   runEndedAt: number;
   timeoutMs: number;
@@ -476,6 +478,12 @@ export async function dispatchCronDelivery(
         timeoutMs: 10_000,
       });
       directCronSessionDeleted = true;
+      const sessionId = params.sessionId.trim();
+      if (sessionId) {
+        await disposeSessionMcpRuntime(sessionId).catch(() => {
+          // Best-effort; direct delivery result should still be returned.
+        });
+      }
     } catch {
       // Best-effort; direct delivery result should still be returned.
     }

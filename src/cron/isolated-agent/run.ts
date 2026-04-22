@@ -1,4 +1,5 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -255,6 +256,25 @@ function resolveMessagingToolSentTargets(params: {
         : {}),
     },
   ];
+}
+
+async function disposeRetiredCronSessionRuntime(params: {
+  job: CronJob;
+  cronSession: MutableCronSession;
+}) {
+  if (params.job.sessionTarget === "isolated") {
+    return;
+  }
+  const previousSessionId = params.cronSession.previousSessionId?.trim();
+  const currentSessionId = params.cronSession.sessionEntry.sessionId?.trim();
+  if (!previousSessionId || previousSessionId === currentSessionId) {
+    return;
+  }
+  await disposeSessionMcpRuntime(previousSessionId).catch((error) => {
+    logWarn(
+      `[cron:${params.job.id}] Failed to dispose retired bundle MCP runtime for session ${previousSessionId}: ${String(error)}`,
+    );
+  });
 }
 
 function resolveCronToolPolicy(params: { deliveryMode: "announce" | "webhook" | "none" }) {
@@ -618,6 +638,10 @@ async function prepareCronRunContext(params: {
   } catch (err) {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
+  await disposeRetiredCronSessionRuntime({
+    job: input.job,
+    cronSession,
+  });
   const hasSessionAuthProfileOverride = Boolean(
     cronSession.sessionEntry.authProfileOverride?.trim(),
   );
@@ -839,6 +863,7 @@ async function finalizeCronRun(params: {
     job: prepared.input.job,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
+    sessionId: prepared.runSessionId,
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,

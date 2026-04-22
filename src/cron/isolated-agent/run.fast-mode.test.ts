@@ -5,6 +5,7 @@ import {
   setupRunCronIsolatedAgentTurnSuite,
 } from "./run.suite-helpers.js";
 import {
+  disposeSessionMcpRuntimeMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   resolveFastModeStateMock,
@@ -37,20 +38,24 @@ async function runFastModeCase(params: {
   configFastMode: boolean;
   expectedFastMode: boolean;
   expectedCleanupBundleMcpOnRunEnd?: boolean;
+  expectedDisposedSessionId?: string;
+  sessionId?: string;
   message: string;
+  previousSessionId?: string;
   sessionTarget?: string;
   sessionFastMode?: boolean;
 }) {
   const baseSession = makeCronSession();
   resolveCronSessionMock.mockReturnValue(
-    params.sessionFastMode === undefined
-      ? baseSession
-      : makeCronSession({
-          sessionEntry: {
-            ...baseSession.sessionEntry,
-            fastMode: params.sessionFastMode,
-          },
-        }),
+    makeCronSession({
+      ...baseSession,
+      ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
+      sessionEntry: {
+        ...baseSession.sessionEntry,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.sessionFastMode === undefined ? {} : { fastMode: params.sessionFastMode }),
+      },
+    }),
   );
   mockSuccessfulModelFallback();
   resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
@@ -98,6 +103,11 @@ async function runFastModeCase(params: {
     cleanupBundleMcpOnRunEnd: params.expectedCleanupBundleMcpOnRunEnd ?? true,
     allowGatewaySubagentBinding: true,
   });
+  if (params.expectedDisposedSessionId) {
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith(params.expectedDisposedSessionId);
+    return;
+  }
+  expect(disposeSessionMcpRuntimeMock).not.toHaveBeenCalled();
 }
 
 describe("runCronIsolatedAgentTurn — fast mode", () => {
@@ -135,6 +145,19 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       expectedFastMode: true,
       expectedCleanupBundleMcpOnRunEnd: false,
       message: "test persistent cron session",
+      sessionTarget: "session:agent:main:main:thread:9999",
+    });
+  });
+
+  it("disposes the retired bundled MCP runtime when a persistent cron session rolls over", async () => {
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      expectedCleanupBundleMcpOnRunEnd: false,
+      expectedDisposedSessionId: "stale-session-id",
+      message: "test persistent cron session rollover",
+      previousSessionId: "stale-session-id",
+      sessionId: "rotated-session-id",
       sessionTarget: "session:agent:main:main:thread:9999",
     });
   });

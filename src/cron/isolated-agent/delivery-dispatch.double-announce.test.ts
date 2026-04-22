@@ -15,8 +15,9 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
-const { countActiveDescendantRunsMock } = vi.hoisted(() => ({
+const { countActiveDescendantRunsMock, disposeSessionMcpRuntimeMock } = vi.hoisted(() => ({
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
+  disposeSessionMcpRuntimeMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
@@ -26,6 +27,10 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  disposeSessionMcpRuntime: disposeSessionMcpRuntimeMock,
 }));
 
 vi.mock("./delivery-subagent-registry.runtime.js", () => ({
@@ -71,6 +76,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { callGateway } from "../../gateway/call.runtime.js";
@@ -138,6 +144,7 @@ function makeBaseParams(overrides: {
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
+    sessionId: "test-session-id",
     runStartedAt,
     runEndedAt: runStartedAt,
     timeoutMs: 30_000,
@@ -171,6 +178,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(disposeSessionMcpRuntime).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -508,6 +516,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       timeoutMs: 10_000,
     });
+    expect(disposeSessionMcpRuntime).toHaveBeenCalledWith("test-session-id");
   });
 
   it("cleans up the direct cron session after text delivery when deleteAfterRun is enabled", async () => {
@@ -531,6 +540,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       timeoutMs: 10_000,
     });
+    expect(disposeSessionMcpRuntime).toHaveBeenCalledWith("test-session-id");
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {
