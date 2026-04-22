@@ -67,11 +67,12 @@ export async function ensureLoaded(
     if (typeof hydrated.enabled !== "boolean") {
       hydrated.enabled = true;
     }
-    // Same shape: persisted jobs missing `sessionTarget` crash on the next
-    // tick via `assertSupportedJobSpec`. Mirror the defaulter applied at
-    // create time: systemEvent payloads -> "main", agentTurn -> "isolated".
-    // Use `Object.hasOwn` rather than `in` so a poisoned prototype cannot
-    // feed a crafted `kind` into the defaulter.
+    // Same shape: persisted jobs missing `sessionTarget` crash downstream
+    // on any code path that dereferences `.startsWith` (e.g.
+    // `runIsolatedAgentJob` in `src/gateway/server-cron.ts`). Mirror the
+    // defaulter applied at create time: systemEvent payloads -> "main",
+    // agentTurn -> "isolated". Use `Object.hasOwn` rather than `in` so a
+    // poisoned prototype cannot feed a crafted `kind` into the defaulter.
     if (typeof hydrated.sessionTarget !== "string") {
       const payload = hydrated.payload as unknown;
       const payloadKind =
@@ -89,14 +90,18 @@ export async function ensureLoaded(
       }
       if (defaulted) {
         hydrated.sessionTarget = defaulted;
-        state.deps.log.warn(
-          {
-            storePath: state.deps.storePath,
-            jobId: typeof hydrated.id === "string" ? hydrated.id : undefined,
-            defaulted,
-          },
-          "cron: job missing sessionTarget; defaulted in memory (run openclaw doctor --fix to persist canonical shape)",
-        );
+        // `ensureLoaded` is called with `forceReload: true` on every tick;
+        // warn once per jobId per process to avoid log spam on repeated
+        // loads of the same still-broken store file.
+        const jobId = typeof hydrated.id === "string" ? hydrated.id : undefined;
+        const dedupeKey = jobId ?? "<unknown>";
+        if (!state.warnedMissingSessionTargetJobIds.has(dedupeKey)) {
+          state.warnedMissingSessionTargetJobIds.add(dedupeKey);
+          state.deps.log.warn(
+            { storePath: state.deps.storePath, jobId, defaulted },
+            "cron: job missing sessionTarget; defaulted in memory (edit jobs.json to persist canonical shape)",
+          );
+        }
       }
     }
   }

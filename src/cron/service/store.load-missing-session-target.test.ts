@@ -82,4 +82,34 @@ describe("cron service store load: missing sessionTarget", () => {
     } as unknown as Parameters<typeof assertSupportedJobSpec>[0];
     expect(() => assertSupportedJobSpec(bogus)).toThrow(/missing sessionTarget/);
   });
+
+  it("warns once per jobId across repeated forceReload cycles", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeSingleJobStore(storePath, {
+      id: "log-dedupe-target",
+      name: "log dedupe target",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {},
+    });
+
+    const warnSpy = vi.spyOn(logger, "warn");
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state);
+    await ensureLoaded(state, { forceReload: true });
+    await ensureLoaded(state, { forceReload: true });
+
+    const missingSessionTargetWarns = warnSpy.mock.calls.filter((call) => {
+      const msg = typeof call[1] === "string" ? call[1] : "";
+      return msg.includes("missing sessionTarget");
+    });
+    expect(missingSessionTargetWarns).toHaveLength(1);
+    warnSpy.mockRestore();
+  });
 });
