@@ -3,11 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearEmbeddedExtensionFactories,
-  listEmbeddedExtensionFactories,
-} from "../plugins/embedded-extension-factory.js";
+import { listEmbeddedExtensionFactories } from "../plugins/embedded-extension-factory.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildEmbeddedExtensionFactories } from "./pi-embedded-runner/extensions.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
@@ -52,7 +51,7 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   clearPluginLoaderCache();
-  clearEmbeddedExtensionFactories();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -105,7 +104,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(firstFactories).toHaveLength(1);
     expect(listEmbeddedExtensionFactories()).toHaveLength(1);
 
-    clearEmbeddedExtensionFactories();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     expect(listEmbeddedExtensionFactories()).toHaveLength(0);
 
     loadOpenClawPlugins(options);
@@ -212,5 +211,93 @@ describe("buildEmbeddedExtensionFactories", () => {
       }),
     );
     expect(listEmbeddedExtensionFactories()).toHaveLength(0);
+  });
+
+  it("rejects non-function embedded extension factories from bundled plugins", () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "embedded-ext",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          embeddedExtensionFactories: ["pi"],
+        },
+      },
+      body: `export default { id: "embedded-ext", register(api) {
+  api.registerEmbeddedExtensionFactory("not-a-function");
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      config: {
+        plugins: {
+          entries: {
+            "embedded-ext": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "embedded-ext",
+        message: "embedded extension factory must be a function",
+      }),
+    );
+    expect(listEmbeddedExtensionFactories()).toHaveLength(0);
+  });
+
+  it("contains embedded extension factory failures so one bad plugin cannot crash setup", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "embedded-ext",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          embeddedExtensionFactories: ["pi"],
+        },
+      },
+      body: `export default { id: "embedded-ext", register(api) {
+  api.registerEmbeddedExtensionFactory(() => {
+    throw new Error("boom");
+  });
+} };`,
+    });
+
+    loadOpenClawPlugins({
+      config: {
+        plugins: {
+          entries: {
+            "embedded-ext": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+    expect(factories).toHaveLength(1);
+
+    await expect(
+      factories[0]?.({
+        on() {},
+      } as never),
+    ).resolves.toBeUndefined();
   });
 });

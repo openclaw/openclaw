@@ -1213,7 +1213,7 @@ importers:
   extensions/tokenjuice:
     dependencies:
       tokenjuice:
-        specifier: ^0.6.1
+        specifier: 0.6.1
         version: 0.6.1
     devDependencies:
       '@openclaw/plugin-sdk':
