@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { writeJsonAtomic } from "./json-files.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -78,9 +79,8 @@ export async function writeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const filePath = resolveRestartSentinelPath(env);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const data: RestartSentinel = { version: 1, payload };
-  await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+  await writeJsonAtomic(filePath, data, { trailingNewline: true });
   return filePath;
 }
 
