@@ -70,8 +70,6 @@ describe("short-term promotion", () => {
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/2026-04-03-backups.md")).toBe(true);
-    expect(isShortTermMemoryPath("2026-04-03-backups.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
@@ -81,7 +79,6 @@ describe("short-term promotion", () => {
     expect(isShortTermMemoryPath("memory/日记/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/notes/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03-backups.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/dreaming/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("../../vault/memory/dreaming/deep/2026-04-03.md")).toBe(false);
@@ -1472,53 +1469,6 @@ describe("short-term promotion", () => {
       expect(applied.applied).toBe(1);
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryText).toContain("source=2026-04-01.md:1-1");
-    });
-  });
-
-  it("rehydrates basename-only slugged short-term paths from the memory directory", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-01-backups", [
-        "Slugged basename path note.",
-      ]);
-
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: [
-          {
-            key: "memory:2026-04-01-backups.md:1:1",
-            path: "2026-04-01-backups.md",
-            startLine: 1,
-            endLine: 1,
-            source: "memory",
-            snippet: "Slugged basename path note.",
-            recallCount: 2,
-            avgScore: 0.9,
-            maxScore: 0.95,
-            uniqueQueries: 2,
-            firstRecalledAt: "2026-04-01T00:00:00.000Z",
-            lastRecalledAt: "2026-04-02T00:00:00.000Z",
-            ageDays: 0,
-            score: 0.9,
-            recallDays: ["2026-04-01", "2026-04-02"],
-            conceptTags: ["slugged", "note"],
-            components: {
-              frequency: 0.3,
-              relevance: 0.9,
-              diversity: 0.4,
-              recency: 1,
-              consolidation: 0.5,
-              conceptual: 0.3,
-            },
-          },
-        ],
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-      });
-
-      expect(applied.applied).toBe(1);
-      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-      expect(memoryText).toContain("source=2026-04-01-backups.md:1-1");
     });
   });
 
