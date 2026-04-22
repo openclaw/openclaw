@@ -161,6 +161,49 @@ function readObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function readNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Invalid stability bundle: ${label} must be a finite number`);
+  }
+  return value;
+}
+
+function readOptionalNumber(value: unknown, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readNumber(value, label);
+}
+
+function readString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`Invalid stability bundle: ${label} must be a string`);
+  }
+  return value;
+}
+
+function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
+  const snapshot = readObject(value, "snapshot");
+  readString(snapshot.generatedAt, "snapshot.generatedAt");
+  readNumber(snapshot.capacity, "snapshot.capacity");
+  readNumber(snapshot.count, "snapshot.count");
+  readNumber(snapshot.dropped, "snapshot.dropped");
+  readOptionalNumber(snapshot.firstSeq, "snapshot.firstSeq");
+  readOptionalNumber(snapshot.lastSeq, "snapshot.lastSeq");
+  if (!Array.isArray(snapshot.events)) {
+    throw new Error("Invalid stability bundle: snapshot.events must be an array");
+  }
+  for (const [index, event] of snapshot.events.entries()) {
+    const record = readObject(event, `snapshot.events[${index}]`);
+    readNumber(record.seq, `snapshot.events[${index}].seq`);
+    readNumber(record.ts, `snapshot.events[${index}].ts`);
+    readString(record.type, `snapshot.events[${index}].type`);
+  }
+  const summary = readObject(snapshot.summary, "snapshot.summary");
+  readObject(summary.byType, "snapshot.summary.byType");
+  return snapshot as DiagnosticStabilitySnapshot;
+}
+
 function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBundle {
   const bundle = readObject(value, "bundle");
   if (bundle.version !== DIAGNOSTIC_STABILITY_BUNDLE_VERSION) {
@@ -171,10 +214,7 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
   }
   readObject(bundle.process, "process");
   readObject(bundle.host, "host");
-  const snapshot = readObject(bundle.snapshot, "snapshot");
-  if (!Array.isArray(snapshot.events) || typeof snapshot.summary !== "object") {
-    throw new Error("Invalid stability bundle: snapshot is malformed");
-  }
+  readStabilitySnapshot(bundle.snapshot);
   return bundle as DiagnosticStabilityBundle;
 }
 

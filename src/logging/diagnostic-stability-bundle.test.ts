@@ -187,4 +187,64 @@ describe("diagnostic stability bundles", () => {
       "Unsupported stability bundle version",
     );
   });
+
+  it("rejects malformed bundle snapshots before returning them", () => {
+    const baseBundle = {
+      version: 1,
+      generatedAt: "2026-04-22T12:00:00.000Z",
+      reason: "gateway.restart_startup_failed",
+      process: {
+        pid: 123,
+        platform: "darwin",
+        arch: "arm64",
+        node: "24.14.1",
+        uptimeMs: 1000,
+      },
+      host: {
+        hostname: "<redacted-hostname>",
+      },
+      snapshot: {
+        generatedAt: "2026-04-22T12:00:00.000Z",
+        capacity: 1000,
+        count: 1,
+        dropped: 0,
+        events: [{ seq: 1, ts: 1, type: "webhook.received" }],
+        summary: { byType: { "webhook.received": 1 } },
+      },
+    };
+    const cases = [
+      {
+        name: "malformed-event",
+        bundle: {
+          ...baseBundle,
+          snapshot: {
+            ...baseBundle.snapshot,
+            events: [{ type: "webhook.received", ts: 1 }],
+          },
+        },
+        error: "snapshot.events[0].seq",
+      },
+      {
+        name: "null-summary",
+        bundle: {
+          ...baseBundle,
+          snapshot: {
+            ...baseBundle.snapshot,
+            summary: null,
+          },
+        },
+        error: "snapshot.summary",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const file = path.join(tempDir, `${testCase.name}.json`);
+      fs.writeFileSync(file, `${JSON.stringify(testCase.bundle, null, 2)}\n`, "utf8");
+
+      const result = readDiagnosticStabilityBundleFileSync(file);
+
+      expect(result.status).toBe("failed");
+      expect(result.status === "failed" ? String(result.error) : "").toContain(testCase.error);
+    }
+  });
 });
