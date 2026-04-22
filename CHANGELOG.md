@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/Claude: hash only static extra system prompt parts when deciding whether to reuse a CLI session, so per-message inbound metadata no longer resets Claude CLI conversations on every turn. (#70122) Thanks @zijunl.
 - Hooks/Slack: standardize shared message hook routing fields (`threadId` / `replyToId`) and stop Slack outbound delivery from re-running `message_sending` inside the channel adapter, so plugins like thread-ownership make one outbound routing decision per reply. Thanks @vincentkoc.
 - Auto-reply/media: share one run-scoped reply media context between streamed block delivery and final payload filtering, so a local `MEDIA:` attachment is staged once and duplicate media sends are suppressed reliably. (#68111) Thanks @ayeshakhalid192007-dev.
 - Gateway/restart: preserve group and channel chat context when resuming an agent turn after a Gateway restart, so continuation replies keep the same prompt, routing, and tool-status behavior as the original conversation.
