@@ -50,18 +50,21 @@ if [ "$(stat -c %U "${STATE_DIR}" 2>/dev/null || echo root)" != "node" ]; then
   mkdir -p "${STATE_DIR}/workspace" "${AGENT_DIR}" "${STATE_DIR}/agents/main/sessions" \
            "${STATE_DIR}/scripts" "${STATE_DIR}/npm-global"
   if [ ! -f "${CONFIG_FILE}" ]; then
-    if [ "${BLINK_POOL_MODE:-}" = "true" ]; then
-      # Pool mode: pre-bake all restart-triggering fields (plugins, gateway,
-      # browser) so that the adopt-time config write only changes hot-reloadable
-      # fields.
-      cat > "${CONFIG_FILE}" <<'POOL_SKELETON'
-{"agents":{"defaults":{"workspace":"/data/workspace"}},"plugins":{"slots":{"memory":"none"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true},"http":{"endpoints":{"chatCompletions":{"enabled":true}}}},"browser":{"headless":true,"noSandbox":true,"profiles":{"user":{"driver":"openclaw","cdpPort":18800,"color":"#00AA00"}}},"session":{"maintenance":{"mode":"enforce","pruneAfter":"30d","maxEntries":200}}}
-POOL_SKELETON
-    else
-      echo '{"agents":{"defaults":{"workspace":"/data/workspace"}},"browser":{"noSandbox":true},"gateway":{"auth":{"mode":"token"}}}' > "${CONFIG_FILE}"
-    fi
+    echo '{"agents":{"defaults":{"workspace":"/data/workspace"}},"browser":{"noSandbox":true},"gateway":{"auth":{"mode":"token"}}}' > "${CONFIG_FILE}"
   fi
   chown -R node:node "${STATE_DIR}"
+fi
+
+# Pool mode: always overwrite config with the full skeleton on every boot.
+# This ensures image updates propagate the correct config (gateway, plugins,
+# browser fields that would trigger a restart if changed at adopt time).
+# Safe on every restart because pool machines have no user config to preserve.
+if [ "${BLINK_POOL_MODE:-}" = "true" ]; then
+  rm -f "${STATE_DIR}/logs/config-health.json" "${CONFIG_FILE}.bak"
+  cat > "${CONFIG_FILE}" <<'POOL_SKELETON'
+{"agents":{"defaults":{"workspace":"/data/workspace"}},"plugins":{"slots":{"memory":"none"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true},"http":{"endpoints":{"chatCompletions":{"enabled":true}}}},"browser":{"headless":true,"noSandbox":true,"profiles":{"user":{"driver":"openclaw","cdpPort":18800,"color":"#00AA00"}}},"session":{"maintenance":{"mode":"enforce","pruneAfter":"30d","maxEntries":200}}}
+POOL_SKELETON
+  chown node:node "${CONFIG_FILE}"
 fi
 
 # Ensure agent dir always exists (for machines with pre-existing volumes that
