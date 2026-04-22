@@ -18,6 +18,9 @@ import {
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
+  PLANNING_ONLY_RETRY_INSTRUCTION_FIRM,
+  PLANNING_ONLY_RETRY_INSTRUCTION_FINAL,
+  resolveEscalatingPlanningRetryInstruction,
   REASONING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolveEmptyResponseRetryInstruction,
@@ -105,7 +108,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       } as OpenClawConfig,
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    // Three retries (strict-agentic retry cap) plus the original attempt = 4 calls.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.payloads).toEqual([
       {
         text: STRICT_AGENTIC_BLOCKED_TEXT,
@@ -179,8 +183,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       } as OpenClawConfig,
     });
 
-    // Two retries (strict-agentic retry cap) plus the original attempt = 3 calls.
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    // Three retries (strict-agentic retry cap) plus the original attempt = 4 calls.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.payloads).toEqual([
       {
         text: STRICT_AGENTIC_BLOCKED_TEXT,
@@ -227,6 +231,44 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       expect(text).not.toContain("plan-only turns");
     }
   });
+
+  it("auto-continue injects ACK fast-path and resets retry counter when enabled", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-auto-continue-enabled",
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              autoContinue: { enabled: true, maxCycles: 2 },
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    // 2 auto-continue cycles × (1 ACK + 3 retries) + initial (1 + 3 retries) = 1 + 3 + 4 + 4 = 12
+    // But after the final cycle exhausts retries, it blocks.
+    expect(mockedRunEmbeddedAttempt.mock.calls.length).toBeGreaterThan(4);
+    expect(result.payloads).toEqual([{ text: STRICT_AGENTIC_BLOCKED_TEXT, isError: true }]);
+  });
+
+  // Note: stopOnMutation via accumulated mutation tracking is defense-in-depth.
+  // In the current code, resolvePlanningOnlyRetryInstruction() at incomplete-turn.ts:567
+  // already returns null when hadPotentialSideEffects is true, so a turn with
+  // side effects never reaches the auto-continue block. The accumulated guard
+  // protects against future code changes that might relax that filter.
 
   it("detects replay-safe planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
@@ -612,11 +654,65 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Act now");
   });
 
-  it("allows one retry by default and two retries for strict-agentic runs", () => {
+  it("allows one retry by default and three retries for strict-agentic runs", () => {
     expect(resolvePlanningOnlyRetryLimit("default")).toBe(1);
-    expect(resolvePlanningOnlyRetryLimit("strict-agentic")).toBe(2);
+    expect(resolvePlanningOnlyRetryLimit("strict-agentic")).toBe(3);
     expect(STRICT_AGENTIC_BLOCKED_TEXT).toContain("plan-only turns");
     expect(STRICT_AGENTIC_BLOCKED_TEXT).toContain("advanced the task");
+  });
+
+  it("escalates retry instruction urgency based on attempt index", () => {
+    expect(resolveEscalatingPlanningRetryInstruction(0)).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(resolveEscalatingPlanningRetryInstruction(1)).toBe(PLANNING_ONLY_RETRY_INSTRUCTION_FIRM);
+    expect(resolveEscalatingPlanningRetryInstruction(2)).toBe(
+      PLANNING_ONLY_RETRY_INSTRUCTION_FINAL,
+    );
+    expect(resolveEscalatingPlanningRetryInstruction(5)).toBe(
+      PLANNING_ONLY_RETRY_INSTRUCTION_FINAL,
+    );
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FIRM).toContain("CRITICAL");
+    // Final retry tone hardened: removed "execute or cancel" threat language.
+    // Now uses Hermes-style escalating reminder instead of ultimatum.
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).toContain("Final reminder");
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).toContain("third planning-only turn");
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).not.toContain("cancelled");
+  });
+
+  it("returns null for planning-only retry when plan mode is active", () => {
+    // Planning-only IS the desired state in plan mode — the retry guard
+    // must not pressure the agent to act. The agent should produce a thorough
+    // plan and call exit_plan_mode for approval.
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      planModeActive: true,
+      attempt: {
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+        clientToolCall: false,
+        yieldDetected: false,
+        didSendDeterministicApprovalPrompt: false,
+        didSendViaMessagingTool: false,
+        lastToolError: false,
+        lastAssistant: { stopReason: "stop" },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        toolMetas: [],
+      } as unknown as Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"],
+    });
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("ack fast-path is also disabled in plan mode (approval signal, not skip)", () => {
+    const result = resolveAckExecutionFastPathInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "ok do it",
+      planModeActive: true,
+    });
+    expect(result).toBeNull();
   });
 
   it("detects short execution approval prompts", () => {
