@@ -88,6 +88,30 @@ describe("thread-ownership plugin", () => {
       );
     });
 
+    it("prefers shared conversationId over non-canonical Slack target shapes", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const result = await hooks.message_sending(
+        {
+          content: "hello",
+          replyToId: "1234.5678",
+          to: "channel:C123",
+        },
+        { channelId: "slack", conversationId: "C123" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://localhost:8750/api/v1/ownership/C123/1234.5678",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ agent_id: "test-agent" }),
+        }),
+      );
+    });
+
     it("cancels when thread owned by another agent", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValue(
         new Response(JSON.stringify({ owner: "other-agent" }), { status: 409 }),
@@ -130,6 +154,29 @@ describe("thread-ownership plugin", () => {
       // Now send in the same thread -- should skip the ownership HTTP call.
       const result = await hooks.message_sending(
         { content: "Sure!", replyToId: "9999.0001", metadata: { channelId: "C456" }, to: "C456" },
+        { channelId: "slack", conversationId: "C456" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("tracks mentions under the shared conversationId when inbound metadata is non-canonical", async () => {
+      await hooks.message_received(
+        {
+          content: "Hey @TestBot help me",
+          threadId: "9999.0002",
+          metadata: { channelId: "channel:C456" },
+        },
+        { channelId: "slack", conversationId: "C456" },
+      );
+
+      const result = await hooks.message_sending(
+        {
+          content: "Sure!",
+          replyToId: "9999.0002",
+          to: "channel:C456",
+        },
         { channelId: "slack", conversationId: "C456" },
       );
 

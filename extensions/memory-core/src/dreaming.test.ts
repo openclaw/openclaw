@@ -32,7 +32,6 @@ type DreamingPluginApiTestDouble = {
   pluginConfig: Record<string, unknown>;
   logger: ReturnType<typeof createLogger>;
   runtime: unknown;
-  registerHook: (event: string, handler: (event: unknown) => unknown) => void;
   on: ReturnType<typeof vi.fn>;
 };
 
@@ -739,7 +738,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -805,7 +803,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -875,7 +872,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -963,7 +959,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1025,7 +1020,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1077,7 +1071,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1129,7 +1122,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1192,7 +1184,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1231,7 +1222,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: vi.fn(),
     };
 
@@ -1292,7 +1282,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 

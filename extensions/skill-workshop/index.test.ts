@@ -176,6 +176,28 @@ describe("skill-workshop", () => {
     expect(logger.info).toHaveBeenCalledWith("skill-workshop: applied animated-gif-workflow");
   });
 
+  it("emits prompt-build guidance through the registered hook", async () => {
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "auto" },
+      on,
+    });
+
+    plugin.register(api);
+
+    const hook = on.mock.calls.find((call) => call[0] === "before_prompt_build")?.[1];
+    expect(hook).toBeTypeOf("function");
+
+    await expect(hook?.({}, {})).resolves.toEqual({
+      prependSystemContext: expect.stringContaining(
+        "Auto mode: apply safe workspace-skill updates",
+      ),
+    });
+    await expect(hook?.({}, {})).resolves.toEqual({
+      prependSystemContext: expect.stringContaining("<skill_workshop>"),
+    });
+  });
+
   it("lets explicit tool suggestions stay pending in auto mode", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();

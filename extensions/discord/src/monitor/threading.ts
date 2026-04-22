@@ -1,4 +1,4 @@
-import { ChannelType, type Client } from "@buape/carbon";
+import { ChannelType, type Client, type MessageCreateListener } from "@buape/carbon";
 import { Routes, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import {
   resolveChannelModelOverride,
@@ -15,7 +15,6 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import { resolveDiscordChannelNameSafe } from "./channel-access.js";
-import type { DiscordMessageEvent } from "./listeners.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordEmbedText,
@@ -80,6 +79,7 @@ type DiscordThreadStarterRestMessage = {
   author?: DiscordThreadStarterRestAuthor | null;
   timestamp?: string | null;
 };
+type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
 // Cache entry with timestamp for TTL-based eviction
 type DiscordThreadStarterCacheEntry = {
