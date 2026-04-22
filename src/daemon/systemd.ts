@@ -54,6 +54,17 @@ function resolveSystemdServiceName(env: GatewayServiceEnv): string {
   if (override) {
     return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
   }
+  // Legacy `clawdbot-gateway.service` units expose CLAWDBOT_SYSTEMD_UNIT but
+  // not the newer OPENCLAW_SYSTEMD_UNIT. Honor it for status/restart/stop so
+  // tooling and user-facing messages report the unit that actually ran instead
+  // of the canonical name. New installs continue to use the canonical name via
+  // resolveGatewaySystemdServiceName.
+  const legacyOverride = env.CLAWDBOT_SYSTEMD_UNIT?.trim();
+  if (legacyOverride) {
+    return legacyOverride.endsWith(".service")
+      ? legacyOverride.slice(0, -".service".length)
+      : legacyOverride;
+  }
   return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
 }
 

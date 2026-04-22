@@ -17,6 +17,9 @@ const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+// Cap the normalized final-answer surfaced to the parent. Larger than the
+// snippet preview, but bounded so a runaway transcript cannot flood the parent.
+const FINAL_ANSWER_MAX_CHARS = 6_000;
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -30,6 +33,43 @@ function truncate(value: string, maxChars: number): string {
     return value.slice(0, maxChars);
   }
   return `${value.slice(0, maxChars - 1)}…`;
+}
+
+// Normalize a multi-delta accumulation for parent-visible final emit.
+// Preserves newlines (so multi-line key/value outputs survive), strips
+// per-line trailing whitespace, collapses runs of >2 blank lines, and
+// hard-caps total length at the line boundary nearest the limit.
+function normalizeFinalAnswerText(value: string, maxChars: number): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const lines = trimmed
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/u, ""));
+  const compacted: string[] = [];
+  let consecutiveBlank = 0;
+  for (const line of lines) {
+    if (line === "") {
+      consecutiveBlank += 1;
+      if (consecutiveBlank > 1) {
+        continue;
+      }
+    } else {
+      consecutiveBlank = 0;
+    }
+    compacted.push(line);
+  }
+  const joined = compacted.join("\n").trim();
+  if (joined.length <= maxChars) {
+    return joined;
+  }
+  // Truncate at a line boundary when possible to avoid mid-line cuts.
+  const slice = joined.slice(0, maxChars - 1);
+  const lastNewline = slice.lastIndexOf("\n");
+  const cut = lastNewline > maxChars / 2 ? slice.slice(0, lastNewline).replace(/\s+$/u, "") : slice;
+  return `${cut}\n…`;
 }
 
 function toFiniteNumber(value: unknown): number | undefined {
@@ -220,6 +260,11 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   let disposed = false;
   let pendingText = "";
+  // Accumulate the full child final-answer text so the parent can be handed a
+  // single coherent message at end-of-run, instead of relying on truncated
+  // mid-flight snippets. This is in-memory only and bounded by
+  // FINAL_ANSWER_MAX_CHARS at emit time.
+  let accumulatedFinalText = "";
   let lastProgressAt = Date.now();
   let stallNotified = false;
   let flushTimer: NodeJS.Timeout | undefined;
@@ -345,6 +390,12 @@ export function startAcpSpawnParentStreamRelay(params: {
 
       lastProgressAt = Date.now();
       pendingText += delta;
+      // Keep the full final-answer transcript with newlines preserved so the
+      // end-of-run emit can hand the parent a coherent message instead of a
+      // collapsed snippet. Bounded so a runaway transcript stays in memory.
+      if (accumulatedFinalText.length < FINAL_ANSWER_MAX_CHARS * 2) {
+        accumulatedFinalText += delta;
+      }
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
       }
@@ -363,7 +414,15 @@ export function startAcpSpawnParentStreamRelay(params: {
     const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
-      flushPending();
+      // Drop the in-flight snippet (it would just be a noisy duplicate of the
+      // final emit) and surface the normalized full final answer instead.
+      pendingText = "";
+      clearFlushTimer();
+      const finalAnswer = normalizeFinalAnswerText(accumulatedFinalText, FINAL_ANSWER_MAX_CHARS);
+      if (finalAnswer) {
+        logEvent("final_answer", { text: finalAnswer });
+        emit(`${relayLabel} final:\n${finalAnswer}`, `${contextPrefix}:final`);
+      }
       const startedAt = toFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
       );
@@ -385,7 +444,19 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (phase === "error") {
-      flushPending();
+      pendingText = "";
+      clearFlushTimer();
+      // Surface whatever the child produced before the failure so the parent
+      // can decide whether to retry or fall back, instead of getting only a
+      // bare error string.
+      const partial = normalizeFinalAnswerText(accumulatedFinalText, FINAL_ANSWER_MAX_CHARS);
+      if (partial) {
+        logEvent("partial_answer", { text: partial });
+        emit(
+          `${relayLabel} partial output before failure:\n${partial}`,
+          `${contextPrefix}:partial`,
+        );
+      }
       const errorText = normalizeOptionalString(
         (event.data as { error?: unknown } | undefined)?.error,
       );

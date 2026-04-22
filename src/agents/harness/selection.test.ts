@@ -6,7 +6,12 @@ import type {
   EmbeddedRunAttemptResult,
 } from "../pi-embedded-runner/run/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
-import { runAgentHarnessAttemptWithFallback, selectAgentHarness } from "./selection.js";
+import {
+  clearHarnessSelectionDiagnosticsForTests,
+  readRecentHarnessSelectionDiagnostics,
+  runAgentHarnessAttemptWithFallback,
+  selectAgentHarness,
+} from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
 const piRunAttempt = vi.fn(async () => createAttemptResult("pi"));
@@ -25,6 +30,7 @@ const originalHarnessFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
 
 afterEach(() => {
   clearAgentHarnesses();
+  clearHarnessSelectionDiagnosticsForTests();
   piRunAttempt.mockClear();
   if (originalRuntime == null) {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
@@ -181,5 +187,55 @@ describe("selectAgentHarness", () => {
     expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6", config }).id).toBe(
       "pi",
     );
+  });
+});
+
+describe("harness selection diagnostics", () => {
+  it("records a fallback event when a forced harness is not registered", () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "codex";
+    const before = readRecentHarnessSelectionDiagnostics().length;
+
+    const harness = selectAgentHarness({
+      provider: "codex",
+      modelId: "gpt-5.4",
+      agentId: "codex",
+      sessionKey: "agent:codex:acp:abcd",
+    });
+
+    expect(harness.id).toBe("pi");
+    const diagnostics = readRecentHarnessSelectionDiagnostics();
+    expect(diagnostics.length).toBe(before + 1);
+    const last = diagnostics[diagnostics.length - 1];
+    expect(last?.requestedRuntime).toBe("codex");
+    expect(last?.selectedHarnessId).toBe("pi");
+    expect(last?.fallbackUsed).toBe(true);
+    expect(last?.fallbackReason).toBe("requested-not-registered");
+    expect(last?.agentId).toBe("codex");
+    expect(last?.sessionKey).toBe("agent:codex:acp:abcd");
+  });
+
+  it("records a non-fallback event when a forced harness is registered", () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "codex";
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    const harness = selectAgentHarness({
+      provider: "codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(harness.id).toBe("codex");
+    const diagnostics = readRecentHarnessSelectionDiagnostics();
+    const last = diagnostics[diagnostics.length - 1];
+    expect(last?.selectedHarnessId).toBe("codex");
+    expect(last?.fallbackUsed).toBe(false);
+    expect(last?.fallbackReason).toBeUndefined();
   });
 });
