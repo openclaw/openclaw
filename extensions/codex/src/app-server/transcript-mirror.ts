@@ -5,11 +5,13 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   acquireSessionWriteLock,
   emitSessionTranscriptUpdate,
+  runAgentHarnessBeforeMessageWriteHook,
 } from "openclaw/plugin-sdk/agent-harness";
 
 export async function mirrorCodexAppServerTranscript(params: {
   sessionFile: string;
   sessionKey?: string;
+  agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
 }): Promise<void> {
@@ -39,7 +41,15 @@ export async function mirrorCodexAppServerTranscript(params: {
         ...message,
         ...(idempotencyKey ? { idempotencyKey } : {}),
       } as Parameters<SessionManager["appendMessage"]>[0];
-      sessionManager.appendMessage(transcriptMessage);
+      const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+        message: transcriptMessage,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
+      if (!nextMessage) {
+        continue;
+      }
+      sessionManager.appendMessage(nextMessage as Parameters<SessionManager["appendMessage"]>[0]);
       if (idempotencyKey) {
         existingIdempotencyKeys.add(idempotencyKey);
       }
