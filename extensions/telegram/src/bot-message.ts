@@ -112,7 +112,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       const effectiveReplyToMode = resolveTelegramReplyToMode(
         cfg,
         context.route?.accountId,
-        context.isGroup ? "group" : "direct",
+        context.msg.chat.type === "channel" ? "channel" : context.isGroup ? "group" : "direct",
       );
       await dispatchTelegramMessage({
         context,
