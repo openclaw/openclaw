@@ -8,6 +8,7 @@ import {
 } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
 export function createChangedCheckPlan(result) {
@@ -184,7 +185,17 @@ function printPlan(result, plan, options) {
 }
 
 async function runPnpm(command, timings) {
-  return await runCommand({ ...command, bin: "pnpm" }, timings);
+  const runner = resolvePnpmRunner({ pnpmArgs: command.args });
+  return await runCommand(
+    {
+      ...command,
+      bin: runner.command,
+      args: runner.args,
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    },
+    timings,
+  );
 }
 
 async function runNode(command, timings) {
@@ -196,7 +207,8 @@ async function runCommand(command, timings) {
   console.error(`\n[check:changed] ${command.name}`);
   const child = spawn(command.bin, command.args, {
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: command.shell ?? process.platform === "win32",
+    windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
 
   return await new Promise((resolve) => {

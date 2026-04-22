@@ -41,6 +41,10 @@ function installPreCommitFixture(dir: string): string {
       mode: 0o755,
     },
   );
+  symlinkSync(
+    path.join(process.cwd(), "scripts", "pre-commit", "run-pnpm-command.sh"),
+    path.join(dir, "scripts", "pre-commit", "run-pnpm-command.sh"),
+  );
   writeFileSync(
     path.join(dir, "scripts", "pre-commit", "filter-staged-files.mjs"),
     "process.exit(0);\n",
@@ -106,6 +110,29 @@ describe("git-hooks/pre-commit (integration)", () => {
     });
 
     expect(run(dir, "cat", ["pnpm-args.txt"])).toBe("check:changed --staged");
+  });
+
+  it("falls back to corepack pnpm when pnpm is not on PATH", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-corepack-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    const fakeBinDir = installPreCommitFixture(dir);
+    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    writeExecutable(
+      fakeBinDir,
+      "corepack",
+      '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" > corepack-args.txt\nif [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then\n  exit 0\nfi\n',
+    );
+
+    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
+    run(dir, "git", ["add", "--", "tracked.txt"]);
+
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(run(dir, "cat", ["corepack-args.txt"])).toBe("pnpm check:changed --staged");
   });
 
   it("skips changed-scope check when FAST_COMMIT is enabled", () => {
