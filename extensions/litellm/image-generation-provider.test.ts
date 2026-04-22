@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
+
+type MockResolvedProviderHttpRequestConfig = {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy: PinnedDispatcherPolicy | undefined;
+};
 
 const {
   resolveApiKeyForProviderMock,
@@ -10,12 +18,14 @@ const {
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "litellm-key" })),
   postJsonRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: Boolean(params.allowPrivateNetwork),
-    headers: new Headers(params.defaultHeaders),
-    dispatcherPolicy: undefined,
-  })),
+  resolveProviderHttpRequestConfigMock: vi.fn(
+    (params): MockResolvedProviderHttpRequestConfig => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+      allowPrivateNetwork: Boolean(params.allowPrivateNetwork),
+      headers: new Headers(params.defaultHeaders),
+      dispatcherPolicy: undefined,
+    }),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -39,7 +49,7 @@ function mockGeneratedPngResponse() {
   });
 }
 
-const dispatcherPolicy = { mode: "test-dispatcher" };
+const dispatcherPolicy: PinnedDispatcherPolicy = { mode: "direct" };
 
 describe("litellm image generation provider", () => {
   afterEach(() => {
