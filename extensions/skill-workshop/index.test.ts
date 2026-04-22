@@ -226,6 +226,19 @@ describe("skill-workshop", () => {
     expect(on).not.toHaveBeenCalledWith("agent_end", expect.any(Function));
   });
 
+  it("skips agent_end hook wiring when review mode is off", () => {
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { reviewMode: "off" },
+      on,
+    });
+
+    plugin.register(api);
+
+    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expect(on).not.toHaveBeenCalledWith("agent_end", expect.any(Function));
+  });
+
   it("lets explicit tool suggestions stay pending in auto mode", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();

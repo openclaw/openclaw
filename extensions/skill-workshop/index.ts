@@ -25,7 +25,7 @@ export default definePluginEntry({
       prependSystemContext: buildWorkshopGuidance(config),
     }));
 
-    if (config.autoCapture) {
+    if (config.autoCapture && config.reviewMode !== "off") {
       api.on("agent_end", async (event, ctx) => {
         if (!event.success) {
           return;
