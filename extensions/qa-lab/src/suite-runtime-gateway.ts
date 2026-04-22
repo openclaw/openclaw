@@ -3,6 +3,10 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
+const QA_CONTROL_PLANE_WRITE_MAX_REQUESTS = 3;
+const QA_CONTROL_PLANE_WRITE_WINDOW_MS = 60_000;
+const qaControlPlaneWriteWindows = new Map<string, { count: number; windowStartMs: number }>();
+
 async function fetchJson<T>(url: string): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
@@ -106,6 +110,52 @@ function getGatewayRetryAfterMs(error: unknown) {
     }
   }
   return null;
+}
+
+function resolveQaControlPlaneWriteWindowKey(env: Pick<QaSuiteRuntimeEnv, "gateway">): string {
+  return `${env.gateway.baseUrl}|${env.gateway.tempRoot}`;
+}
+
+function consumeLocalConfigWriteBudget(params: {
+  bucket?: { count: number; windowStartMs: number };
+  nowMs: number;
+}): {
+  state: { count: number; windowStartMs: number };
+  waitMs: number;
+} {
+  const bucket = params.bucket;
+  if (!bucket || params.nowMs - bucket.windowStartMs >= QA_CONTROL_PLANE_WRITE_WINDOW_MS) {
+    return {
+      state: { count: 1, windowStartMs: params.nowMs },
+      waitMs: 0,
+    };
+  }
+  if (bucket.count < QA_CONTROL_PLANE_WRITE_MAX_REQUESTS) {
+    return {
+      state: { count: bucket.count + 1, windowStartMs: bucket.windowStartMs },
+      waitMs: 0,
+    };
+  }
+  return {
+    state: bucket,
+    waitMs: Math.max(0, bucket.windowStartMs + QA_CONTROL_PLANE_WRITE_WINDOW_MS - params.nowMs),
+  };
+}
+
+async function reserveLocalConfigWriteBudget(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
+  const key = resolveQaControlPlaneWriteWindowKey(env);
+  while (true) {
+    const nowMs = Date.now();
+    const { state, waitMs } = consumeLocalConfigWriteBudget({
+      bucket: qaControlPlaneWriteWindows.get(key),
+      nowMs,
+    });
+    if (waitMs <= 0) {
+      qaControlPlaneWriteWindows.set(key, state);
+      return;
+    }
+    await sleep(waitMs + 250);
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -234,6 +284,7 @@ async function runConfigMutation(params: {
       return { ok: true, noop: true };
     }
     try {
+      await reserveLocalConfigWriteBudget(params.env);
       const result = await params.env.gateway.call(
         params.action,
         {
@@ -323,6 +374,7 @@ async function applyConfig(params: {
 }
 
 export {
+  consumeLocalConfigWriteBudget,
   applyConfig,
   fetchJson,
   formatGatewayPrimaryErrorText,

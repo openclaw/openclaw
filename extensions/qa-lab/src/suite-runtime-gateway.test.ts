@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  consumeLocalConfigWriteBudget,
   getGatewayRetryAfterMs,
   isConfigHashConflict,
   isConfigPatchNoopForSnapshot,
@@ -61,5 +62,32 @@ describe("qa suite gateway helpers", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("allows the first three local config writes inside the gateway window", () => {
+    let bucket: { count: number; windowStartMs: number } | undefined;
+    const first = consumeLocalConfigWriteBudget({ bucket, nowMs: 1_000 });
+    bucket = first.state;
+    const second = consumeLocalConfigWriteBudget({ bucket, nowMs: 2_000 });
+    bucket = second.state;
+    const third = consumeLocalConfigWriteBudget({ bucket, nowMs: 3_000 });
+
+    expect(first.waitMs).toBe(0);
+    expect(second.waitMs).toBe(0);
+    expect(third.waitMs).toBe(0);
+    expect(third.state).toEqual({ count: 3, windowStartMs: 1_000 });
+  });
+
+  it("waits for the local config write window to reset before a fourth write", () => {
+    const bucket = { count: 3, windowStartMs: 1_000 };
+
+    expect(consumeLocalConfigWriteBudget({ bucket, nowMs: 30_000 })).toEqual({
+      state: bucket,
+      waitMs: 31_000,
+    });
+    expect(consumeLocalConfigWriteBudget({ bucket, nowMs: 61_001 })).toEqual({
+      state: { count: 1, windowStartMs: 61_001 },
+      waitMs: 0,
+    });
   });
 });
