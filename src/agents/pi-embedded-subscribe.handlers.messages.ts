@@ -35,6 +35,7 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripFinalTagsFromMessage,
 } from "./pi-embedded-utils.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
@@ -625,6 +626,7 @@ export function handleMessageEnd(
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
+  stripFinalTagsFromMessage(assistantMessage);
 
   const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));

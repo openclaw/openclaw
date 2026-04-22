@@ -7,6 +7,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
+  stripFinalTagsFromMessage,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -823,6 +824,68 @@ describe("promoteThinkingTagsToBlocks", () => {
     });
     promoteThinkingTagsToBlocks(msg);
     expect(msg.content).toEqual([{ type: "text", text: "hello world" }]);
+  });
+});
+
+describe("stripFinalTagsFromMessage", () => {
+  it("strips <final> and </final> tags from text blocks", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "<final>Hello world!</final>" }],
+      timestamp: Date.now(),
+    });
+    stripFinalTagsFromMessage(msg);
+    expect(msg.content).toEqual([{ type: "text", text: "Hello world!" }]);
+  });
+
+  it("strips self-closing <final/> variant", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Hello<final/>" }],
+      timestamp: Date.now(),
+    });
+    stripFinalTagsFromMessage(msg);
+    expect(msg.content).toEqual([{ type: "text", text: "Hello" }]);
+  });
+
+  it("preserves non-text blocks", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "internal reasoning" },
+        { type: "text", text: "<final>visible</final>" },
+      ],
+      timestamp: Date.now(),
+    });
+    stripFinalTagsFromMessage(msg);
+    expect(msg.content).toEqual([
+      { type: "thinking", thinking: "internal reasoning" },
+      { type: "text", text: "visible" },
+    ]);
+  });
+
+  it("removes empty text blocks after stripping", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "<final>" },
+        { type: "text", text: "Hello" },
+        { type: "text", text: "</final>" },
+      ],
+      timestamp: Date.now(),
+    });
+    stripFinalTagsFromMessage(msg);
+    expect(msg.content).toEqual([{ type: "text", text: "Hello" }]);
+  });
+
+  it("does not mutate message without final tags", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "no tags here" }],
+      timestamp: Date.now(),
+    });
+    stripFinalTagsFromMessage(msg);
+    expect(msg.content).toEqual([{ type: "text", text: "no tags here" }]);
   });
 });
 
