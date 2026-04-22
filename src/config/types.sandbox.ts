@@ -17,6 +17,8 @@ export type SandboxDockerSettings = {
   user?: string;
   /** Drop Linux capabilities. */
   capDrop?: string[];
+  /** Enable Docker no-new-privileges hardening (default: true). Set false only for known-incompatible hosts. */
+  noNewPrivileges?: boolean;
   /** Extra environment variables for sandbox exec. */
   env?: Record<string, string>;
   /** Optional setup command run once after container creation (array entries are joined by newline). */

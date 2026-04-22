@@ -109,6 +109,7 @@ export const SandboxDockerSchema = z
     network: z.string().optional(),
     user: z.string().optional(),
     capDrop: z.array(z.string()).optional(),
+    noNewPrivileges: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
     setupCommand: z
       .union([z.string(), z.array(z.string())])

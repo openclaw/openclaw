@@ -178,6 +178,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",
           "containerPrefix": "openclaw-sbx-",
+          "noNewPrivileges": true,
           // ... more Docker options
         },
         "prune": {
@@ -189,6 +190,24 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
   },
 }
 ```
+
+If your Docker host/kernel rejects `--security-opt no-new-privileges` (for example, sandbox containers exit immediately with `exec /usr/bin/sleep: operation not permitted`), you can explicitly opt out:
+
+```jsonc
+{
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "docker": {
+          "noNewPrivileges": false,
+        },
+      },
+    },
+  },
+}
+```
+
+Treat this as a host-compatibility escape hatch: it weakens sandbox hardening and should only be used on trusted single-tenant setups where the default flag is known to be incompatible.
 
 ## See Also
 

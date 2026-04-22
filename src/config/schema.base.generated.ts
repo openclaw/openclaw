@@ -5349,6 +5349,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                         },
                       },
+                      noNewPrivileges: {
+                        type: "boolean",
+                        title: "Sandbox Docker No New Privileges",
+                        description:
+                          "Enable Docker no-new-privileges hardening for sandbox containers (default: true). Disable only on trusted hosts where this flag is known to break container exec.",
+                      },
                       dangerouslyAllowReservedContainerTargets: {
                         type: "boolean",
                       },
@@ -6682,6 +6688,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           items: {
                             type: "string",
                           },
+                        },
+                        noNewPrivileges: {
+                          type: "boolean",
+                          title: "Agent Sandbox Docker No New Privileges",
+                          description:
+                            "Per-agent override for Docker no-new-privileges sandbox hardening. Disable only on trusted hosts where this flag is known to break container exec.",
                         },
                         dangerouslyAllowReservedContainerTargets: {
                           type: "boolean",
@@ -26007,6 +26019,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
       tags: ["storage"],
     },
+    "agents.defaults.sandbox.docker.noNewPrivileges": {
+      label: "Sandbox Docker No New Privileges",
+      help: "Enable Docker no-new-privileges hardening for sandbox containers (default: true). Disable only on trusted hosts where this flag is known to break container exec.",
+      tags: ["security", "storage", "advanced"],
+    },
     "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin": {
       label: "Sandbox Docker Allow Container Namespace Join",
       help: "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
@@ -27074,6 +27091,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Sandbox Browser CDP Source Port Range",
       help: "Per-agent override for CDP source CIDR allowlist.",
       tags: ["storage"],
+    },
+    "agents.list[].sandbox.docker.noNewPrivileges": {
+      label: "Agent Sandbox Docker No New Privileges",
+      help: "Per-agent override for Docker no-new-privileges sandbox hardening. Disable only on trusted hosts where this flag is known to break container exec.",
+      tags: ["security", "storage", "advanced"],
     },
     "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin": {
       label: "Agent Sandbox Docker Allow Container Namespace Join",

@@ -133,6 +133,36 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("uses agent override precedence for noNewPrivileges and defaults it to true", () => {
+    const defaulted = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {},
+      agentDocker: {},
+    });
+    expect(defaulted.noNewPrivileges).toBe(true);
+
+    const inherited = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { noNewPrivileges: false },
+      agentDocker: {},
+    });
+    expect(inherited.noNewPrivileges).toBe(false);
+
+    const overridden = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { noNewPrivileges: true },
+      agentDocker: { noNewPrivileges: false },
+    });
+    expect(overridden.noNewPrivileges).toBe(false);
+
+    const sharedScope = resolveSandboxDockerConfig({
+      scope: "shared",
+      globalDocker: { noNewPrivileges: true },
+      agentDocker: { noNewPrivileges: false },
+    });
+    expect(sharedScope.noNewPrivileges).toBe(true);
+  });
+
   it("rejects seccomp unconfined via Zod schema validation", () => {
     const res = validateConfigObject({
       agents: {

@@ -89,6 +89,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
                 docker: {
                   dangerouslyAllowReservedContainerTargets: true,
                   dangerouslyAllowContainerNamespaceJoin: true,
+                  noNewPrivileges: false,
                 },
               },
             },
@@ -122,6 +123,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       expect.arrayContaining([
         "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
         "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
+        "agents.defaults.sandbox.docker.noNewPrivileges=false",
         'agents.list[id="worker"].sandbox.docker.dangerouslyAllowExternalBindSources=true',
         "hooks.allowRequestSessionKey=true",
         "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=true",
