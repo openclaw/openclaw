@@ -40,8 +40,12 @@ export type RunEmbeddedPiAgentParams = {
   groupChannel?: string | null;
   /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
   groupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  memberRoleIds?: string[];
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
+  isCanonicalWorkspace?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -62,6 +66,8 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Keep the message tool available even when a narrow profile would omit it. */
+  forceMessageTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   sessionFile: string;

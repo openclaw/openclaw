@@ -317,6 +317,7 @@ export type ChannelLogoutResult = {
 export type ChannelLoginWithQrStartResult = {
   qrDataUrl?: string;
   message: string;
+  connected?: boolean;
 };
 
 export type ChannelLoginWithQrWaitResult = {
@@ -335,6 +336,7 @@ export type ChannelLogoutContext<ResolvedAccount = unknown> = {
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
+  /** Keep gateway auth bypass resolution mirrored through a lightweight top-level `gateway-auth-api.ts` artifact. */
   resolveGatewayAuthBypassPaths?: (params: { cfg: OpenClawConfig }) => string[];
   loginWithQrStart?: (params: {
     accountId?: string;
@@ -760,7 +762,7 @@ export type ChannelConversationBindingSupport = {
     conversationId: string;
     parentConversationId?: string;
   } | null;
-  buildBoundReplyChannelData?: (params: {
+  buildBoundReplyPayload?: (params: {
     operation: "acp-spawn";
     placement: "current" | "child";
     conversation: {
@@ -769,7 +771,10 @@ export type ChannelConversationBindingSupport = {
       conversationId: string;
       parentConversationId?: string;
     };
-  }) => ReplyPayload["channelData"] | null | Promise<ReplyPayload["channelData"] | null>;
+  }) =>
+    | Pick<ReplyPayload, "channelData" | "delivery" | "presentation">
+    | null
+    | Promise<Pick<ReplyPayload, "channelData" | "delivery" | "presentation"> | null>;
   buildModelOverrideParentCandidates?: (params: {
     parentConversationId?: string | null;
   }) => string[] | null | undefined;

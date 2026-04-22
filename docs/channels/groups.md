@@ -82,12 +82,12 @@ If you want...
 
 Yes — this works well if your “personal” traffic is **DMs** and your “public” traffic is **groups**.
 
-Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in Docker while your main DM session stays on-host.
+Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in the configured sandbox backend while your main DM session stays on-host. Docker is the default backend if you do not choose one.
 
 This gives you one agent “brain” (shared workspace + memory), but two execution postures:
 
 - **DMs**: full tools (host)
-- **Groups**: sandbox + restricted tools (Docker)
+- **Groups**: sandbox + restricted tools
 
 > If you need truly separate workspaces/personas (“personal” and “public” must never mix), use a second agent + bindings. See [Multi-Agent Routing](/concepts/multi-agent).
 
@@ -407,6 +407,10 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - Prefer `chat_id:<id>` when routing or allowlisting.
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
+
+## WhatsApp system prompts
+
+See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics.
 
 ## WhatsApp specifics
 

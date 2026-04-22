@@ -14,7 +14,8 @@ import {
   type MatrixQaFaultProxyRule,
 } from "../../substrate/fault-proxy.js";
 import {
-  MATRIX_QA_E2EE_ROOM_KEY,
+  buildMatrixQaE2eeScenarioRoomKey,
+  type MatrixQaE2eeScenarioId,
   MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
 } from "./scenario-catalog.js";
@@ -37,21 +38,6 @@ import {
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaReplyArtifact, MatrixQaScenarioExecution } from "./scenario-types.js";
 
-type MatrixQaE2eeScenarioId =
-  | "matrix-e2ee-artifact-redaction"
-  | "matrix-e2ee-basic-reply"
-  | "matrix-e2ee-bootstrap-success"
-  | "matrix-e2ee-device-sas-verification"
-  | "matrix-e2ee-dm-sas-verification"
-  | "matrix-e2ee-key-bootstrap-failure"
-  | "matrix-e2ee-media-image"
-  | "matrix-e2ee-qr-verification"
-  | "matrix-e2ee-recovery-key-lifecycle"
-  | "matrix-e2ee-restart-resume"
-  | "matrix-e2ee-stale-device-hygiene"
-  | "matrix-e2ee-thread-follow-up"
-  | "matrix-e2ee-verification-notice-no-trigger";
-
 const MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT = "/_matrix/client/v3/room_keys/version";
 const MATRIX_QA_ROOM_KEY_BACKUP_FAULT_RULE_ID = "room-key-backup-version-unavailable";
 
@@ -70,6 +56,17 @@ function requireMatrixQaPassword(context: MatrixQaScenarioContext, actor: "drive
     throw new Error(`Matrix E2EE ${actor} password is required for this scenario`);
   }
   return password;
+}
+
+function resolveMatrixQaE2eeScenarioGroupRoom(
+  context: MatrixQaScenarioContext,
+  scenarioId: MatrixQaE2eeScenarioId,
+) {
+  const roomKey = buildMatrixQaE2eeScenarioRoomKey(scenarioId);
+  return {
+    roomKey,
+    roomId: resolveMatrixQaScenarioRoomId(context, roomKey),
+  };
 }
 
 function assertMatrixQaBootstrapSucceeded(label: string, result: MatrixQaE2eeBootstrapResult) {
@@ -476,7 +473,7 @@ async function runMatrixQaE2eeTopLevelScenario(
     tokenPrefix: string;
   },
 ) {
-  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_E2EE_ROOM_KEY);
+  const { roomId, roomKey } = resolveMatrixQaE2eeScenarioGroupRoom(context, params.scenarioId);
   return await withMatrixQaE2eeDriver(context, params.scenarioId, async (client) => {
     const startSince = await client.prime();
     const token = buildMatrixQaToken(params.tokenPrefix);
@@ -502,6 +499,7 @@ async function runMatrixQaE2eeTopLevelScenario(
       driverEventId,
       reply,
       roomId,
+      roomKey,
       since: matched.since ?? startSince,
       token,
     };
@@ -519,11 +517,11 @@ export async function runMatrixQaE2eeBasicReplyScenario(
     artifacts: {
       driverEventId: result.driverEventId,
       reply: result.reply,
-      roomKey: MATRIX_QA_E2EE_ROOM_KEY,
+      roomKey: result.roomKey,
       roomId: result.roomId,
     },
     details: [
-      `encrypted room key: ${MATRIX_QA_E2EE_ROOM_KEY}`,
+      `encrypted room key: ${result.roomKey}`,
       `encrypted room id: ${result.roomId}`,
       `driver event: ${result.driverEventId}`,
       ...buildMatrixReplyDetails("E2EE reply", result.reply),
@@ -534,7 +532,10 @@ export async function runMatrixQaE2eeBasicReplyScenario(
 export async function runMatrixQaE2eeThreadFollowUpScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_E2EE_ROOM_KEY);
+  const { roomId, roomKey } = resolveMatrixQaE2eeScenarioGroupRoom(
+    context,
+    "matrix-e2ee-thread-follow-up",
+  );
   const result = await withMatrixQaE2eeDriver(
     context,
     "matrix-e2ee-thread-follow-up",
@@ -582,11 +583,11 @@ export async function runMatrixQaE2eeThreadFollowUpScenario(
       driverEventId: result.driverEventId,
       reply: result.reply,
       rootEventId: result.rootEventId,
-      roomKey: MATRIX_QA_E2EE_ROOM_KEY,
+      roomKey,
       roomId,
     },
     details: [
-      `encrypted room key: ${MATRIX_QA_E2EE_ROOM_KEY}`,
+      `encrypted room key: ${roomKey}`,
       `encrypted room id: ${roomId}`,
       `thread root event: ${result.rootEventId}`,
       `mention trigger event: ${result.driverEventId}`,
@@ -633,7 +634,10 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
     context,
     "matrix-e2ee-recovery-key-lifecycle",
     async (client) => {
-      const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_E2EE_ROOM_KEY);
+      const { roomId } = resolveMatrixQaE2eeScenarioGroupRoom(
+        context,
+        "matrix-e2ee-recovery-key-lifecycle",
+      );
       const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
         client,
         label: "driver",
@@ -1042,11 +1046,11 @@ export async function runMatrixQaE2eeRestartResumeScenario(
       recoveredDriverEventId: recovered.driverEventId,
       recoveredReply: recovered.reply,
       restartSignal: "gateway-restart",
-      roomKey: MATRIX_QA_E2EE_ROOM_KEY,
+      roomKey: recovered.roomKey,
       roomId: recovered.roomId,
     },
     details: [
-      `encrypted room key: ${MATRIX_QA_E2EE_ROOM_KEY}`,
+      `encrypted room key: ${recovered.roomKey}`,
       `encrypted room id: ${recovered.roomId}`,
       `pre-restart event: ${first.driverEventId}`,
       ...buildMatrixReplyDetails("pre-restart reply", first.reply),
@@ -1059,7 +1063,10 @@ export async function runMatrixQaE2eeRestartResumeScenario(
 export async function runMatrixQaE2eeVerificationNoticeNoTriggerScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_E2EE_ROOM_KEY);
+  const { roomId, roomKey } = resolveMatrixQaE2eeScenarioGroupRoom(
+    context,
+    "matrix-e2ee-verification-notice-no-trigger",
+  );
   return await withMatrixQaE2eeDriver(
     context,
     "matrix-e2ee-verification-notice-no-trigger",
@@ -1096,11 +1103,11 @@ export async function runMatrixQaE2eeVerificationNoticeNoTriggerScenario(
         artifacts: {
           expectedNoReplyWindowMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
           noticeEventId,
-          roomKey: MATRIX_QA_E2EE_ROOM_KEY,
+          roomKey,
           roomId,
         },
         details: [
-          `encrypted room key: ${MATRIX_QA_E2EE_ROOM_KEY}`,
+          `encrypted room key: ${roomKey}`,
           `encrypted room id: ${roomId}`,
           `verification notice event: ${noticeEventId}`,
           `waited ${Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs)}ms with no SUT reply`,
@@ -1129,7 +1136,7 @@ export async function runMatrixQaE2eeArtifactRedactionScenario(
     artifacts: {
       driverEventId: result.driverEventId,
       reply: result.reply,
-      roomKey: MATRIX_QA_E2EE_ROOM_KEY,
+      roomKey: result.roomKey,
       roomId: result.roomId,
     },
     details: [
@@ -1144,7 +1151,10 @@ export async function runMatrixQaE2eeArtifactRedactionScenario(
 export async function runMatrixQaE2eeMediaImageScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_E2EE_ROOM_KEY);
+  const { roomId, roomKey } = resolveMatrixQaE2eeScenarioGroupRoom(
+    context,
+    "matrix-e2ee-media-image",
+  );
   return await withMatrixQaE2eeDriver(context, "matrix-e2ee-media-image", async (client) => {
     const startSince = await client.prime();
     const triggerBody = buildMatrixQaImageUnderstandingPrompt(context.sutUserId);
@@ -1187,11 +1197,11 @@ export async function runMatrixQaE2eeMediaImageScenario(
         attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
         driverEventId,
         reply,
-        roomKey: MATRIX_QA_E2EE_ROOM_KEY,
+        roomKey,
         roomId,
       },
       details: [
-        `encrypted room key: ${MATRIX_QA_E2EE_ROOM_KEY}`,
+        `encrypted room key: ${roomKey}`,
         `encrypted room id: ${roomId}`,
         `driver encrypted image event: ${driverEventId}`,
         `driver encrypted image filename: ${MATRIX_QA_IMAGE_ATTACHMENT_FILENAME}`,

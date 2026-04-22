@@ -34,6 +34,8 @@ import {
   normalizeOptionalString,
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDiscordChannelNameSafe } from "./channel-access.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -79,6 +81,7 @@ export type DispatchDiscordCommandInteractionParams = {
   sessionPrefix: string;
   preferFollowUp: boolean;
   threadBindings: ThreadBindingManager;
+  responseEphemeral?: boolean;
   suppressReplies?: boolean;
 };
 
@@ -254,7 +257,7 @@ async function resolveDiscordModelPickerRouteState(params: {
       client: interaction.client,
       threadChannel: {
         id: rawChannelId,
-        name: "name" in channel ? (channel.name as string | undefined) : undefined,
+        name: resolveDiscordChannelNameSafe(channel),
         parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
         parent: undefined,
       },
@@ -917,6 +920,7 @@ export async function handleDiscordCommandArgInteraction(params: {
     sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
+    responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
   });
 }
 

@@ -80,6 +80,8 @@ disposable server. It requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
 private group. The SUT bot must have a Telegram username, and bot-to-bot
 observation works best when both bots have Bot-to-Bot Communication Mode
 enabled in `@BotFather`.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
 
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:
@@ -107,9 +109,11 @@ inside the guest, runs `qa suite`, then copies the normal QA report and
 summary back into `.artifacts/qa-e2e/...` on the host.
 It reuses the same scenario-selection behavior as `qa suite` on the host.
 Host and Multipass suite runs execute multiple selected scenarios in parallel
-with isolated gateway workers by default, up to 64 workers or the selected
-scenario count. Use `--concurrency <count>` to tune the worker count, or
-`--concurrency 1` for serial execution.
+with isolated gateway workers by default. `qa-channel` defaults to concurrency
+4, capped by the selected scenario count. Use `--concurrency <count>` to tune
+the worker count, or `--concurrency 1` for serial execution.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
 guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest
@@ -120,7 +124,7 @@ can write back through the mounted workspace.
 Seed assets live in `qa/`:
 
 - `qa/scenarios/index.md`
-- `qa/scenarios/*.md`
+- `qa/scenarios/<theme>/*.md`
 
 These are intentionally in git so the QA plan is visible to both humans and the
 agent.
@@ -129,6 +133,7 @@ agent.
 the source of truth for one test run and should define:
 
 - scenario metadata
+- optional category, capability, lane, and risk metadata
 - docs and code refs
 - optional plugin requirements
 - optional gateway config patch
@@ -138,6 +143,10 @@ The reusable runtime surface that backs `qa-flow` is allowed to stay generic
 and cross-cutting. For example, markdown scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.
+
+Scenario files should be grouped by product capability rather than source tree
+folder. Keep scenario IDs stable when files move; use `docsRefs` and `codeRefs`
+for implementation traceability.
 
 The baseline list should stay broad enough to cover:
 
@@ -150,6 +159,22 @@ The baseline list should stay broad enough to cover:
 - subagent handoff
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
+
+## Provider mock lanes
+
+`qa suite` has two local provider mock lanes:
+
+- `mock-openai` is the scenario-aware OpenClaw mock. It remains the default
+  deterministic mock lane for repo-backed QA and parity gates.
+- `aimock` starts an AIMock-backed provider server for experimental protocol,
+  fixture, record/replay, and chaos coverage. It is additive and does not
+  replace the `mock-openai` scenario dispatcher.
+
+Provider-lane implementation lives under `extensions/qa-lab/src/providers/`.
+Each provider owns its defaults, local server startup, gateway model config,
+auth-profile staging needs, and live/mock capability flags. Shared suite and
+gateway code should route through the provider registry instead of branching on
+provider names.
 
 ## Transport adapters
 

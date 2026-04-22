@@ -40,6 +40,10 @@ import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenar
 
 type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
 
+const MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE =
+  /thread=true is unavailable because no channel plugin registered subagent_spawning hooks/i;
+const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
+
 function assertMatrixQaInReplyTarget(params: {
   actualEventId?: string;
   expectedEventId: string;
@@ -69,6 +73,14 @@ function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
     rootEventId: result.rootEventId,
     token: result.token,
   };
+}
+
+function failIfMatrixSubagentThreadHookError(event: MatrixQaObservedEvent) {
+  if (MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE.test(event.body ?? "")) {
+    throw new Error(
+      `Matrix subagent thread spawn hit missing hook error: ${event.body ?? "<empty>"}`,
+    );
+  }
 }
 
 function buildMatrixQaThreadDetailLines(params: {
@@ -281,6 +293,80 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
   } satisfies MatrixQaScenarioExecution;
 }
 
+export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioContext) {
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
+  const triggerBody = [
+    `${context.sutUserId} Use sessions_spawn for this QA check.`,
+    `task="Reply exactly \`${childToken}\`. This is the marker."`,
+    "label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=30",
+  ].join(" ");
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const intro = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) => {
+      failIfMatrixSubagentThreadHookError(event);
+      return (
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        event.type === "m.room.message" &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        /\bsession active\b/i.test(event.body ?? "") &&
+        /Messages here go directly to this session/i.test(event.body ?? "")
+      );
+    },
+    roomId: context.roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  const completion = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) => {
+      failIfMatrixSubagentThreadHookError(event);
+      return (
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        event.type === "m.room.message" &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        (event.body ?? "").includes(childToken) &&
+        event.relatesTo?.relType === "m.thread" &&
+        event.relatesTo.eventId === intro.event.eventId
+      );
+    },
+    roomId: context.roomId,
+    since: intro.since,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: completion.since,
+    startSince,
+  });
+  const subagentIntro = buildMatrixReplyArtifact(intro.event);
+  const subagentCompletion = buildMatrixReplyArtifact(completion.event, childToken);
+  return {
+    artifacts: {
+      driverEventId,
+      subagentCompletion,
+      subagentIntro,
+      threadRootEventId: intro.event.eventId,
+      threadToken: childToken,
+      triggerBody,
+    },
+    details: [
+      `driver event: ${driverEventId}`,
+      `subagent thread root event: ${intro.event.eventId}`,
+      ...buildMatrixReplyDetails("subagent intro", subagentIntro),
+      ...buildMatrixReplyDetails("subagent completion", subagentCompletion),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
 export async function runTopLevelReplyShapeScenario(context: MatrixQaScenarioContext) {
   const result = await runAssertedDriverTopLevelScenario({
     context,
@@ -381,6 +467,85 @@ export async function runObserverAllowlistOverrideScenario(context: MatrixQaScen
       `trigger sender: ${context.observerUserId}`,
       `driver event: ${driverEventId}`,
       ...buildMatrixReplyDetails("reply", reply),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runAllowlistHotReloadScenario(context: MatrixQaScenarioContext) {
+  if (!context.patchGatewayConfig) {
+    throw new Error("Matrix allowlist hot-reload scenario requires gateway config patching");
+  }
+  const accepted = await runTopologyScopedTopLevelScenario({
+    accessToken: context.observerAccessToken,
+    actorId: "observer",
+    actorUserId: context.observerUserId,
+    context,
+    roomKey: context.topology.defaultRoomKey,
+    tokenPrefix: "MATRIX_QA_GROUP_RELOAD_ACCEPTED",
+  });
+  const accountId = context.sutAccountId ?? "sut";
+
+  await context.patchGatewayConfig(
+    {
+      channels: {
+        matrix: {
+          accounts: {
+            [accountId]: {
+              groupAllowFrom: [context.driverUserId],
+            },
+          },
+        },
+      },
+      gateway: {
+        // Isolate the Matrix handler's per-message config read from generic channel reload.
+        reload: {
+          mode: "off",
+        },
+      },
+    },
+    {
+      restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
+    },
+  );
+
+  const blockedToken = buildMatrixQaToken("MATRIX_QA_GROUP_RELOAD_REMOVED");
+  const removed = await runNoReplyExpectedScenario({
+    accessToken: context.observerAccessToken,
+    actorId: "observer",
+    actorUserId: context.observerUserId,
+    baseUrl: context.baseUrl,
+    body: buildMentionPrompt(context.sutUserId, blockedToken),
+    mentionUserIds: [context.sutUserId],
+    observedEvents: context.observedEvents,
+    roomId: context.roomId,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
+    sutUserId: context.sutUserId,
+    replyPredicate: (event) =>
+      isMatrixQaExactMarkerReply(event, {
+        roomId: context.roomId,
+        sutUserId: context.sutUserId,
+        token: blockedToken,
+      }),
+    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+    token: blockedToken,
+  });
+
+  return {
+    artifacts: {
+      accepted: accepted.artifacts ?? {},
+      blocked: removed.artifacts ?? {},
+      driverEventId: accepted.artifacts?.driverEventId,
+      secondDriverEventId: removed.artifacts?.driverEventId,
+      firstReply: accepted.artifacts?.reply,
+      token: accepted.artifacts?.token,
+      triggerBody: accepted.artifacts?.triggerBody,
+    },
+    details: [
+      "group allowlist before removal:",
+      accepted.details,
+      "group allowlist after hot reload removal:",
+      removed.details,
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

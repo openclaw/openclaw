@@ -590,6 +590,9 @@ describe("gateway server sessions", () => {
 
   test("sessions.create can start the first agent turn from an initial task", async () => {
     await createSessionStoreDir();
+    // Register "ops" so the deleted-agent guard added in #65986 does not
+    // reject the auto-started chat.send triggered by `task:`.
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     const { ws } = await openClient();
 
     const created = await rpcReq<{
@@ -2548,9 +2551,7 @@ describe("gateway server sessions", () => {
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const event = (
-      subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][]
-    )[0]?.[0] as
+    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
       | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
       | undefined;
     expect(event).toMatchObject({
@@ -2866,9 +2867,7 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.key).toBe("agent:main:subagent:worker");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const event = (
-      subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][]
-    )[0]?.[0] as
+    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
       | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
       | undefined;
     expect(event).toMatchObject({

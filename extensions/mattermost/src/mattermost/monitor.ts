@@ -1,3 +1,4 @@
+import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -10,9 +11,12 @@ import {
   createMattermostClient,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
+  updateMattermostPost,
+  type MattermostClient,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
+import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -234,6 +238,104 @@ export function resolveMattermostReplyRootId(params: {
     return threadRootId;
   }
   return normalizeOptionalString(params.replyToId);
+}
+
+export function canFinalizeMattermostPreviewInPlace(params: {
+  previewRootId?: string;
+  threadRootId?: string;
+  replyToId?: string;
+}): boolean {
+  return (
+    resolveMattermostReplyRootId({
+      threadRootId: params.threadRootId,
+      replyToId: params.replyToId,
+    }) === params.previewRootId?.trim()
+  );
+}
+
+export function shouldClearMattermostDraftPreview(params: {
+  finalizedViaPreviewPost: boolean;
+  finalReplyDelivered: boolean;
+}): boolean {
+  return params.finalReplyDelivered && !params.finalizedViaPreviewPost;
+}
+
+export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
+  finalCount: number;
+  canFinalizeInPlace: boolean;
+}): boolean {
+  return params.finalCount === 1 && params.canFinalizeInPlace;
+}
+
+type MattermostDraftPreviewState = {
+  finalizedViaPreviewPost: boolean;
+};
+
+type MattermostDraftPreviewDeliverParams = {
+  payload: ReplyPayload;
+  info: { kind: "tool" | "block" | "final" };
+  client: MattermostClient;
+  draftStream: Pick<
+    ReturnType<typeof createMattermostDraftStream>,
+    "flush" | "postId" | "clear" | "discardPending" | "seal"
+  >;
+  effectiveReplyToId?: string;
+  resolvePreviewFinalText: (text?: string) => string | undefined;
+  previewState: MattermostDraftPreviewState;
+  logVerboseMessage: (message: string) => void;
+  deliverFinal: () => Promise<void>;
+};
+
+export async function deliverMattermostReplyWithDraftPreview(
+  params: MattermostDraftPreviewDeliverParams,
+): Promise<void> {
+  if (params.payload.isReasoning) {
+    return;
+  }
+
+  await deliverFinalizableDraftPreview({
+    kind: params.info.kind,
+    payload: params.payload,
+    draft: {
+      flush: params.draftStream.flush,
+      clear: params.draftStream.clear,
+      discardPending: params.draftStream.discardPending,
+      seal: params.draftStream.seal,
+      id: params.draftStream.postId,
+    },
+    buildFinalEdit: (payload) => {
+      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+      const previewFinalText = params.resolvePreviewFinalText(payload.text);
+
+      if (
+        hasMedia ||
+        typeof previewFinalText !== "string" ||
+        payload.isError ||
+        !canFinalizeMattermostPreviewInPlace({
+          previewRootId: params.effectiveReplyToId,
+          threadRootId: params.effectiveReplyToId,
+          replyToId: payload.replyToId,
+        })
+      ) {
+        return undefined;
+      }
+      return { message: previewFinalText };
+    },
+    editFinal: async (previewPostId, edit) => {
+      await updateMattermostPost(params.client, previewPostId, edit);
+    },
+    deliverNormally: async () => {
+      await params.deliverFinal();
+    },
+    onPreviewFinalized: () => {
+      params.previewState.finalizedViaPreviewPost = true;
+    },
+    logPreviewEditFailure: (err) => {
+      params.logVerboseMessage(
+        `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
+      );
+    },
+  });
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
@@ -1516,52 +1618,156 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           },
         });
-        const { dispatcher, replyOptions, markDispatchIdle } =
+        const draftStream = createMattermostDraftStream({
+          client,
+          channelId,
+          rootId: effectiveReplyToId,
+          throttleMs: 1200,
+          log: logVerboseMessage,
+          warn: logVerboseMessage,
+        });
+        let lastPartialText = "";
+        const previewState: MattermostDraftPreviewState = {
+          finalizedViaPreviewPost: false,
+        };
+
+        const resolvePreviewFinalText = (text?: string) => {
+          if (typeof text !== "string") {
+            return undefined;
+          }
+          const formatted = core.channel.text.convertMarkdownTables(text, tableMode);
+          const chunkMode = core.channel.text.resolveChunkMode(
+            cfg,
+            "mattermost",
+            account.accountId,
+          );
+          const chunks = core.channel.text.chunkMarkdownTextWithMode(
+            formatted,
+            textLimit,
+            chunkMode,
+          );
+          if (!chunks.length && formatted) {
+            chunks.push(formatted);
+          }
+          if (chunks.length != 1) {
+            return undefined;
+          }
+          const trimmed = chunks[0]?.trim();
+          if (!trimmed) {
+            return undefined;
+          }
+          if (
+            lastPartialText &&
+            lastPartialText.startsWith(trimmed) &&
+            trimmed.length < lastPartialText.length
+          ) {
+            return undefined;
+          }
+          return trimmed;
+        };
+
+        const updateDraftFromPartial = (text?: string) => {
+          const cleaned = text?.trim();
+          if (!cleaned) {
+            return;
+          }
+          if (cleaned === lastPartialText) {
+            return;
+          }
+          if (
+            lastPartialText &&
+            lastPartialText.startsWith(cleaned) &&
+            cleaned.length < lastPartialText.length
+          ) {
+            return;
+          }
+          lastPartialText = cleaned;
+          draftStream.update(cleaned);
+        };
+
+        const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
           core.channel.reply.createReplyDispatcherWithTyping({
             ...replyPipeline,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
-            deliver: async (payload: ReplyPayload) => {
-              await deliverMattermostReplyPayload({
-                core,
-                cfg,
+            deliver: async (payload: ReplyPayload, info) => {
+              await deliverMattermostReplyWithDraftPreview({
                 payload,
-                to,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId: effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
+                info,
+                client,
+                draftStream,
+                effectiveReplyToId,
+                resolvePreviewFinalText,
+                previewState,
+                logVerboseMessage,
+                deliverFinal: async () => {
+                  await deliverMattermostReplyPayload({
+                    core,
+                    cfg,
+                    payload,
+                    to,
+                    accountId: account.accountId,
+                    agentId: route.agentId,
+                    replyToId: resolveMattermostReplyRootId({
+                      threadRootId: effectiveReplyToId,
+                      replyToId: payload.replyToId,
+                    }),
+                    textLimit,
+                    tableMode,
+                    sendMessage: sendMessageMattermost,
+                  });
+                  runtime.log?.(`delivered reply to ${to}`);
+                },
               });
-              runtime.log?.(`delivered reply to ${to}`);
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
             },
           });
 
-        await core.channel.reply.withReplyDispatcher({
-          dispatcher,
-          onSettled: () => {
-            markDispatchIdle();
-          },
-          run: () =>
-            core.channel.reply.dispatchReplyFromConfig({
-              ctx: ctxPayload,
-              cfg,
-              dispatcher,
-              replyOptions: {
-                ...replyOptions,
-                disableBlockStreaming:
-                  typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-                onModelSelected,
-              },
-            }),
-        });
+        try {
+          await core.channel.reply.withReplyDispatcher({
+            dispatcher,
+            onSettled: () => {
+              markDispatchIdle();
+            },
+            run: () =>
+              core.channel.reply.dispatchReplyFromConfig({
+                ctx: ctxPayload,
+                cfg,
+                dispatcher,
+                replyOptions: {
+                  ...replyOptions,
+                  disableBlockStreaming: true,
+                  onModelSelected,
+                  onPartialReply: (payload) => {
+                    updateDraftFromPartial(payload.text);
+                  },
+                  onAssistantMessageStart: () => {
+                    lastPartialText = "";
+                  },
+                  onReasoningEnd: () => {
+                    lastPartialText = "";
+                  },
+                  onReasoningStream: async () => {
+                    if (!lastPartialText) {
+                      draftStream.update("Thinking…");
+                    }
+                  },
+                  onToolStart: async (payload) => {
+                    draftStream.update(buildMattermostToolStatusText(payload));
+                  },
+                },
+              }),
+          });
+        } finally {
+          try {
+            await draftStream.stop();
+          } catch (err) {
+            logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`);
+          }
+          markRunComplete();
+        }
         if (historyKey) {
           clearHistoryEntriesIfEnabled({
             historyMap: channelHistories,
