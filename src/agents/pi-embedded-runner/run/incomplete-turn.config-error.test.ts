@@ -137,6 +137,33 @@ describe("isLikelyConfigErrorEmptyStream", () => {
     ).toBe(false);
   });
 
+  // Regression test: when the provider omits usage telemetry entirely (no
+  // `usage` field on the assistant), we cannot prove the request never
+  // reached the model. Without this guard the heuristic would misclassify
+  // legitimate empty turns from usage-silent providers as config errors.
+  it("does not flag when usage is missing (no telemetry to prove zero tokens)", () => {
+    expect(
+      isLikelyConfigErrorEmptyStream({
+        payloadCount: 0,
+        attempt: makeAttempt({
+          lastAssistant: makeAssistant({ usage: undefined }),
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("does not flag when usage is an empty object (no recognizable fields)", () => {
+    expect(
+      isLikelyConfigErrorEmptyStream({
+        payloadCount: 0,
+        attempt: makeAttempt({
+          // empty usage normalizes to undefined - same defer-to-generic path
+          lastAssistant: makeAssistant({ usage: {} as never }),
+        }),
+      }),
+    ).toBe(false);
+  });
+
   it("prefers currentAttemptAssistant over lastAssistant when both are present", () => {
     expect(
       isLikelyConfigErrorEmptyStream({

@@ -287,11 +287,21 @@ export function isLikelyConfigErrorEmptyStream(params: {
   // Assistant usage carries aggregate counts on `totalTokens` (plus provider
   // alias fields like `input_tokens`, `prompt_tokens`, `totalTokens`), while
   // `hasNonzeroUsage` only inspects the normalized `{input, output, cacheRead,
-  // cacheWrite, total}` surface. Run the usage through `normalizeUsage` first
-  // so a real model turn that reports billing only via `totalTokens` (for
-  // example the OpenAI WS conversion path) cannot be misclassified as a
-  // zero-token config error.
-  if (hasNonzeroUsage(normalizeUsage(assistant.usage as UsageLike | undefined))) {
+  // cacheWrite, total}` surface. Normalize first so a real model turn that
+  // reports billing only via `totalTokens` (for example the OpenAI WS
+  // conversion path) cannot be misclassified as a zero-token config error.
+  //
+  // Require the normalized usage to be PRESENT and explicitly zero before we
+  // flag a config error. If the provider omitted usage telemetry entirely
+  // (or only sent fields we don't recognize), `normalizeUsage` returns
+  // `undefined` and we cannot prove the request never reached the model -
+  // defer to the generic "try again" path rather than misdiagnose a
+  // legitimate-but-empty turn from a usage-silent provider.
+  const normalizedUsage = normalizeUsage(assistant.usage as UsageLike | undefined);
+  if (!normalizedUsage) {
+    return false;
+  }
+  if (hasNonzeroUsage(normalizedUsage)) {
     return false;
   }
   return true;
