@@ -3,6 +3,7 @@ import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./pi-bundle-mcp-materialize.js";
+import { makeTempDir, startSseProbeServer } from "./pi-bundle-mcp-test-harness.js";
 import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 

@@ -156,7 +156,7 @@ describe("config mcp config", () => {
   });
 
   it("accepts MCP server configs with tools.allow and tools.deny", async () => {
-    await withTempHomeConfig({}, async () => {
+    await withTempHome(async () => {
       const setResult = await setConfiguredMcpServer({
         name: "plane",
         server: {
@@ -185,7 +185,7 @@ describe("config mcp config", () => {
   });
 
   it("rejects tools field when it is not an object", async () => {
-    await withTempHomeConfig({}, async () => {
+    await withTempHome(async () => {
       const setResult = await setConfiguredMcpServer({
         name: "plane",
         server: {
@@ -198,7 +198,7 @@ describe("config mcp config", () => {
   });
 
   it("rejects tools.allow with an empty string entry", async () => {
-    await withTempHomeConfig({}, async () => {
+    await withTempHome(async () => {
       const setResult = await setConfiguredMcpServer({
         name: "plane",
         server: {
@@ -211,7 +211,7 @@ describe("config mcp config", () => {
   });
 
   it("rejects tools.allow: [] (load-bearing guard against silent-hide footgun)", async () => {
-    await withTempHomeConfig({}, async () => {
+    await withTempHome(async () => {
       const setResult = await setConfiguredMcpServer({
         name: "plane",
         server: {
@@ -224,7 +224,7 @@ describe("config mcp config", () => {
   });
 
   it("rejects tools.deny: [] (symmetric guard with allow)", async () => {
-    await withTempHomeConfig({}, async () => {
+    await withTempHome(async () => {
       const setResult = await setConfiguredMcpServer({
         name: "plane",
         server: {
