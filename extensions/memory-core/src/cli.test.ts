@@ -384,7 +384,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("reports phase-level dreaming status for light-only configs", async () => {
+  it("shows dreaming off for light-only configs because managed deep dreaming is disabled", async () => {
     loadConfig.mockReturnValue({
       plugins: {
         entries: {
@@ -417,15 +417,11 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
 
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Dreaming: 0 3 * * * (America/Sao_Paulo) · light on · deep off · rem off",
-      ),
-    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
     expect(close).toHaveBeenCalled();
   });
 
-  it("reports phase-level dreaming status for rem-only configs", async () => {
+  it("shows dreaming off for rem-only configs because managed deep dreaming is disabled", async () => {
     loadConfig.mockReturnValue({
       plugins: {
         entries: {
@@ -457,9 +453,7 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
 
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("Dreaming: 45 1 * * * · light off · deep off · rem on"),
-    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
     expect(close).toHaveBeenCalled();
   });
 
@@ -607,7 +601,7 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("shows dreaming schedule defaults when frequency and timezone are omitted", async () => {
+  it("shows dreaming off when defaults resolve to deep disabled", async () => {
     loadConfig.mockReturnValue({
       plugins: {
         entries: {
@@ -638,9 +632,7 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
 
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("Dreaming: 0 3 * * * · light on · deep off · rem on"),
-    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
     expect(close).toHaveBeenCalled();
   });
 

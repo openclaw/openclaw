@@ -215,7 +215,11 @@ async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Pro
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
   const dreaming = resolveMemoryDreamingConfig({ pluginConfig, cfg });
-  if (!dreaming.enabled) {
+  const shortTermDreaming = resolveShortTermPromotionDreamingConfig({
+    pluginConfig,
+    cfg,
+  });
+  if (!dreaming.enabled || !shortTermDreaming.enabled) {
     return "off";
   }
   const timezoneLabel = dreaming.timezone?.trim();
