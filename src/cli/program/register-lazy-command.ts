@@ -20,6 +20,9 @@ export function registerLazyCommand({
   const placeholder = program.command(name).description(description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
+  // Let lazy-loaded subcommands receive --help instead of printing the
+  // placeholder's empty help output before the real command is registered.
+  placeholder.helpOption(false);
   placeholder.action(async (...actionArgs) => {
     for (const commandName of new Set(removeNames ?? [name])) {
       removeCommandByName(program, commandName);

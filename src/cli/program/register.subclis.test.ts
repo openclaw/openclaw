@@ -158,4 +158,34 @@ describe("registerSubCliCommands", () => {
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
+
+  it("passes --help through to the real subcommand, not the placeholder", async () => {
+    const program = createRegisteredProgram(
+      ["node", "openclaw", "nodes", "list", "--help"],
+      "openclaw",
+    );
+    program.exitOverride();
+
+    let helpOutput = "";
+    program.configureOutput({
+      writeOut: (str) => {
+        helpOutput += str;
+      },
+      writeErr: (str) => {
+        helpOutput += str;
+      },
+    });
+
+    await program
+      .parseAsync(["node", "openclaw", "nodes", "list", "--help"])
+      .catch((err: Error & { code?: string }) => {
+        if (err.code !== "commander.helpDisplayed") {
+          throw err;
+        }
+      });
+
+    expect(nodesAction).not.toHaveBeenCalled();
+    expect(helpOutput).toMatch(/nodes list/i);
+    expect(helpOutput).not.toMatch(/^Usage: openclaw nodes \[options\]/m);
+  });
 });
