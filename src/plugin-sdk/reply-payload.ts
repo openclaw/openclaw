@@ -1,14 +1,16 @@
+import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
-export type { ReplyPayload } from "../auto-reply/reply-payload.js";
+export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
 
 export type OutboundReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  sensitiveMedia?: boolean;
   replyToId?: string;
 };
 
@@ -72,11 +74,13 @@ export function normalizeOutboundReplyPayload(
       )
     : undefined;
   const mediaUrl = readStringValue(payload.mediaUrl);
+  const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
   const replyToId = readStringValue(payload.replyToId);
   return {
     text,
     mediaUrls,
     mediaUrl,
+    sensitiveMedia,
     replyToId,
   };
 }

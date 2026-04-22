@@ -136,11 +136,11 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      "on-request",
+      "never",
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
-      "workspace-write",
+      "danger-full-access",
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
       (env.OPENCLAW_CODEX_APP_SERVER_GUARDIAN === "1" ? "guardian_subagent" : "user"),
