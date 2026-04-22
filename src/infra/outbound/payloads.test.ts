@@ -301,16 +301,16 @@ describe("normalizeReplyPayloadsForDelivery", () => {
 
     it("drops bare silent replies via the registered runtime query", () => {
       const sessionKey = "agent:main:telegram:direct:456";
-      registerPendingSpawnedChildrenQuery((key) => key === sessionKey);
+      const previousQuery = registerPendingSpawnedChildrenQuery((key) => key === sessionKey);
       try {
         expect(planSilent(sessionKey)).toEqual([]);
       } finally {
-        registerPendingSpawnedChildrenQuery(undefined);
+        registerPendingSpawnedChildrenQuery(previousQuery);
       }
     });
 
     it("falls back to the rewrite path when the query throws", () => {
-      registerPendingSpawnedChildrenQuery(() => {
+      const previousQuery = registerPendingSpawnedChildrenQuery(() => {
         throw new Error("registry unavailable");
       });
       try {
@@ -319,7 +319,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         expect(delivery[0]?.text).toBeTruthy();
         expect(delivery[0]?.text).not.toMatch(/NO_REPLY/i);
       } finally {
-        registerPendingSpawnedChildrenQuery(undefined);
+        registerPendingSpawnedChildrenQuery(previousQuery);
       }
     });
   });

@@ -16,8 +16,10 @@ let pendingSpawnedChildrenQuery: PendingSpawnedChildrenQuery | undefined;
 
 export function registerPendingSpawnedChildrenQuery(
   query: PendingSpawnedChildrenQuery | undefined,
-): void {
+): PendingSpawnedChildrenQuery | undefined {
+  const previous = pendingSpawnedChildrenQuery;
   pendingSpawnedChildrenQuery = query;
+  return previous;
 }
 
 function summarizeError(err: unknown): { name: string; message: string } {
