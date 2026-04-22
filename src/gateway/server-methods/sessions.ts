@@ -1793,6 +1793,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       delete entryToUpdate.inputTokens;
       delete entryToUpdate.outputTokens;
+      delete entryToUpdate.cacheRead;
+      delete entryToUpdate.cacheWrite;
+      delete entryToUpdate.estimatedCostUsd;
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
       entryToUpdate.updatedAt = Date.now();

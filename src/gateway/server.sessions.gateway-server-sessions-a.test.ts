@@ -1685,6 +1685,59 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.compact with maxLines clears stale cache and cost accounting", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ role: "user", content: "one" }),
+        JSON.stringify({ role: "assistant", content: "two" }),
+        JSON.stringify({ role: "user", content: "three" }),
+        JSON.stringify({ role: "assistant", content: "four" }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          totalTokens: 999,
+          totalTokensFresh: false,
+          estimatedCostUsd: 0.25,
+          cacheRead: 12,
+          cacheWrite: 8,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
+      key: "main",
+      maxLines: 3,
+    });
+
+    expect(compacted.ok).toBe(true);
+    expect(compacted.payload?.compacted).toBe(true);
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+        estimatedCostUsd?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+      }
+    >;
+    expect(store["agent:main:main"]?.totalTokens).toBeUndefined();
+    expect(store["agent:main:main"]?.totalTokensFresh).toBeUndefined();
+    expect(store["agent:main:main"]?.estimatedCostUsd).toBeUndefined();
+    expect(store["agent:main:main"]?.cacheRead).toBeUndefined();
+    expect(store["agent:main:main"]?.cacheWrite).toBeUndefined();
+
+    ws.close();
+  });
+
   test("sessions.compact resets token accounting when manual compaction leaves zero tokens", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     embeddedRunMock.compactEmbeddedPiSession.mockResolvedValueOnce({
