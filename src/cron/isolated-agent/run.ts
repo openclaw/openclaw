@@ -550,7 +550,66 @@ async function prepareCronRunContext(params: {
       cfg: cfgWithAgentDefaults,
       job: input.job,
       agentId,
+      deliveryContract: input.deliveryContract ?? "cron-owned",
     });
+  // C3 (Plan Mode 1.0 follow-up): autoEnableFor runtime wiring.
+  // When the session has NEVER been toggled into plan mode
+  // (`planMode` is completely undefined on the entry) AND the config
+  // pattern list matches the resolved model id, flip the session
+  // into `mode: "plan"` before the turn starts. Intentionally does
+  // NOT fire when `planMode` exists with `mode: "normal"` — that
+  // state means the user explicitly toggled plan mode OFF via
+  // `/plan off` or completed an approval cycle, and we must respect
+  // that choice (no re-enabling on every turn).
+  const planModeCfg = cfgWithAgentDefaults.agents?.defaults?.planMode;
+  if (
+    planModeCfg?.enabled === true &&
+    cronSession.sessionEntry.planMode === undefined &&
+    planModeCfg.autoEnableFor &&
+    planModeCfg.autoEnableFor.length > 0
+  ) {
+    const { evaluateAutoEnableForMatch } = await import("../../agents/plan-mode/auto-enable.js");
+    const modelId = provider ? `${provider}/${model}` : model;
+    if (evaluateAutoEnableForMatch(modelId, planModeCfg.autoEnableFor)) {
+      cronSession.sessionEntry.planMode = {
+        mode: "plan",
+        approval: "none",
+        rejectionCount: 0,
+        updatedAt: Date.now(),
+      };
+      await persistSessionEntry();
+    }
+  }
+  if (agentPayload?.planCycleId) {
+    const livePlanMode = cronSession.sessionEntry.planMode;
+    if (!livePlanMode || livePlanMode.mode !== "plan") {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary: "Plan nudge skipped: plan mode is no longer active for this session.",
+        }),
+      };
+    }
+    if (livePlanMode.cycleId !== agentPayload.planCycleId) {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary: "Plan nudge skipped: this cron belongs to an older plan cycle.",
+        }),
+      };
+    }
+    if (livePlanMode.approval === "pending") {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary: "Plan nudge skipped: plan approval is still pending.",
+        }),
+      };
+    }
+  }
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();

@@ -853,6 +853,19 @@ export const AgentEntrySchema = z
     embeddedPi: z
       .object({
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        // PR-9 Tier 1: per-agent overrides for autoContinue + maxIterations.
+        // Mirror of agents.defaults.embeddedPi.* shape — cascades per-field
+        // (per-agent → defaults → builtin) per resolveAgentAutoContinue /
+        // resolveAgentMaxIterations.
+        autoContinue: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxCycles: z.number().int().min(1).max(10).optional(),
+            stopOnMutation: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        maxIterations: z.number().int().min(1).max(100_000).optional(),
       })
       .strict()
       .optional(),

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -407,5 +407,87 @@ describe("sessions_spawn tool", () => {
     const contentSchema = schema.properties?.attachments?.items?.properties?.content;
     expect(contentSchema?.type).toBe("string");
     expect(contentSchema?.maxLength).toBeUndefined();
+  });
+});
+
+// Wave-3 regression: subagent concurrency cap during plan mode.
+// Without this gate, an agent could stack N concurrent research
+// children during a plan, each of whose completion fires an announce-
+// turn that races with exit_plan_mode or approval resolution.
+describe("sessions_spawn concurrency cap in plan mode (wave-3)", () => {
+  const RUN_ID = "parent-run-spawn-cap";
+
+  beforeAll(async () => {
+    ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+  });
+
+  beforeEach(async () => {
+    const { clearAgentRunContext } = await import("../../infra/agent-events.js");
+    clearAgentRunContext(RUN_ID);
+    hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+      runId: "run-subagent-new",
+    });
+  });
+
+  afterEach(async () => {
+    const { clearAgentRunContext } = await import("../../infra/agent-events.js");
+    clearAgentRunContext(RUN_ID);
+  });
+
+  it("rejects a second concurrent subagent when parent is in plan mode with one in-flight", async () => {
+    const { registerAgentRunContext } = await import("../../infra/agent-events.js");
+    registerAgentRunContext(RUN_ID, {
+      sessionKey: "agent:main:main",
+      inPlanMode: true,
+      openSubagentRunIds: new Set(["existing-child"]),
+    });
+
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      runId: RUN_ID,
+    });
+
+    await expect(tool.execute("call-cap", { task: "do another thing" })).rejects.toThrow(
+      /only 1 concurrent research subagent/i,
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a subagent spawn when parent is in plan mode with no in-flight children", async () => {
+    const { registerAgentRunContext } = await import("../../infra/agent-events.js");
+    registerAgentRunContext(RUN_ID, {
+      sessionKey: "agent:main:main",
+      inPlanMode: true,
+      openSubagentRunIds: new Set(),
+    });
+
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      runId: RUN_ID,
+    });
+
+    const result = await tool.execute("call-allowed", { task: "first child" });
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
+  });
+
+  it("does NOT cap concurrency when parent is NOT in plan mode", async () => {
+    const { registerAgentRunContext } = await import("../../infra/agent-events.js");
+    registerAgentRunContext(RUN_ID, {
+      sessionKey: "agent:main:main",
+      inPlanMode: false,
+      openSubagentRunIds: new Set(["child-1", "child-2", "child-3"]),
+    });
+
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      runId: RUN_ID,
+    });
+
+    const result = await tool.execute("call-no-cap", { task: "concurrent work" });
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
   });
 });

@@ -537,21 +537,18 @@ export function normalizeCronJobInput(
       }
     }
 
-    // Resolve "current" sessionTarget to the actual sessionKey from context
-    if (next.sessionTarget === "current") {
-      if (options.sessionContext?.sessionKey) {
-        const sessionKey = options.sessionContext.sessionKey.trim();
-        if (sessionKey) {
-          // Store as session:customId format for persistence
-          next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
-        }
-      }
-      // If "current" wasn't resolved, fall back to "isolated" behavior
-      // This handles CLI/headless usage where no session context exists
-      if (next.sessionTarget === "current") {
-        next.sessionTarget = "isolated";
-      }
-    }
+    // Resolve "current" sessionTarget to the actual sessionKey from
+    // context. PR-9 Wave B2: this is the path agents use to schedule a
+    // wake-up that resumes their CURRENT session ("come back in 10 min,
+    // pick up where I left off"). The cron fires a new agent turn into
+    // the same sessionKey, which means session-persisted state
+    // (`SessionEntry.planMode.lastPlanSteps`, transcript, model
+    // overrides) is automatically available to the resumed turn.
+    //
+    // Fallback: when no session context is available (CLI/headless),
+    // silently degrade to "isolated" so the cron is at least scheduled.
+    // The previous implementation had this resolution block twice
+    // (back-to-back identical logic) — consolidated here.
     if (next.sessionTarget === "current") {
       const sessionKey = options.sessionContext?.sessionKey?.trim();
       if (sessionKey) {

@@ -279,6 +279,110 @@ export type AgentDefaultsConfig = {
      * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
      */
     executionContract?: EmbeddedPiExecutionContract;
+    /**
+     * Auto-continuation for planning-only turns. When enabled, the runner
+     * automatically injects an ACK fast-path instruction instead of surfacing
+     * the plan to the user, up to `maxCycles` consecutive auto-continue cycles.
+     * Each cycle = 1 ACK injection + up to 3 planning retries = ~4 API calls.
+     */
+    autoContinue?: {
+      /** Enable auto-continuation. Default: false. */
+      enabled?: boolean;
+      /**
+       * Max auto-continue cycles before pausing for user review. Default: 3.
+       * Total worst-case API calls = 1 + (maxCycles x 4). Default 3 = ~13 calls max.
+       */
+      maxCycles?: number;
+      /** Pause when any attempt in the run produces mutating tool calls. Default: true. */
+      stopOnMutation?: boolean;
+    };
+    /**
+     * PR-9 Tier 1: outer-loop turn budget for the embedded Pi runner.
+     * When set, fully replaces the default (which scales with auth-profile
+     * count and is now floored at 500). Use this to give long research /
+     * build runs more headroom — the previous 32-turn floor cut many
+     * legitimate sessions short.
+     *
+     * Copilot review #68939 (2026-04-19): the doc previously said
+     * "out-of-range values are clamped" but config validation (Zod)
+     * actually rejects out-of-range values. Updated to match the
+     * validated/rejected behavior so operators don't silently
+     * trust a value that was actually rejected at load time.
+     * Valid range: [1, 100_000]; out-of-range values are rejected
+     * during config validation. Subagents (`lightContext: true`
+     * spawns) keep a separate lower cap and ignore this setting.
+     */
+    maxIterations?: number;
+  };
+  /**
+   * Plan mode toggle (PR-8 integration). Default OFF — opt-in.
+   *
+   * When enabled, the runtime registers `enter_plan_mode` and
+   * `exit_plan_mode` tools and activates the mutation gate so a
+   * session in `planMode.mode === "plan"` blocks write/edit/exec/etc
+   * until the user approves the proposed plan via the approval flow.
+   *
+   * Read-only tools (read, web_search, web_fetch, update_plan) remain
+   * available so the agent can investigate before proposing changes.
+   */
+  planMode?: {
+    /** Master switch. Default: false. */
+    enabled?: boolean;
+    /**
+     * Optional list of model-id regex patterns. When a session has
+     * never been toggled into plan mode AND its resolved model id
+     * matches any pattern, the cron isolated-agent runtime flips
+     * `planMode.mode` to `"plan"` at session start. Default empty —
+     * no auto-enable. Common use: `["^openai/gpt-5\\."]` to route
+     * the GPT-5.x family into plan-first by default.
+     *
+     * C3 (Plan Mode 1.0 follow-up): shipped. Runtime check lives at
+     * `src/cron/isolated-agent/run.ts` before turn dispatch; pure
+     * pattern-matcher is at `src/agents/plan-mode/auto-enable.ts`
+     * (compiled-regex cache, malformed-pattern fallthrough).
+     *
+     * Contract: auto-enable only fires when `planMode` is completely
+     * absent on the session entry. Sessions with `planMode.mode:
+     * "normal"` (user explicitly toggled off via `/plan off` or post-
+     * approval) are NOT re-enabled — respects user intent.
+     */
+    autoEnableFor?: string[];
+    /**
+     * **SCHEMA-RESERVED — runtime wiring not yet implemented.**
+     *
+     * Copilot review #68939 (2026-04-19): same deferral status as
+     * `autoEnableFor` above; this comment is the authoritative
+     * source of truth.
+     *
+     * Seconds an unanswered approval request stays pending before
+     * timing out. The agent receives a `[PLAN_DECISION] decision: expired`
+     * injection on timeout and stays in plan mode. Default: 600 (10 min).
+     *
+     * Implementation requires a cron-time watchdog that fires
+     * `resolvePlanApproval(action="timeout")` after the configured
+     * seconds elapse since the approval was requested. Setting this
+     * field today is silently ignored at runtime (no error, no
+     * effect) — once the runtime PR lands, configurations using this
+     * field will activate automatically.
+     */
+    approvalTimeoutSeconds?: number;
+    /**
+     * Live-test iteration 2 Bug D: opt-in debug log toggle. When true,
+     * enables detailed plan-mode lifecycle logging at every state
+     * transition / gate decision / tool call / synthetic injection /
+     * approval event. Off by default (zero perf impact when unset).
+     *
+     * Equivalent to setting `OPENCLAW_DEBUG_PLAN_MODE=1` in the env,
+     * but doesn't depend on launchd / process-tree env propagation
+     * (which is unreliable on macOS when the gateway is supervised
+     * by the OpenClaw Mac app rather than launched directly by
+     * launchd). Either signal turns logging on; the env var wins
+     * if both are set.
+     *
+     * Stream the log with:
+     *   tail -F ~/.openclaw/logs/gateway.err.log | grep '\[plan-mode/'
+     */
+    debug?: boolean;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

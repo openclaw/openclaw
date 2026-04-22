@@ -1,7 +1,11 @@
-import { onAgentEvent } from "../infra/agent-events.js";
+import { onAgentEvent, setPlanModeSubagentGatePersistenceHandler } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  persistPlanModeSubagentGateState,
+  startPlanSnapshotPersister,
+} from "./plan-snapshot-persister.js";
 import {
   createAgentEventHandler,
   type ChatRunState,
@@ -66,10 +70,58 @@ export function startGatewayEventSubscriptions(params: {
     }),
   );
 
+  // PR-8 follow-up: persist live plan snapshot to SessionEntry.planMode
+  // after each update_plan call so the Control UI can rebuild the
+  // live-plan sidebar after a hard refresh. See
+  // `plan-snapshot-persister.ts` for details.
+  //
+  // PR-11 review fix (Copilot #3105169600): wire `emitSessionsChanged`
+  // so the persister broadcasts `sessions.changed` to UI subscribers
+  // when it writes `lastPlanSteps` or auto-flips `planMode → "normal"`
+  // on close-on-complete. Without this, the persister silently mutates
+  // session state outside the `sessions.patch` RPC handler and the UI
+  // never gets a refresh signal — the live-plan sidebar drifts behind
+  // the runtime until the user manually refreshes.
+  // Consolidation pass note: removed the `params.minimalTestGateway`
+  // conditional from PR-11 because the param was renamed/dropped in
+  // upstream's restructure. This module now always wires a concrete
+  // `emitSessionsChanged`; tests that need to suppress broadcasts
+  // should use `sessionEventSubscribers` with no conn ids (so
+  // `getAll()` returns an empty set and the early-return at line
+  // 89 below short-circuits the broadcast) or otherwise provide
+  // no-op broadcast plumbing in the test harness — there's no
+  // injected emitter param to override here.
+  // Copilot review #68939 (post-nuclear-fix-stack): comment
+  // updated to reflect the actual suppression mechanism (the
+  // earlier "pass a noop emitSessionsChanged" wording implied a
+  // param that doesn't exist).
+  const stopPlanModeSubagentGatePersistence = setPlanModeSubagentGatePersistenceHandler(
+    persistPlanModeSubagentGateState,
+  );
+
+  const stopPlanSnapshotListener = startPlanSnapshotPersister({
+    emitSessionsChanged: ({ sessionKey, reason }) => {
+      const connIds = params.sessionEventSubscribers.getAll();
+      if (connIds.size === 0) {
+        return;
+      }
+      params.broadcastToConnIds(
+        "sessions.changed",
+        { sessionKey, reason, ts: Date.now() },
+        connIds,
+      );
+    },
+  });
+  const planSnapshotUnsub = () => {
+    stopPlanSnapshotListener();
+    stopPlanModeSubagentGatePersistence();
+  };
+
   return {
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
+    planSnapshotUnsub,
   };
 }

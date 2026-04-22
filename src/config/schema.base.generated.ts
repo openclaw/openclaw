@@ -4747,11 +4747,56 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
                   },
+                  autoContinue: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      maxCycles: {
+                        type: "integer",
+                        minimum: 1,
+                        maximum: 10,
+                      },
+                      stopOnMutation: {
+                        type: "boolean",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  maxIterations: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 100000,
+                  },
                 },
                 additionalProperties: false,
                 title: "Embedded Pi",
                 description:
                   "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
+              },
+              planMode: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  autoEnableFor: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  approvalTimeoutSeconds: {
+                    type: "integer",
+                    minimum: 10,
+                    maximum: 86400,
+                  },
+                  debug: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               thinkingDefault: {
                 anyOf: [
@@ -6478,6 +6523,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       title: "Agent Embedded Pi Execution Contract",
                       description:
                         'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+                    },
+                    autoContinue: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        maxCycles: {
+                          type: "integer",
+                          minimum: 1,
+                          maximum: 10,
+                        },
+                        stopOnMutation: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    maxIterations: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 100000,
                     },
                   },
                   additionalProperties: false,
@@ -22430,6 +22497,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               maxSkillFileBytes: {
                 type: "integer",
                 minimum: 0,
+                maximum: 9007199254740991,
+              },
+              maxPlanTemplateSteps: {
+                type: "integer",
+                minimum: 1,
                 maximum: 9007199254740991,
               },
             },

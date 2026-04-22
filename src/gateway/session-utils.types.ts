@@ -69,6 +69,23 @@ export type GatewaySessionRow = {
   lastThreadId?: SessionEntry["lastThreadId"];
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpoint;
+  // PR-8 / #67721: surface mode-state on the session row so the UI
+  // mode chip can render the current selection rather than always
+  // defaulting to Ask. Backend writes these via `sessions.patch`;
+  // gateway includes them on `sessions.list` payloads.
+  execHost?: SessionEntry["execHost"];
+  execSecurity?: SessionEntry["execSecurity"];
+  execAsk?: SessionEntry["execAsk"];
+  planMode?: SessionEntry["planMode"];
+  pendingInteraction?: SessionEntry["pendingInteraction"];
+  /**
+   * Codex P2 review #68939 (2026-04-19): mirror of
+   * `SessionEntry.pendingQuestionApprovalId` for the UI's /plan
+   * answer flow. Read-only on the wire — the persister writes it
+   * when an `ask_user_question` approval event fires; the patch
+   * handler clears it after a successful answer.
+   */
+  pendingQuestionApprovalId?: SessionEntry["pendingQuestionApprovalId"];
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;

@@ -26,12 +26,18 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 
-vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn((handler: typeof lifecycleHandler) => {
-    lifecycleHandler = handler;
-    return noop;
-  }),
-}));
+vi.mock("../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/agent-events.js")>(
+    "../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    onAgentEvent: vi.fn((handler: typeof lifecycleHandler) => {
+      lifecycleHandler = handler;
+      return noop;
+    }),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({
@@ -241,6 +247,34 @@ describe("subagent registry steer restarts", () => {
     emitSessionLifecycleEventMock.mockReset();
     lifecycleHandler = undefined;
     mod.resetSubagentRegistryForTests({ persist: false });
+  });
+
+  it("remaps parent openSubagentRunIds when a steer restart replaces the child run id", async () => {
+    const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
+      await import("../infra/agent-events.js");
+    registerAgentRunContext("parent-run", {
+      sessionKey: MAIN_REQUESTER_SESSION_KEY,
+      inPlanMode: true,
+      openSubagentRunIds: new Set(["run-old"]),
+    });
+    try {
+      registerRun({
+        runId: "run-old",
+        childSessionKey: "agent:main:subagent:steer",
+        task: "initial task",
+      });
+
+      const replaced = mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-old",
+        nextRunId: "run-new",
+      });
+      expect(replaced).toBe(true);
+      expect([...(getAgentRunContext("parent-run")?.openSubagentRunIds ?? new Set())]).toEqual([
+        "run-new",
+      ]);
+    } finally {
+      clearAgentRunContext("parent-run");
+    }
   });
 
   it("suppresses announce for interrupted runs and only announces the replacement run", async () => {

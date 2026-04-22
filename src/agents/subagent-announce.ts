@@ -78,14 +78,35 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  /**
+   * Live-test iter-3 R6b: the requester session's current plan-mode
+   * mode (read at announce-build time from SessionEntry.planMode.mode).
+   * When `"plan"`, the announce reply instruction includes an
+   * explicit "continue your plan-mode flow" reminder so the agent
+   * does NOT just narrate the subagent result and stop — it must
+   * either (a) call `exit_plan_mode` if its investigation was
+   * waiting on this result, or (b) continue investigation with
+   * another tool call. Without this, the agent reads the standard
+   * "send a user-facing update now" instruction and treats the
+   * subagent return as a TERMINAL turn, leaving the plan-mode
+   * cycle stalled (Bug R6b root cause).
+   *
+   * Undefined / "normal": no plan-mode-aware suffix added; default
+   * announce behavior.
+   */
+  requesterPlanMode?: "plan" | "normal";
 }): string {
+  const planModeSuffix =
+    params.requesterPlanMode === "plan"
+      ? " You are currently in PLAN MODE — do not stop after the user-facing update. Your next action MUST be either: (a) call `exit_plan_mode(title=..., plan=[...])` if this subagent's result completes your investigation, OR (b) continue investigation with another read-only tool call. Trailing chat alone is treated as yielding without acting and will trigger a [PLAN_ACK_ONLY] retry."
+      : "";
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.${planModeSuffix}`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).${planModeSuffix}`;
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.${planModeSuffix}`;
 }
 
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
@@ -489,10 +510,31 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    // Live-test iter-3 R6b: read the requester's plan-mode mode at
+    // announce-build time so the reply instruction can include an
+    // explicit "continue your plan-mode flow" steer when the parent
+    // is in plan mode. Without this, the standard "send a user-facing
+    // update now" instruction is read as a TERMINAL step and the
+    // agent stalls instead of calling exit_plan_mode after
+    // incorporating the subagent result.
+    let requesterPlanMode: "plan" | "normal" | undefined;
+    if (!requesterIsSubagent) {
+      try {
+        const { entry: requesterEntry } = loadRequesterSessionEntry(targetRequesterSessionKey);
+        const mode = requesterEntry?.planMode?.mode;
+        if (mode === "plan" || mode === "normal") {
+          requesterPlanMode = mode;
+        }
+      } catch {
+        // Best-effort lookup; if it fails, fall back to default
+        // (no plan-mode-aware suffix).
+      }
+    }
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      ...(requesterPlanMode ? { requesterPlanMode } : {}),
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,

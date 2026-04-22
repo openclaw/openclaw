@@ -1,6 +1,10 @@
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  drainCompletedSubagentFromParents,
+  replaceOpenSubagentRunIdInParents,
+} from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
@@ -158,6 +162,13 @@ export function createSubagentRunManager(params: {
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
       });
+      // PR-8 follow-up: drain this child from any parent's
+      // `openSubagentRunIds` so `exit_plan_mode` no longer blocks on it.
+      // Pass `requesterSessionKey` as fallback so the persist layer
+      // can scrub `blockingSubagentRunIds` even when the parent ctx was
+      // already evicted (the auto-approve flow makes this the common
+      // case — see drainCompletedSubagentFromParents docstring).
+      drainCompletedSubagentFromParents(runId, entry?.requesterSessionKey);
     } catch {
       // ignore
     }
@@ -227,6 +238,7 @@ export function createSubagentRunManager(params: {
       if (shouldDeleteAttachments(source)) {
         void safeRemoveAttachmentsDir(source);
       }
+      replaceOpenSubagentRunIdInParents(previousRunId, nextRunId);
       params.runs.delete(previousRunId);
       params.resumedRuns.delete(previousRunId);
     }
@@ -436,6 +448,11 @@ export function createSubagentRunManager(params: {
       entry.cleanupHandled = true;
       entry.cleanupCompletedAt = now;
       entry.suppressAnnounceReason = "killed";
+      // PR-8 follow-up: drain killed runs from parents' open-sets too,
+      // otherwise a killed child would block exit_plan_mode indefinitely.
+      // Pass `requesterSessionKey` as fallback so the persist layer can
+      // scrub `blockingSubagentRunIds` when the parent ctx is gone.
+      drainCompletedSubagentFromParents(runId, entry.requesterSessionKey);
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
         entriesByChildSessionKey.set(entry.childSessionKey, entry);
       }

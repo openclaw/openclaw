@@ -349,9 +349,32 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
     mockedPickFallbackThinkingLevel.mockReturnValue("low");
 
-    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+    // Copilot review #68939 (round-1): set a small
+    // `agents.defaults.embeddedPi.maxIterations` override via the
+    // `config` param so the test exercises the retry-limit path
+    // with a tiny mock-invocation budget (12 vs the default 500).
+    // Production defaults (PR-9 Tier 1: floor 500 / cap 1000) are
+    // unchanged; this test just keeps CI fast by avoiding 500 mock
+    // calls per run. The retry_limit error contract is the same
+    // regardless of the cap value. Wired via
+    // `resolveAgentMaxIterations(params.config, agentId)` →
+    // `resolveMaxRunRetryIterations(profileCount, override)` at
+    // `run.ts:475-485`.
+    const TEST_RETRY_LIMIT = 12;
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              maxIterations: TEST_RETRY_LIMIT,
+            },
+          },
+        },
+      } as unknown as Parameters<typeof runEmbeddedPiAgent>[0]["config"],
+    });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(TEST_RETRY_LIMIT);
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("retry_limit");
     expect(result.meta.livenessState).toBe("blocked");

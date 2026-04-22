@@ -44,6 +44,13 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
+  // Nuclear-fix-stack subagent concurrency cap commit (984b4eebff)
+  // added `drainCompletedSubagentFromParents` — used by
+  // `subagent-registry-run-manager.ts:431` when a subagent run is
+  // marked terminated (kill / complete). Mock as a no-op since this
+  // test suite focuses on the registry's persisted-entry seam, not
+  // the parent's open-set draining.
+  drainCompletedSubagentFromParents: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => {

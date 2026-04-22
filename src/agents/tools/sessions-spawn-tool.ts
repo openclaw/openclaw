@@ -1,8 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { getAgentRunContext, trackOpenSubagentForParent } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE } from "../plan-mode/index.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -154,6 +156,15 @@ export function createSessionsSpawnTool(
     sandboxed?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /**
+     * PR-8 follow-up: stable run id of the PARENT run spawning this child.
+     * Used to:
+     *  - add childRunId to the parent's `AgentRunContext.openSubagentRunIds`
+     *    so `exit_plan_mode` can block submission while research is in flight.
+     *  - force `cleanup: "keep"` when the parent session is in plan mode,
+     *    keeping research children visible in the session menu.
+     */
+    runId?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   return {
@@ -229,6 +240,29 @@ export function createSessionsSpawnTool(
         });
       }
 
+      // Subagent concurrency cap during plan mode. Without this, an
+      // agent in plan mode could spawn N research children and build
+      // up a race surface where each completion fires an announce-
+      // turn that could collide with exit_plan_mode submission or
+      // approval resolution. The cap value is
+      // `MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE` (defined in
+      // `src/agents/plan-mode/index.ts`); subsequent spawns over the
+      // cap are rejected with a ToolInputError (agent learns to
+      // sequence). Copilot review #68939 (round-2): comment kept
+      // value-agnostic so it stays correct if the constant ever
+      // changes — see the constant for the current numeric value.
+      const spawnParentCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
+      if (
+        spawnParentCtx?.inPlanMode === true &&
+        (spawnParentCtx.openSubagentRunIds?.size ?? 0) >= MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE
+      ) {
+        throw new ToolInputError(
+          `Plan mode allows only ${MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE} concurrent research ${
+            MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE === 1 ? "subagent" : "subagents"
+          }. Wait for the current child to return before spawning another.`,
+        );
+      }
+
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
         if (Array.isArray(attachments) && attachments.length > 0) {
@@ -258,6 +292,13 @@ export function createSessionsSpawnTool(
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
             agentGroupId: opts?.agentGroupId ?? undefined,
+            // Copilot review #68939 (round-1): forward the
+            // group-scoped context fields the WIP-strip in commit 4
+            // (b6b2783ba3) inadvertently dropped. Without these,
+            // spawned sessions in group channels (Discord/Slack
+            // role-aware allowlists) lose downstream policy /
+            // permission resolution. Re-added to mirror the parent
+            // session's context.
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
@@ -276,7 +317,19 @@ export function createSessionsSpawnTool(
             requestedMode: result.mode,
             threadRequested: thread,
           });
-          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
+          // PR-8 follow-up: when the parent session is in plan mode,
+          // force cleanup:"keep" so research children stay visible in the
+          // session menu even after they complete. Prior default was to
+          // purge them (cleanup:"delete" + time-based filter), which hid
+          // results the user may want to inspect during plan synthesis.
+          //
+          // `inPlanMode` is mirrored onto AgentRunContext by the runner at
+          // context-registration time (kept there to avoid a session-store
+          // read on every spawn).
+          const parentCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
+          const parentInPlanMode = parentCtx?.inPlanMode === true;
+          const trackedCleanup =
+            trackedSpawnMode === "session" || parentInPlanMode ? "keep" : cleanup;
           const { mainKey, alias } = resolveMainSessionAlias(cfg);
           const requesterInternalKey = opts?.agentSessionKey
             ? resolveInternalSessionKey({
@@ -310,6 +363,14 @@ export function createSessionsSpawnTool(
               expectsCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
+            // PR-8 follow-up: track this child in the parent's
+            // `openSubagentRunIds` set so `exit_plan_mode` can block
+            // plan submission while research children are in flight.
+            // The completion hook in `subagent-registry-run-manager.ts`
+            // drains the set when the child ends.
+            if (opts?.runId && parentCtx) {
+              trackOpenSubagentForParent(opts.runId, childRunId);
+            }
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
             // child session record here does not guarantee the in-flight run was aborted.
@@ -326,6 +387,13 @@ export function createSessionsSpawnTool(
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
+      // PR-8 follow-up: mirror the in-plan-mode cleanup override applied
+      // on the ACP path above. When the parent session is in plan mode,
+      // force cleanup:"keep" so research children stay visible in the
+      // session menu.
+      const directParentCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
+      const directInPlanMode = directParentCtx?.inPlanMode === true;
+      const directCleanup: "delete" | "keep" | undefined = directInPlanMode ? "keep" : cleanup;
       const result = await spawnSubagentDirect(
         {
           task,
@@ -336,7 +404,7 @@ export function createSessionsSpawnTool(
           runTimeoutSeconds,
           thread,
           mode,
-          cleanup,
+          cleanup: directCleanup,
           sandbox,
           lightContext,
           expectsCompletionMessage,
@@ -355,11 +423,28 @@ export function createSessionsSpawnTool(
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
+          // Copilot review #68939 (round-1): forward
+          // `agentMemberRoleIds` (Discord/Slack role-aware
+          // allowlist policy resolution). The subagent spawn path
+          // already had `agentGroupSpace`; missing
+          // `agentMemberRoleIds` was the WIP-strip artifact.
           agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
         },
       );
+      // PR-8 follow-up: track child runId in the parent's
+      // `openSubagentRunIds` so `exit_plan_mode` can block plan
+      // submission while research is in flight.
+      if (
+        directParentCtx &&
+        opts?.runId &&
+        result.status === "accepted" &&
+        typeof result.runId === "string" &&
+        result.runId
+      ) {
+        trackOpenSubagentForParent(opts.runId, result.runId);
+      }
 
       return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },

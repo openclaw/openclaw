@@ -1435,6 +1435,27 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
+    // PR-8 / #67721: surface permission-mode + plan-mode state on the
+    // session row so the UI mode chip can render the current state.
+    // PR-8 review fix (Copilot #3105170257 / #3105170264 / #3105217894):
+    // also include `execHost` so sessions.list / sessions.changed
+    // payloads carry the full permission tuple (security + ask + host).
+    // The UI mode chip reads all three to render the right preset.
+    execSecurity: entry?.execSecurity,
+    execAsk: entry?.execAsk,
+    execHost: entry?.execHost,
+    planMode: entry?.planMode,
+    pendingInteraction: entry?.pendingInteraction,
+    // Codex P2 review #68939 (2026-04-19): expose the question
+    // approvalId on the session row so the webchat /plan answer
+    // path can thread it into the planApproval patch (the
+    // gateway-side answer-guard requires the matching token).
+    // Read-only — clients can't set this; the persister manages
+    // its lifecycle.
+    pendingQuestionApprovalId:
+      entry?.pendingInteraction?.kind === "question"
+        ? entry.pendingInteraction.approvalId
+        : entry?.pendingQuestionApprovalId,
   };
 }
 
