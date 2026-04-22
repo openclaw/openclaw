@@ -68,15 +68,15 @@ function buildChannelCandidates(
     normalizeMessageChannel(params.channel ?? "") ??
     normalizeOptionalLowercaseString(params.channel);
   const groupId = normalizeOptionalString(params.groupId);
-  const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
+  const rawParentConversation = parseRawSessionConversationRef(params.parentSessionKey);
+  const channelPlugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : undefined;
   const parentOverrideFallbacks =
-    (normalizedChannel
-      ? getChannelPlugin(
-          normalizedChannel,
-        )?.conversationBindings?.buildModelOverrideParentCandidates?.({
-          parentConversationId: sessionConversation?.rawId,
-        })
-      : null) ?? [];
+    channelPlugin?.conversationBindings?.buildModelOverrideParentCandidates?.({
+      parentConversationId: rawParentConversation?.rawId,
+    }) ?? [];
+  const sessionConversation = resolveSessionConversationRef(params.parentSessionKey, {
+    bundledFallback: parentOverrideFallbacks.length === 0,
+  });
   const groupConversationKind =
     normalizeChatType(params.groupChatType ?? undefined) === "channel"
       ? "channel"

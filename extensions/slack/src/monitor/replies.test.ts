@@ -10,8 +10,11 @@ let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReply
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
 
+const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+
 function baseParams(overrides?: Record<string, unknown>) {
   return {
+    cfg: SLACK_TEST_CFG,
     replies: [{ text: "hello" }],
     target: "C123",
     token: "xoxb-test",
