@@ -1,106 +1,91 @@
-# OpenClaw Contributor Status - 2026-04-21
+# OpenClaw Contributor Status - 2026-04-22
 
-## Merged PRs: 4
+## Merged PRs: 4 (lifetime)
 
-- #55787 `fix: strip orphaned OpenAI reasoning blocks before responses API call` — merged 2026-04-19
-- #67457 `fix(ollama): strip provider prefix from model ID in chat requests` — merged 2026-04-16
-- #64735 `fix(hooks): pass workspaceDir in gateway session reset internal hook context` — merged 2026-04-14
-- #45911 `fix(telegram): accept approval callbacks from forwarding target recipients` — merged 2026-03-29
+- 2026-04-19: #55787 fix: strip orphaned OpenAI reasoning blocks before responses API call
+- 2026-04-16: #67457 fix(ollama): strip provider prefix from model ID in chat requests
+- 2026-04-14: #64735 fix(hooks): pass workspaceDir in gateway session reset internal hook context
+- 2026-03-29: #45911 fix(telegram): accept approval callbacks from forwarding target recipients
 
-## Open PRs: 3
+## Open PRs: 4
 
-| PR | Title | Labels | Comments | Updated | Status |
-|----|-------|--------|----------|---------|--------|
-| #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass | channel:whatsapp-web, size:XS | 2 | 2026-04-18 | 3 days old, awaiting review |
-| #66544 | fix(gateway): exclude heartbeat sender ID from session display name | gateway, size:XS | 3 | 2026-04-19 | Active; 7 days old |
-| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size:S | 5 | 2026-04-19 | Active; 7 days old |
+| #      | Title                                                                          | Labels                | Age | Comments | Status          |
+| ------ | ------------------------------------------------------------------------------ | --------------------- | --- | -------- | --------------- |
+| #69685 | fix(agents): strip final tags from persisted assistant message                 | agents, size:M        | 1d  | 2        | Awaiting review |
+| #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass      | whatsapp-web, size:XS | 4d  | 2        | Awaiting review |
+| #66544 | fix(gateway): exclude heartbeat sender ID from session display name            | gateway, size:XS      | 8d  | 3        | Awaiting review |
+| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size:S        | 8d  | 5        | Awaiting review |
 
-CI/mergeability: cannot read directly via MCP (restricted to suboss87/openclaw for direct ops).
-All three PRs updated within last 3 days - unlikely to have rebase conflicts.
+CI and mergeable status not available (GitHub MCP restricted to fork; search API does not surface per-PR check status).
 
 ## Actions Taken This Run
 
-### 1. Status Check
-Confirmed 3 open PRs and 4 lifetime merged PRs (PR #55787 merged 2026-04-19 - new since last run).
-All open PRs recently touched (updated 2026-04-18 or 2026-04-19) suggesting active review activity.
+### Bug Fix filed: #69960 (plugins install --profile X writes to wrong extensions dir)
 
-### 2. Human Comment Check
-MCP GitHub tools restricted to `suboss87/openclaw` for all direct operations (get_comments,
-pull_request_read, issue_read, add_issue_comment, pull_request_review_write). Cannot read or
-respond to comments on `openclaw/openclaw` PRs. No `gh` CLI available as alternative.
+**Root cause confirmed in code:**
 
-### 3. Rebase Check
-Scanned all branches on `suboss87/openclaw` fork (5 pages, ~250 branches). No branches found
-matching the 3 open PRs' fix names. All PRs recently updated (within 3 days) - unlikely stale.
-Rebase not needed this run.
+`CONFIG_DIR` in `src/utils.ts` is a module-level constant evaluated at import time:
 
-### 4. Bug Investigation
+```ts
+export const CONFIG_DIR = resolveConfigDir(); // line 387
+```
 
-Scanned all 42 fresh bugs filed 2026-04-21 with zero assignees.
+`resolveConfigDir()` reads `OPENCLAW_STATE_DIR` from `process.env`. But `src/infra/dotenv.ts`
+is statically imported in `src/cli/run-main.ts`, which transitively imports `utils.ts` -
+so `CONFIG_DIR` is frozen to the default `~/.openclaw` **before** `applyCliProfileEnv` runs
+and sets `OPENCLAW_STATE_DIR` to the profile-specific path.
 
-**Competing PRs found for:**
-- #69547 (cron TypeError) - already claimed by PR #69574 from @Eruditi
-- #69482 (Telegram allow-always source field) - already claimed by PR #69529 from @hszhsz
+`runPluginInstallCommand` in `src/cli/plugins-cli.ts` called `installPluginFromNpmSpec` and
+`installPluginFromPath` without passing `extensionsDir`, so both fell back to
+`path.join(CONFIG_DIR, "extensions")` - always `~/.openclaw/extensions` regardless of profile.
 
-**Investigated: #69554 (Disabling a skill fails via skills.update)**
+The `uninstall` command (same file, line 595) already correctly called
+`resolveStateDir(process.env, os.homedir)` at call time. Applied the same pattern to install.
 
-Root cause analysis:
-- `skills.update` handler (`src/gateway/server-methods/skills.ts:146`) calls
-  `writeConfigFile(nextConfig)` at line 201 after modifying only the skills section.
-- `writeConfigFile` internally calls `validateConfigObjectRawWithPlugins` (without applying
-  config defaults) before writing to disk.
-- `openclaw config validate` calls `validateConfigObjectWithPlugins` (WITH defaults applied).
-- This asymmetry means a config that passes interactive validation can fail the write-path
-  validation if any plugin schema or validation rule is sensitive to raw vs. default-applied form.
+**Fix:** Added `extensionsDir` computation via `resolveStateDir(process.env, os.homedir)` at
+the top of `runPluginInstallCommand` and threaded it through to all three install call sites
+(dryRun probe, path install, npm install). 5 lines changed.
 
-However, the specific error message the reporter sees ("tools.web.search provider-owned config
-moved to plugins.entries.<plugin>.config.webSearch") does NOT exist anywhere in:
-- `src/config/legacy.rules.ts` (checked all rules exhaustively)
-- `src/config/validation.ts` (checked full `validateConfigObjectWithPluginsBase`)
-- `src/config/io.ts`
-- Any plugin source in `extensions/`
-- Any skill manifest under `skills/`
+**Verified:** All 13 existing plugin install tests pass. `pnpm tsgo` clean.
 
-This error message appears to come from a plugin installed at the user's runtime that is not
-shipped in this repo. Without a live install or the plugin's source, the fix cannot be identified.
-**Cannot fix this run.**
+**Branch pushed:** `suboss87:fix/plugins-install-profile-extensions-dir`
 
-**Other unclaimed bugs surveyed:**
-- #69546 (QQBot binding reload) - complex runtime hot-reload issue, not tractable quickly
-- #69538 (OpenRouter empty turn) - provider adapter regression, needs deeper tracing
-- #69527 (openrouter/auto ignored by infer) - regression, needs model routing trace
+**PR URL (open manually):** https://github.com/suboss87/openclaw/pull/new/fix/plugins-install-profile-extensions-dir
+Upstream target: openclaw/openclaw, closes #69960
 
-### 5. PR Review
+### Comment check
 
-**Targeted: #69495** by @zote - `feat(heartbeat): support model fallbacks via {primary,fallbacks}`
-(gateway, size:M, 17 files, opened 2026-04-20)
+Unable to read PR comments on `openclaw/openclaw` (GitHub MCP write and read tools
+restricted to `suboss87/openclaw`; only the search API reaches upstream). No comment
+responses posted this run.
 
-Identified four substantive technical observations:
+### Rebase check
 
-1. **Empty fallbacks semantics footgun**: `{ primary: "x", fallbacks: [] }` silently disables
-   the inherited agent-level fallback chain, while string form `"x"` preserves it. Users
-   migrating from string to object form lose fallbacks unexpectedly.
+Mergeable status not available via search API. All 4 open PRs were updated within the last
+8 days so no automated rebase was attempted.
 
-2. **FAST_COMMIT bypass**: PR notes pre-commit was skipped due to a pre-existing failure in
-   `src/entry.version-fast-path.test.ts:44`. Should be verified as truly pre-existing before
-   merge; bypass should not land in final commit.
+### PR review identified: #69270
 
-3. **`heartbeatModelFallbacks` on FollowupRun**: New `modelFallbacksOverride` on `FollowupRun.run`
-   may not carry forward correctly if a heartbeat-initiated followup spawns nested followups.
+PR #69270 by @de1tydev (fix(compaction): restore session invariants across compaction and
+reset, agents+gateway, size:M, 3 comments) was the best candidate in our lanes.
 
-4. **Pricing cache registration timing**: `addModelListLike` for heartbeat fallbacks only runs
-   at startup; if user updates `heartbeat.model` at runtime via `openclaw config set`, new
-   fallback models won't be prefetched until gateway restart.
+Could not post review - MCP write tools are restricted to `suboss87/openclaw`.
 
-**Cannot post review**: `mcp__github__add_issue_comment` and `pull_request_review_write` denied
-for `openclaw/openclaw`. Review queued for when MCP access is resolved.
+Key observations from local code review (post manually if desired):
+
+- `src/agents/pi-embedded-subscribe.handlers.compaction.ts` fires `before_compaction` /
+  `after_compaction` hooks in two separate sites (subscribe-time ~line 848 and engine-owned
+  ~line 1052). Each builds its hook context independently. Worth checking whether the PR
+  centralizes this into a shared helper to prevent future drift, or patches each site
+  separately.
+- Verify the reset path correctly invalidates in-flight compaction state before reinitializing
+  session invariants. A race between reset and a queued compaction could re-corrupt state
+  even after the fix.
 
 ## Next Steps
 
-1. **#66544 and #66225** - both 7 days old with 3-5 comments. If still open by 2026-04-25,
-   post a polite ping asking if anything blocks merge.
-2. **#68446** - 3 days old, XS size, strong PR description. Wait for standard 5-7 day window.
-3. **MCP access** - blocking all meaningful upstream actions (comment responses, PR review
-   posting, reading PR state). Resolve `openclaw/openclaw` restriction or confirm it is by design.
-4. **#69495 review** - draft is ready; post when MCP access is resolved.
-5. **#55787 merged** - first merge in over a month. Update personal tracking/profile.
+1. Open upstream PR for the profile fix from
+   https://github.com/suboss87/openclaw/pull/new/fix/plugins-install-profile-extensions-dir
+2. Follow up on #66544 and #66225 (8 days old, no merge activity) - may need a ping or rebase.
+3. Post the compaction review on #69270 manually if desired.
+4. Check CI on #69685 and #68446 (both recent, should have results).
