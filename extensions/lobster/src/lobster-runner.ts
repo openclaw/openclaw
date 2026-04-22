@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
@@ -15,6 +16,7 @@ export type LobsterEnvelope =
         prompt: string;
         items: unknown[];
         resumeToken?: string;
+        approvalId?: string;
       };
     }
   | {
@@ -27,6 +29,7 @@ export type LobsterRunnerParams = {
   pipeline?: string;
   argsJson?: string;
   token?: string;
+  approvalId?: string;
   approve?: boolean;
   cwd: string;
   timeoutMs: number;
@@ -60,6 +63,7 @@ type EmbeddedToolEnvelope = {
     items: unknown[];
     preview?: string;
     resumeToken?: string;
+    approvalId?: string;
   } | null;
   requiresInput?: {
     prompt: string;
@@ -156,6 +160,9 @@ function normalizeEnvelope(envelope: EmbeddedToolEnvelope): LobsterEnvelope {
             ...(envelope.requiresApproval.resumeToken
               ? { resumeToken: envelope.requiresApproval.resumeToken }
               : {}),
+            ...(envelope.requiresApproval.approvalId
+              ? { approvalId: envelope.requiresApproval.approvalId }
+              : {}),
           }
         : null,
     };
@@ -177,7 +184,6 @@ function throwOnErrorEnvelope(envelope: LobsterEnvelope): Extract<LobsterEnvelop
 }
 
 async function resolveWorkflowFile(candidate: string, cwd: string) {
-  const { stat } = await import("node:fs/promises");
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
   const fileStat = await stat(resolved);
   if (!fileStat.isFile()) {
@@ -296,8 +302,9 @@ export function createEmbeddedLobsterRunner(options?: {
         }
 
         const token = params.token?.trim() ?? "";
-        if (!token) {
-          throw new Error("token required");
+        const approvalId = params.approvalId?.trim() ?? "";
+        if (!token && !approvalId) {
+          throw new Error("token or approvalId required");
         }
         if (typeof params.approve !== "boolean") {
           throw new Error("approve required");
@@ -306,7 +313,8 @@ export function createEmbeddedLobsterRunner(options?: {
         return throwOnErrorEnvelope(
           normalizeEnvelope(
             await runtime.resumeToolRequest({
-              token,
+              ...(token ? { token } : {}),
+              ...(approvalId ? { approvalId } : {}),
               approved: params.approve,
               ctx,
             }),

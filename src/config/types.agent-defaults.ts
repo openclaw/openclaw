@@ -1,4 +1,8 @@
 import type {
+  SilentReplyPolicyShape,
+  SilentReplyRewriteShape,
+} from "../shared/silent-reply-policy.js";
+import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
   AgentSandboxConfig,
@@ -13,7 +17,6 @@ import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
-export type LocalModelMode = "default" | "lean";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -60,10 +63,21 @@ export type AgentStartupContextConfig = {
   dailyMemoryDays?: number;
   /** Max bytes to read from each daily memory file before skipping (default: 16384). */
   maxFileBytes?: number;
-  /** Max characters retained from each daily memory file (default: 2000). */
+  /** Max characters retained from each daily memory file (default: 1200). */
   maxFileChars?: number;
-  /** Max total characters retained across the startup prelude (default: 4500). */
+  /** Max total characters retained across the startup prelude (default: 2800). */
   maxTotalChars?: number;
+};
+
+export type AgentContextLimitsConfig = {
+  /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
+  memoryGetMaxChars?: number;
+  /** Default line window for memory_get when lines is omitted (default: 120). */
+  memoryGetDefaultLines?: number;
+  /** Max chars kept for a single live tool result before truncation (default: 16000). */
+  toolResultMaxChars?: number;
+  /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
+  postCompactionMaxChars?: number;
 };
 
 export type CliBackendConfig = {
@@ -77,6 +91,8 @@ export type CliBackendConfig = {
   resumeOutput?: "json" | "text" | "jsonl";
   /** JSONL event dialect for CLIs with provider-specific stream formats. */
   jsonlDialect?: "claude-stream-json";
+  /** Long-lived CLI process mode. */
+  liveSession?: "claude-stdio";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
@@ -181,6 +197,10 @@ export type AgentDefaultsConfig = {
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
   skills?: string[];
+  /** Silent-reply policy by conversation type. */
+  silentReply?: SilentReplyPolicyShape;
+  /** Whether disallowed silent replies should be rewritten by conversation type. */
+  silentReplyRewrite?: SilentReplyRewriteShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
@@ -199,12 +219,14 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
-  /**
-   * Optional local-model prompt profile:
-   * - default: keep the standard tool surface
-   * - lean: drop heavyweight non-essential tools for smaller or weaker models
-   */
-  localModelMode?: LocalModelMode;
+  /** Experimental agent-default flags. Keep off unless you are intentionally testing a preview surface. */
+  experimental?: {
+    /**
+     * Drop heavyweight non-essential default tools for weaker or smaller local
+     * model backends. Experimental preview only.
+     */
+    localModelLean?: boolean;
+  };
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
@@ -216,6 +238,8 @@ export type AgentDefaultsConfig = {
   userTimezone?: string;
   /** Runtime-owned first-turn startup context for bare /new and /reset. */
   startupContext?: AgentStartupContextConfig;
+  /** Focused context-budget overrides for high-volume injected/read surfaces. */
+  contextLimits?: AgentContextLimitsConfig;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
   /**
@@ -259,7 +283,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
@@ -436,7 +460,7 @@ export type AgentCompactionConfig = {
    */
   truncateAfterCompaction?: boolean;
   /**
-   * Send a "🧹 Compacting context..." notice to the user when compaction starts.
+   * Send brief compaction notices to the user when compaction starts and completes.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;

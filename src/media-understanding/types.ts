@@ -1,3 +1,4 @@
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type MediaUnderstandingKind =
@@ -83,6 +84,8 @@ export type MediaUnderstandingProviderRequestTransportOverrides = {
   auth?: MediaUnderstandingProviderRequestAuthOverride;
   proxy?: MediaUnderstandingProviderRequestProxyOverride;
   tls?: MediaUnderstandingProviderRequestTlsOverride;
+  /** Runtime-only flag from trusted model-provider config; media config rejects it. */
+  allowPrivateNetwork?: boolean;
 };
 
 export type AudioTranscriptionRequest = {
@@ -134,6 +137,7 @@ export type ImageDescriptionRequest = {
   timeoutMs: number;
   profile?: string;
   preferredProfile?: string;
+  authStore?: AuthProfileStore;
   agentDir: string;
   cfg: OpenClawConfig;
   model: string;
@@ -155,6 +159,7 @@ export type ImagesDescriptionRequest = {
   timeoutMs: number;
   profile?: string;
   preferredProfile?: string;
+  authStore?: AuthProfileStore;
   agentDir: string;
   cfg: OpenClawConfig;
 };

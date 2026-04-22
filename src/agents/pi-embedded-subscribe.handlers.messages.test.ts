@@ -21,6 +21,7 @@ function createMessageUpdateContext(
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onPartialReply?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
+    resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
   } = {},
@@ -50,6 +51,8 @@ function createMessageUpdateContext(
       shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
       blockReplyBreak: "text_end",
       assistantMessageIndex: 0,
+      lastAssistantStreamItemId: undefined,
+      assistantTexts: [],
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
@@ -57,6 +60,7 @@ function createMessageUpdateContext(
     consumePartialReplyDirectives: vi.fn(() => null),
     emitReasoningStream: vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
+    resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
@@ -190,11 +194,64 @@ describe("buildAssistantStreamData", () => {
   });
 });
 
+describe("handleMessageUpdate", () => {
+  it("treats phased textSignature item changes as assistant-message boundaries", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      resetAssistantMessageState,
+    });
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+    context.state.lastAssistantStreamItemId = "item-1";
+    context.state.assistantMessageIndex = 7;
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 1,
+        delta: "Second block",
+        partial: {
+          role: "assistant",
+          phase: "final_answer",
+          content: [
+            createOpenAiResponsesTextBlock({
+              text: "First block",
+              id: "item-1",
+              phase: "final_answer",
+            }),
+            createOpenAiResponsesTextBlock({
+              text: "Second block",
+              id: "item-2",
+              phase: "final_answer",
+            }),
+          ],
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
+    expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
+  });
+});
+
 describe("consumePendingToolMediaIntoReply", () => {
   it("attaches queued tool media to the next assistant reply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -213,6 +270,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -234,6 +292,7 @@ describe("consumePendingToolMediaReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(consumePendingToolMediaReply(state)).toEqual({

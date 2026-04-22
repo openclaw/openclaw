@@ -19,7 +19,6 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
 );
 const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
   "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
 ] as const;
 const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
   ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
@@ -171,29 +170,30 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
-  it("flags missing root mirrors for bundled plugin deps imported by root dist", () => {
+  function writeSlackWebApiProbePackage(
+    root: string,
+    dependencies: Record<string, string> = {},
+  ): void {
+    writePackageFile(root, "package.json", {
+      version: "2026.4.10",
+      dependencies,
+    });
+    writePackageFile(root, "dist/extensions/slack/package.json", {
+      dependencies: {
+        "@slack/web-api": "^7.15.0",
+      },
+    });
+    mkdirSync(join(root, "dist"), { recursive: true });
+    writeFileSync(join(root, "dist", "probe-Cz2PiFtC.js"), 'import("@slack/web-api");\n', "utf8");
+  }
+
+  it("does not require root mirrors for bundled plugin deps imported by root dist", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {},
-      });
-      writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
-        dependencies: {
-          "@slack/web-api": "^7.15.0",
-        },
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
-        'import("@slack/web-api");\n',
-        "utf8",
-      );
+      writeSlackWebApiProbePackage(packageRoot);
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; mirror '@slack/web-api: ^7.15.0' in root package.json (declared by slack).",
-      ]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -227,31 +227,15 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("flags root mirror dependency version mismatches", () => {
+  it("does not compare root mirror dependency versions", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {
-          "@slack/web-api": "^7.16.0",
-        },
+      writeSlackWebApiProbePackage(packageRoot, {
+        "@slack/web-api": "^7.16.0",
       });
-      writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
-        dependencies: {
-          "@slack/web-api": "^7.15.0",
-        },
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
-        'import("@slack/web-api");\n',
-        "utf8",
-      );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; root package.json has '^7.16.0' but plugin manifest declares '^7.15.0' (slack).",
-      ]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -316,7 +300,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("rejects private qa sidecar directories that are missing package.json", () => {
+  it("accepts legacy qa channel sidecar directories without package.json", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -325,22 +309,13 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist/extensions/qa-channel"), { recursive: true });
-      mkdirSync(join(packageRoot, "dist/extensions/qa-lab"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist/extensions/qa-channel/runtime-api.js"),
         "export {};\n",
         "utf8",
       );
-      writeFileSync(
-        join(packageRoot, "dist/extensions/qa-lab/runtime-api.js"),
-        "export {};\n",
-        "utf8",
-      );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-channel/package.json")}.`,
-        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-lab/package.json")}.`,
-      ]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

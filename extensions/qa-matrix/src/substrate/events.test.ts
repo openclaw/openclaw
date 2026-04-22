@@ -67,6 +67,39 @@ describe("matrix observed event normalization", () => {
     );
   });
 
+  it("prefers m.new_content text for Matrix replacement events", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$replace",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "* finalized",
+          msgtype: "m.text",
+          "m.new_content": {
+            body: "finalized",
+            msgtype: "m.text",
+          },
+          "m.relates_to": {
+            rel_type: "m.replace",
+            event_id: "$draft",
+          },
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventId: "$replace",
+        body: "finalized",
+        msgtype: "m.text",
+        relatesTo: {
+          eventId: "$draft",
+          relType: "m.replace",
+        },
+      }),
+    );
+  });
+
   it("normalizes Matrix reaction events with target metadata", () => {
     expect(
       normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
@@ -98,6 +131,53 @@ describe("matrix observed event normalization", () => {
         key: "👍",
       },
     });
+  });
+
+  it("normalizes Matrix image messages with attachment metadata", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$image",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "Protocol note: generated the QA lighthouse image successfully.",
+          filename: "qa-lighthouse.png",
+          msgtype: "m.image",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventId: "$image",
+        msgtype: "m.image",
+        attachment: {
+          kind: "image",
+          caption: "Protocol note: generated the QA lighthouse image successfully.",
+          filename: "qa-lighthouse.png",
+        },
+      }),
+    );
+  });
+
+  it("treats filename-like Matrix media bodies as attachment filenames", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$image",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "qa-lighthouse.png",
+          msgtype: "m.image",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        attachment: {
+          kind: "image",
+          filename: "qa-lighthouse.png",
+        },
+      }),
+    );
   });
 
   it("normalizes membership events with explicit membership kind", () => {

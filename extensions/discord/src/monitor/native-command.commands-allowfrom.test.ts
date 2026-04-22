@@ -83,11 +83,13 @@ async function runGuildSlashCommand(params?: {
   userId?: string;
   mutateConfig?: (cfg: OpenClawConfig) => void;
   runtimeDiscordConfig?: DiscordAccountConfig;
+  mutateInteraction?: (interaction: MockCommandInteraction) => void;
 }) {
   const cfg = createConfig();
   params?.mutateConfig?.(cfg);
   const command = createCommand(cfg, params?.runtimeDiscordConfig);
   const interaction = createInteraction({ userId: params?.userId });
+  params?.mutateInteraction?.(interaction);
   vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
   const dispatchSpy = createDispatchSpy();
   await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
@@ -148,6 +150,92 @@ describe("Discord native slash commands with commands.allowFrom", () => {
         };
       },
     });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("tolerates partial guild channels whose name getter throws", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateInteraction: (currentInteraction) => {
+        Object.defineProperty(currentInteraction.channel, "name", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            throw new Error(
+              "Cannot access rawData on partial Channel. Use fetch() to populate data.",
+            );
+          },
+        });
+      },
+    });
+    expect(interaction.defer).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("tolerates partial guild channels whose topic getter throws", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateInteraction: (currentInteraction) => {
+        Object.defineProperty(currentInteraction.channel, "topic", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            throw new Error(
+              "Cannot access rawData on partial Channel. Use fetch() to populate data.",
+            );
+          },
+        });
+      },
+    });
+    expect(interaction.defer).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("tolerates partial guild thread channels whose parentId getter throws", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateInteraction: (currentInteraction) => {
+        currentInteraction.channel = {
+          type: ChannelType.PublicThread,
+          id: currentInteraction.channel.id,
+        } as MockCommandInteraction["channel"];
+        Object.defineProperty(currentInteraction.channel, "parentId", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            throw new Error(
+              "Cannot access rawData on partial Channel. Use fetch() to populate data.",
+            );
+          },
+        });
+      },
+    });
+    expect(interaction.defer).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("tolerates guild thread channels exposed through a Proxy whose has trap throws", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateInteraction: (currentInteraction) => {
+        const baseChannel = {
+          type: ChannelType.PublicThread,
+          id: currentInteraction.channel.id,
+        };
+        currentInteraction.channel = new Proxy(baseChannel, {
+          has(target, key) {
+            if (key === "parentId") {
+              throw new Error("has-trap denied");
+            }
+            return key in target;
+          },
+          get(target, key, receiver) {
+            return Reflect.get(target, key, receiver);
+          },
+        }) as MockCommandInteraction["channel"];
+      },
+    });
+    expect(interaction.defer).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
   });

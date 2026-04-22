@@ -15,6 +15,12 @@ export type MatrixQaObservedEventKind =
   | "reaction"
   | "room-event";
 
+export type MatrixQaObservedEventAttachment = {
+  caption?: string;
+  filename?: string;
+  kind: "audio" | "file" | "image" | "sticker" | "video";
+};
+
 export type MatrixQaObservedEvent = {
   kind: MatrixQaObservedEventKind;
   roomId: string;
@@ -41,12 +47,28 @@ export type MatrixQaObservedEvent = {
     eventId?: string;
     key?: string;
   };
+  attachment?: MatrixQaObservedEventAttachment;
 };
 
 function normalizeMentionUserIds(value: unknown) {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     : undefined;
+}
+
+function resolveMatrixQaMessageContent(
+  content: Record<string, unknown>,
+  relatesTo: Record<string, unknown> | null,
+) {
+  const newContentRaw = content["m.new_content"];
+  const newContent =
+    typeof newContentRaw === "object" && newContentRaw !== null
+      ? (newContentRaw as Record<string, unknown>)
+      : null;
+  if (relatesTo?.rel_type === "m.replace" && newContent) {
+    return newContent;
+  }
+  return content;
 }
 
 function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: string }) {
@@ -63,6 +85,49 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
     return params.msgtype === "m.notice" ? ("notice" as const) : ("message" as const);
   }
   return "room-event" as const;
+}
+
+function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
+  switch (msgtype) {
+    case "m.audio":
+      return "audio" as const;
+    case "m.file":
+      return "file" as const;
+    case "m.image":
+      return "image" as const;
+    case "m.sticker":
+      return "sticker" as const;
+    case "m.video":
+      return "video" as const;
+    default:
+      return undefined;
+  }
+}
+
+function isLikelyMatrixQaFilenameBody(value: string) {
+  return !value.includes("\n") && /\.[a-z0-9][a-z0-9._-]{0,24}$/i.test(value);
+}
+
+function resolveMatrixQaAttachmentSummary(params: {
+  body?: string;
+  filename?: string;
+  msgtype?: string;
+}): MatrixQaObservedEventAttachment | undefined {
+  const kind = resolveMatrixQaAttachmentKind(params.msgtype);
+  if (!kind) {
+    return undefined;
+  }
+  const body = params.body?.trim() ?? "";
+  const explicitFilename = params.filename?.trim() ?? "";
+  const inferredFilename =
+    !explicitFilename && body && isLikelyMatrixQaFilenameBody(body) ? body : "";
+  const filename = explicitFilename || inferredFilename;
+  const caption = body && body !== filename ? body : "";
+  return {
+    kind,
+    ...(caption ? { caption } : {}),
+    ...(filename ? { filename } : {}),
+  };
 }
 
 export function normalizeMatrixQaObservedEvent(
@@ -86,7 +151,16 @@ export function normalizeMatrixQaObservedEvent(
     typeof inReplyToRaw === "object" && inReplyToRaw !== null
       ? (inReplyToRaw as Record<string, unknown>)
       : null;
-  const mentionsRaw = content["m.mentions"];
+  const messageContent = resolveMatrixQaMessageContent(content, relatesTo);
+  const normalizedMsgtype =
+    typeof messageContent.msgtype === "string" ? messageContent.msgtype : msgtype;
+  const normalizedFilename =
+    typeof messageContent.filename === "string"
+      ? messageContent.filename
+      : typeof content.filename === "string"
+        ? content.filename
+        : undefined;
+  const mentionsRaw = messageContent["m.mentions"] ?? content["m.mentions"];
   const mentions =
     typeof mentionsRaw === "object" && mentionsRaw !== null
       ? (mentionsRaw as Record<string, unknown>)
@@ -98,9 +172,14 @@ export function normalizeMatrixQaObservedEvent(
     type === "m.reaction" && typeof relatesTo?.event_id === "string"
       ? relatesTo.event_id
       : undefined;
+  const attachment = resolveMatrixQaAttachmentSummary({
+    body: typeof messageContent.body === "string" ? messageContent.body : undefined,
+    filename: normalizedFilename,
+    msgtype: normalizedMsgtype,
+  });
 
   return {
-    kind: resolveMatrixQaObservedEventKind({ msgtype, type }),
+    kind: resolveMatrixQaObservedEventKind({ msgtype: normalizedMsgtype, type }),
     roomId,
     eventId,
     sender: typeof event.sender === "string" ? event.sender : undefined,
@@ -108,9 +187,10 @@ export function normalizeMatrixQaObservedEvent(
     type,
     originServerTs:
       typeof event.origin_server_ts === "number" ? Math.floor(event.origin_server_ts) : undefined,
-    body: typeof content.body === "string" ? content.body : undefined,
-    formattedBody: typeof content.formatted_body === "string" ? content.formatted_body : undefined,
-    msgtype,
+    body: typeof messageContent.body === "string" ? messageContent.body : undefined,
+    formattedBody:
+      typeof messageContent.formatted_body === "string" ? messageContent.formatted_body : undefined,
+    msgtype: normalizedMsgtype,
     membership: typeof content.membership === "string" ? content.membership : undefined,
     ...(relatesTo
       ? {
@@ -141,5 +221,27 @@ export function normalizeMatrixQaObservedEvent(
           },
         }
       : {}),
+    ...(attachment ? { attachment } : {}),
   };
+}
+
+export function findMatrixQaObservedEventMatch(params: {
+  cursorIndex: number;
+  events: MatrixQaObservedEvent[];
+  predicate: (event: MatrixQaObservedEvent) => boolean;
+  roomId: string;
+}) {
+  for (let index = params.cursorIndex; index < params.events.length; index += 1) {
+    const event = params.events[index];
+    if (event?.roomId !== params.roomId) {
+      continue;
+    }
+    if (params.predicate(event)) {
+      return {
+        event,
+        nextCursorIndex: index + 1,
+      };
+    }
+  }
+  return undefined;
 }

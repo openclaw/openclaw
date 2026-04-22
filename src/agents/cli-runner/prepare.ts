@@ -3,7 +3,14 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import type {
+  CliBackendAuthEpochMode,
+  CliBackendPreparedExecution,
+} from "../../plugins/cli-backend.types.js";
+import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
+import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
@@ -14,7 +21,7 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
-import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
+import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
@@ -48,6 +55,20 @@ export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDep
   Object.assign(prepareDeps, overrides);
 }
 
+export function shouldSkipLocalCliCredentialEpoch(params: {
+  authEpochMode?: CliBackendAuthEpochMode;
+  authProfileId?: string;
+  authCredential?: AuthProfileCredential;
+  preparedExecution?: CliBackendPreparedExecution | null;
+}): boolean {
+  return Boolean(
+    params.authEpochMode === "profile-only" &&
+    params.authProfileId &&
+    params.authCredential &&
+    params.preparedExecution,
+  );
+}
+
 export async function prepareCliRunContext(
   params: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -73,10 +94,18 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  const authEpoch = await resolveCliAuthEpoch({
-    provider: params.provider,
-    authProfileId: params.authProfileId,
-  });
+  const agentDir = resolveOpenClawAgentDir();
+  const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
+  const effectiveAuthProfileId =
+    requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
+  let authCredential: AuthProfileCredential | undefined;
+  if (effectiveAuthProfileId) {
+    const authStore = loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+    authCredential = authStore.profiles[effectiveAuthProfileId];
+  }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
   const modelId = (params.model ?? "default").trim() || "default";
@@ -91,6 +120,7 @@ export async function prepareCliRunContext(
     sessionId: params.sessionId,
     warn: prepareDeps.makeBootstrapWarn({
       sessionLabel,
+      workspaceDir,
       warn: (message) => cliBackendLog.warn(message),
     }),
   });
@@ -138,23 +168,75 @@ export async function prepareCliRunContext(
       : undefined,
     env: mcpLoopbackRuntime
       ? {
-          OPENCLAW_MCP_TOKEN: mcpLoopbackRuntime.token,
+          OPENCLAW_MCP_TOKEN:
+            params.senderIsOwner === true
+              ? mcpLoopbackRuntime.ownerToken
+              : mcpLoopbackRuntime.nonOwnerToken,
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
-          OPENCLAW_MCP_SENDER_IS_OWNER: params.senderIsOwner === true ? "true" : "false",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
+  const preparedExecution = await backendResolved.prepareExecution?.({
+    config: params.config,
+    workspaceDir,
+    agentDir,
+    provider: params.provider,
+    modelId,
+    authProfileId: effectiveAuthProfileId,
+  });
+  const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
+    authEpochMode: backendResolved.authEpochMode,
+    authProfileId: effectiveAuthProfileId,
+    authCredential,
+    preparedExecution,
+  });
+  const authEpoch = await resolveCliAuthEpoch({
+    provider: params.provider,
+    authProfileId: effectiveAuthProfileId,
+    skipLocalCredential: skipLocalCredentialEpoch,
+  });
+  const preparedBackendEnv =
+    preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
+      ? { ...preparedBackend.env, ...preparedExecution.env }
+      : preparedBackend.env;
+  const preparedBackendCleanup =
+    preparedBackend.cleanup || preparedExecution?.cleanup
+      ? async () => {
+          try {
+            await preparedExecution?.cleanup?.();
+          } finally {
+            await preparedBackend.cleanup?.();
+          }
+        }
+      : undefined;
+  const preparedBackendClearEnv = [
+    ...(preparedBackend.backend.clearEnv ?? []),
+    ...(preparedExecution?.clearEnv ?? []),
+  ];
+  const preparedBackendFinal = {
+    ...preparedBackend,
+    backend: {
+      ...preparedBackend.backend,
+      ...(preparedBackendClearEnv.length > 0
+        ? { clearEnv: Array.from(new Set(preparedBackendClearEnv)) }
+        : {}),
+    },
+    ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
+    ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
+  };
   const reusableCliSession = params.cliSessionBinding
     ? resolveCliSessionReuse({
         binding: params.cliSessionBinding,
-        authProfileId: params.authProfileId,
+        authProfileId: effectiveAuthProfileId,
         authEpoch,
+        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
         extraSystemPromptHash,
-        mcpConfigHash: preparedBackend.mcpConfigHash,
+        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
       })
     : params.cliSessionId
       ? { sessionId: params.cliSessionId }
@@ -239,10 +321,11 @@ export async function prepareCliRunContext(
 
   return {
     params,
+    effectiveAuthProfileId,
     started,
     workspaceDir,
     backendResolved,
-    preparedBackend,
+    preparedBackend: preparedBackendFinal,
     reusableCliSession,
     modelId,
     normalizedModel,
@@ -251,6 +334,7 @@ export async function prepareCliRunContext(
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
     heartbeatPrompt,
     authEpoch,
+    authEpochVersion: CLI_AUTH_EPOCH_VERSION,
     extraSystemPromptHash,
   };
 }
