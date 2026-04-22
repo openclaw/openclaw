@@ -1,7 +1,8 @@
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/config-runtime";
 import {
+  isHeartbeatEnabledForAgent,
   peekSystemEventEntries,
-  resolveHeartbeatSummaryForAgent,
+  resolveHeartbeatIntervalMs,
 } from "openclaw/plugin-sdk/infra-runtime";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
@@ -408,8 +409,13 @@ export function resolveDreamingBlockedReason(cfg: OpenClawConfig): string | null
   }
 
   const defaultAgentId = resolveDefaultAgentId(cfg);
-  const heartbeat = resolveHeartbeatSummaryForAgent(cfg, defaultAgentId);
-  if (heartbeat.enabled && heartbeat.everyMs != null) {
+  // Mirror the managed dreaming wake path in server-cron: the job carries no
+  // agentId/sessionKey, so the wake uses defaults-only heartbeat. Not using
+  // resolveHeartbeatSummaryForAgent since it would apply the per-agent override
+  // and diverge from actual runtime behavior.
+  const enabledForDefault = isHeartbeatEnabledForAgent(cfg, defaultAgentId);
+  const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, cfg.agents?.defaults?.heartbeat);
+  if (enabledForDefault && intervalMs != null) {
     return null;
   }
 
