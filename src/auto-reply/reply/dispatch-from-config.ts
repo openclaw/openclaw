@@ -633,8 +633,10 @@ export async function dispatchReplyFromConfig(
       return { queuedFinal, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
-    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const shouldSendToolSummaries =
+      (ctx.ChatType !== "group" && ctx.ChatType !== "channel") || ctx.IsForum === true;
+    const shouldSendToolStartStatuses =
+      (ctx.ChatType !== "group" && ctx.ChatType !== "channel") || ctx.IsForum === true;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
