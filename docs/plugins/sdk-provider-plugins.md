@@ -243,7 +243,8 @@ API key auth, and dynamic model resolution.
     provider auth. It may perform provider-specific discovery. Use
     `buildStaticProvider` only for bundled/offline rows that are safe to show in
     display-only surfaces such as `models list --all` before auth is configured;
-    it must not require credentials or make network requests.
+    it must not require credentials or make network requests. Static catalog
+    hooks run with an empty config, empty env, and no agent/workspace paths.
 
     If your auth flow also needs to patch `models.providers.*`, aliases, and
     the agent default model during onboarding, use the preset helpers from

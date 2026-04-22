@@ -160,6 +160,10 @@ export async function appendCatalogSupplementRows(params: {
     params.seenKeys.add(key);
   }
 
+  if (params.context.filter.local) {
+    return;
+  }
+
   for (const model of await loadProviderCatalogModelsForList({
     cfg: params.context.cfg,
     agentDir: params.context.agentDir,

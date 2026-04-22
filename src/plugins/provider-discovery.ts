@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
+const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 let providerRuntimePromise: Promise<typeof import("./provider-discovery.runtime.js")> | undefined;
 
 function loadProviderRuntime() {
@@ -17,6 +18,14 @@ function resolveProviderCatalogHook(provider: ProviderPlugin) {
 
 function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
   return resolveProviderCatalogHook(provider) ?? provider.staticCatalog;
+}
+
+function createProviderConfigRecord(): Record<string, ModelProviderConfig> {
+  return Object.create(null) as Record<string, ModelProviderConfig>;
+}
+
+function isSafeProviderConfigKey(value: string): boolean {
+  return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
 }
 
 export async function resolvePluginDiscoveryProviders(params: {
@@ -67,14 +76,14 @@ export function normalizePluginDiscoveryResult(params: {
   }
 
   if ("provider" in result) {
-    const normalized: Record<string, ModelProviderConfig> = {};
+    const normalized = createProviderConfigRecord();
     for (const providerId of [
       params.provider.id,
       ...(params.provider.aliases ?? []),
       ...(params.provider.hookAliases ?? []),
     ]) {
       const normalizedKey = normalizeProviderId(providerId);
-      if (!normalizedKey) {
+      if (!isSafeProviderConfigKey(normalizedKey)) {
         continue;
       }
       normalized[normalizedKey] = result.provider;
@@ -82,10 +91,10 @@ export function normalizePluginDiscoveryResult(params: {
     return normalized;
   }
 
-  const normalized: Record<string, ModelProviderConfig> = {};
+  const normalized = createProviderConfigRecord();
   for (const [key, value] of Object.entries(result.providers)) {
     const normalizedKey = normalizeProviderId(key);
-    if (!normalizedKey || !value) {
+    if (!isSafeProviderConfigKey(normalizedKey) || !value) {
       continue;
     }
     normalized[normalizedKey] = value;
@@ -132,10 +141,8 @@ export function runProviderStaticCatalog(params: {
   env: NodeJS.ProcessEnv;
 }) {
   return params.provider.staticCatalog?.run({
-    config: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
+    config: {},
+    env: {},
     resolveProviderApiKey: () => ({
       apiKey: undefined,
     }),

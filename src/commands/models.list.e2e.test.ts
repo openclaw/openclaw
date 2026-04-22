@@ -369,6 +369,16 @@ describe("models list/status", () => {
     ]);
   });
 
+  it("models list all local skips unauthenticated provider catalog rows", async () => {
+    setDefaultZaiRegistry({ available: false });
+    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, local: true, json: true }, runtime);
+
+    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+  });
+
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {
     configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     modelRegistryState.getAllError = Object.assign(new Error("model discovery failed"), {

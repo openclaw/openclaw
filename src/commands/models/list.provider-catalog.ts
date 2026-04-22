@@ -2,6 +2,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -12,6 +14,7 @@ import { resolveOwningPluginIdsForProvider } from "../../plugins/providers.js";
 
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
+const log = createSubsystemLogger("models/list-provider-catalog");
 
 function modelFromProviderCatalog(params: {
   provider: string;
@@ -76,7 +79,8 @@ export async function loadProviderCatalogModelsForList(params: {
           agentDir: params.agentDir,
           env,
         });
-      } catch {
+      } catch (error) {
+        log.warn(`provider static catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
         result = null;
       }
       const normalized = normalizePluginDiscoveryResult({ provider, result });
