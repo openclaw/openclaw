@@ -3,6 +3,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
@@ -12,6 +17,7 @@ import {
 import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
@@ -470,6 +476,42 @@ describe("gateway broadcaster", () => {
       ["chat", 1],
       ["heartbeat", 2],
     ]);
+  });
+
+  it("records a payload diagnostic when the outbound websocket buffer exceeds the limit", () => {
+    resetDiagnosticEventsForTest();
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    try {
+      const slowReadSocket = makeRecordingSocket();
+      slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+      const clients = new Set<GatewayWsClient>([
+        makeGatewayWsClient("c-slow-read", slowReadSocket, {
+          role: "operator",
+          scopes: ["operator.read"],
+        } as GatewayWsClient["connect"]),
+      ]);
+
+      const { broadcast } = createGatewayBroadcaster({ clients });
+
+      broadcast("chat", { sessionKey: "agent:main:main", message: "secret" }, { dropIfSlow: true });
+      broadcast("heartbeat", { ts: 1 });
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "payload.large",
+          surface: "gateway.ws.outbound_buffer",
+          action: "rejected",
+          bytes: MAX_BUFFERED_BYTES + 1,
+          limitBytes: MAX_BUFFERED_BYTES,
+          reason: "ws_send_buffer_drop",
+        }),
+      );
+      expect(events.filter((event) => event.type === "payload.large")).toHaveLength(1);
+    } finally {
+      stop();
+      resetDiagnosticEventsForTest();
+    }
   });
 });
 

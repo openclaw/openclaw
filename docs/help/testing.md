@@ -329,6 +329,20 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test:perf:profile:main` writes a main-thread CPU profile for Vitest/Vite startup and transform overhead.
   - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for the unit suite with file parallelism disabled.
 
+### Stability (gateway)
+
+- Command: `pnpm test:stability:gateway`
+- Config: `vitest.gateway.config.ts`, forced to one worker
+- Scope:
+  - Starts a real loopback Gateway with diagnostics enabled by default
+  - Drives synthetic gateway message, memory, and large-payload churn through the diagnostic event path
+  - Queries `diagnostics.stability` over the Gateway WS RPC
+  - Covers diagnostic stability bundle persistence helpers
+  - Asserts the recorder remains bounded, synthetic RSS samples stay under the pressure budget, and per-session queue depths drain back to zero
+- Expectations:
+  - CI-safe and keyless
+  - Narrow lane for stability-regression follow-up, not a substitute for the full Gateway suite
+
 ### E2E (gateway smoke)
 
 - Command: `pnpm test:e2e`

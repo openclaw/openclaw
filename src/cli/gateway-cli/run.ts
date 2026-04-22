@@ -33,6 +33,7 @@ import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
+import { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -345,6 +346,13 @@ function isHealthyGatewayLockError(err: unknown): boolean {
     err.message.includes("gateway already running") ||
     err.message.includes("another gateway instance is already listening")
   );
+}
+
+function maybeWriteGatewayStartupFailureBundle(err: unknown): void {
+  const result = writeDiagnosticStabilityBundleForFailureSync("gateway.startup_failed", err);
+  if ("message" in result) {
+    gatewayLog.warn(result.message);
+  }
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
@@ -678,6 +686,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       }
     }
   } catch (err) {
+    maybeWriteGatewayStartupFailureBundle(err);
     if (isGatewayLockError(err)) {
       const errMessage = formatErrorMessage(err);
       defaultRuntime.error(
