@@ -142,17 +142,24 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+  if (controlUiEnabled && trustedProxies.length === 0) {
+    const isLoopback = bind === "loopback";
     findings.push({
       checkId: "gateway.trusted_proxies_missing",
-      severity: "warn",
-      title: "Reverse proxy headers are not trusted",
-      detail:
-        "gateway.bind is loopback and gateway.trustedProxies is empty. " +
-        "If you expose the Control UI through a reverse proxy, configure trusted proxies " +
-        "so local-client checks cannot be spoofed.",
-      remediation:
-        "Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.",
+      severity: isLoopback ? "info" : "warn",
+      title: isLoopback
+        ? "Trusted proxies not required on loopback"
+        : "Reverse proxy headers are not trusted",
+      detail: isLoopback
+        ? "gateway.bind is loopback and gateway.trustedProxies is empty. " +
+          "X-Forwarded-For spoofing is not reachable off-host on a loopback-only bind. " +
+          "If you later expose the Control UI via a reverse proxy, set gateway.trustedProxies."
+        : `gateway.bind="${bind}" and gateway.trustedProxies is empty. ` +
+          "If you expose the Control UI through a reverse proxy, configure trusted proxies " +
+          "so local-client checks cannot be spoofed.",
+      remediation: isLoopback
+        ? "No action required. Set gateway.trustedProxies only if you move off loopback behind a reverse proxy."
+        : "Set gateway.trustedProxies to your proxy IPs or bind to loopback.",
     });
   }
 

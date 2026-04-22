@@ -5,7 +5,7 @@ import { collectGatewayConfigFindings, collectLoggingFindings } from "./audit.js
 
 function hasGatewayFinding(
   checkId: "gateway.trusted_proxies_missing" | "gateway.loopback_no_auth",
-  severity: "warn" | "critical",
+  severity: "info" | "warn" | "critical",
   findings: ReturnType<typeof collectGatewayConfigFindings>,
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
@@ -27,6 +27,22 @@ describe("security audit loopback and logging findings", () => {
           gateway: {
             bind: "loopback",
             controlUi: { enabled: true },
+          },
+        };
+        expect(
+          hasGatewayFinding(
+            "gateway.trusted_proxies_missing",
+            "info",
+            collectGatewayConfigFindings(cfg, cfg, process.env),
+          ),
+        ).toBe(true);
+      })(),
+      (async () => {
+        const cfg: OpenClawConfig = {
+          gateway: {
+            bind: "lan",
+            controlUi: { enabled: true },
+            auth: { token: "placeholder-for-lan-audit-test" },
           },
         };
         expect(
