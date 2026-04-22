@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
@@ -17,9 +18,11 @@ import {
 } from "./http-common.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
+  checkGatewayHttpRequestAuth,
   getHeader,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import {
@@ -88,6 +91,7 @@ export async function handleSessionHistoryHttpRequest(
   res: ServerResponse,
   opts: {
     auth: ResolvedGatewayAuth;
+    getResolvedAuth?: () => ResolvedGatewayAuth;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -197,50 +201,106 @@ export async function handleSessionHistoryHttpRequest(
     ...sentHistory,
   });
 
-  const heartbeat = setInterval(() => {
-    if (!res.writableEnded) {
-      res.write(": keepalive\n\n");
-    }
-  }, 15_000);
-
-  const unsubscribe = onSessionTranscriptUpdate((update) => {
-    if (res.writableEnded || !entry?.sessionId) {
-      return;
-    }
-    const updatePath = canonicalizePath(update.sessionFile);
-    if (!updatePath || !transcriptCandidates.has(updatePath)) {
-      return;
-    }
-    if (update.message !== undefined) {
-      if (limit === undefined && cursor === undefined) {
-        const nextEvent = sseState.appendInlineMessage({
-          message: update.message,
-          messageId: update.messageId,
-        });
-        if (!nextEvent) {
-          return;
-        }
-        sentHistory = sseState.snapshot();
-        sseWrite(res, "message", {
-          sessionKey: target.canonicalKey,
-          message: nextEvent.message,
-          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-          messageSeq: nextEvent.messageSeq,
-        });
-        return;
-      }
-    }
-    sentHistory = sseState.refresh();
-    sseWrite(res, "history", {
-      sessionKey: target.canonicalKey,
-      ...sentHistory,
-    });
-  });
+  let cleanedUp = false;
+  let streamQueue = Promise.resolve();
 
   const cleanup = () => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
     clearInterval(heartbeat);
     unsubscribe();
   };
+
+  const closeStream = () => {
+    cleanup();
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  const queueStreamWork = (work: () => Promise<void>) => {
+    streamQueue = streamQueue
+      .then(async () => {
+        if (cleanedUp || res.writableEnded) {
+          return;
+        }
+        await work();
+      })
+      .catch(() => {
+        closeStream();
+      });
+  };
+
+  const isStreamStillAuthorized = async (): Promise<boolean> => {
+    const cfg = loadConfig();
+    const currentRequestAuth = await checkGatewayHttpRequestAuth({
+      req,
+      auth: opts.getResolvedAuth?.() ?? opts.auth,
+      trustedProxies: cfg.gateway?.trustedProxies ?? opts.trustedProxies,
+      allowRealIpFallback: cfg.gateway?.allowRealIpFallback ?? opts.allowRealIpFallback,
+      rateLimiter: opts.rateLimiter,
+      cfg,
+    });
+    if (!currentRequestAuth.ok) {
+      return false;
+    }
+    const requestedScopes = resolveTrustedHttpOperatorScopes(req, currentRequestAuth.requestAuth);
+    return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
+  };
+
+  const heartbeat = setInterval(() => {
+    queueStreamWork(async () => {
+      if (!(await isStreamStillAuthorized())) {
+        closeStream();
+        return;
+      }
+      if (!res.writableEnded) {
+        res.write(": keepalive\n\n");
+      }
+    });
+  }, 15_000);
+
+  const unsubscribe = onSessionTranscriptUpdate((update) => {
+    queueStreamWork(async () => {
+      if (!(await isStreamStillAuthorized())) {
+        closeStream();
+        return;
+      }
+      if (res.writableEnded || !entry?.sessionId) {
+        return;
+      }
+      const updatePath = canonicalizePath(update.sessionFile);
+      if (!updatePath || !transcriptCandidates.has(updatePath)) {
+        return;
+      }
+      if (update.message !== undefined) {
+        if (limit === undefined && cursor === undefined) {
+          const nextEvent = sseState.appendInlineMessage({
+            message: update.message,
+            messageId: update.messageId,
+          });
+          if (!nextEvent) {
+            return;
+          }
+          sentHistory = sseState.snapshot();
+          sseWrite(res, "message", {
+            sessionKey: target.canonicalKey,
+            message: nextEvent.message,
+            ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+            messageSeq: nextEvent.messageSeq,
+          });
+          return;
+        }
+      }
+      sentHistory = sseState.refresh();
+      sseWrite(res, "history", {
+        sessionKey: target.canonicalKey,
+        ...sentHistory,
+      });
+    });
+  });
   req.on("close", cleanup);
   res.on("close", cleanup);
   res.on("finish", cleanup);
