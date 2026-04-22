@@ -39,21 +39,22 @@ Healthy baseline:
 | Group messages ignored          | Check `requireMention` + mention patterns in config | Mention the bot or relax mention policy for that group. |
 | Random disconnect/relogin loops | `openclaw channels status --probe` + logs           | Re-login and verify credentials directory is healthy.   |
 
-Full troubleshooting: [/channels/whatsapp#troubleshooting](/channels/whatsapp#troubleshooting)
+Full troubleshooting: [WhatsApp troubleshooting](/channels/whatsapp#troubleshooting)
 
 ## Telegram
 
 ### Telegram failure signatures
 
-| Symptom                             | Fastest check                                   | Fix                                                                         |
-| ----------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
-| `/start` but no usable reply flow   | `openclaw pairing list telegram`                | Approve pairing or change DM policy.                                        |
-| Bot online but group stays silent   | Verify mention requirement and bot privacy mode | Disable privacy mode for group visibility or mention bot.                   |
-| Send failures with network errors   | Inspect logs for Telegram API call failures     | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                           |
-| `setMyCommands` rejected at startup | Inspect logs for `BOT_COMMANDS_TOO_MUCH`        | Reduce plugin/skill/custom Telegram commands or disable native menus.       |
-| Upgraded and allowlist blocks you   | `openclaw security audit` and config allowlists | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs. |
+| Symptom                             | Fastest check                                    | Fix                                                                                                                        |
+| ----------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `/start` but no usable reply flow   | `openclaw pairing list telegram`                 | Approve pairing or change DM policy.                                                                                       |
+| Bot online but group stays silent   | Verify mention requirement and bot privacy mode  | Disable privacy mode for group visibility or mention bot.                                                                  |
+| Send failures with network errors   | Inspect logs for Telegram API call failures      | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                                                                          |
+| Polling stalls or reconnects slowly | `openclaw logs --follow` for polling diagnostics | Upgrade; if restarts are false positives, tune `pollingStallThresholdMs`. Persistent stalls still point to proxy/DNS/IPv6. |
+| `setMyCommands` rejected at startup | Inspect logs for `BOT_COMMANDS_TOO_MUCH`         | Reduce plugin/skill/custom Telegram commands or disable native menus.                                                      |
+| Upgraded and allowlist blocks you   | `openclaw security audit` and config allowlists  | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs.                                                |
 
-Full troubleshooting: [/channels/telegram#troubleshooting](/channels/telegram#troubleshooting)
+Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshooting)
 
 ## Discord
 
@@ -65,7 +66,7 @@ Full troubleshooting: [/channels/telegram#troubleshooting](/channels/telegram#tr
 | Group messages ignored          | Check logs for mention gating drops | Mention bot or set guild/channel `requireMention: false`. |
 | DM replies missing              | `openclaw pairing list discord`     | Approve DM pairing or adjust DM policy.                   |
 
-Full troubleshooting: [/channels/discord#troubleshooting](/channels/discord#troubleshooting)
+Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshooting)
 
 ## Slack
 
@@ -77,7 +78,7 @@ Full troubleshooting: [/channels/discord#troubleshooting](/channels/discord#trou
 | DMs blocked                            | `openclaw pairing list slack`             | Approve pairing or relax DM policy.                                                                                                                  |
 | Channel message ignored                | Check `groupPolicy` and channel allowlist | Allow the channel or switch policy to `open`.                                                                                                        |
 
-Full troubleshooting: [/channels/slack#troubleshooting](/channels/slack#troubleshooting)
+Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
 
 ## iMessage and BlueBubbles
 
@@ -91,8 +92,8 @@ Full troubleshooting: [/channels/slack#troubleshooting](/channels/slack#troubles
 
 Full troubleshooting:
 
-- [/channels/imessage#troubleshooting](/channels/imessage#troubleshooting)
-- [/channels/bluebubbles#troubleshooting](/channels/bluebubbles#troubleshooting)
+- [iMessage troubleshooting](/channels/imessage#troubleshooting)
+- [BlueBubbles troubleshooting](/channels/bluebubbles#troubleshooting)
 
 ## Signal
 
@@ -104,7 +105,7 @@ Full troubleshooting:
 | DM blocked                      | `openclaw pairing list signal`             | Approve sender or adjust DM policy.                      |
 | Group replies do not trigger    | Check group allowlist and mention patterns | Add sender/group or loosen gating.                       |
 
-Full troubleshooting: [/channels/signal#troubleshooting](/channels/signal#troubleshooting)
+Full troubleshooting: [Signal troubleshooting](/channels/signal#troubleshooting)
 
 ## QQ Bot
 
@@ -117,7 +118,7 @@ Full troubleshooting: [/channels/signal#troubleshooting](/channels/signal#troubl
 | Voice not transcribed           | Check STT provider config                   | Configure `channels.qqbot.stt` or `tools.media.audio`.          |
 | Proactive messages not arriving | Check QQ platform interaction requirements  | QQ may block bot-initiated messages without recent interaction. |
 
-Full troubleshooting: [/channels/qqbot#troubleshooting](/channels/qqbot#troubleshooting)
+Full troubleshooting: [QQ Bot troubleshooting](/channels/qqbot#troubleshooting)
 
 ## Matrix
 
