@@ -40,23 +40,6 @@ const isBuildRelevantSourcePath = (relativePath) => {
   return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
 };
 
-export const isBuildRelevantRunNodePath = (repoPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
 const isRestartRelevantExtensionPath = (relativePath) => {
   const normalizedPath = normalizePath(relativePath);
   if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
@@ -65,7 +48,7 @@ const isRestartRelevantExtensionPath = (relativePath) => {
   return isBuildRelevantSourcePath(normalizedPath);
 };
 
-export const isRestartRelevantRunNodePath = (repoPath) => {
+const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
   if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
     return false;
@@ -77,10 +60,16 @@ export const isRestartRelevantRunNodePath = (repoPath) => {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
   if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
+    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
+
+export const isBuildRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
+
+export const isRestartRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -284,6 +273,23 @@ const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
 const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
+const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
+const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
+const DEFAULT_BUILD_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_BUILD_LOCK_POLL_MS = 100;
+const DEFAULT_BUILD_LOCK_STALE_MS = 10 * 60 * 1000;
+
+const parsePositiveIntegerEnv = (env, name, fallback) => {
+  const raw = env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
@@ -440,9 +446,115 @@ const closeRunNodeOutputTee = async (deps, exitCode) => {
   return exitCode;
 };
 
-const syncRuntimeArtifacts = (deps) => {
+const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   try {
-    deps.runRuntimePostBuild({ cwd: deps.cwd });
+    const stats = deps.fs.statSync(lockDir);
+    if (Date.now() - stats.mtimeMs < staleMs) {
+      return false;
+    }
+    deps.fs.rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const acquireRunNodeBuildLock = async (deps) => {
+  const lockRoot = path.join(deps.cwd, ".artifacts");
+  const lockDir = path.join(lockRoot, "run-node-build.lock");
+  const timeoutMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_TIMEOUT_ENV,
+    DEFAULT_BUILD_LOCK_TIMEOUT_MS,
+  );
+  const pollMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_POLL_ENV,
+    DEFAULT_BUILD_LOCK_POLL_MS,
+  );
+  const staleMs = parsePositiveIntegerEnv(
+    deps.env,
+    RUN_NODE_BUILD_LOCK_STALE_ENV,
+    DEFAULT_BUILD_LOCK_STALE_MS,
+  );
+  const startedAt = Date.now();
+  let loggedWait = false;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      deps.fs.mkdirSync(lockRoot, { recursive: true });
+      deps.fs.mkdirSync(lockDir);
+      try {
+        deps.fs.writeFileSync(
+          path.join(lockDir, "owner.json"),
+          `${JSON.stringify(
+            {
+              pid: deps.process.pid,
+              startedAt: new Date().toISOString(),
+              args: deps.args,
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+      } catch {
+        // Owner metadata is diagnostic only; the directory itself is the lock.
+      }
+      let released = false;
+      const removeLockDir = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        try {
+          deps.fs.rmSync(lockDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup; a follow-up waiter will fall back to staleness
+          // detection if the directory is still present.
+        }
+      };
+      const onSignal = () => removeLockDir();
+      const onExit = () => removeLockDir();
+      deps.process.on("SIGINT", onSignal);
+      deps.process.on("SIGTERM", onSignal);
+      deps.process.on("exit", onExit);
+      return () => {
+        deps.process.off("SIGINT", onSignal);
+        deps.process.off("SIGTERM", onSignal);
+        deps.process.off("exit", onExit);
+        removeLockDir();
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      if (removeStaleBuildLock(deps, lockDir, staleMs)) {
+        continue;
+      }
+      if (!loggedWait) {
+        logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
+        loggedWait = true;
+      }
+      await sleep(pollMs);
+    }
+  }
+
+  throw new Error(`timed out waiting for ${path.relative(deps.cwd, lockDir)}`);
+};
+
+const withRunNodeBuildLock = async (deps, callback) => {
+  const release = await acquireRunNodeBuildLock(deps);
+  try {
+    return await callback();
+  } finally {
+    release();
+  }
+};
+
+const syncRuntimeArtifacts = async (deps) => {
+  try {
+    await deps.runRuntimePostBuild({ cwd: deps.cwd });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -502,38 +614,55 @@ export async function runNodeMain(params = {}) {
     let exitCode = 1;
     const buildRequirement = resolveBuildRequirement(deps);
     if (!buildRequirement.shouldBuild) {
-      if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
-        return await closeRunNodeOutputTee(deps, 1);
+      if (!shouldSkipCleanWatchRuntimeSync(deps)) {
+        const synced = await withRunNodeBuildLock(
+          deps,
+          async () => await syncRuntimeArtifacts(deps),
+        );
+        if (!synced) {
+          return await closeRunNodeOutputTee(deps, 1);
+        }
       }
       exitCode = await runOpenClaw(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
     }
 
-    logRunner(
-      `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
-      deps,
-    );
-    const buildCmd = deps.execPath;
-    const buildArgs = compilerArgs;
-    const build = deps.spawn(buildCmd, buildArgs, {
-      cwd: deps.cwd,
-      env: deps.env,
-      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
-    });
-    pipeSpawnedOutput(build, deps);
+    const buildExitCode = await withRunNodeBuildLock(deps, async () => {
+      const lockedBuildRequirement = resolveBuildRequirement(deps);
+      if (!lockedBuildRequirement.shouldBuild) {
+        return (await syncRuntimeArtifacts(deps)) ? 0 : 1;
+      }
 
-    const buildRes = await waitForSpawnedProcess(build, deps);
-    const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
-    if (interruptedExitCode !== null) {
-      return await closeRunNodeOutputTee(deps, interruptedExitCode);
+      logRunner(
+        `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
+        deps,
+      );
+      const buildCmd = deps.execPath;
+      const buildArgs = compilerArgs;
+      const build = deps.spawn(buildCmd, buildArgs, {
+        cwd: deps.cwd,
+        env: deps.env,
+        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+      });
+      pipeSpawnedOutput(build, deps);
+
+      const buildRes = await waitForSpawnedProcess(build, deps);
+      const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
+      if (interruptedExitCode !== null) {
+        return interruptedExitCode;
+      }
+      if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
+        return buildRes.exitCode;
+      }
+      if (!(await syncRuntimeArtifacts(deps))) {
+        return 1;
+      }
+      writeBuildStamp(deps);
+      return 0;
+    });
+    if (buildExitCode !== 0) {
+      return await closeRunNodeOutputTee(deps, buildExitCode);
     }
-    if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
-      return await closeRunNodeOutputTee(deps, buildRes.exitCode);
-    }
-    if (!syncRuntimeArtifacts(deps)) {
-      return await closeRunNodeOutputTee(deps, 1);
-    }
-    writeBuildStamp(deps);
     exitCode = await runOpenClaw(deps);
     return await closeRunNodeOutputTee(deps, exitCode);
   } catch (error) {

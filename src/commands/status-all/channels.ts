@@ -1,22 +1,18 @@
 import fs from "node:fs";
-import {
-  hasConfiguredUnavailableCredentialStatus,
-  hasResolvedCredentialValue,
-} from "../../channels/account-snapshot-fields.js";
+import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshot,
   formatChannelAllowFrom,
-  resolveChannelAccountConfigured,
-  resolveChannelAccountEnabled,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import { inspectReadOnlyChannelAccount } from "../../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -58,54 +54,16 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   }
 }
 
-async function inspectChannelAccount(
-  plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
-  accountId: string,
-) {
-  return (
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
-      channelId: plugin.id,
-      cfg,
-      accountId,
-    }))
-  );
-}
-
 async function resolveChannelAccountRow(
   params: ResolvedChannelAccountRowParams,
 ): Promise<ChannelAccountRow> {
   const { plugin, cfg, sourceConfig, accountId } = params;
-  const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
-  const resolvedInspectedAccount = await inspectChannelAccount(plugin, cfg, accountId);
-  const resolvedInspection = resolvedInspectedAccount as {
-    enabled?: boolean;
-    configured?: boolean;
-  } | null;
-  const sourceInspection = sourceInspectedAccount as {
-    enabled?: boolean;
-    configured?: boolean;
-  } | null;
-  const resolvedAccount = resolvedInspectedAccount ?? plugin.config.resolveAccount(cfg, accountId);
-  const useSourceUnavailableAccount = Boolean(
-    sourceInspectedAccount &&
-    hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
-    (!hasResolvedCredentialValue(resolvedAccount) ||
-      (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
-  );
-  const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
-  const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
-  const enabled =
-    selectedInspection?.enabled ?? resolveChannelAccountEnabled({ plugin, account, cfg });
-  const configured =
-    selectedInspection?.configured ??
-    (await resolveChannelAccountConfigured({
-      plugin,
-      account,
-      cfg,
-      readAccountConfiguredField: true,
-    }));
+  const { account, enabled, configured } = await resolveInspectedChannelAccount({
+    plugin,
+    cfg,
+    sourceConfig,
+    accountId,
+  });
   const snapshot = buildChannelAccountSnapshot({
     plugin,
     cfg,
@@ -188,16 +146,18 @@ const buildAccountNotes = (params: {
 };
 
 function resolveLinkFields(summary: unknown): {
+  statusState: string | null;
   linked: boolean | null;
   authAgeMs: number | null;
   selfE164: string | null;
 } {
   const rec = asRecord(summary);
+  const statusState = typeof rec.statusState === "string" ? rec.statusState : null;
   const linked = typeof rec.linked === "boolean" ? rec.linked : null;
   const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
   const self = asRecord(rec.self);
   const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
-  return { linked, authAgeMs, selfE164 };
+  return { statusState, linked, authAgeMs, selfE164 };
 }
 
 function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
@@ -245,7 +205,7 @@ export async function buildChannelsTable(
     rows: Array<Record<string, string>>;
   }> = [];
 
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg)) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -311,6 +271,9 @@ export async function buildChannelsTable(
       if (unavailableConfiguredAccounts.length > 0) {
         return "warn";
       }
+      if (link.statusState === "unstable") {
+        return "warn";
+      }
       if (link.linked === false) {
         return "setup";
       }
@@ -338,6 +301,24 @@ export async function buildChannelsTable(
       }
       if (issues.length > 0) {
         return issues[0]?.message ?? "misconfigured";
+      }
+      if (link.statusState) {
+        if (link.statusState === "linked") {
+          const extra: string[] = [];
+          if (link.selfE164) {
+            extra.push(link.selfE164);
+          }
+          if (link.authAgeMs != null && link.authAgeMs >= 0) {
+            extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
+          }
+          if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
+            extra.push(`accounts ${accounts.length || 1}`);
+          }
+          return extra.length > 0
+            ? `${formatChannelStatusState(link.statusState)} · ${extra.join(" · ")}`
+            : formatChannelStatusState(link.statusState);
+        }
+        return formatChannelStatusState(link.statusState);
       }
 
       if (link.linked !== null) {

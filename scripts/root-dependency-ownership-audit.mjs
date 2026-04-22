@@ -130,11 +130,13 @@ export function classifyRootDependencyOwnership(record) {
   const sections = new Set(record.sections);
 
   if (record.rootMirrorImporters.length > 0) {
-    return {
-      category: "extension_only_root_mirror",
-      recommendation:
-        "blocked by packaged host graph: remove root mirror only after bundled runtime resolution stops importing it from root dist",
-    };
+    if (!sectionSetContainsCore(sections)) {
+      return {
+        category: "extension_only_localizable",
+        recommendation:
+          "remove from root package.json and rely on owning extension manifests plus doctor --fix",
+      };
+    }
   }
 
   if (sections.size === 0) {
@@ -169,7 +171,7 @@ export function classifyRootDependencyOwnership(record) {
     return {
       category: "extension_only_localizable",
       recommendation:
-        "candidate to remove from root package.json and rely on owning extension manifests",
+        "remove from root package.json and rely on owning extension manifests plus doctor --fix",
     };
   }
 
@@ -266,6 +268,23 @@ export function collectRootDependencyOwnershipAudit(params = {}) {
     .toSorted((left, right) => left.depName.localeCompare(right.depName));
 }
 
+export function collectRootDependencyOwnershipCheckErrors(records) {
+  return records
+    .filter((record) => record.category === "extension_only_localizable")
+    .map((record) => {
+      const declaredInExtensions =
+        record.declaredInExtensions.length > 0
+          ? `; extension declarations: ${record.declaredInExtensions.join(", ")}`
+          : "";
+      const sampleFiles =
+        record.sampleFiles.length > 0 ? `; sample imports: ${record.sampleFiles.join(", ")}` : "";
+      return (
+        `root dependency '${record.depName}' is extension-owned (${record.recommendation})` +
+        `${declaredInExtensions}${sampleFiles}`
+      );
+    });
+}
+
 function printTextReport(records) {
   const grouped = new Map();
   for (const record of records) {
@@ -292,7 +311,22 @@ function printTextReport(records) {
 
 function main(argv = process.argv.slice(2)) {
   const asJson = argv.includes("--json");
+  const check = argv.includes("--check");
   const records = collectRootDependencyOwnershipAudit();
+  if (check) {
+    const errors = collectRootDependencyOwnershipCheckErrors(records);
+    if (errors.length > 0) {
+      for (const error of errors) {
+        console.error(`[root-dependency-ownership] ${error}`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+    if (!asJson) {
+      console.error("[root-dependency-ownership] ok");
+      return;
+    }
+  }
   if (asJson) {
     console.log(JSON.stringify(records, null, 2));
     return;
