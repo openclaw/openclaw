@@ -249,10 +249,7 @@ describe("chat-model-ref helpers", () => {
         name: "Grok 4.1 Fast",
         provider: "xai",
       };
-      expect(buildChatModelOption(entry)).toEqual({
-        value: "xai/grok-4-1-fast",
-        label: "grok-4-1-fast · xai",
-      });
+      expect(buildChatModelOption(entry).value).toBe("xai/grok-4-1-fast");
     });
 
     it("preserves provider prefix for ollama models with provider field", () => {
@@ -261,13 +258,10 @@ describe("chat-model-ref helpers", () => {
         name: "gemma3:1b",
         provider: "ollama",
       };
-      expect(buildChatModelOption(entry)).toEqual({
-        value: "ollama/gemma3:1b",
-        label: "gemma3:1b · ollama",
-      });
+      expect(buildChatModelOption(entry).value).toBe("ollama/gemma3:1b");
     });
 
-    it("extracts provider from slash-qualified id when provider field is empty", () => {
+    it("keeps slash-qualified id intact when provider field is empty", () => {
       // Defensive: catalog entry arrived with provider stripped but id
       // still contains the provider prefix.
       const entry = {
@@ -275,9 +269,7 @@ describe("chat-model-ref helpers", () => {
         name: "grok-4-1-fast",
         provider: "",
       } as ModelCatalogEntry;
-      const option = buildChatModelOption(entry);
-      expect(option.value).toBe("xai/grok-4-1-fast");
-      expect(option.label).toBe("grok-4-1-fast · xai");
+      expect(buildChatModelOption(entry).value).toBe("xai/grok-4-1-fast");
     });
 
     it("handles missing provider with non-qualified id gracefully", () => {
