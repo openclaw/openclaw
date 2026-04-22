@@ -118,6 +118,9 @@ const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
 ];
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
+// Keep raw uploads comfortably below the 2 MB persisted data URL limit after
+// base64 expansion and a small MIME/header prefix are added.
+const MAX_LOCAL_USER_AVATAR_FILE_BYTES = 1_500_000;
 
 function renderDefaultUserAvatar() {
   return html`
@@ -154,13 +157,22 @@ function renderLocalUserAvatarPreview(
 function handleLocalUserAvatarFileSelect(e: Event, props: QuickSettingsProps) {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
-  if (!file || !props.onUserAvatarChange) {
+  const onUserAvatarChange = props.onUserAvatarChange;
+  if (!file || !onUserAvatarChange) {
+    input.value = "";
+    return;
+  }
+  if (!file.type.startsWith("image/")) {
+    input.value = "";
+    return;
+  }
+  if (file.size > MAX_LOCAL_USER_AVATAR_FILE_BYTES) {
     input.value = "";
     return;
   }
   const reader = new FileReader();
   reader.addEventListener("load", () => {
-    props.onUserAvatarChange?.(typeof reader.result === "string" ? reader.result : null);
+    onUserAvatarChange(typeof reader.result === "string" ? reader.result : null);
   });
   reader.readAsDataURL(file);
   input.value = "";

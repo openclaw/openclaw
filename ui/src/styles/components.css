@@ -3439,11 +3439,16 @@ td.data-table-key-col {
     opacity var(--duration-fast) var(--ease-out);
 }
 
-.agent-chip-input .chip-remove:hover:not(:disabled),
+.agent-chip-input .chip-remove:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
 .agent-chip-input .chip-remove:focus-visible:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .agent-chip-input .chip-remove:disabled {

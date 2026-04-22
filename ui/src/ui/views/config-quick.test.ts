@@ -60,4 +60,34 @@ describe("renderQuickSettings", () => {
     expect(container.querySelectorAll(".qs-stack")).toHaveLength(4);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
+
+  it("rejects oversized avatar uploads before reading them", () => {
+    const onUserAvatarChange = vi.fn();
+    const fileReader = vi.fn();
+    vi.stubGlobal("FileReader", fileReader);
+
+    try {
+      const container = document.createElement("div");
+      render(renderQuickSettings(createProps({ onUserAvatarChange })), container);
+
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      if (!input) {
+        return;
+      }
+
+      const file = new File([new Uint8Array(1_500_001)], "avatar.png", { type: "image/png" });
+      Object.defineProperty(input, "files", {
+        configurable: true,
+        value: [file],
+      });
+
+      input.dispatchEvent(new Event("change"));
+
+      expect(fileReader).not.toHaveBeenCalled();
+      expect(onUserAvatarChange).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

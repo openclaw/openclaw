@@ -8,6 +8,9 @@ describe("agent fallback chip styles", () => {
     expect(css).toContain(".agent-chip-input .chip {");
     expect(css).toContain(".agent-chip-input .chip-remove {");
     expect(css).toContain(".agent-chip-input .chip-remove:hover:not(:disabled)");
+    expect(css).toContain(".agent-chip-input .chip-remove:focus-visible:not(:disabled)");
+    expect(css).toContain("outline: 2px solid var(--accent);");
+    expect(css).toContain("outline-offset: 2px;");
     expect(css).toContain(".agent-chip-input .chip-remove:disabled");
   });
 });
