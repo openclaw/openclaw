@@ -215,16 +215,20 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
       continue;
     }
     const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
+    reader.addEventListener(
+      "load",
+      () => {
+        const dataUrl = reader.result as string;
+        const newAttachment: ChatAttachment = {
+          id: generateAttachmentId(),
+          dataUrl,
+          mimeType: file.type,
+        };
+        const current = props.attachments ?? [];
+        props.onAttachmentsChange?.([...current, newAttachment]);
+      },
+      { once: true },
+    );
     reader.readAsDataURL(file);
   }
 }
@@ -243,17 +247,21 @@ function handleFileSelect(e: Event, props: ChatProps) {
     }
     pending++;
     const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push({
-        id: generateAttachmentId(),
-        dataUrl: reader.result as string,
-        mimeType: file.type,
-      });
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
+    reader.addEventListener(
+      "load",
+      () => {
+        additions.push({
+          id: generateAttachmentId(),
+          dataUrl: reader.result as string,
+          mimeType: file.type,
+        });
+        pending--;
+        if (pending === 0) {
+          props.onAttachmentsChange?.([...current, ...additions]);
+        }
+      },
+      { once: true },
+    );
     reader.readAsDataURL(file);
   }
   input.value = "";
@@ -274,17 +282,21 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     }
     pending++;
     const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push({
-        id: generateAttachmentId(),
-        dataUrl: reader.result as string,
-        mimeType: file.type,
-      });
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
+    reader.addEventListener(
+      "load",
+      () => {
+        additions.push({
+          id: generateAttachmentId(),
+          dataUrl: reader.result as string,
+          mimeType: file.type,
+        });
+        pending--;
+        if (pending === 0) {
+          props.onAttachmentsChange?.([...current, ...additions]);
+        }
+      },
+      { once: true },
+    );
     reader.readAsDataURL(file);
   }
 }
