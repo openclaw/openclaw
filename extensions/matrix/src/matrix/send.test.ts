@@ -19,6 +19,7 @@ const loadWebMediaMock = vi.fn().mockResolvedValue({
   kind: "image",
 });
 const loadConfigMock = vi.fn(() => ({}));
+const withResolvedRuntimeMatrixClientMock = vi.hoisted(() => vi.fn());
 const getImageMetadataMock = vi.fn().mockResolvedValue(null);
 const resizeToJpegMock = vi.fn();
 const mediaKindFromMimeMock = vi.fn((_: string | null | undefined) => "image");
@@ -34,6 +35,10 @@ const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : [
 
 vi.mock("./outbound-media-runtime.js", () => ({
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
+}));
+
+vi.mock("./client-bootstrap.js", () => ({
+  withResolvedRuntimeMatrixClient: withResolvedRuntimeMatrixClientMock,
 }));
 
 const runtimeStub = {
@@ -138,6 +143,19 @@ function resetMatrixSendRuntimeMocks() {
     kind: "image",
   });
   loadConfigMock.mockReset().mockReturnValue({});
+  withResolvedRuntimeMatrixClientMock
+    .mockReset()
+    .mockImplementation(
+      async (
+        opts: { client?: import("./sdk.js").MatrixClient },
+        run: (resolved: import("./sdk.js").MatrixClient) => Promise<unknown>,
+      ) => {
+        if (!opts.client) {
+          throw new Error("test Matrix client is required");
+        }
+        return await run(opts.client);
+      },
+    );
   getImageMetadataMock.mockReset().mockResolvedValue(null);
   resizeToJpegMock.mockReset();
   mediaKindFromMimeMock.mockReset().mockReturnValue("image");
@@ -187,8 +205,10 @@ describe("sendMessageMatrix media", () => {
       mediaUrl: "file:///tmp/photo.png",
     });
 
-    const uploadArg = uploadContent.mock.calls[0]?.[0] as Buffer | undefined;
-    expect(uploadArg?.toString()).toBe("encrypted");
+    const uploadArg = uploadContent.mock.calls[0]?.[0];
+    expect(uploadArg instanceof Uint8Array ? Buffer.from(uploadArg).toString() : undefined).toBe(
+      "encrypted",
+    );
 
     const content = sendMessage.mock.calls[0]?.[1] as {
       url?: string;
@@ -954,5 +974,35 @@ describe("sendTypingMatrix", () => {
     await sendTypingMatrix("room:!room:example", true, undefined, client);
 
     expect(setTyping).toHaveBeenCalledWith("!room:example", true, 30_000);
+  });
+
+  it("passes account config through when resolving the typing client", async () => {
+    const cfg = { channels: { matrix: {} } } as unknown as import("../types.js").CoreConfig;
+    const setTyping = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      setTyping,
+    } as unknown as import("./sdk.js").MatrixClient;
+    withResolvedRuntimeMatrixClientMock.mockImplementation(
+      async (
+        opts: Record<string, unknown>,
+        run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
+      ) => {
+        expect(opts).toMatchObject({
+          cfg,
+          accountId: "work",
+          timeoutMs: 12_345,
+          readiness: "none",
+        });
+        return await run(client);
+      },
+    );
+
+    await sendTypingMatrix("room:!room:example", true, {
+      cfg,
+      accountId: "work",
+      timeoutMs: 12_345,
+    });
+
+    expect(setTyping).toHaveBeenCalledWith("!room:example", true, 12_345);
   });
 });

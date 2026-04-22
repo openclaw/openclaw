@@ -734,6 +734,16 @@ export const telegramPlugin = createChatChannelPlugin({
         await deleteTelegramUpdateOffset({ accountId });
       },
     },
+    heartbeat: {
+      sendTyping: async ({ cfg, to, accountId, threadId }) => {
+        const { sendTypingTelegram } = await loadTelegramSendModule();
+        await sendTypingTelegram(to, {
+          cfg,
+          ...(accountId ? { accountId } : {}),
+          messageThreadId: parseTelegramThreadId(threadId),
+        });
+      },
+    },
     approvalCapability: {
       ...telegramApprovalCapability,
       render: {
