@@ -58,7 +58,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
         title: context.title,
         description: context.description,
         severity: context.severity,
-        toolName: context.kind === "exec" ? "codex_command_approval" : "codex_file_approval",
+        toolName: context.toolName,
         toolCallId: context.itemId,
         agentId: params.paramsForRun.agentId,
         sessionKey: params.paramsForRun.sessionKey,
@@ -199,28 +199,43 @@ function buildApprovalContext(params: {
   const command = readCommand(params.requestParams);
   const reason = readString(params.requestParams, "reason");
   const kind = approvalKindForMethod(params.method);
+  const permissionLines =
+    params.method === "item/permissions/requestApproval"
+      ? describeRequestedPermissions(params.requestParams)
+      : [];
   const title =
     kind === "exec"
       ? "Codex app-server command approval"
+      : params.method === "item/permissions/requestApproval"
+        ? "Codex app-server permission approval"
       : kind === "plugin"
         ? "Codex app-server file approval"
         : "Codex app-server approval";
-  const subject = command
-    ? `Command: ${truncate(command, 180)}`
-    : reason
-      ? `Reason: ${truncate(reason, 180)}`
-      : `Request method: ${params.method}`;
-  const description = [
-    subject,
-    params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const subject =
+    permissionLines[0] ??
+    (command
+      ? `Command: ${truncate(command, 180)}`
+      : reason
+        ? `Reason: ${truncate(reason, 180)}`
+        : `Request method: ${params.method}`);
+  const description = joinDescriptionLinesWithinLimit(
+    [
+      subject,
+      ...permissionLines.slice(1),
+    ].filter((line): line is string => Boolean(line)),
+    256,
+  );
   return {
     kind,
     title,
     description,
     severity: kind === "exec" ? ("warning" as const) : ("info" as const),
+    toolName:
+      kind === "exec"
+        ? "codex_command_approval"
+        : params.method === "item/permissions/requestApproval"
+          ? "codex_permission_approval"
+          : "codex_file_approval",
     itemId,
     requestParams: params.requestParams,
     eventDetails: {
@@ -307,6 +322,186 @@ function unsupportedApprovalResponse(): JsonValue {
   };
 }
 
+function describeRequestedPermissions(requestParams: JsonObject | undefined): string[] {
+  const permissions = requestedPermissions(requestParams);
+  const lines: string[] = [];
+  const kinds: string[] = [];
+  if (isJsonObject(permissions.network)) {
+    kinds.push("network");
+  }
+  if (isJsonObject(permissions.fileSystem)) {
+    kinds.push("fileSystem");
+  }
+  if (kinds.length > 0) {
+    lines.push(`Permissions: ${kinds.join(", ")}`);
+  }
+  if (isJsonObject(permissions.network)) {
+    lines.push(
+      summarizePermissionRecord("Network permission requested", permissions.network, [
+        {
+          key: "allowHosts",
+          label: "allowHosts",
+          sanitize: sanitizePermissionHostValue,
+          risksFor: permissionHostRisks,
+        },
+      ]),
+    );
+  }
+  if (isJsonObject(permissions.fileSystem)) {
+    lines.push(
+      summarizePermissionRecord("File system permission requested", permissions.fileSystem, [
+        {
+          key: "roots",
+          label: "roots",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "readPaths",
+          label: "readPaths",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "writePaths",
+          label: "writePaths",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+      ]),
+    );
+  }
+  return lines;
+}
+
+type PermissionArrayDescriptor = {
+  key: string;
+  label: string;
+  sanitize: (value: string) => string;
+  risksFor: (value: string) => readonly string[];
+};
+
+function summarizePermissionRecord(
+  label: string,
+  permission: JsonObject,
+  descriptors: readonly PermissionArrayDescriptor[],
+): string {
+  const details: string[] = [];
+  const risks = new Set<string>();
+  for (const descriptor of descriptors) {
+    const summary = summarizePermissionArray(permission, descriptor, risks);
+    if (summary) {
+      details.push(summary);
+    }
+  }
+  const suffix: string[] = [];
+  if (details.length > 0) {
+    suffix.push(details.join("; "));
+  }
+  if (risks.size > 0) {
+    suffix.push(`high-risk: ${[...risks].join(", ")}`);
+  }
+  return suffix.length > 0 ? `${label} (${suffix.join("; ")})` : label;
+}
+
+function summarizePermissionArray(
+  record: JsonObject,
+  descriptor: PermissionArrayDescriptor,
+  risks: Set<string>,
+): string | undefined {
+  const values = readStringArray(record, descriptor.key);
+  if (values.length === 0) {
+    return undefined;
+  }
+  for (const value of values) {
+    for (const risk of descriptor.risksFor(value)) {
+      risks.add(risk);
+    }
+  }
+  const sampleValues = values.slice(0, 2).map(descriptor.sanitize).filter(Boolean);
+  if (sampleValues.length === 0) {
+    return `${descriptor.label}: ${values.length}`;
+  }
+  const remaining = values.length - sampleValues.length;
+  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return `${descriptor.label}: ${sampleValues.join(", ")}${remainderSuffix}`;
+}
+
+function readStringArray(record: JsonObject, key: string): string[] {
+  const value = record[key];
+  return Array.isArray(value)
+    ? value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean)
+    : [];
+}
+
+function sanitizePermissionHostValue(value: string): string {
+  return truncate(value.replace(/\s+/g, " ").trim().toLowerCase(), 48);
+}
+
+function sanitizePermissionPathValue(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const homeCompacted = normalized
+    .replace(/^\/home\/[^/]+(?=\/|$)/, "~")
+    .replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/, "~");
+  return truncate(homeCompacted, 48);
+}
+
+function permissionHostRisks(value: string): string[] {
+  const normalized = value.trim().toLowerCase();
+  const risks: string[] = [];
+  if (normalized.includes("*")) {
+    risks.push("wildcard hosts");
+    if (isPrivateNetworkHostPattern(normalized)) {
+      risks.push("private-network wildcards");
+    }
+  }
+  return risks;
+}
+
+function permissionPathRisks(value: string): string[] {
+  const normalized = sanitizePermissionPathValue(value);
+  const risks: string[] = [];
+  if (normalized === "/" || normalized === "\\" || /^[A-Za-z]:[\\/]*$/.test(normalized)) {
+    risks.push("filesystem root");
+  }
+  if (normalized === "~" || normalized === "~/" || normalized === "~\\") {
+    risks.push("home directory");
+  }
+  return risks;
+}
+
+function isPrivateNetworkHostPattern(value: string): boolean {
+  const normalized = value.toLowerCase();
+  const wildcardStripped = normalized.replace(/^\*\./, "");
+  if (
+    wildcardStripped === "localhost" ||
+    wildcardStripped === "local" ||
+    wildcardStripped === "internal" ||
+    wildcardStripped === "lan" ||
+    wildcardStripped === "home" ||
+    wildcardStripped === "corp" ||
+    wildcardStripped === "private" ||
+    wildcardStripped.endsWith(".local") ||
+    wildcardStripped.endsWith(".internal") ||
+    wildcardStripped.endsWith(".lan") ||
+    wildcardStripped.endsWith(".home") ||
+    wildcardStripped.endsWith(".corp") ||
+    wildcardStripped.endsWith(".private")
+  ) {
+    return true;
+  }
+  if (
+    wildcardStripped.startsWith("10.") ||
+    wildcardStripped.startsWith("127.") ||
+    wildcardStripped.startsWith("192.168.") ||
+    wildcardStripped.startsWith("169.254.")
+  ) {
+    return true;
+  }
+  return /^172\.(1[6-9]|2\d|3[0-1])\./.test(wildcardStripped);
+}
+
 function hasAvailableDecision(requestParams: JsonObject | undefined, decision: string): boolean {
   const available = requestParams?.availableDecisions;
   if (!Array.isArray(available)) {
@@ -386,6 +581,25 @@ function readString(record: JsonObject | undefined, key: string): string | undef
 
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function joinDescriptionLinesWithinLimit(lines: string[], maxLength: number): string {
+  let description = "";
+  for (const line of lines) {
+    const prefix = description ? "\n" : "";
+    const next = `${description}${prefix}${line}`;
+    if (next.length <= maxLength) {
+      description = next;
+      continue;
+    }
+    const remaining = maxLength - description.length - prefix.length;
+    if (remaining < 3) {
+      break;
+    }
+    description += `${prefix}${truncate(line, remaining)}`;
+    break;
+  }
+  return description;
 }
 
 function formatErrorMessage(error: unknown): string {

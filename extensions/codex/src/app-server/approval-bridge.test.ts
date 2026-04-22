@@ -129,6 +129,120 @@ describe("Codex app-server approval bridge", () => {
     expect(params.onAgentEvent).not.toHaveBeenCalled();
   });
 
+  it("labels permission approvals explicitly with sanitized permission detail", async () => {
+    const params = createParams();
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "plugin:approval-3",
+      decision: "allow-once",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "perm-1",
+        permissions: {
+          network: { allowHosts: ["example.com", "*.internal"] },
+          fileSystem: { roots: ["/"], writePaths: ["/home/simone"] },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({
+      permissions: {
+        network: { allowHosts: ["example.com", "*.internal"] },
+        fileSystem: { roots: ["/"], writePaths: ["/home/simone"] },
+      },
+      scope: "turn",
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        title: "Codex app-server permission approval",
+        toolName: "codex_permission_approval",
+        description: expect.stringContaining("Permissions: network, fileSystem"),
+      }),
+      { expectFinal: false },
+    );
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        description: expect.stringContaining(
+          "Network permission requested (allowHosts: example.com, *.internal; high-risk: wildcard hosts, private-network wildcards)",
+        ),
+      }),
+      { expectFinal: false },
+    );
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        description: expect.stringContaining(
+          "File system permission requested (roots: /; writePaths: ~; high-risk: filesystem root, home directory)",
+        ),
+      }),
+      { expectFinal: false },
+    );
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    expect(requestPayload).toEqual(
+      expect.objectContaining({
+        description: expect.not.stringContaining("agent:main:session-1"),
+      }),
+    );
+  });
+
+  it("keeps permission detail bounded and truncated within the approval description cap", async () => {
+    const params = createParams();
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "plugin:approval-4",
+      decision: "allow-once",
+    });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "perm-2",
+        permissions: {
+          network: {
+            allowHosts: [
+              "*.internal",
+              "very-long-service-name.example.corp",
+              "third.example.com",
+            ],
+          },
+          fileSystem: {
+            roots: ["/", "/workspace/project", "/Users/simone/Documents"],
+            writePaths: ["/tmp/output", "/var/log/app"],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    expect(requestPayload).toEqual(
+      expect.objectContaining({
+        description: expect.any(String),
+      }),
+    );
+    const description = (requestPayload as { description: string }).description;
+    expect(description.length).toBeLessThanOrEqual(256);
+    expect(description).toContain("*.internal");
+    expect(description).toContain("/workspace/project");
+    expect(description).toContain("(+1 more)");
+    expect(description).toContain("high-risk:");
+  });
+
   it("maps app-server approval response families separately", () => {
     expect(
       buildApprovalResponse(
