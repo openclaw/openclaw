@@ -49,6 +49,7 @@ import {
 import {
   normalizeTtsAutoMode,
   resolveConfiguredTtsMode,
+  resolveRawTtsConfig,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -118,8 +119,9 @@ async function maybeApplyTtsToReplyPayload(
   ) {
     return params.payload;
   }
+  const rawConfigOverride = resolveRawTtsConfig(params.cfg, agentId);
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
-  return maybeApplyTtsToPayload({ ...params, agentId });
+  return maybeApplyTtsToPayload({ ...params, agentId, rawConfigOverride });
 }
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
