@@ -151,8 +151,8 @@ compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
 selection. Use `embeddedHarness.runtime: "codex"` with
 `embeddedHarness.fallback: "none"` when you need to prove that only the Codex
-app-server path can claim the run. Codex app-server failures already fail
-directly instead of retrying through PI.
+app-server path can claim the run. That config is only a selection guard:
+Codex app-server failures already fail directly instead of retrying through PI.
 
 ## Disable PI fallback
 
