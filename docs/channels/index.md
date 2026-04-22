@@ -38,6 +38,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (bundled plugin).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (bundled plugin).
+- [QQvu (Pufferfish)](/channels/pufferfish) — External plugin for QQvu / Pufferfish IM.
 
 ## Notes
 
