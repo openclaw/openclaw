@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
@@ -259,6 +261,25 @@ export async function runGatewayLoop(params: {
     let isFirstStart = true;
     for (;;) {
       onIteration();
+      // Re-source /data/.env on in-process restart so env vars written by
+      // Blink pool adoption (BLINK_API_KEY, BLINK_AGENT_ID, etc.) propagate
+      // into the gateway's process.env without a full container restart.
+      if (!isFirstStart) {
+        const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/data";
+        const envFile = path.join(stateDir, ".env");
+        if (fs.existsSync(envFile)) {
+          for (const line of fs.readFileSync(envFile, "utf-8").split("\n")) {
+            const eqIdx = line.indexOf("=");
+            if (eqIdx <= 0) continue;
+            const key = line.slice(0, eqIdx).trim();
+            const val = line.slice(eqIdx + 1).replace(/^['"]|['"]$/g, "");
+            if (key && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+              process.env[key] = val;
+            }
+          }
+          gatewayLog.info("re-sourced /data/.env into process.env");
+        }
+      }
       try {
         server = await params.start({ startupStartedAt });
         isFirstStart = false;
