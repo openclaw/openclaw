@@ -84,8 +84,8 @@ export function stripThoughtSignatures<T>(
   }) as T;
 }
 
-export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
-export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
+export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
+export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 150_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 // Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
@@ -204,7 +204,8 @@ function trimBootstrapContent(
   }
   if (headChars === 0 && tailChars === 0 && trimmed.length > 0) {
     const singleHeadMarker = resolvedMarkerTemplate(1, 0);
-    const singleHeadLength = 1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
+    const singleHeadLength =
+      1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
     if (singleHeadLength <= maxChars) {
       headChars = 1;
       marker = singleHeadMarker;

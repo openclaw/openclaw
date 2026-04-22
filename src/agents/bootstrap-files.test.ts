@@ -16,7 +16,10 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
+import { DEFAULT_BOOTSTRAP_MAX_CHARS } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+const memoryBootstrapWarning = `workspace bootstrap file MEMORY.md is 36697 chars (limit ${DEFAULT_BOOTSTRAP_MAX_CHARS}); truncating`;
 
 function registerExtraBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
@@ -394,12 +397,10 @@ describe("makeBootstrapWarn", () => {
       warn: (message) => warnings.push(message),
     });
 
-    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
-    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    warn?.(memoryBootstrapWarning);
+    warn?.(memoryBootstrapWarning);
 
-    expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:test-session)",
-    ]);
+    expect(warnings).toEqual([`${memoryBootstrapWarning} (sessionKey=agent:main:test-session)`]);
   });
 
   it("keeps warnings distinct across sessions", () => {
@@ -413,12 +414,12 @@ describe("makeBootstrapWarn", () => {
       warn: (message) => warnings.push(message),
     });
 
-    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
-    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    first?.(memoryBootstrapWarning);
+    second?.(memoryBootstrapWarning);
 
     expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:first-session)",
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:second-session)",
+      `${memoryBootstrapWarning} (sessionKey=agent:main:first-session)`,
+      `${memoryBootstrapWarning} (sessionKey=agent:main:second-session)`,
     ]);
   });
 
@@ -435,12 +436,12 @@ describe("makeBootstrapWarn", () => {
       warn: (message) => warnings.push(message),
     });
 
-    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
-    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    first?.(memoryBootstrapWarning);
+    second?.(memoryBootstrapWarning);
 
     expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:shared-session)",
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:shared-session)",
+      `${memoryBootstrapWarning} (sessionKey=agent:main:shared-session)`,
+      `${memoryBootstrapWarning} (sessionKey=agent:main:shared-session)`,
     ]);
   });
 });

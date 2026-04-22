@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/bootstrap: align the live bootstrap injection defaults with the config schema, Control UI, and docs by using `bootstrapMaxChars = 20000` and `bootstrapTotalMaxChars = 150000` at runtime, so operators no longer see stale 12k/60k behavior behind 20k/150k config hints.
 - Browser/Chrome MCP: reset cached existing-session control sessions when a `navigate_page` call times out, so one stuck navigation no longer poisons the browser profile until a gateway restart. (#69733) Thanks @ayeshakhalid192007-dev.
 - Browser/Chrome MCP: propagate click timeouts and abort signals to existing-session actions so a stuck click fails fast and reconnects instead of poisoning the browser tool until gateway restart. (#63524) Thanks @dongseok0.
 - OpenCode Go: canonicalize stale bundled `opencode-go` base URLs from `/go` or `/go/v1` to `/zen/go` or `/zen/go/v1`, so older generated model metadata stops hitting the 404 HTML endpoint. (#69898)

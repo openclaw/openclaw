@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_BOOTSTRAP_MAX_CHARS,
+  DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+} from "../../agents/pi-embedded-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -36,8 +40,10 @@ function makeParams(
         source: "run",
         generatedAt: Date.now(),
         workspaceDir: "/tmp/workspace",
-        bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : 12_000,
-        bootstrapTotalMaxChars: options?.omitBootstrapLimits ? undefined : 60_000,
+        bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : DEFAULT_BOOTSTRAP_MAX_CHARS,
+        bootstrapTotalMaxChars: options?.omitBootstrapLimits
+          ? undefined
+          : DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
         sandbox: { mode: "off", sandboxed: false },
         systemPrompt: {
           chars: 1_000,
@@ -76,7 +82,7 @@ function makeParams(
 describe("buildContextReply", () => {
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
-    expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
   });
@@ -92,8 +98,8 @@ describe("buildContextReply", () => {
         omitBootstrapLimits: true,
       }),
     );
-    expect(result.text).toContain("Bootstrap max/file: 12,000 chars");
-    expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
+    expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
     expect(result.text).not.toContain("Bootstrap max/file: ? chars");
   });
 
