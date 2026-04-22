@@ -21,7 +21,10 @@ import {
 } from "./pi-embedded-runner/replay-state.js";
 import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import { consumePendingToolMediaIntoReply } from "./pi-embedded-subscribe.handlers.messages.js";
+import {
+  consumePendingAssistantReplyDirectivesIntoReply,
+  consumePendingToolMediaIntoReply,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
@@ -123,6 +126,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
+    pendingToolTrustedLocalMedia: false,
+    pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };
@@ -183,7 +188,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number },
   ) => {
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload), options);
+    const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
+    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, withAssistantDirectives), options);
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -212,6 +218,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+    state.pendingAssistantReplyDirectives = undefined;
   };
 
   const rememberAssistantText = (text: string) => {
@@ -709,6 +716,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);

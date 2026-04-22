@@ -5,7 +5,8 @@ import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
-} from "../../tasks/task-executor.js";
+} from "../../tasks/detached-task-runtime.js";
+import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -20,6 +21,13 @@ import {
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
+import type {
+  CronJobsEnabledFilter,
+  CronJobsSortBy,
+  CronListPageOptions,
+  CronListPageResult,
+  CronSortDir,
+} from "./list-page-types.js";
 import { locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
@@ -34,28 +42,6 @@ import {
   wake,
 } from "./timer.js";
 
-type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
-type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
-type CronSortDir = "asc" | "desc";
-
-export type CronListPageOptions = {
-  includeDisabled?: boolean;
-  limit?: number;
-  offset?: number;
-  query?: string;
-  enabled?: CronJobsEnabledFilter;
-  sortBy?: CronJobsSortBy;
-  sortDir?: CronSortDir;
-};
-
-export type CronListPageResult = {
-  jobs: ReturnType<typeof sortJobs>;
-  total: number;
-  offset: number;
-  limit: number;
-  hasMore: boolean;
-  nextOffset: number | null;
-};
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -394,10 +380,6 @@ type ManualRunPreflightResult =
 
 let nextManualRunId = 1;
 
-function createCronTaskRunId(jobId: string, startedAt: number): string {
-  return `cron:${jobId}:${startedAt}`;
-}
-
 async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
   job: CronJob;
@@ -445,7 +427,7 @@ function tryCreateManualTaskRun(params: {
   job: CronJob;
   startedAt: number;
 }): string | undefined {
-  const runId = createCronTaskRunId(params.job.id, params.startedAt);
+  const runId = createCronExecutionId(params.job.id, params.startedAt);
   try {
     createRunningTaskRun({
       runtime: "cron",
@@ -597,7 +579,7 @@ async function prepareManualRun(
       job,
       startedAt: preflight.now,
     });
-    const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
+    const executionJob = structuredClone(job);
     return {
       ok: true,
       ran: true,
@@ -661,6 +643,7 @@ async function finishPreparedManualRun(
       delivered: coreResult.delivered,
       deliveryStatus: job.state.lastDeliveryStatus,
       deliveryError: job.state.lastDeliveryError,
+      delivery: coreResult.delivery,
       sessionId: coreResult.sessionId,
       sessionKey: coreResult.sessionKey,
       runAtMs: startedAt,

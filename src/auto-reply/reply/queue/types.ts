@@ -81,6 +81,7 @@ export type FollowupRun = {
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
+    extraSystemPromptStatic?: string;
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
