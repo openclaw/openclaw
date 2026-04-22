@@ -2,18 +2,28 @@ import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
+const ssrfMocks = {
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+};
+
 // Mock http and https modules before importing the client
 vi.mock("node:https", () => {
-  const mockRequest = vi.fn();
-  const mockGet = vi.fn();
-  return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
+  const httpsRequest = vi.fn();
+  const httpsGet = vi.fn();
+  const httpsModule = { request: httpsRequest, get: httpsGet };
+  return { default: httpsModule, request: httpsRequest, get: httpsGet };
 });
 
 vi.mock("node:http", () => {
-  const mockRequest = vi.fn();
-  const mockGet = vi.fn();
-  return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
+  const httpRequest = vi.fn();
+  const httpGet = vi.fn();
+  return { default: { request: httpRequest, get: httpGet }, request: httpRequest, get: httpGet };
 });
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
+}));
 
 const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
@@ -32,7 +42,7 @@ type MockRequestHandler = (
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
   const res = new EventEmitter() as Partial<IncomingMessage>;
   res.statusCode = statusCode;
-  return res as IncomingMessage;
+  return res as unknown as IncomingMessage;
 }
 
 function createMockRequestEmitter(): ClientRequest {
@@ -40,7 +50,7 @@ function createMockRequestEmitter(): ClientRequest {
   req.write = vi.fn() as ClientRequest["write"];
   req.end = vi.fn() as ClientRequest["end"];
   req.destroy = vi.fn() as ClientRequest["destroy"];
-  return req as ClientRequest;
+  return req as unknown as ClientRequest;
 }
 
 async function settleTimers<T>(promise: Promise<T>): Promise<T> {
@@ -82,6 +92,10 @@ function installFakeTimerHarness() {
     vi.useFakeTimers();
     fakeNowMs += 10_000;
     vi.setSystemTime(fakeNowMs);
+    ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
   });
 
   afterEach(() => {
@@ -155,25 +169,63 @@ describe("sendFileUrl", () => {
     const httpsRequest = vi.mocked(https.request);
     expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
+
+  it("respects the shared send interval before posting a file URL", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "hello"));
+    vi.mocked(https.request).mockClear();
+
+    const promise = sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png");
+    await Promise.resolve();
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await promise;
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed file URLs before making a request", async () => {
+    const result = await settleTimers(sendFileUrl("https://nas.example.com/incoming", "not-a-url"));
+    expect(result).toBe(false);
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-http file URLs before making a request", async () => {
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "file:///tmp/secret.txt"),
+    );
+    expect(result).toBe(false);
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("rejects SSRF-blocked hosts before making a request", async () => {
+    ssrfMocks.resolvePinnedHostnameWithPolicy.mockRejectedValueOnce(
+      new Error("Blocked private network target"),
+    );
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "http://169.254.169.254/latest/meta-data"),
+    );
+    expect(result).toBe(false);
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("169.254.169.254");
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
 });
 
 // Helper to mock the user_list API response for fetchChatUsers / resolveLegacyWebhookNameToChatUserId
-function mockUserListResponse(
-  users: Array<{ user_id: number; username: string; nickname: string }>,
-) {
+function mockUserListResponse(users: Array<Record<string, unknown>>) {
   mockUserListResponseImpl(users, false);
 }
 
-function mockUserListResponseOnce(
-  users: Array<{ user_id: number; username: string; nickname: string }>,
-) {
+function mockUserListResponseOnce(users: Array<Record<string, unknown>>) {
   mockUserListResponseImpl(users, true);
 }
 
-function mockUserListResponseImpl(
-  users: Array<{ user_id: number; username: string; nickname: string }>,
-  once: boolean,
-) {
+function mockUserListResponseImpl(users: Array<Record<string, unknown>>, once: boolean) {
   const httpsGet = vi.mocked(https.get);
   const impl: MockRequestHandler = (_url, _opts, callback) => {
     const res = createMockResponseEmitter(200);
@@ -298,29 +350,10 @@ describe("fetchChatUsers", () => {
   installFakeTimerHarness();
 
   it("filters malformed user entries while keeping valid ones", async () => {
-    const httpsGet = vi.mocked(https.get);
-    httpsGet.mockImplementation(((_url, _opts, callback) => {
-      const res = createMockResponseEmitter(200);
-      process.nextTick(() => {
-        callback?.(res);
-        res.emit(
-          "data",
-          Buffer.from(
-            JSON.stringify({
-              success: true,
-              data: {
-                users: [
-                  { user_id: 4, username: "jmn67", nickname: "jmn" },
-                  { user_id: "bad", username: "broken" },
-                ],
-              },
-            }),
-          ),
-        );
-        res.emit("end");
-      });
-      return createMockRequestEmitter();
-    }) as MockRequestHandler);
+    mockUserListResponse([
+      { user_id: 4, username: "jmn67", nickname: "jmn" },
+      { user_id: "bad", username: "broken" },
+    ]);
 
     const users = await fetchChatUsers(
       "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",

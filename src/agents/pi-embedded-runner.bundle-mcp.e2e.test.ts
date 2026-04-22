@@ -33,6 +33,7 @@ let streamCallCount = 0;
 let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
 
 vi.mock("./pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: vi.fn(async () => true),
   getOrCreateSessionMcpRuntime: async () => ({
     sessionId: "bundle-mcp-runtime",
     sessionKey: "agent:test:bundle-mcp-e2e",
@@ -126,7 +127,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
       context: { messages?: Array<{ role?: string; content?: unknown }> },
     ) => {
       streamCallCount += 1;
-      const messages = (context.messages ?? []).map((message) => ({ ...message }));
+      const messages = (context.messages ?? []).map((message) => Object.assign({}, message));
       observedContexts.push(messages);
       const stream = actual.createAssistantMessageEventStream();
       queueMicrotask(() => {
