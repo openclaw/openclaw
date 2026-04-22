@@ -220,6 +220,15 @@ function syncLinkedDurableJobResume(params: {
   }
 }
 
+function isTerminalDurableJobStatus(status: string): boolean {
+  return (
+    status === "completed" ||
+    status === "blocked" ||
+    status === "cancelled" ||
+    status === "superseded"
+  );
+}
+
 function syncLinkedDurableJobTerminal(params: {
   ownerKey: string;
   flowId: string;
@@ -236,12 +245,7 @@ function syncLinkedDurableJobTerminal(params: {
     return;
   }
 
-  if (
-    job.status === "completed" ||
-    job.status === "blocked" ||
-    job.status === "cancelled" ||
-    job.status === "superseded"
-  ) {
+  if (isTerminalDurableJobStatus(job.status)) {
     return;
   }
 
@@ -272,6 +276,46 @@ function syncLinkedDurableJobTerminal(params: {
       summary: params.flowStatus === "failed" ? (params.summary ?? null) : null,
     },
   });
+}
+
+function syncLinkedDurableJobCancelled(params: {
+  ownerKey: string;
+  flowId: string;
+  currentStep?: string | null;
+  updatedAt?: number;
+}): void {
+  const job = getDurableJobByTaskFlowIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.ownerKey,
+  });
+  if (!job || isTerminalDurableJobStatus(job.status)) {
+    return;
+  }
+
+  const jobs = createRuntimeJobs().bindSession({
+    sessionKey: params.ownerKey,
+  });
+  const result = jobs.transition({
+    jobId: job.jobId,
+    expectedRevision: job.audit.revision,
+    from: job.status,
+    to: "cancelled",
+    reason: "Linked TaskFlow cancelled",
+    at: params.updatedAt,
+    wake: {
+      status: "cleared",
+      detail: "TaskFlow cancellation cleared any pending wake.",
+    },
+    patch: {
+      currentStep: params.currentStep,
+      nextWakeAt: null,
+      summary: null,
+    },
+  });
+
+  if (!result.applied && result.current && isTerminalDurableJobStatus(result.current.status)) {
+    return;
+  }
 }
 
 function createBoundTaskFlowRuntime(params: {
@@ -487,12 +531,22 @@ function createBoundTaskFlowRuntime(params: {
         }),
       );
     },
-    cancel: ({ flowId, cfg }) =>
-      cancelFlowByIdForOwner({
+    cancel: async ({ flowId, cfg }) => {
+      const result = await cancelFlowByIdForOwner({
         cfg,
         flowId,
         callerOwnerKey: ownerKey,
-      }),
+      });
+      if (result.cancelled && result.flow?.status === "cancelled") {
+        syncLinkedDurableJobCancelled({
+          ownerKey,
+          flowId: result.flow.flowId,
+          currentStep: result.flow.currentStep,
+          updatedAt: result.flow.updatedAt,
+        });
+      }
+      return result;
+    },
     runTask: (input) => {
       const created = runTaskInFlowForOwner({
         flowId: input.flowId,

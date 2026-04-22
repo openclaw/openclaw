@@ -441,4 +441,123 @@ describe("runtime TaskFlow", () => {
       }),
     ]);
   });
+
+  it("syncs an attached durable job to cancelled when a managed flow is cancelled", async () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Cancel linked TaskFlow",
+      goal: "Mirror TaskFlow cancellation into durable jobs",
+      status: "waiting",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      currentStep: "await_next_wake",
+      nextWakeAt: 500,
+      summary: "Waiting on next wake",
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Cancel after waiting",
+      currentStep: "await_next_wake",
+      updatedAt: 40,
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+
+    const cancelled = await taskFlow.cancel({
+      flowId: createdFlow.flowId,
+      cfg: {} as never,
+    });
+
+    expect(cancelled).toMatchObject({
+      found: true,
+      cancelled: true,
+      flow: expect.objectContaining({
+        status: "cancelled",
+      }),
+    });
+
+    expect(jobs.get(createdJob.jobId)).toMatchObject({
+      status: "cancelled",
+      currentStep: "await_next_wake",
+      nextWakeAt: undefined,
+      summary: undefined,
+      backing: expect.objectContaining({ taskFlowId: createdFlow.flowId }),
+    });
+    expect(jobs.history(createdJob.jobId)).toEqual([
+      expect.objectContaining({
+        from: "waiting",
+        to: "cancelled",
+        reason: "Linked TaskFlow cancelled",
+        disposition: {
+          kind: "clear_wake_only",
+          wake: { status: "cleared", detail: "TaskFlow cancellation cleared any pending wake." },
+        },
+      }),
+    ]);
+  });
+
+  it("preserves an attached durable job that was already moved into a terminal state manually", async () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Keep manual terminal durable job",
+      goal: "Do not overwrite manual durable-job terminal states during TaskFlow cancellation",
+      status: "blocked",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      summary: "Operator blocked this job manually",
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Cancel without touching manual durable-job terminal state",
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+
+    const cancelled = await taskFlow.cancel({
+      flowId: createdFlow.flowId,
+      cfg: {} as never,
+    });
+
+    expect(cancelled).toMatchObject({
+      found: true,
+      cancelled: true,
+      flow: expect.objectContaining({
+        status: "cancelled",
+      }),
+    });
+    expect(jobs.get(createdJob.jobId)).toMatchObject({
+      status: "blocked",
+      summary: "Operator blocked this job manually",
+      backing: expect.objectContaining({ taskFlowId: createdFlow.flowId }),
+    });
+    expect(jobs.history(createdJob.jobId)).toEqual([]);
+  });
 });
