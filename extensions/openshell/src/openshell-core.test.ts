@@ -342,20 +342,18 @@ describe("openshell fs bridges", () => {
 
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
-    const originalOpen = nodeFs.open.bind(nodeFs);
+    const originalOpen = fs.open.bind(fs);
     const targetPath = path.join(workspaceDir, "subdir", "secret.txt");
     let swapped = false;
-    const openSpy = vi
-      .spyOn(nodeFs, "open")
-      .mockImplementation(((...args: unknown[]) => {
-        const filePath = args[0];
-        if (!swapped && filePath === targetPath) {
-          swapped = true;
-          nodeFs.rmSync(path.join(workspaceDir, "subdir"), { recursive: true, force: true });
-          nodeFs.symlinkSync(outsideDir, path.join(workspaceDir, "subdir"));
-        }
-        return (originalOpen as (...delegated: unknown[]) => unknown)(...args);
-      }) as unknown as typeof nodeFs.open);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const filePath = args[0];
+      if (!swapped && filePath === targetPath) {
+        swapped = true;
+        nodeFs.rmSync(path.join(workspaceDir, "subdir"), { recursive: true, force: true });
+        nodeFs.symlinkSync(outsideDir, path.join(workspaceDir, "subdir"));
+      }
+      return await (originalOpen as (...delegated: unknown[]) => Promise<unknown>)(...args);
+    }) as unknown as typeof fs.open);
 
     try {
       await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
@@ -396,7 +394,13 @@ describe("openshell fs bridges", () => {
     }
   });
 
-  it("rejects fallback reads when path stats report an unknown device id", async () => {
+  // The shared `sameFileIdentity` contract intentionally treats either-side
+  // `dev=0` as "unknown device" on win32 (path-based stat can legitimately
+  // report `dev=0` there) and only fails closed on other platforms. Skip the
+  // Linux/macOS rejection expectation on Windows runners.
+  it.skipIf(process.platform === "win32")(
+    "rejects fallback reads when path stats report an unknown device id",
+    async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const targetPath = path.join(workspaceDir, "subdir", "secret.txt");
     await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
@@ -434,7 +438,8 @@ describe("openshell fs bridges", () => {
       lstatSpy.mockRestore();
       readlinkSpy.mockRestore();
     }
-  });
+    },
+  );
 
   it("rejects fallback reads when an ancestor directory is swapped to a symlink", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
@@ -455,20 +460,18 @@ describe("openshell fs bridges", () => {
 
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
-    const originalOpen = nodeFs.open.bind(nodeFs);
+    const originalOpen = fs.open.bind(fs);
     const targetPath = path.join(workspaceDir, "subdir", "secret.txt");
     let swapped = false;
-    const openSpy = vi
-      .spyOn(nodeFs, "open")
-      .mockImplementation(((...args: unknown[]) => {
-        const filePath = args[0];
-        if (!swapped && filePath === targetPath) {
-          swapped = true;
-          nodeFs.rmSync(path.join(workspaceDir, "subdir"), { recursive: true, force: true });
-          nodeFs.symlinkSync(outsideDir, path.join(workspaceDir, "subdir"));
-        }
-        return (originalOpen as (...delegated: unknown[]) => unknown)(...args);
-      }) as unknown as typeof nodeFs.open);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const filePath = args[0];
+      if (!swapped && filePath === targetPath) {
+        swapped = true;
+        nodeFs.rmSync(path.join(workspaceDir, "subdir"), { recursive: true, force: true });
+        nodeFs.symlinkSync(outsideDir, path.join(workspaceDir, "subdir"));
+      }
+      return await (originalOpen as (...delegated: unknown[]) => Promise<unknown>)(...args);
+    }) as unknown as typeof fs.open);
     // Force the fallback verification path even on Linux so the ancestor-walk
     // guard is exercised directly.
     const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
