@@ -112,10 +112,7 @@ async function maybeApplyAcpTts(params: {
   if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
     return params.payload;
   }
-  if (
-    params.kind !== "final" &&
-    resolveConfiguredTtsMode(params.cfg, params.agentId) === "final"
-  ) {
+  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg, params.agentId) === "final") {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
