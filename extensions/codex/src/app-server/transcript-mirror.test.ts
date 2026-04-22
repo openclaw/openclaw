@@ -125,6 +125,39 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(raw).toContain('"idempotencyKey":"scope-1:assistant:0"');
   });
 
+  it("preserves the computed idempotency key when hooks rewrite message keys", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (event) => ({
+            message: castAgentMessage({
+              ...((event as { message: unknown }).message as Record<string, unknown>),
+              idempotencyKey: "hook-rewritten-key",
+            }),
+          }),
+        },
+      ]),
+    );
+    const sessionFile = await createTempSessionFile();
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "hello" }],
+          timestamp: Date.now(),
+        }),
+      ],
+      idempotencyScope: "scope-1",
+    });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    expect(raw).toContain('"idempotencyKey":"scope-1:assistant:0"');
+    expect(raw).not.toContain("hook-rewritten-key");
+  });
+
   it("respects before_message_write blocking decisions", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
