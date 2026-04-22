@@ -413,6 +413,7 @@ async function runPackageInstallUpdate(params: {
     const stagingStep = await runBundledPluginStagingStep({
       packageRoot: verifiedPackageRoot,
       manager,
+      packageManagerCommand: installTarget.command,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -458,11 +459,15 @@ async function runPackageInstallUpdate(params: {
 async function runBundledPluginStagingStep(params: {
   packageRoot: string;
   manager: "pnpm" | "npm" | "bun";
+  packageManagerCommand: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
 }): Promise<UpdateStepResult | null> {
-  const { discoverMissingBundledPluginStaging, repairBundledPluginStaging } =
-    await import("../../commands/doctor-bundled-plugin-staging.js");
+  const {
+    discoverMissingBundledPluginStaging,
+    repairBundledPluginStaging,
+    summarizeRepairForUpdateStep,
+  } = await import("../../commands/doctor-bundled-plugin-staging.js");
   const extensionsDir = path.join(params.packageRoot, "dist", "extensions");
   const discovery = discoverMissingBundledPluginStaging({ extensionsDir });
   if (discovery.missing.length === 0) {
@@ -479,13 +484,20 @@ async function runBundledPluginStagingStep(params: {
   });
 
   const startedAt = Date.now();
+  // Pass the already-computed `discovery.missing` into repair so a single scan
+  // drives both the early-exit guard above and the per-plugin loop. Pin the
+  // subprocess to the caller-resolved package-manager command so the staging
+  // step spawns the same executable the global install step already used.
   const result = await repairBundledPluginStaging({
     extensionsDir,
     packageManager: params.manager,
-    runCommand: async ({ command: cmd, args, cwd }) => {
+    packageManagerCommand: params.packageManagerCommand,
+    missing: discovery.missing,
+    runCommand: async ({ command: cmd, args, cwd, env }) => {
       const spawned = await runCommandWithTimeout([cmd, ...args], {
         cwd,
         timeoutMs: params.timeoutMs,
+        env,
       });
       return {
         exitCode: spawned.code ?? 1,
@@ -495,14 +507,11 @@ async function runBundledPluginStagingStep(params: {
     },
   });
   const durationMs = Date.now() - startedAt;
-  const hasFailure = result.failed.length > 0;
-  const exitCode = hasFailure ? 1 : 0;
 
-  const repairedList = result.repaired.map((entry) => entry.id).join(", ") || "(none)";
-  const stdoutTail = `staged ${result.repaired.length} of ${discovery.missing.length}: ${repairedList}`;
-  const stderrTail = hasFailure
-    ? result.failed.map((entry) => `${entry.id}: ${entry.detail}`).join("\n")
-    : null;
+  const { stepExitCode, stdoutTail, stderrTail } = summarizeRepairForUpdateStep({
+    attempted: discovery.missing.length,
+    repair: result,
+  });
 
   params.progress?.onStepComplete?.({
     name: stepName,
@@ -510,7 +519,7 @@ async function runBundledPluginStagingStep(params: {
     index: 0,
     total: 0,
     durationMs,
-    exitCode,
+    exitCode: stepExitCode,
     stderrTail: stderrTail ?? undefined,
   });
 
@@ -519,7 +528,7 @@ async function runBundledPluginStagingStep(params: {
     command,
     cwd: extensionsDir,
     durationMs,
-    exitCode,
+    exitCode: stepExitCode,
     stdoutTail,
     stderrTail,
   };
