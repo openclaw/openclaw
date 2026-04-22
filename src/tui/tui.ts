@@ -113,10 +113,7 @@ export function resolveLocalAuthSpawnOptions(params: {
     : {};
 }
 
-export function resolveLocalAuthSpawnCwd(params: {
-  args: string[];
-  defaultCwd?: string;
-}): string {
+export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
   const defaultCwd = params.defaultCwd ?? process.cwd();
   const entryArg = params.args[0]?.trim();
   if (!entryArg) {
@@ -782,11 +779,7 @@ export async function runTui(opts: TuiOptions) {
               (resolve, reject) => {
                 const provider = params.provider?.trim() || undefined;
 
-                // For openai-codex, delegate to `codex auth login` when available.
-                // The codex CLI uses its own originator, which gets the correct `plus`
-                // plan instead of the `prolite` plan that OpenClaw's originator yields.
-                // Credentials land in ~/.codex/auth.json and the external CLI sync
-                // picks them up as `openai-codex:default` with managedBy: "codex-cli".
+                // Codex owns its auth store; delegate when the CLI is available.
                 const codexBin =
                   provider === OPENAI_CODEX_PROVIDER ||
                   (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)

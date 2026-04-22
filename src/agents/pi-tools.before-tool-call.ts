@@ -1,5 +1,4 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -233,16 +232,6 @@ export async function runBeforeToolCallHook(args: {
           log.warn(`plugin onResolution callback failed: ${String(err)}`);
         }
       };
-      // In embedded (gateway-less) TUI mode the local operator is trusted and
-      // there is no gateway WebSocket to route approval requests through.
-      // Auto-approve so tools are not blocked.
-      if (isEmbeddedMode()) {
-        safeOnResolution(PluginApprovalResolutions.ALLOW_ONCE);
-        return {
-          blocked: false,
-          params: mergeParamsWithApprovalOverrides(params, hookResult.params),
-        };
-      }
       try {
         const requestResult: {
           id?: string;
@@ -361,7 +350,7 @@ export async function runBeforeToolCallHook(args: {
             reason: "Approval cancelled (run aborted)",
           };
         }
-        log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
+        log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
         return {
           blocked: true,
           reason: "Plugin approval required (gateway unavailable)",

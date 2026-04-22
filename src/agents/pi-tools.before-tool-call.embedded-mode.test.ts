@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { HookRunner } from "../plugins/hooks.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -21,18 +22,17 @@ vi.mock("./tools/gateway.js", () => ({
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
-describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
-  let hookRunner: {
-    hasHooks: ReturnType<typeof vi.fn>;
-    runBeforeToolCall: ReturnType<typeof vi.fn>;
-  };
+describe("runBeforeToolCallHook — embedded mode approvals", () => {
+  let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall">;
+  let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
 
   beforeEach(() => {
+    runBeforeToolCallMock = vi.fn<HookRunner["runBeforeToolCall"]>();
     hookRunner = {
-      hasHooks: vi.fn().mockReturnValue(true),
-      runBeforeToolCall: vi.fn(),
+      hasHooks: vi.fn<HookRunner["hasHooks"]>().mockReturnValue(true),
+      runBeforeToolCall: runBeforeToolCallMock,
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as HookRunner);
     mockCallGatewayTool.mockReset();
   });
 
@@ -40,20 +40,21 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
     setEmbeddedMode(false);
   });
 
-  it("auto-approves when a plugin hook returns requireApproval in embedded mode", async () => {
+  it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
     setEmbeddedMode(true);
     const onResolution = vi.fn();
 
-    hookRunner.runBeforeToolCall.mockResolvedValue({
+    runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "test-plugin",
         title: "Needs approval",
         description: "Test approval request",
-        severity: "low",
+        severity: "info",
         onResolution,
       },
       params: { adjusted: true },
     });
+    mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
 
     const result = await runBeforeToolCallHook({
       toolName: "exec",
@@ -61,30 +62,33 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
       toolCallId: "call-1",
     });
 
-    expect(result.blocked).toBe(false);
-    if (!result.blocked) {
-      expect(result.params).toEqual({ command: "ls", adjusted: true });
-    }
-    // Must NOT call the gateway for approval
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      blocked: true,
+      reason: "Plugin approval required (gateway unavailable)",
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+    );
     expect(onResolution).toHaveBeenCalledTimes(1);
-    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.ALLOW_ONCE);
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
   });
 
   it("sends approval to gateway when NOT in embedded mode", async () => {
     setEmbeddedMode(false);
 
-    hookRunner.runBeforeToolCall.mockResolvedValue({
+    runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "test-plugin",
         title: "Needs approval",
         description: "Test approval request",
-        severity: "low",
+        severity: "info",
         timeoutMs: 5_000,
       },
     });
 
-    // Gateway returns no id → approval fails → blocked
     mockCallGatewayTool.mockResolvedValue({});
 
     const result = await runBeforeToolCallHook({
@@ -102,17 +106,21 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
     );
   });
 
-  it("preserves hook params override when auto-approving in embedded mode", async () => {
+  it("preserves hook params override after an approval allow decision", async () => {
     setEmbeddedMode(true);
 
-    hookRunner.runBeforeToolCall.mockResolvedValue({
+    runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "test-plugin",
         title: "Approval",
         description: "desc",
-        severity: "low",
+        severity: "info",
       },
       params: { extraField: "injected" },
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-3",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
     });
 
     const result = await runBeforeToolCallHook({
@@ -122,7 +130,6 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
     });
 
     expect(result.blocked).toBe(false);
-    // Original params merged with hook-provided overrides
     if (!result.blocked) {
       expect(result.params).toEqual({
         path: "/tmp/test.txt",
@@ -132,17 +139,20 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
     }
   });
 
-  it("auto-approves with original params when hook provides no param overrides", async () => {
+  it("keeps original params after an approval allow decision without overrides", async () => {
     setEmbeddedMode(true);
 
-    hookRunner.runBeforeToolCall.mockResolvedValue({
+    runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "test-plugin",
         title: "Approval",
         description: "desc",
-        severity: "low",
+        severity: "info",
       },
-      // No params field
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-4",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
     });
 
     const result = await runBeforeToolCallHook({

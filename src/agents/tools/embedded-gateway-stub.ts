@@ -1,27 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-/**
- * Embedded-mode local `callGateway` replacement.
- *
- * Handles the gateway RPC methods that `sessions_list` and `sessions_history`
- * tools use, reading directly from disk instead of opening a WebSocket to the
- * gateway process.  All other methods throw a clear error so the caller knows
- * the gateway is unavailable.
- *
- * Heavy gateway modules are loaded lazily via a computed dynamic import to avoid
- * an import cycle (openclaw-tools → stub → chat.ts → auto-reply → openclaw-tools).
- * Both the dynamic `import()` path and the type annotation use opaque forms so
- * madge's static AST parser cannot trace the edge.
- */
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { SessionsListParams } from "../../gateway/protocol/index.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
-/**
- * Shape of the lazily-loaded runtime module.  Defined manually to avoid
- * `typeof import(...)` which madge traces as a static dependency.
- */
 interface EmbeddedGatewayRuntime {
   resolveSessionAgentId: (opts: { sessionKey: string; config: OpenClawConfig }) => string;
   loadConfig: () => OpenClawConfig;
@@ -67,12 +50,10 @@ interface EmbeddedGatewayRuntime {
   ) => { provider: string | undefined };
 }
 
-/** Lazy-loaded runtime module cache. */
 let runtimeMod: EmbeddedGatewayRuntime | undefined;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
-    // Compute the path in a variable so madge's static parser cannot trace it.
     const modPath = [".", "embedded-gateway-stub.runtime.js"].join("/");
     runtimeMod = (await import(modPath)) as EmbeddedGatewayRuntime;
   }
@@ -114,8 +95,6 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       ? rt.readSessionMessages(sessionId, storePath, entry?.sessionFile as string | undefined)
       : [];
 
-  // Replicate the full gateway sanitization pipeline from
-  // src/gateway/server-methods/chat.ts "chat.history" handler (lines 1620-1668).
   const rawMessages = rt.augmentChatHistoryWithCliSessionImports({
     entry,
     provider: resolvedSessionModel.provider,
@@ -153,10 +132,6 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   };
 }
 
-/**
- * Create a `callGateway`-compatible function that handles `sessions.list` and
- * `chat.history` locally, reading from disk.  All other methods throw.
- */
 export function createEmbeddedCallGateway(): EmbeddedCallGateway {
   return async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> => {
     const method = opts.method?.trim();

@@ -3,7 +3,6 @@ import { isEmbeddedMode, setEmbeddedMode } from "./embedded-mode.js";
 
 describe("embedded-mode flag", () => {
   afterEach(() => {
-    // Reset to default after each test.
     setEmbeddedMode(false);
   });
 
