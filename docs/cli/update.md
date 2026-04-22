@@ -36,7 +36,9 @@ openclaw --update
 - `--channel <stable|beta|dev>`: set the update channel (git + npm; persisted in config).
 - `--tag <dist-tag|version|spec>`: override the package target for this update only. For package installs, `main` maps to `github:openclaw/openclaw#main`.
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
-- `--json`: print machine-readable `UpdateRunResult` JSON.
+- `--json`: print machine-readable `UpdateRunResult` JSON, including
+  `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is
+  detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1200s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation)
 
@@ -100,6 +102,11 @@ High-level:
 7. Builds + builds the Control UI.
 8. Runs `openclaw doctor` as the final “safe update” check.
 9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
+
+If an exact pinned npm plugin update resolves to an artifact whose integrity
+differs from the stored install record, `openclaw update` aborts that plugin
+artifact update instead of installing it. Reinstall or update the plugin
+explicitly only after verifying that you trust the new artifact.
 
 If pnpm bootstrap still fails, the updater now stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 

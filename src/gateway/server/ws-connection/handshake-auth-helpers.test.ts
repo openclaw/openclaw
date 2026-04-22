@@ -519,6 +519,28 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
   });
 
+  it("keeps shared-secret loopback clients remote when forwarded headers were present", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+    } as ConnectParams;
+
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "127.0.0.1:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+  });
+
   it("allows silent scope-upgrade for shared_secret_loopback_local", () => {
     expect(
       shouldAllowSilentLocalPairing({
