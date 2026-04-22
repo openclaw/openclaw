@@ -44,6 +44,25 @@
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "openai": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "gpt-5.4-mini",
+        "audio": "gpt-4o-transcribe"
+      },
+      "autoPriority": {
+        "image": 10,
+        "audio": 10
+      }
+    },
+    "openai-codex": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5.4"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

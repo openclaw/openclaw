@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -94,13 +94,6 @@ jobs:
           fi
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
-
-      - name: Setup Node environment
-        if: steps.docs_scope.outputs.docs_only != 'true'
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          install-deps: "false"
 
       - name: Detect changed extensions
         id: changed_extensions

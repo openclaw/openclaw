@@ -22,23 +22,19 @@ describe("setup promotion helpers", () => {
     getLoadedChannelPluginMock.mockReset();
   });
 
-  it("keeps static named-account migration keys cheap", () => {
+  it("keeps static single-account migration keys cheap", () => {
     const keys = resolveSingleAccountKeysToMove({
-      channelKey: "whatsapp",
+      channelKey: "demo",
       channel: {
-        accounts: {
-          work: { enabled: true },
-        },
         dmPolicy: "allowlist",
         allowFrom: ["+15551234567"],
         groupPolicy: "allowlist",
-        groupAllowFrom: ["120363000000000000@g.us"],
+        groupAllowFrom: ["group-123"],
       },
     });
 
     expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
-    expect(getLoadedChannelPluginMock).toHaveBeenCalledTimes(1);
-    expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("whatsapp");
+    expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
     expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
   });
 
@@ -78,5 +74,28 @@ describe("setup promotion helpers", () => {
 
     expect(keys).toEqual(["token"]);
     expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("loads bundled setup for named-account filters before registry bootstrap", () => {
+    getBundledChannelPluginMock.mockReturnValue({
+      setup: {
+        namedAccountPromotionKeys: ["token"],
+      },
+    });
+
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "demo",
+      channel: {
+        accounts: {
+          work: { enabled: true },
+        },
+        token: "secret",
+        dmPolicy: "allowlist",
+      },
+    });
+
+    expect(keys).toEqual(["token"]);
+    expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
+    expect(getBundledChannelPluginMock).toHaveBeenCalledWith("demo");
   });
 });
