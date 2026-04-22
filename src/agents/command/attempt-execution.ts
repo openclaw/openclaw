@@ -12,7 +12,7 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
-import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
+import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
@@ -22,6 +22,7 @@ import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { resolveFallbackRetryPrompt } from "./attempt-execution.helpers.js";
 import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
+import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
@@ -301,22 +302,12 @@ export function runAgentAttempt(params: {
           `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
         );
 
-        const entry = params.sessionStore[params.sessionKey];
-        if (entry) {
-          const updatedEntry = { ...entry };
-          clearCliSession(updatedEntry, params.providerOverride);
-          updatedEntry.updatedAt = Date.now();
-
-          await persistSessionEntry({
-            sessionStore: params.sessionStore,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-            entry: updatedEntry,
-            clearedFields: ["cliSessionBindings", "cliSessionIds", "claudeCliSessionId"],
-          });
-
-          params.sessionEntry = updatedEntry;
-        }
+        params.sessionEntry = await clearCliSessionInStore({
+          provider: params.providerOverride,
+          sessionKey: params.sessionKey,
+          sessionStore: params.sessionStore,
+          storePath: params.storePath,
+        });
 
         return runCliWithSession(undefined).then(async (result) => {
           if (
