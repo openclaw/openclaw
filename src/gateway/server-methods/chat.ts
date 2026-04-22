@@ -2029,7 +2029,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
-      let appendedWebchatAgentAudio = false;
+      let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       const emitUserTranscriptUpdate = async () => {
         if (userTranscriptUpdatePromise) {
@@ -2092,7 +2092,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
+        if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
         const mediaMessage = await buildWebchatAssistantMediaMessage([payload], {
@@ -2117,7 +2117,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           idempotencyKey: `${clientRunId}:assistant-media`,
         });
         if (appended.ok) {
-          appendedWebchatAgentAudio = true;
+          appendedWebchatAgentMedia = true;
           return;
         }
         context.logGateway.warn(

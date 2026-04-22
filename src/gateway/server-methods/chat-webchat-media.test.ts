@@ -189,4 +189,38 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
       ],
     });
   });
+
+  it("suppresses control tokens and falls back to synthetic image text", async () => {
+    const message = await buildWebchatAssistantMessageFromReplyPayloads([
+      {
+        text: "NO_REPLY",
+        mediaUrl: "data:image/png;base64,cG5n",
+      },
+    ]);
+
+    expect(message).toEqual({
+      transcriptText: "Image reply",
+      content: [
+        { type: "text", text: "Image reply" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
+  });
+
+  it("preserves reply directives in transcript text for media replies", async () => {
+    const message = await buildWebchatAssistantMessageFromReplyPayloads([
+      {
+        replyToCurrent: true,
+        mediaUrl: "data:image/png;base64,cG5n",
+      },
+    ]);
+
+    expect(message).toEqual({
+      transcriptText: "[[reply_to_current]]Image reply",
+      content: [
+        { type: "text", text: "[[reply_to_current]]Image reply" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
+  });
 });

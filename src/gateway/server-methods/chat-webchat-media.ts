@@ -6,6 +6,7 @@ import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/loca
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 
 /** Cap embedded audio size to avoid multi‑MB payloads on the chat WebSocket. */
 const MAX_WEBCHAT_AUDIO_BYTES = 15 * 1024 * 1024;
@@ -105,6 +106,16 @@ function isEmbeddableImageUrl(url: string): boolean {
   return /^https?:\/\/.+\.(apng|avif|bmp|gif|jpe?g|png|svg|webp)(?:[?#].*)?$/i.test(trimmed);
 }
 
+function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
+  if (typeof payload.replyToId === "string" && payload.replyToId.trim()) {
+    return `[[reply_to:${payload.replyToId.trim()}]]`;
+  }
+  if (payload.replyToCurrent) {
+    return "[[reply_to_current]]";
+  }
+  return "";
+}
+
 /**
  * Build Control UI / transcript `content` blocks for local TTS (or other) audio files
  * referenced by slash-command / agent replies when the webchat path only had text aggregation.
@@ -148,11 +159,13 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   let hasImage = false;
 
   for (const payload of payloads) {
-    const text = payload.text?.trim();
-    if (text) {
-      transcriptTextParts.push(text);
-      content.push({ type: "text", text });
-    }
+    const visibleText = payload.text?.trim();
+    const text =
+      visibleText && !isSuppressedControlReplyText(visibleText) ? visibleText : undefined;
+    const replyDirectivePrefix = resolveReplyDirectivePrefix(payload);
+    let payloadHasAudio = false;
+    let payloadHasImage = false;
+    const payloadMediaBlocks: Array<Record<string, unknown>> = [];
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
       const url = raw.trim();
@@ -167,8 +180,9 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
         seenAudio.add(resolvedAudioPath);
         const block = tryReadLocalAudioContentBlock(resolvedAudioPath);
         if (block) {
-          content.push(block);
+          payloadMediaBlocks.push(block);
           hasAudio = true;
+          payloadHasAudio = true;
         }
         continue;
       }
@@ -176,9 +190,29 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
         continue;
       }
       seenImages.add(url);
-      content.push({ type: "input_image", image_url: url });
+      payloadMediaBlocks.push({ type: "input_image", image_url: url });
       hasImage = true;
+      payloadHasImage = true;
     }
+    const needsSyntheticText =
+      payloadMediaBlocks.length > 0 && (!text || replyDirectivePrefix) && transcriptTextParts.length === 0;
+    const syntheticText = needsSyntheticText
+      ? payloadHasAudio && payloadHasImage
+        ? "Media reply"
+        : payloadHasAudio
+          ? "Audio reply"
+          : "Image reply"
+      : undefined;
+    const blockText = text ?? syntheticText;
+    if (blockText) {
+      const fullText = replyDirectivePrefix ? `${replyDirectivePrefix}${blockText}` : blockText;
+      transcriptTextParts.push(fullText);
+      content.push({ type: "text", text: fullText });
+    } else if (replyDirectivePrefix) {
+      transcriptTextParts.push(replyDirectivePrefix);
+      content.push({ type: "text", text: replyDirectivePrefix });
+    }
+    content.push(...payloadMediaBlocks);
   }
 
   if (!hasAudio && !hasImage) {

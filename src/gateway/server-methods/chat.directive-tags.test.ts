@@ -20,10 +20,18 @@ const mockState = vi.hoisted(() => ({
   sessionId: "sess-1",
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
-  finalPayload: null as { text?: string; mediaUrl?: string } | null,
+  finalPayload: null as
+    | { text?: string; mediaUrl?: string; replyToId?: string; replyToCurrent?: boolean }
+    | null,
   dispatchedReplies: [] as Array<{
     kind: "tool" | "block" | "final";
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
+    payload: {
+      text?: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+      replyToId?: string;
+      replyToCurrent?: boolean;
+    };
   }>,
   dispatchError: null as Error | null,
   triggerAgentRunStart: false,
@@ -91,16 +99,25 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
     async (params: {
       ctx: MsgContext;
       dispatcher: {
-        sendFinalReply: (payload: { text?: string; mediaUrl?: string }) => boolean;
+        sendFinalReply: (payload: {
+          text?: string;
+          mediaUrl?: string;
+          replyToId?: string;
+          replyToCurrent?: boolean;
+        }) => boolean;
         sendBlockReply: (payload: {
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          replyToId?: string;
+          replyToCurrent?: boolean;
         }) => boolean;
         sendToolResult: (payload: {
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          replyToId?: string;
+          replyToCurrent?: boolean;
         }) => boolean;
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
@@ -130,9 +147,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
             params.dispatcher.sendBlockReply(reply.payload);
             continue;
           }
-          params.dispatcher.sendFinalReply({
-            text: reply.payload.text ?? "",
-          });
+          params.dispatcher.sendFinalReply(reply.payload);
         }
       } else {
         params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
@@ -1932,6 +1947,50 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         { type: "text", text: "Image reply" },
         { type: "input_image", image_url: "https://example.com/final.png" },
       ],
+    });
+  });
+
+  it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
+    createTranscriptFixture("openclaw-chat-send-media-reply-tags-");
+    mockState.finalPayload = {
+      replyToCurrent: true,
+      mediaUrl: "https://example.com/final.png",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-media-reply-tags",
+    });
+
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Image reply" },
+        { type: "input_image", image_url: "https://example.com/final.png" },
+      ],
+    });
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant" &&
+        Array.isArray((update.message as { content?: unknown }).content) &&
+        ((update.message as { content: Array<{ type?: string; text?: string }> }).content.some(
+          (block) => block?.type === "text" && block?.text?.includes("[[reply_to_current]]"),
+        ) ??
+          false),
+    );
+    expect(transcriptUpdate).toMatchObject({
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "[[reply_to_current]]Image reply" },
+          { type: "input_image", image_url: "https://example.com/final.png" },
+        ],
+      },
     });
   });
 
