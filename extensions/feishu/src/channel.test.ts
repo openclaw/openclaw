@@ -385,6 +385,48 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
   });
 
+  it("rejects legacy command payloads in non-button card elements", async () => {
+    const legacyCard = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "overflow",
+                options: [
+                  {
+                    text: { tag: "plain_text", content: "Run help" },
+                    value: { command: "help" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: legacyCard,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow(
+      "Feishu card actions that trigger text or commands must use structured interaction envelopes.",
+    );
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to text send when card payload is empty", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_text", chatId: "oc_group_1" });
 

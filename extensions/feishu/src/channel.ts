@@ -98,7 +98,7 @@ function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
     return false;
   }
 
-  if (node.tag === "button" && hasLegacyFeishuCardCommandValue(node.value)) {
+  if (hasLegacyFeishuCardCommandValue(node.value)) {
     return true;
   }
 
@@ -727,7 +727,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (hasValidCard) {
               if (containsLegacyFeishuCardCommandValue(card)) {
                 throw new Error(
-                  "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+                  "Feishu card actions that trigger text or commands must use structured interaction envelopes.",
                 );
               }
               result = await runtime.sendCardFeishu({
