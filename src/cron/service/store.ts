@@ -70,15 +70,33 @@ export async function ensureLoaded(
     // Same shape: persisted jobs missing `sessionTarget` crash on the next
     // tick via `assertSupportedJobSpec`. Mirror the defaulter applied at
     // create time: systemEvent payloads -> "main", agentTurn -> "isolated".
+    // Use `Object.hasOwn` rather than `in` so a poisoned prototype cannot
+    // feed a crafted `kind` into the defaulter.
     if (typeof hydrated.sessionTarget !== "string") {
+      const payload = hydrated.payload as unknown;
       const payloadKind =
-        hydrated.payload && typeof hydrated.payload === "object" && "kind" in hydrated.payload
-          ? (hydrated.payload as { kind?: unknown }).kind
+        payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        Object.hasOwn(payload, "kind")
+          ? (payload as { kind?: unknown }).kind
           : undefined;
+      let defaulted: "main" | "isolated" | undefined;
       if (payloadKind === "systemEvent") {
-        hydrated.sessionTarget = "main";
+        defaulted = "main";
       } else if (payloadKind === "agentTurn") {
-        hydrated.sessionTarget = "isolated";
+        defaulted = "isolated";
+      }
+      if (defaulted) {
+        hydrated.sessionTarget = defaulted;
+        state.deps.log.warn(
+          {
+            storePath: state.deps.storePath,
+            jobId: typeof hydrated.id === "string" ? hydrated.id : undefined,
+            defaulted,
+          },
+          "cron: job missing sessionTarget; defaulted in memory (run openclaw doctor --fix to persist canonical shape)",
+        );
       }
     }
   }
