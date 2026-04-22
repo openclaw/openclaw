@@ -156,6 +156,58 @@ describe("models-add", () => {
     expect(written.agents?.defaults?.models?.["ollama/glm-5.1:cloud"]).toEqual({});
   });
 
+  it("reuses an existing configured provider key when the stored key is non-canonical", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          Ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      parsed: cfg,
+    });
+    ollamaMocks.queryOllamaModelShowInfo.mockResolvedValue({
+      contextWindow: 202752,
+      capabilities: ["thinking"],
+    });
+    configMocks.validateConfigObjectWithPlugins.mockImplementation((config: OpenClawConfig) => ({
+      ok: true,
+      config,
+    }));
+
+    const result = await addModelToConfig({
+      cfg,
+      provider: "ollama",
+      modelId: "glm-5.1:cloud",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    expect(written.models?.providers?.Ollama?.models).toEqual([
+      expect.objectContaining({
+        id: "glm-5.1:cloud",
+      }),
+    ]);
+    expect(written.models?.providers?.ollama).toBeUndefined();
+  });
+
   it("treats duplicate provider/model entries as idempotent", async () => {
     const cfg = {
       agents: {

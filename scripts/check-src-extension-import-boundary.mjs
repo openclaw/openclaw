@@ -3,7 +3,7 @@
 import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
-const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(["api.js", "runtime-api.js"]);
+const ALLOWED_EXTENSION_PUBLIC_SURFACE_RE = /^extensions\/[^/]+\/(?:api|runtime-api)\.js$/;
 
 const checker = createExtensionImportBoundaryChecker({
   roots: ["src"],
@@ -13,8 +13,7 @@ const checker = createExtensionImportBoundaryChecker({
   inventoryTitle: "Src extension import boundary inventory:",
   skipSourcesWithoutBundledPluginPrefix: true,
   allowResolvedPath(resolvedPath) {
-    const basename = resolvedPath.split("/").at(-1) ?? "";
-    return ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES.has(basename);
+    return ALLOWED_EXTENSION_PUBLIC_SURFACE_RE.test(resolvedPath);
   },
   shouldSkipFile(relativeFile) {
     return (

@@ -78,8 +78,24 @@ function buildDefaultModelDefinition(modelId: string): ModelDefinitionConfig {
 function resolveConfiguredProvider(
   cfg: OpenClawConfig,
   providerId: string,
-): ModelProviderConfig | undefined {
-  return cfg.models?.providers?.[providerId];
+): { providerKey: string; providerConfig: ModelProviderConfig } | undefined {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (!normalizedProviderId) {
+    return undefined;
+  }
+  const providers = cfg.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  for (const [configuredProviderId, configuredProvider] of Object.entries(providers)) {
+    if (normalizeProviderId(configuredProviderId) === normalizedProviderId) {
+      return {
+        providerKey: configuredProviderId,
+        providerConfig: configuredProvider,
+      };
+    }
+  }
+  return undefined;
 }
 
 function buildDefaultLmstudioProviderConfig(): ModelProviderConfig {
@@ -248,19 +264,33 @@ export function validateAddProvider(params: {
   return { ok: true, provider };
 }
 
-function ensureProviderConfig(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-}): { ok: true; providerConfig: ModelProviderConfig; bootstrapped: boolean } | { ok: false } {
-  const providerConfig = resolveConfiguredProvider(params.cfg, params.provider);
-  if (providerConfig) {
-    return { ok: true, providerConfig, bootstrapped: false };
+function ensureProviderConfig(params: { cfg: OpenClawConfig; provider: string }):
+  | {
+      ok: true;
+      providerKey: string;
+      providerConfig: ModelProviderConfig;
+      bootstrapped: boolean;
+    }
+  | { ok: false } {
+  const configuredProvider = resolveConfiguredProvider(params.cfg, params.provider);
+  if (configuredProvider) {
+    return {
+      ok: true,
+      providerKey: configuredProvider.providerKey,
+      providerConfig: configuredProvider.providerConfig,
+      bootstrapped: false,
+    };
   }
   const bootstrapped = MODEL_ADD_ADAPTERS[params.provider]?.bootstrapProviderConfig?.(params.cfg);
   if (!bootstrapped) {
     return { ok: false };
   }
-  return { ok: true, providerConfig: bootstrapped, bootstrapped: true };
+  return {
+    ok: true,
+    providerKey: params.provider,
+    providerConfig: bootstrapped,
+    bootstrapped: true,
+  };
 }
 
 async function detectModelDefinition(params: {
@@ -334,13 +364,14 @@ export async function detectProviderModelDefinition(params: {
 function upsertModelEntry(params: {
   cfg: OpenClawConfig;
   provider: string;
+  providerKey: string;
   providerConfig: ModelProviderConfig;
   model: ModelDefinitionConfig;
 }): { nextConfig: OpenClawConfig; existed: boolean } {
   const nextConfig = structuredClone(params.cfg);
   nextConfig.models ??= {};
   nextConfig.models.providers ??= {};
-  const existingProvider = nextConfig.models.providers[params.provider];
+  const existingProvider = nextConfig.models.providers[params.providerKey];
   const providerConfig = existingProvider
     ? {
         ...existingProvider,
@@ -360,7 +391,7 @@ function upsertModelEntry(params: {
   if (!existed) {
     providerConfig.models.push(params.model);
   }
-  nextConfig.models.providers[params.provider] = providerConfig;
+  nextConfig.models.providers[params.providerKey] = providerConfig;
   return { nextConfig, existed };
 }
 
@@ -433,6 +464,7 @@ export async function addModelToConfig(params: {
   const upserted = upsertModelEntry({
     cfg: currentConfig,
     provider,
+    providerKey: providerResolution.providerKey,
     providerConfig: providerResolution.providerConfig,
     model: detected.model,
   });
