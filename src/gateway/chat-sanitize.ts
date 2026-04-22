@@ -13,7 +13,7 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
   if (typeof entry.content === "string") {
     return (
       extractInboundSenderLabel(entry.content) ||
-      extractEnvelopeSender(entry.content, chatType as "direct" | "group")
+      extractEnvelopeSender(entry.content, chatType as "direct" | "group" | "channel")
     );
   }
   if (Array.isArray(entry.content)) {
@@ -27,7 +27,7 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
       }
       const senderLabel =
         extractInboundSenderLabel(text) ||
-        extractEnvelopeSender(text, chatType as "direct" | "group");
+        extractEnvelopeSender(text, chatType as "direct" | "group" | "channel");
       if (senderLabel) {
         return senderLabel;
       }
@@ -36,7 +36,7 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
   if (typeof entry.text === "string") {
     return (
       extractInboundSenderLabel(entry.text) ||
-      extractEnvelopeSender(entry.text, chatType as "direct" | "group")
+      extractEnvelopeSender(entry.text, chatType as "direct" | "group" | "channel")
     );
   }
   return null;
