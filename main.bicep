@@ -340,7 +340,6 @@ EXECUTOR_EOF
 # security check, so we use plugins.load.paths instead of copying to ~/.openclaw/extensions/.
 rm -rf /home/node/.openclaw/extensions/token-budget
 node --require /tmp/patch.js openclaw.mjs config set plugins.load.paths '["/app/custom-plugins/token-budget"]'
-node --require /tmp/patch.js openclaw.mjs config set plugins.allow '["token-budget"]'
 # Token budget plugin config
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.enabled true
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.monthlyLimit 2000000
