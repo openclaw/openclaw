@@ -99,4 +99,44 @@ describe("task-registry audit", () => {
 
     expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
   });
+
+  it("ignores tiny startedAt jitter before createdAt", () => {
+    const createdAt = Date.parse("2026-03-30T00:00:00.007Z");
+    const findings = listTaskAuditFindings({
+      tasks: [
+        createTask({
+          status: "succeeded",
+          createdAt,
+          startedAt: createdAt - 1,
+          endedAt: createdAt + 100,
+          cleanupAfter: createdAt + 60_000,
+        }),
+      ],
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("still reports larger timestamp inversions", () => {
+    const createdAt = Date.parse("2026-03-30T00:00:00.020Z");
+    const findings = listTaskAuditFindings({
+      now: createdAt,
+      tasks: [
+        createTask({
+          status: "succeeded",
+          createdAt,
+          startedAt: createdAt - 25,
+          endedAt: createdAt + 100,
+          cleanupAfter: createdAt + 60_000,
+        }),
+      ],
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        code: "inconsistent_timestamps",
+        detail: "startedAt is earlier than createdAt",
+      }),
+    ]);
+  });
 });
