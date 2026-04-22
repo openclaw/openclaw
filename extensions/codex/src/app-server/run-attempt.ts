@@ -101,9 +101,9 @@ export async function runCodexAppServerAttempt(
     tools,
     signal: runAbortController.signal,
     hookContext: {
-      agentId: params.agentId,
+      agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
+      sessionKey: sandboxSessionKey,
       runId: params.runId,
     },
   });
@@ -285,7 +285,9 @@ export async function runCodexAppServerAttempt(
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     await mirrorTranscriptBestEffort({
       params,
+      agentId: sessionAgentId,
       result,
+      sessionKey: sandboxSessionKey,
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
@@ -520,15 +522,17 @@ function readMirroredSessionHistoryMessages(sessionFile: string): unknown[] {
 
 async function mirrorTranscriptBestEffort(params: {
   params: EmbeddedRunAttemptParams;
+  agentId?: string;
   result: EmbeddedRunAttemptResult;
+  sessionKey?: string;
   threadId: string;
   turnId: string;
 }): Promise<void> {
   try {
     await mirrorCodexAppServerTranscript({
       sessionFile: params.params.sessionFile,
-      agentId: params.params.agentId,
-      sessionKey: params.params.sessionKey,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
     });
