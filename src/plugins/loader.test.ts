@@ -2910,6 +2910,42 @@ module.exports = { id: "throws-after-import", register() {} };`,
         };
       },
     },
+    {
+      name: "does not reuse cached registries across explicit interSession runtime overrides",
+      setup: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "cache-inter-session-runtime",
+          filename: "cache-inter-session-runtime.cjs",
+          body: `module.exports = { id: "cache-inter-session-runtime", register() {} };`,
+        });
+
+        const options = {
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              allow: ["cache-inter-session-runtime"],
+              load: {
+                paths: [plugin.file],
+              },
+            },
+          },
+        };
+
+        return {
+          loadFirst: () => loadOpenClawPlugins(options),
+          loadVariant: () =>
+            loadOpenClawPlugins({
+              ...options,
+              runtimeOptions: {
+                interSession: {
+                  send: async () => ({ messageRef: "send-ref" }),
+                },
+              },
+            }),
+        };
+      },
+    },
   ])("$name", ({ setup }) => {
     expectCacheMissThenHit(setup());
   });

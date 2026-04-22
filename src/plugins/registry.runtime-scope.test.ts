@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-import { createPluginRuntimeMock } from "../../test/helpers/plugins/plugin-runtime-mock.ts";
+import { createPluginRuntimeMock } from "../../test/helpers/plugins/plugin-runtime-mock.js";
 
 describe("plugin runtime registry scoping", () => {
   it("wraps interSession.send with pluginId scope", async () => {

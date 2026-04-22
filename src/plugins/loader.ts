@@ -575,7 +575,7 @@ function resolveRuntimeSubagentMode(
   if (runtimeOptions?.allowGatewaySubagentBinding === true) {
     return "gateway-bindable";
   }
-  if (runtimeOptions?.subagent) {
+  if (runtimeOptions?.subagent || runtimeOptions?.interSession) {
     return "explicit";
   }
   return "default";

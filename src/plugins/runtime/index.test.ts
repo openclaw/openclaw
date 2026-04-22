@@ -14,7 +14,7 @@ import {
 } from "./index.js";
 import {
   INTERSESSION_RUNTIME_UNAVAILABLE_ERROR_MESSAGE,
-  OPENCLAW_INTERSESSION_UNAVAILABLE,
+  OPENCLAW_INTERSESSION_RUNTIME_NOT_BOUND,
 } from "../../plugin-sdk/error-runtime.js";
 
 function createCommandResult() {
@@ -300,7 +300,7 @@ describe("plugin runtime command execution", () => {
       throw new Error("Expected interSession.send to throw");
     } catch (error) {
       expect(error).toMatchObject({
-        code: OPENCLAW_INTERSESSION_UNAVAILABLE,
+        code: OPENCLAW_INTERSESSION_RUNTIME_NOT_BOUND,
         message: INTERSESSION_RUNTIME_UNAVAILABLE_ERROR_MESSAGE,
       });
     }

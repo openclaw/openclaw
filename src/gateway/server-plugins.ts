@@ -505,7 +505,7 @@ export function createGatewayInterSessionRuntime(): PluginRuntime["interSession"
         const payload = await dispatchGatewayMethod<{ runId?: string }>("sessions.send", {
           key: params.sessionKey,
           message: params.message,
-          idempotencyKey: params.idempotencyKey || randomUUID(),
+          idempotencyKey: params.idempotencyKey ?? randomUUID(),
         });
         const runId = payload?.runId;
         if (!isInterSessionMessageRef(runId)) {
