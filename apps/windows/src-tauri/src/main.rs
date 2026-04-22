@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::io::{BufReader, BufRead};
 use serde::Serialize;
-use sysinfo::{CpuRefreshKind, ProcessRefreshKind, System, SystemExt, ProcessExt};
+use sysinfo::{ProcessRefreshKind, System};
 use tauri::{
     AppHandle, Manager, State, SystemTray, SystemTrayEvent, CustomMenuItem, SystemTrayMenu, SystemTrayMenuItem
 };
@@ -160,10 +160,10 @@ async fn get_metrics(state: State<'_, GatewayState>) -> Result<GatewayMetrics, S
     let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
     let process_lock = state.process.lock().map_err(|e| e.to_string())?;
     
-    let mut metrics = GatewayMetrics {
         online: false,
         cpu_usage: 0.0,
         memory_mb: 0,
+        total_memory_mb: 0,
         uptime_secs: 0,
         restarts: state.restart_count.load(Ordering::SeqCst),
     };
@@ -171,8 +171,8 @@ async fn get_metrics(state: State<'_, GatewayState>) -> Result<GatewayMetrics, S
     if let Some(ref child) = *process_lock {
         let pid = sysinfo::Pid::from(child.id() as usize);
         
-        // Refresh only the specific process for efficiency
-        sys.refresh_processes_spec(ProcessRefreshKind::new().with_cpu(), false);
+        // Refresh only relevant data
+        sys.refresh_processes();
         
         if let Some(process) = sys.process(pid) {
             metrics.online = true;
