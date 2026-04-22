@@ -248,7 +248,9 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
 }
 
 function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
-  return payloads.some((payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload));
+  return payloads.some(
+    (payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload),
+  );
 }
 
 function resolveChatSendOriginatingRoute(params: {

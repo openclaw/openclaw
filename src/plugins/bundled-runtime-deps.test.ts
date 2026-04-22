@@ -603,6 +603,50 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} })).toBe(pluginRoot);
   });
 
+  it("treats Docker build source trees without .git as source checkouts", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages:\n  - .\n");
+    const pluginRoot = path.join(packageRoot, "extensions", "acpx");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          acpx: "0.5.3",
+        },
+        devDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "acpx",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["acpx@0.5.3"],
+      retainSpecs: ["acpx@0.5.3"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        installExecutionRoot: expect.stringContaining(
+          path.join(".local", "bundled-plugin-runtime-deps"),
+        ),
+        missingSpecs: ["acpx@0.5.3"],
+        installSpecs: ["acpx@0.5.3"],
+      },
+    ]);
+  });
+
   it("does not trust package-root runtime deps for source-checkout bundled plugins", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();

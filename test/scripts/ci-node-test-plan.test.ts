@@ -53,7 +53,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .filter((shard) => shard.requiresDist)
       .map((shard) => shard.shardName);
 
-    expect(requiresDistShardNames).toEqual(["core-support-boundary", "agentic-plugins"]);
+    expect(requiresDistShardNames).toEqual(["core-support-boundary"]);
   });
 
   it("splits core runtime configs into smaller source-only shards", () => {
@@ -70,7 +70,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: [
           "test/vitest/vitest.infra.config.ts",
           "test/vitest/vitest.hooks.config.ts",
-          "test/vitest/vitest.runtime-config.config.ts",
           "test/vitest/vitest.secrets.config.ts",
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
@@ -93,6 +92,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: [
           "test/vitest/vitest.acp.config.ts",
           "test/vitest/vitest.cron.config.ts",
+          "test/vitest/vitest.runtime-config.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
@@ -114,13 +114,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(controlPlaneShard).toEqual({
       checkName: "checks-node-agentic-control-plane",
       shardName: "agentic-control-plane",
-      configs: [
-        "test/vitest/vitest.gateway-core.config.ts",
-        "test/vitest/vitest.gateway-client.config.ts",
-        "test/vitest/vitest.gateway-methods.config.ts",
-        "test/vitest/vitest.gateway-server.config.ts",
-        "test/vitest/vitest.daemon.config.ts",
-      ],
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
       requiresDist: false,
     });
     expect(commandsShard).toEqual({
@@ -130,19 +124,25 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         "test/vitest/vitest.cli.config.ts",
         "test/vitest/vitest.commands-light.config.ts",
         "test/vitest/vitest.commands.config.ts",
+        "test/vitest/vitest.daemon.config.ts",
       ],
       requiresDist: false,
     });
     expect(agentShard).toEqual({
       checkName: "checks-node-agentic-agents",
       shardName: "agentic-agents",
-      configs: ["test/vitest/vitest.agents.config.ts"],
+      configs: [
+        "test/vitest/vitest.agents.config.ts",
+        "test/vitest/vitest.gateway-client.config.ts",
+      ],
       requiresDist: false,
     });
     expect(pluginSdkShard).toEqual({
       checkName: "checks-node-agentic-plugin-sdk",
       shardName: "agentic-plugin-sdk",
       configs: [
+        "test/vitest/vitest.gateway-core.config.ts",
+        "test/vitest/vitest.gateway-methods.config.ts",
         "test/vitest/vitest.plugin-sdk-light.config.ts",
         "test/vitest/vitest.plugin-sdk.config.ts",
       ],
@@ -152,7 +152,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       checkName: "checks-node-agentic-plugins",
       shardName: "agentic-plugins",
       configs: ["test/vitest/vitest.plugins.config.ts"],
-      requiresDist: true,
+      requiresDist: false,
     });
   });
 
@@ -191,12 +191,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
         shardName: "auto-reply-reply-commands-a",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-b",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-b",
       },
       {
         checkName: "checks-node-auto-reply-reply-dispatch-a",

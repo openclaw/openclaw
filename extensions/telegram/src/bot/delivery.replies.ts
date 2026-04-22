@@ -9,6 +9,7 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "openclaw/plugin-sdk/hook-runtime";
+import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -487,7 +488,7 @@ async function deliverMediaReply(params: {
 }
 
 async function maybePinFirstDeliveredMessage(params: {
-  pin: NonNullable<ReplyPayload["delivery"]>["pin"] | undefined;
+  pin: ReplyPayloadDelivery["pin"];
   bot: Bot;
   chatId: string;
   runtime: RuntimeEnv;

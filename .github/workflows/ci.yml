@@ -305,7 +305,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -396,7 +396,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -550,7 +550,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -638,7 +638,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -744,7 +744,7 @@ jobs:
     name: "checks-fast-protocol"
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -1461,22 +1461,22 @@ jobs:
         include:
           - check_name: check-preflight-guards
             task: preflight-guards
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - check_name: check-prod-types
             task: prod-types
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - check_name: check-lint
             task: lint
             runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - check_name: check-test-types
             task: test-types
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - check_name: check-strict-smoke
             task: strict-smoke
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-24.04
     steps:
       - name: Checkout
         shell: bash
@@ -1592,7 +1592,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1604,10 +1604,8 @@ jobs:
             group: extension-channels
           - check_name: check-additional-extension-bundled
             group: extension-bundled
-          - check_name: check-additional-extension-package-boundary-compile
-            group: extension-package-boundary-compile
-          - check_name: check-additional-extension-package-boundary-canary
-            group: extension-package-boundary-canary
+          - check_name: check-additional-extension-package-boundary
+            group: extension-package-boundary
           - check_name: check-additional-runtime-topology-gateway
             group: runtime-topology-gateway
           - check_name: check-additional-runtime-topology-architecture
@@ -1668,7 +1666,7 @@ jobs:
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
-        if: matrix.group == 'extension-package-boundary-compile'
+        if: matrix.group == 'extension-package-boundary'
         uses: actions/cache@v5
         with:
           path: |
@@ -1681,7 +1679,7 @@ jobs:
             ${{ runner.os }}-extension-package-boundary-v1-
 
       - name: Preserve extension package boundary cache hit
-        if: matrix.group == 'extension-package-boundary-compile' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
+        if: matrix.group == 'extension-package-boundary' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -1709,6 +1707,7 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
+          OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
         shell: bash
         run: |
@@ -1732,24 +1731,7 @@ jobs:
 
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
-              run_check "plugin-extension-boundary" pnpm run lint:plugins:no-extension-imports
-              run_check "lint:tmp:no-random-messaging" pnpm run lint:tmp:no-random-messaging
-              run_check "lint:tmp:channel-agnostic-boundaries" pnpm run lint:tmp:channel-agnostic-boundaries
-              run_check "lint:tmp:tsgo-core-boundary" pnpm run lint:tmp:tsgo-core-boundary
-              run_check "lint:tmp:no-raw-channel-fetch" pnpm run lint:tmp:no-raw-channel-fetch
-              run_check "lint:agent:ingress-owner" pnpm run lint:agent:ingress-owner
-              run_check "lint:plugins:no-register-http-handler" pnpm run lint:plugins:no-register-http-handler
-              run_check "lint:plugins:no-monolithic-plugin-sdk-entry-imports" pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports
-              run_check "lint:plugins:no-extension-src-imports" pnpm run lint:plugins:no-extension-src-imports
-              run_check "lint:plugins:no-extension-test-core-imports" pnpm run lint:plugins:no-extension-test-core-imports
-              run_check "lint:plugins:plugin-sdk-subpaths-exported" pnpm run lint:plugins:plugin-sdk-subpaths-exported
-              run_check "deps:root-ownership:check" pnpm deps:root-ownership:check
-              run_check "web-search-provider-boundary" pnpm run lint:web-search-provider-boundaries
-              run_check "web-fetch-provider-boundary" pnpm run lint:web-fetch-provider-boundaries
-              run_check "extension-src-outside-plugin-sdk-boundary" pnpm run lint:extensions:no-src-outside-plugin-sdk
-              run_check "extension-plugin-sdk-internal-boundary" pnpm run lint:extensions:no-plugin-sdk-internal
-              run_check "extension-relative-outside-package-boundary" pnpm run lint:extensions:no-relative-outside-package
-              run_check "lint:ui:no-raw-window-open" pnpm lint:ui:no-raw-window-open
+              node scripts/run-additional-boundary-checks.mjs
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
@@ -1757,10 +1739,8 @@ jobs:
             extension-bundled)
               run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
               ;;
-            extension-package-boundary-compile)
+            extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
-              ;;
-            extension-package-boundary-canary)
               run_check "test:extensions:package-boundary:canary" pnpm run test:extensions:package-boundary:canary
               ;;
             runtime-topology-gateway)
@@ -1908,7 +1888,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1972,7 +1952,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout

@@ -59,6 +59,21 @@ function readRepoSource(file: string): string {
   return source;
 }
 
+function isAllowedBundledExtensionImport(specifier: string): boolean {
+  return /(?:^|\/)extensions\/[^/]+\/(?:api|runtime-api)\.js$/u.test(specifier);
+}
+
+function collectBundledExtensionImports(source: string): string[] {
+  const matches = [
+    ...source.matchAll(/from\s+["']([^"']*extensions\/[^"']+)["']/gu),
+    ...source.matchAll(/vi\.(?:mock|doMock)\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
+    ...source.matchAll(/importActual(?:<[^>]*>)?\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
+  ];
+  return matches
+    .map((match) => match[1])
+    .filter((specifier): specifier is string => typeof specifier === "string");
+}
+
 describe("plugin contract boundary invariants", () => {
   it("keeps bundled-capability-metadata confined to contract/test inventory", () => {
     const files = listTsFiles("src");
@@ -86,11 +101,8 @@ describe("plugin contract boundary invariants", () => {
   it("keeps core tests off bundled extension deep imports", () => {
     const files = listTsFiles("src", { testOnly: true });
     const offenders = files.filter((file) => {
-      const source = readRepoSource(file);
-      return (
-        /from\s+["'][^"']*extensions\/.+(?:api|runtime-api|test-api)\.js["']/u.test(source) ||
-        /vi\.(?:mock|doMock)\(\s*["'][^"']*extensions\/.+["']/u.test(source) ||
-        /importActual<[^>]*>\(\s*["'][^"']*extensions\/.+["']/u.test(source)
+      return collectBundledExtensionImports(readRepoSource(file)).some(
+        (specifier) => !isAllowedBundledExtensionImport(specifier),
       );
     });
     expect(offenders).toEqual([]);

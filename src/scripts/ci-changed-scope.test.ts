@@ -170,13 +170,13 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs platform lanes when the CI workflow changes", () => {
+  it("keeps native platform lanes scoped when the CI workflow changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
       runNode: true,
-      runMacos: true,
-      runAndroid: true,
-      runWindows: true,
-      runSkillsPython: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
       runChangedSmoke: false,
       runControlUiI18n: false,
     });

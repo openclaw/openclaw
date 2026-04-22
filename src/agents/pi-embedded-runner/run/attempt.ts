@@ -1126,7 +1126,7 @@ export async function runEmbeddedAttempt(
 
       ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
         createAgentSession: async (options) =>
-          await createAgentSession(options as Parameters<typeof createAgentSession>[0]),
+          await createAgentSession(options as unknown as Parameters<typeof createAgentSession>[0]),
         options: {
           cwd: resolvedWorkspace,
           agentDir,

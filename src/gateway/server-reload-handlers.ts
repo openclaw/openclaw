@@ -1,3 +1,4 @@
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -101,6 +102,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
+
+    if (
+      plan.changedPaths.some(
+        (path) =>
+          path === "models" ||
+          path.startsWith("models.") ||
+          path === "agents.defaults.model" ||
+          path.startsWith("agents.defaults.model.") ||
+          path === "agents.defaults.models" ||
+          path.startsWith("agents.defaults.models."),
+      )
+    ) {
+      resetModelCatalogCache();
+    }
 
     if (plan.reloadHooks) {
       try {
