@@ -218,7 +218,8 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
   if (!dreaming.enabled) {
     return "off";
   }
-  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+  const timezoneLabel = dreaming.timezone?.trim();
+  const timezone = timezoneLabel ? ` (${timezoneLabel})` : "";
   const phaseBits = [
     `light ${dreaming.phases.light.enabled ? "on" : "off"}`,
     `deep ${dreaming.phases.deep.enabled ? "on" : "off"}`,

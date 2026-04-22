@@ -53,7 +53,8 @@ function formatStatus(cfg: OpenClawConfig): string {
     cfg,
   });
   const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+  const timezoneLabel = dreaming.timezone?.trim();
+  const timezone = timezoneLabel ? ` (${timezoneLabel})` : "";
 
   return [
     "Dreaming status:",
