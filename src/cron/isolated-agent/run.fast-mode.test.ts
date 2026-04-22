@@ -36,7 +36,9 @@ function mockSuccessfulModelFallback() {
 async function runFastModeCase(params: {
   configFastMode: boolean;
   expectedFastMode: boolean;
+  expectedCleanupBundleMcpOnRunEnd?: boolean;
   message: string;
+  sessionTarget?: string;
   sessionFastMode?: boolean;
 }) {
   const baseSession = makeCronSession();
@@ -77,6 +79,7 @@ async function runFastModeCase(params: {
         },
       },
       job: makeIsolatedAgentTurnJob({
+        sessionTarget: params.sessionTarget ?? "isolated",
         payload: {
           kind: "agentTurn",
           message: params.message,
@@ -92,7 +95,7 @@ async function runFastModeCase(params: {
     provider: "openai",
     model: EXPECTED_OPENAI_MODEL,
     fastMode: params.expectedFastMode,
-    cleanupBundleMcpOnRunEnd: true,
+    cleanupBundleMcpOnRunEnd: params.expectedCleanupBundleMcpOnRunEnd ?? true,
     allowGatewaySubagentBinding: true,
   });
 }
@@ -123,6 +126,16 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       expectedFastMode: true,
       message: "test fast mode session override",
       sessionFastMode: true,
+    });
+  });
+
+  it("preserves bundled MCP runtime state for persistent cron session targets", async () => {
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      expectedCleanupBundleMcpOnRunEnd: false,
+      message: "test persistent cron session",
+      sessionTarget: "session:agent:main:main:thread:9999",
     });
   });
 });
