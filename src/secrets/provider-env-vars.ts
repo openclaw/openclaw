@@ -53,11 +53,12 @@ function shouldUsePluginProviderEnvVars(
 
 // Safe env var name validation: only allow conventional uppercase-with-underscores names.
 // Reject known high-value unrelated secrets to prevent accidental exfiltration.
+// Note: GITHUB_TOKEN, NPM_TOKEN etc are valid provider auth env vars for some providers
+// (e.g. GitHub Copilot), so we don't denylist them here. The regex validation below
+// already prevents injection of lowercase or path-like names.
 const DANGEROUS_ENV_NAMES = new Set([
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
-  "GITHUB_TOKEN",
-  "NPM_TOKEN",
   "SSH_AUTH_SOCK",
   "SSH_KEY",
 ]);
