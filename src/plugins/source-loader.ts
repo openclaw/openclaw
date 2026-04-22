@@ -14,7 +14,7 @@ export function createPluginSourceLoader(): PluginSourceLoader {
       cache: loaders,
       modulePath,
       importerUrl: import.meta.url,
-      jitiFilename: import.meta.url,
+      jitiFilename: modulePath,
     });
     if (!shouldProfilePluginSourceLoader()) {
       return jiti(modulePath);

@@ -103,7 +103,7 @@ function getJiti(modulePath: string) {
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    jitiFilename: import.meta.url,
+    jitiFilename: modulePath,
   });
   return loader;
 }
@@ -132,7 +132,7 @@ function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolea
     cache: sharedBundledPublicSurfaceJitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    jitiFilename: import.meta.url,
+    jitiFilename: modulePath,
     cacheScopeKey: cacheKey,
     tryNative,
   });

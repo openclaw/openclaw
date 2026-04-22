@@ -75,7 +75,7 @@ function getJiti(modulePath: string) {
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    jitiFilename: import.meta.url,
+    jitiFilename: modulePath,
   });
 }
 

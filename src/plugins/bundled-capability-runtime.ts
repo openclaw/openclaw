@@ -219,7 +219,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
-      jitiFilename: import.meta.url,
+      jitiFilename: modulePath,
       ...(aliasMap ? { aliasMap } : {}),
       pluginSdkResolution: params.pluginSdkResolution,
       tryNative,
