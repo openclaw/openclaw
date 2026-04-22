@@ -88,7 +88,9 @@ function sanitizeDeviceCodeErrorText(value: string): string {
   const c0Start = String.fromCharCode(0x00);
   const c0End = String.fromCharCode(0x1f);
   const del = String.fromCharCode(0x7f);
-  const controlCharsRegex = new RegExp(`[${c0Start}-${c0End}${del}]`, "g");
+  const c1Start = String.fromCharCode(0x80);
+  const c1End = String.fromCharCode(0x9f);
+  const controlCharsRegex = new RegExp(`[${c0Start}-${c0End}${del}${c1Start}-${c1End}]`, "g");
   return value
     .replace(osc8Regex, "")
     .replace(ansiCsiRegex, "")

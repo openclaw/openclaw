@@ -319,13 +319,16 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       onProgress: (message) => spin.update(message),
       onVerification: async ({ verificationUrl, userCode, expiresInMs }) => {
         const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+        const codeLine = ctx.isRemote
+          ? "Code: [shown on the local device only]"
+          : `Code: ${userCode}`;
         await ctx.prompter.note(
           [
             ctx.isRemote
               ? "Open this URL in your LOCAL browser and enter the code below."
               : "Open this URL in your browser and enter the code below.",
             `URL: ${verificationUrl}`,
-            `Code: ${userCode}`,
+            codeLine,
             `Code expires in ${expiresInMinutes} minutes. Never share it.`,
           ].join("\n"),
           "OpenAI Codex device code",

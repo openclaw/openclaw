@@ -182,4 +182,34 @@ describe("loginOpenAICodexDeviceCode", () => {
       "OpenAI device authorization failed: authorization_declined spoofed (Denied next line)",
     );
   });
+
+  it("strips C1 terminal controls from reflected device-code errors", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          device_auth_id: "device-auth-123",
+          user_code: "CODE-12345",
+          interval: "0",
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse(
+          {
+            error: `authorization_declined${String.fromCharCode(0x9b)}spoofed`,
+            error_description: `Denied${String.fromCharCode(0x9d)}next line`,
+          },
+          { status: 401 },
+        ),
+      );
+
+    await expect(
+      loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock as typeof fetch,
+        onVerification: async () => {},
+      }),
+    ).rejects.toThrow(
+      "OpenAI device authorization failed: authorization_declined spoofed (Denied next line)",
+    );
+  });
 });

@@ -185,6 +185,17 @@ Docs: https://docs.openclaw.ai
 - Control UI/device pairing: explain scope and role approval upgrades during reconnects, and show requested versus approved access in the Control UI and `openclaw devices` so broader reconnects no longer look like lost pairings. (#69221) Thanks @obviyus.
 - Gateway/Control UI: surface pending scope, role, and device-metadata pairing approvals in auth errors and Control UI hints so broader reconnects no longer look like random auth breakage. (#69226) Thanks @obviyus.
 
+## 2026.4.19-beta.2
+
+### Fixes
+
+- Agents/openai-completions: always send `stream_options.include_usage` on streaming requests, so local and custom OpenAI-compatible backends report real context usage instead of showing 0%. (#68746) Thanks @kagura-agent.
+- Agents/nested lanes: scope nested agent work per target session so a long-running nested run on one session no longer head-of-line blocks unrelated sessions across the gateway. (#67785) Thanks @stainlu.
+- Agents/status: preserve carried-forward session token totals for providers that omit usage metadata, so `/status` and `openclaw sessions` keep showing the last known context usage instead of dropping back to unknown/0%. (#67695) Thanks @stainlu.
+- Install/update: keep legacy update verification compatible with the QA Lab runtime shim, so updating older global installs to beta no longer fails after npm installs the package successfully.
+
+## 2026.4.19-beta.1
+
 ### Fixes
 
 - Agents/channels: route cross-agent subagent spawns through the target agent's bound channel account while preserving peer and workspace/role-scoped bindings, so child sessions no longer inherit the caller's account in shared rooms, workspaces, or multi-account setups. (#67508) Thanks @lukeboyett and @gumadeiras.

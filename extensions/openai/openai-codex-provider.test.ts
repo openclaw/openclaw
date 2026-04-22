@@ -333,6 +333,14 @@ describe("openai codex provider", () => {
     const logOutput = runtime.log.mock.calls.flat().join("\n");
     expect(logOutput).toContain("https://auth.openai.com/codex/device");
     expect(logOutput).not.toContain("CODE-12345");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Code: [shown on the local device only]"),
+      "OpenAI Codex device code",
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Code: CODE-12345"),
+      "OpenAI Codex device code",
+    );
   });
 
   it("exposes Codex CLI auth as a runtime-only external profile", () => {
