@@ -2604,9 +2604,11 @@ export async function runEmbeddedAttempt(
 
       // When the LLM call was blocked by before_llm_call hook, suppress
       // lastAssistant to prevent payloads.ts from replaying a stale response.
-      const lastAssistant = llmCallBlocked
-        ? undefined
-        : messagesSnapshot.findLast((m) => m.role === "assistant");
+      if (llmCallBlocked) {
+        lastAssistant = undefined;
+      } else {
+        lastAssistant = messagesSnapshot.findLast((m) => m.role === "assistant");
+      }
       const toolMetasNormalized = toolMetas
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>
