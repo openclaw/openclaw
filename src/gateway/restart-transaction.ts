@@ -59,6 +59,17 @@ export async function requestGatewayRestartTransaction(params: {
   const activeRun = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
   const mode: RestartTransactionMode = activeRun ? "terminal-handoff" : "drain-then-restart";
   const turnId = activeRun?.sessionId;
+  const interruptedTurn =
+    activeRun && sessionKey
+      ? {
+          sessionKey,
+          turnId,
+          phase: activeRun.phase,
+          interruptionCause: "gateway_restart",
+          pendingUserVisibleFollowupNote: params.payload.message ?? null,
+          resumeEligible: false,
+        }
+      : null;
   const transactionBase: RestartTransaction = {
     restartId: randomUUID(),
     requestedAt: Date.now(),
@@ -71,16 +82,7 @@ export async function requestGatewayRestartTransaction(params: {
     note: params.payload.message ?? null,
     deliveryContext: params.payload.deliveryContext ?? null,
     threadId: params.payload.threadId,
-    interruptedTurn: activeRun
-      ? {
-          sessionKey,
-          turnId,
-          phase: activeRun.phase,
-          interruptionCause: "gateway_restart",
-          pendingUserVisibleFollowupNote: params.payload.message ?? null,
-          resumeEligible: false,
-        }
-      : null,
+    interruptedTurn,
   };
 
   await writeRestartTransaction(transactionBase);

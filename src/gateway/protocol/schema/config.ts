@@ -29,17 +29,7 @@ export const ConfigSetParamsSchema = Type.Object(
 
 const RestartRequestSharedParamsSchema = {
   sessionKey: Type.Optional(Type.String()),
-  deliveryContext: Type.Optional(
-    Type.Object(
-      {
-        channel: Type.Optional(Type.String()),
-        to: Type.Optional(Type.String()),
-        accountId: Type.Optional(Type.String()),
-        threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-      },
-      { additionalProperties: false },
-    ),
-  ),
+  deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
 };

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import type { RestartTransaction } from "../infra/restart-transaction.js";
 
 const mocks = vi.hoisted(() => ({
   getRun: vi.fn(),
-  scheduleGatewaySigusr1Restart: vi.fn(() => ({
+  scheduleGatewaySigusr1Restart: vi.fn((_opts?: unknown) => ({
     ok: true,
     pid: 123,
     signal: "SIGUSR1",
@@ -11,9 +13,17 @@ const mocks = vi.hoisted(() => ({
     coalesced: false,
     cooldownMsApplied: 0,
   })),
-  writeRestartTransaction: vi.fn(async () => "/tmp/restart-transaction.json"),
-  updateRestartTransaction: vi.fn(async () => null),
-  writeRestartSentinel: vi.fn(async () => "/tmp/restart-sentinel.json"),
+  writeRestartTransaction: vi.fn<(tx: RestartTransaction) => Promise<string>>(
+    async () => "/tmp/restart-transaction.json",
+  ),
+  updateRestartTransaction: vi.fn<
+    (
+      updater: (current: RestartTransaction | null) => RestartTransaction | null,
+    ) => Promise<RestartTransaction | null>
+  >(async () => null),
+  writeRestartSentinel: vi.fn<(payload: RestartSentinelPayload) => Promise<string>>(
+    async () => "/tmp/restart-sentinel.json",
+  ),
   abortForRestart: vi.fn(),
 }));
 
@@ -33,8 +43,10 @@ vi.mock("../infra/restart-transaction.js", async () => {
   );
   return {
     ...actual,
-    writeRestartTransaction: (tx: unknown) => mocks.writeRestartTransaction(tx),
-    updateRestartTransaction: (updater: unknown) => mocks.updateRestartTransaction(updater),
+    writeRestartTransaction: (tx: RestartTransaction) => mocks.writeRestartTransaction(tx),
+    updateRestartTransaction: (
+      updater: (current: RestartTransaction | null) => RestartTransaction | null,
+    ) => mocks.updateRestartTransaction(updater),
   };
 });
 
@@ -44,7 +56,7 @@ vi.mock("../infra/restart-sentinel.js", async () => {
   );
   return {
     ...actual,
-    writeRestartSentinel: (payload: unknown) => mocks.writeRestartSentinel(payload),
+    writeRestartSentinel: (payload: RestartSentinelPayload) => mocks.writeRestartSentinel(payload),
   };
 });
 
