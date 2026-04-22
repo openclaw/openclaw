@@ -227,7 +227,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | MiniMax                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M2.7`                          |
 | Mistral                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                  |
 | Moonshot                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                            |
-| NVIDIA                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/llama-3.1-nemotron-70b-instruct` |
+| NVIDIA                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-super-120b-a12b`      |
 | OpenRouter              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                               |
 | Qianfan                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                         |
 | Qwen Cloud              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                             |
@@ -244,6 +244,7 @@ Quirks worth knowing:
 - **OpenRouter** applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
 - **Kilo Gateway** Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
 - **MiniMax** API-key onboarding writes explicit M2.7 model definitions with `input: ["text", "image"]`; the bundled catalog keeps chat refs text-only until that config is materialized.
+- **NVIDIA** model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...` alongside `nvidia/moonshotai/kimi-k2.5`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
 - **xAI** uses the xAI Responses path. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
 - **Cerebras** GLM models use `zai-glm-4.7` / `zai-glm-4.6`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
 

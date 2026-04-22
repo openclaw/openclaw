@@ -37,6 +37,12 @@ describe("openrouter provider hooks", () => {
     ).toBe("native");
   });
 
+  it("declares native-id self-prefix so canonical keys preserve openrouter/… ids", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    expect(provider.nativeIdsIncludeProviderPrefix).toBe(true);
+  });
+
   it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
 

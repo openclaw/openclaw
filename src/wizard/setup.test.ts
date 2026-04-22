@@ -609,37 +609,39 @@ describe("runSetupWizard", () => {
     );
   });
 
-  it("re-prompts for auth when applyAuthChoice requests retry selection", async () => {
-    promptAuthChoiceGrouped.mockReset();
-    promptAuthChoiceGrouped
-      .mockResolvedValueOnce("demo-provider-one")
-      .mockResolvedValueOnce("demo-provider-two");
-    applyAuthChoice.mockReset();
-    applyAuthChoice
-      .mockResolvedValueOnce({
-        config: {
-          plugins: {
-            entries: {
-              "demo-provider-plugin": {
-                enabled: true,
-              },
+  it("prompts for a model during explicit interactive NVIDIA setup", async () => {
+    promptDefaultModel.mockClear();
+    resolvePreferredProviderForAuthChoice.mockResolvedValueOnce("nvidia");
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: {
+        id: "nvidia",
+        label: "NVIDIA",
+        auth: [],
+        wizard: {
+          setup: {
+            modelSelection: {
+              promptWhenAuthChoiceProvided: true,
+              allowKeepCurrent: false,
             },
           },
         },
-        retrySelection: true,
-      })
-      .mockResolvedValueOnce({
-        config: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "demo-provider-two/model",
-              },
-            },
-          },
+      },
+      method: {
+        id: "api-key",
+        label: "NVIDIA API key",
+        kind: "api_key",
+        run: vi.fn(async () => ({
+          profiles: [],
+          defaultModel: "nvidia/nvidia/nemotron-3-super-120b-a12b",
+        })),
+      },
+      wizard: {
+        modelSelection: {
+          promptWhenAuthChoiceProvided: true,
+          allowKeepCurrent: false,
         },
-      });
-
+      },
+    });
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
@@ -647,6 +649,7 @@ describe("runSetupWizard", () => {
       {
         acceptRisk: true,
         flow: "quickstart",
+        authChoice: "nvidia-api-key",
         installDaemon: false,
         skipChannels: true,
         skipSkills: true,
@@ -658,21 +661,10 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenNthCalledWith(
-      2,
+    expect(promptDefaultModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        authChoice: "demo-provider-two",
-        config: {
-          plugins: {
-            entries: {
-              "demo-provider-plugin": {
-                enabled: true,
-              },
-            },
-          },
-        },
+        allowKeep: false,
+        preferredProvider: "nvidia",
       }),
     );
   });

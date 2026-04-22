@@ -102,6 +102,21 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
+  it("resolves NVIDIA auth choices from manifest metadata", async () => {
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "nvidia",
+      providerId: "nvidia",
+      methodId: "api-key",
+      choiceId: "nvidia-api-key",
+      choiceLabel: "NVIDIA API key",
+    });
+
+    await expect(resolvePreferredProviderForAuthChoice({ choice: "nvidia-api-key" })).resolves.toBe(
+      "nvidia",
+    );
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
   it("passes untrusted-workspace filtering through setup-provider fallback lookup", async () => {
     resolvePluginProviders.mockReturnValue([
       {

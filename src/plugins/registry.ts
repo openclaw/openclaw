@@ -5,6 +5,7 @@ import {
   registerAgentHarness as registerGlobalAgentHarness,
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { registerProviderSelfPrefix } from "../agents/provider-self-prefix.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
@@ -678,6 +679,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+    if (normalizedProvider.nativeIdsIncludeProviderPrefix) {
+      registerProviderSelfPrefix(id);
+      for (const alias of normalizedProvider.aliases ?? []) {
+        registerProviderSelfPrefix(alias);
+      }
+    }
   };
 
   const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
