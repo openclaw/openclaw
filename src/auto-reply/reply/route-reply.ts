@@ -218,7 +218,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const results = await deliverOutboundPayloads({
+    const { results } = await deliverOutboundPayloads({
       cfg,
       channel: channelId,
       to,

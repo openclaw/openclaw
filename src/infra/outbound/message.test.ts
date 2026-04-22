@@ -84,7 +84,11 @@ describe("sendMessage", () => {
       outbound: { deliveryMode: "direct" },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
-    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "forum", messageId: "m1" }]);
+    mocks.deliverOutboundPayloads.mockResolvedValue({
+      results: [{ channel: "forum", messageId: "m1" }],
+      cancelledCount: 0,
+      allCancelledByHook: false,
+    });
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {

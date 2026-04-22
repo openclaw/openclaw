@@ -14,7 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import type { DeliveryError, OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import {
@@ -371,6 +371,19 @@ export function getCompletedDirectCronDeliveriesCountForTests(): number {
   return COMPLETED_DIRECT_CRON_DELIVERIES.size;
 }
 
+// Match our DeliveryError by name + shape rather than `instanceof`. Keeps the
+// DeliveryError import type-only (no eager load of the heavy outbound delivery
+// module from this cold path) and falls through to the caller's generic error
+// handling if a third-party adapter happens to throw an error with the same
+// name but missing `sentBeforeError` (#57766).
+function isDeliveryError(err: unknown): err is DeliveryError {
+  return (
+    err instanceof Error &&
+    err.name === "DeliveryError" &&
+    Array.isArray((err as { sentBeforeError?: unknown }).sentBeforeError)
+  );
+}
+
 function summarizeDirectCronDeliveryError(error: unknown): string {
   if (error instanceof Error) {
     return error.message || "error";
@@ -417,7 +430,12 @@ async function retryTransientDirectCronDelivery<T>(params: {
       return await params.run();
     } catch (err) {
       const delayMs = retryDelaysMs[retryIndex];
-      if (delayMs == null || !isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
+      if (
+        delayMs == null ||
+        !isTransientDirectCronDeliveryError(err) ||
+        params.signal?.aborted ||
+        isDeliveryError(err)
+      ) {
         throw err;
       }
       const nextAttempt = retryIndex + 2;
@@ -613,7 +631,7 @@ export async function dispatchCronDelivery(
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
         });
-      const deliveryResults = options?.retryTransient
+      const deliveryOutcome = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
             jobId: params.job.id,
             signal: params.abortSignal,
@@ -621,11 +639,25 @@ export async function dispatchCronDelivery(
           })
         : await runDelivery();
       // Only mark delivered when ALL payloads succeeded (no partial failure).
-      delivered = deliveryResults.length > 0 && !hadPartialFailure;
+      // Hook cancellation is intentional policy, not a failure — treat as delivered
+      // so the job is cached and not replayed (#57766).
+      delivered =
+        (deliveryOutcome.results.length > 0 || deliveryOutcome.allCancelledByHook) &&
+        !hadPartialFailure;
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
-      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+      //
+      // Do NOT queue cron awareness when every payload was suppressed by hooks:
+      // the reply text was not actually sent to the target channel, so
+      // injecting it into the main session as "delivered" content would leak
+      // blocked (e.g. DLP/policy-suppressed) output into agent awareness (#57766).
+      const actuallySentContent = deliveryOutcome.results.length > 0;
+      if (
+        delivered &&
+        actuallySentContent &&
+        shouldQueueCronAwareness(params.job, params.deliveryBestEffort)
+      ) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
@@ -637,10 +669,35 @@ export async function dispatchCronDelivery(
         });
       }
       if (delivered) {
-        rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
+        rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryOutcome.results);
       }
       return null;
     } catch (err) {
+      if (isDeliveryError(err) && err.sentBeforeError.length > 0) {
+        // Partial send: cache as delivered to prevent scheduler replay from
+        // duplicating the already-sent payloads. Accepts truncation over
+        // duplication — same trade-off bestEffort makes (#57766).
+        //
+        // Also mark `delivered = true` so cron state/history stays consistent
+        // with the idempotency cache — otherwise the run is persisted as
+        // "not-delivered" while the same key is treated as already delivered
+        // on replay.
+        //
+        // Awareness (queueCronAwarenessSystemEvent) is intentionally NOT called:
+        // sentBeforeError contains OutboundDeliveryResult entries (messageId,
+        // channel) that don't map cleanly back to payload text, so recording
+        // `outputText`/`synthesizedText` or `payloadsForDelivery` would insert
+        // unsent content into the agent's main-session transcript as if it had
+        // been delivered. That false-history risk outweighs the loss of partial
+        // awareness; the idempotency cache above still prevents user-visible
+        // duplicates on replay.
+        rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, err.sentBeforeError);
+        delivered = true;
+        await logCronDeliveryError(
+          `[cron:${params.job.id}] partial delivery: ${err.sentBeforeError.length} payload(s) sent before failure: ${err.message}`,
+        );
+        return null;
+      }
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
           status: "error",

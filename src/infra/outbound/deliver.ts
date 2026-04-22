@@ -74,6 +74,38 @@ async function loadChannelBootstrapRuntime() {
   return await channelBootstrapRuntimePromise;
 }
 
+/**
+ * Enriched return type for deliverOutboundPayloads that disambiguates hook
+ * cancellations from delivery failures (see #57766).
+ */
+export interface DeliveryOutcome {
+  results: OutboundDeliveryResult[];
+  /** Number of individual payloads cancelled by message_sending hooks. */
+  cancelledCount: number;
+  /** True when ALL payloads were cancelled by hooks (empty results is intentional). */
+  allCancelledByHook: boolean;
+}
+
+/**
+ * Thrown on non-bestEffort delivery failure when some payloads were already
+ * sent before the error. Callers can inspect sentBeforeError to avoid blind
+ * retries that would duplicate already-delivered messages (see #57766).
+ */
+export class DeliveryError extends Error {
+  /** Results for payloads successfully sent before the throw. */
+  readonly sentBeforeError: OutboundDeliveryResult[];
+
+  constructor(cause: unknown, sentBeforeError: OutboundDeliveryResult[]) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "DeliveryError";
+    this.sentBeforeError = sentBeforeError;
+    if (cause instanceof Error) {
+      this.stack = cause.stack;
+      this.cause = cause;
+    }
+  }
+}
+
 type Chunker = (text: string, limit: number) => string[];
 
 type ChannelHandler = {
@@ -633,7 +665,7 @@ async function applyMessageSendingHook(params: {
 
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
-): Promise<OutboundDeliveryResult[]> {
+): Promise<DeliveryOutcome> {
   const { channel, to, payloads } = params;
 
   // Write-ahead delivery queue: persist before sending, remove after success.
@@ -671,7 +703,7 @@ export async function deliverOutboundPayloads(
     : params;
 
   try {
-    const results = await deliverOutboundPayloadsCore(wrappedParams);
+    const outcome = await deliverOutboundPayloadsCore(wrappedParams);
     if (queueId) {
       if (hadPartialFailure) {
         await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
@@ -679,7 +711,7 @@ export async function deliverOutboundPayloads(
         await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
       }
     }
-    return results;
+    return outcome;
   } catch (err) {
     if (queueId) {
       if (isAbortError(err)) {
@@ -695,7 +727,7 @@ export async function deliverOutboundPayloads(
 /** Core delivery logic (extracted for queue wrapper). */
 async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreParams,
-): Promise<OutboundDeliveryResult[]> {
+): Promise<DeliveryOutcome> {
   const { cfg, channel, to, payloads } = params;
   const outboundPayloadPlan = createOutboundPayloadPlan(payloads, {
     cfg,
@@ -813,6 +845,7 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
+  let cancelledCount = 0;
   for (const payload of normalizedPayloads) {
     let payloadSummary = buildPayloadSummary(payload);
     try {
@@ -829,6 +862,7 @@ async function deliverOutboundPayloadsCore(
         accountId,
       });
       if (hookResult.cancelled) {
+        cancelledCount++;
         continue;
       }
       const effectivePayload = await renderPresentationForDelivery(handler, hookResult.payload);
@@ -965,7 +999,11 @@ async function deliverOutboundPayloadsCore(
         error: formatErrorMessage(err),
       });
       if (!params.bestEffort) {
-        throw err;
+        // Wrap in DeliveryError when payloads were already sent before the throw,
+        // so callers can detect partial delivery and avoid blind retries (#57766).
+        // Preserve AbortError identity so the outer queue wrapper can ack the
+        // write-ahead entry instead of marking it failed and replaying later.
+        throw results.length > 0 && !isAbortError(err) ? new DeliveryError(err, [...results]) : err;
       }
       params.onError?.(err, payloadSummary);
     }
@@ -986,5 +1024,6 @@ async function deliverOutboundPayloadsCore(
     }
   }
 
-  return results;
+  const allCancelledByHook = cancelledCount > 0 && cancelledCount === normalizedPayloads.length;
+  return { results, cancelledCount, allCancelledByHook };
 }
