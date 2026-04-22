@@ -68,6 +68,13 @@ export function createSessionsSpawnTool(opts?: {
           : undefined;
       const thread = params.thread === true;
 
+      if (runtime === "acp" && modelOverride) {
+        return jsonResult({
+          status: "error",
+          error: `sessions_spawn: model parameter is not supported on the ACP runtime. Received model="${modelOverride}". Use runtime="subagent" if you need a specific model.`,
+        });
+      }
+
       const result =
         runtime === "acp"
           ? await spawnAcpDirect(
