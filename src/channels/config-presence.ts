@@ -11,6 +11,7 @@ const CHANNEL_ENV_PREFIXES = [
   ["DISCORD_", "discord"],
   ["GOOGLECHAT_", "googlechat"],
   ["IRC_", "irc"],
+  ["KUDOSITY_", "kudosity-sms"],
   ["LINE_", "line"],
   ["MATRIX_", "matrix"],
   ["MSTEAMS_", "msteams"],

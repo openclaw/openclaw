@@ -70,6 +70,11 @@ const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpe
   imessage: {
     stringKeys: ["cliPath"],
   },
+  "kudosity-sms": {
+    envAll: ["KUDOSITY_API_KEY", "KUDOSITY_SENDER"],
+    stringKeys: ["apiKey", "sender"],
+    accountStringKeys: ["apiKey", "sender"],
+  },
 };
 
 function envHasAnyKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
