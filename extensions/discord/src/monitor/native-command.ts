@@ -1075,10 +1075,7 @@ async function dispatchDiscordCommandInteraction(params: {
       interaction.channel?.type === ChannelType.PrivateThread ||
       interaction.channel?.type === ChannelType.AnnouncementThread;
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
-    const threadParentId =
-      !isDirectMessage && isThreadChannel
-        ? resolveDiscordChannelParentIdSafe(interaction.channel)
-        : undefined;
+    const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
     const { effectiveRoute } = await getNativeRouteState();
     const pluginReply = await executePluginCommandImpl({
       command: pluginMatch.command,
@@ -1098,7 +1095,7 @@ async function dispatchDiscordCommandInteraction(params: {
       to: `slash:${user.id}`,
       accountId,
       messageThreadId,
-      threadParentId,
+      threadParentId: pluginThreadParentId,
     });
     if (!hasRenderableReplyPayload(pluginReply)) {
       await respond("Done.");
