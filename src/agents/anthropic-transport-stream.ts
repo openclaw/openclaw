@@ -123,6 +123,31 @@ function supportsAdaptiveThinking(modelId: string): boolean {
   );
 }
 
+/**
+ * Adaptive-thinking models that only accept `medium` effort on some provider
+ * surfaces. GitHub Copilot rejects `low`/`minimal` for claude-opus-4.7 with
+ * 400 invalid_reasoning_effort, which cascades into auth-profile poisoning.
+ * Clamp to the nearest supported value before sending. (#70322)
+ */
+function clampAdaptiveEffortForProvider(params: {
+  provider: string | null | undefined;
+  modelId: string;
+  effort: string;
+}): string {
+  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
+  if (provider !== "github-copilot") {
+    return params.effort;
+  }
+  if (!isClaudeOpus47Model(params.modelId)) {
+    return params.effort;
+  }
+  const effort = normalizeLowercaseStringOrEmpty(params.effort);
+  if (effort === "low" || effort === "minimal") {
+    return "medium";
+  }
+  return params.effort;
+}
+
 function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): AnthropicAdaptiveEffort {
   switch (level) {
     case "minimal":
@@ -658,7 +683,13 @@ function buildAnthropicParams(
       if (supportsAdaptiveThinking(model.id)) {
         params.thinking = { type: "adaptive" };
         if (options.effort) {
-          params.output_config = { effort: options.effort };
+          params.output_config = {
+            effort: clampAdaptiveEffortForProvider({
+              provider: model.provider,
+              modelId: model.id,
+              effort: options.effort,
+            }),
+          };
         }
       } else {
         params.thinking = {

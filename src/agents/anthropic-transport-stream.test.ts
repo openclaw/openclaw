@@ -40,6 +40,7 @@ function makeAnthropicTransportModel(
   params: {
     id?: string;
     name?: string;
+    provider?: string;
     reasoning?: boolean;
     maxTokens?: number;
     headers?: Record<string, string>;
@@ -51,7 +52,7 @@ function makeAnthropicTransportModel(
       id: params.id ?? "claude-sonnet-4-6",
       name: params.name ?? "Claude Sonnet 4.6",
       api: "anthropic-messages",
-      provider: "anthropic",
+      provider: params.provider ?? "anthropic",
       baseUrl: "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
       input: ["text"],
@@ -411,6 +412,93 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload).toMatchObject({
       thinking: { type: "adaptive" },
       output_config: { effort: "xhigh" },
+    });
+  });
+
+  it("clamps low/minimal effort to medium for github-copilot/claude-opus-4.7 (#70322)", async () => {
+    // Regression: github-copilot rejects output_config.effort="low" for
+    // claude-opus-4.7 with 400 invalid_reasoning_effort, which poisons the
+    // auth profile until cooldown clears. Clamp to medium instead of sending
+    // the unsupported value through.
+    for (const reasoning of ["minimal", "low"] as const) {
+      const model = makeAnthropicTransportModel({
+        id: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        provider: "github-copilot",
+        maxTokens: 8192,
+      });
+
+      await runTransportStream(
+        model,
+        {
+          messages: [{ role: "user", content: "Quick answer please." }],
+        } as AnthropicStreamContext,
+        {
+          apiKey: "copilot-token",
+          reasoning,
+        } as AnthropicStreamOptions,
+      );
+
+      expect(latestAnthropicRequest().payload).toMatchObject({
+        thinking: { type: "adaptive" },
+        output_config: { effort: "medium" },
+      });
+    }
+  });
+
+  it("does not clamp effort for non-github-copilot providers on claude-opus-4.7", async () => {
+    // The anthropic direct API accepts low/minimal on opus-4.7 — only the
+    // github-copilot surface rejects them. Preserve the user's chosen effort
+    // on the direct path.
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      provider: "anthropic",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Quick." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "low",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
+    });
+  });
+
+  it("does not clamp effort for github-copilot on non-opus-4.7 adaptive models", async () => {
+    // Clamp is scoped to opus-4.7 specifically — other adaptive models on
+    // github-copilot may or may not have the same constraint; this fix
+    // doesn't assume they do.
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-6",
+      name: "Claude Opus 4.6",
+      provider: "github-copilot",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Quick." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "copilot-token",
+        reasoning: "low",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
     });
   });
 });
