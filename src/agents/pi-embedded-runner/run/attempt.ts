@@ -177,9 +177,7 @@ import {
 import { dropThinkingBlocks } from "../thinking.js";
 import {
   collectAllowedToolNames,
-  collectRegisteredToolNames,
   PI_RESERVED_TOOL_NAMES,
-  toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import {
   installContextEngineLoopHook,
@@ -193,10 +191,12 @@ import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
 } from "../tool-schema-runtime.js";
-import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
-import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
+import {
+  createEmbeddedAgentSessionWithResourceLoader,
+  resolveEmbeddedAgentSessionToolOptions,
+} from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   resolveAttemptWorkspaceBootstrapRouting,
@@ -1084,11 +1084,6 @@ export async function runEmbeddedAttempt(
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
-      const { customTools } = splitSdkTools({
-        tools: effectiveTools,
-        sandboxEnabled: !!sandbox?.enabled,
-      });
-
       // Add client tools (OpenResponses hosted tools) to customTools
       let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
@@ -1142,13 +1137,12 @@ export async function runEmbeddedAttempt(
           )
         : [];
 
+      const { tools: sessionToolAllowlist, customTools } = resolveEmbeddedAgentSessionToolOptions({
+        tools: effectiveTools,
+        clientTools,
+        sandboxEnabled: !!sandbox?.enabled,
+      });
       const allCustomTools = [...customTools, ...clientToolDefs];
-      // Pi treats `tools` as a name allowlist during session creation. Pass the
-      // exact OpenClaw-managed registrations so custom tools survive startup and
-      // client-provided names do not broaden the prompt/runtime boundary.
-      const sessionToolAllowlist = toSessionToolAllowlist(
-        collectRegisteredToolNames(allCustomTools),
-      );
 
       const createdSession = await createEmbeddedAgentSessionWithResourceLoader<
         Awaited<ReturnType<typeof createAgentSession>>
@@ -1394,9 +1388,7 @@ export async function runEmbeddedAttempt(
       }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
-      const promptCacheToolNames = collectPromptCacheToolNames(
-        allCustomTools as Array<{ name?: string }>,
-      );
+      const promptCacheToolNames = collectPromptCacheToolNames(allCustomTools);
       let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
 
       if (cacheTrace) {

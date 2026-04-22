@@ -117,6 +117,7 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { resolveEmbeddedAgentSessionToolOptions } from "./run/attempt-session.js";
 import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
@@ -134,14 +135,11 @@ import {
 } from "./system-prompt.js";
 import {
   collectAllowedToolNames,
-  collectRegisteredToolNames,
-  toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
 } from "./tool-schema-runtime.js";
-import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
@@ -844,13 +842,10 @@ export async function compactEmbeddedPiSessionDirect(
         contextTokenBudget: ctxInfo.tokens,
       });
 
-      const { customTools } = splitSdkTools({
+      const { tools: sessionToolAllowlist, customTools } = resolveEmbeddedAgentSessionToolOptions({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
-      // Pi treats `tools` as a name allowlist during session creation. Pass the
-      // exact OpenClaw-managed registrations so custom tools survive startup.
-      const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
