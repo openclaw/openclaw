@@ -10,9 +10,7 @@ import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
-import { sanitizeLogRecordForSink } from "./redact-sink.js";
-import type { ResolvedRedactOptions } from "./redact.js";
-import { getLoggingRedactionPolicy } from "./redaction-policy.js";
+import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -161,28 +159,12 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   });
 
   // Silent logging does not write files; skip all filesystem setup in this path.
-  // getSinkRedaction is NOT called here — lazy resolve only triggers on the first
-  // actual file write (below), so silent loggers never pay the config-read cost.
   if (settings.level === "silent") {
     for (const transport of externalTransports) {
       attachExternalTransport(logger, transport);
     }
     return logger;
   }
-
-  // Resolve the redaction policy once per logger instance, on the first write.
-  // Rebuilding the logger (via resetLogger / setLoggerOverride / settings change)
-  // naturally produces a fresh closure, so the policy is re-read after any
-  // config change that already triggers a rebuild.
-  //
-  // If you add a new entry point that mutates logging config without rebuilding
-  // the logger, you must also call resetLogger() there, or this cache will serve
-  // the old policy for the lifetime of the current logger instance.
-  let cachedPolicy: ResolvedRedactOptions | undefined;
-  const getSinkRedaction = (): ResolvedRedactOptions => {
-    cachedPolicy ??= getLoggingRedactionPolicy().resolved;
-    return cachedPolicy;
-  };
 
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
@@ -195,8 +177,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   logger.attachTransport((logObj: LogObj) => {
     try {
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-      const sanitizedLogObj = sanitizeLogRecordForSink({ ...logObj, time }, getSinkRedaction());
-      const line = JSON.stringify(sanitizedLogObj);
+      // Redact at the sink exit, same pattern as the diagnostics-otel transport.
+      const line = redactSensitiveText(JSON.stringify({ ...logObj, time }));
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
