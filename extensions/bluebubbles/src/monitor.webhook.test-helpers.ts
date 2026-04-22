@@ -32,6 +32,7 @@ export function createMockAccount(
     config: {
       serverUrl: "http://localhost:1234",
       password: "test-password",
+      webhookSecret: "test-password",
       dmPolicy: "open",
       groupPolicy: "open",
       allowFrom: [],
@@ -42,7 +43,7 @@ export function createMockAccount(
 }
 
 export function createProtectedWebhookAccountForTest(password = "test-password") {
-  return createMockAccount({ password });
+  return createMockAccount({ password, webhookSecret: password });
 }
 
 export function createNewMessagePayloadForTest(dataOverrides: Record<string, unknown> = {}) {

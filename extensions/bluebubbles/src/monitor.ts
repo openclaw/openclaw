@@ -129,11 +129,7 @@ function safeEqualAuthToken(aRaw: string, bRaw: string): boolean {
 }
 
 function resolveWebhookAuthSecret(target: WebhookTarget): string {
-  const webhookSecret = normalizeSecretInputString(target.account.config.webhookSecret);
-  if (webhookSecret) {
-    return webhookSecret;
-  }
-  return normalizeSecretInputString(target.account.config.password) ?? "";
+  return normalizeSecretInputString(target.account.config.webhookSecret) ?? "";
 }
 
 function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {

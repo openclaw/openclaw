@@ -67,8 +67,11 @@ export function resolveBlueBubblesAccount(params: {
   const merged = mergeBlueBubblesAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const serverUrl = normalizeSecretInputString(merged.serverUrl);
-  const _password = normalizeSecretInputString(merged.password);
-  const configured = Boolean(serverUrl && hasConfiguredSecretInput(merged.password));
+  const configured = Boolean(
+    serverUrl &&
+    hasConfiguredSecretInput(merged.password) &&
+    hasConfiguredSecretInput(merged.webhookSecret),
+  );
   const baseUrl = serverUrl ? normalizeBlueBubblesServerUrl(serverUrl) : undefined;
   return {
     accountId,

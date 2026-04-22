@@ -274,10 +274,12 @@ describe("bluebubbles setup surface", () => {
             defaultAccount: "work",
             serverUrl: "http://localhost:3000",
             password: "top-secret",
+            webhookSecret: "top-webhook-secret",
             accounts: {
               work: {
                 serverUrl: "http://localhost:1234",
                 password: "secret",
+                webhookSecret: "work-webhook-secret",
                 name: "Work",
               },
             },
@@ -350,7 +352,33 @@ describe("bluebubbles setup surface", () => {
 });
 
 describe("resolveBlueBubblesAccount", () => {
-  it("treats SecretRef passwords as configured when serverUrl exists", () => {
+  it("treats accounts with password and webhook SecretRefs as configured when serverUrl exists", () => {
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            enabled: true,
+            serverUrl: "http://localhost:1234",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "BLUEBUBBLES_PASSWORD",
+            },
+            webhookSecret: {
+              source: "env",
+              provider: "default",
+              id: "BLUEBUBBLES_WEBHOOK_SECRET",
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.configured).toBe(true);
+    expect(resolved.baseUrl).toBe("http://localhost:1234");
+  });
+
+  it("does not treat password-only accounts as configured", () => {
     const resolved = resolveBlueBubblesAccount({
       cfg: {
         channels: {
@@ -367,7 +395,7 @@ describe("resolveBlueBubblesAccount", () => {
       },
     });
 
-    expect(resolved.configured).toBe(true);
+    expect(resolved.configured).toBe(false);
     expect(resolved.baseUrl).toBe("http://localhost:1234");
   });
 
@@ -407,6 +435,7 @@ describe("BlueBubblesConfigSchema", () => {
     const parsed = BlueBubblesConfigSchema.safeParse({
       serverUrl: "http://localhost:1234",
       password: "secret", // pragma: allowlist secret
+      webhookSecret: "webhook-secret",
     });
     expect(parsed.success).toBe(true);
   });
@@ -418,6 +447,11 @@ describe("BlueBubblesConfigSchema", () => {
         source: "env",
         provider: "default",
         id: "BLUEBUBBLES_PASSWORD",
+      },
+      webhookSecret: {
+        source: "env",
+        provider: "default",
+        id: "BLUEBUBBLES_WEBHOOK_SECRET",
       },
     });
     expect(parsed.success).toBe(true);
@@ -466,10 +500,45 @@ describe("BlueBubblesConfigSchema", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("requires webhookSecret when top-level serverUrl is configured", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: "secret", // pragma: allowlist secret
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["webhookSecret"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      "webhookSecret is required when serverUrl is configured",
+    );
+  });
+
+  it("requires webhookSecret when account serverUrl is configured", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      accounts: {
+        work: {
+          serverUrl: "http://localhost:1234",
+          password: "secret", // pragma: allowlist secret
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["accounts", "work", "webhookSecret"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      "webhookSecret is required when serverUrl is configured",
+    );
+  });
+
   it("defaults enrichGroupParticipantsFromContacts to true", () => {
     const parsed = BlueBubblesConfigSchema.safeParse({
       serverUrl: "http://localhost:1234",
       password: "secret", // pragma: allowlist secret
+      webhookSecret: "webhook-secret",
     });
     expect(parsed.success).toBe(true);
     if (!parsed.success) {
@@ -484,6 +553,7 @@ describe("BlueBubblesConfigSchema", () => {
         work: {
           serverUrl: "http://localhost:1234",
           password: "secret", // pragma: allowlist secret
+          webhookSecret: "webhook-secret",
         },
       },
     });
@@ -508,6 +578,24 @@ describe("BlueBubblesConfigSchema", () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+});
+
+describe("blueBubblesSetupAdapter", () => {
+  it("requires webhookSecret during CLI setup", () => {
+    if (!blueBubblesSetupAdapter.validateInput) {
+      throw new Error("Expected blueBubblesSetupAdapter.validateInput to be defined");
+    }
+    expect(
+      blueBubblesSetupAdapter.validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          httpUrl: "http://localhost:1234",
+          password: "secret",
+          webhookSecret: "",
+        },
+      } as never),
+    ).toBe("BlueBubbles requires --webhook-secret.");
   });
 });
 

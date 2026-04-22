@@ -100,11 +100,19 @@ const bluebubblesAccountSchema = z
   .superRefine((value, ctx) => {
     const serverUrl = value.serverUrl?.trim() ?? "";
     const passwordConfigured = hasConfiguredSecretInput(value.password);
+    const webhookSecretConfigured = hasConfiguredSecretInput(value.webhookSecret);
     if (serverUrl && !passwordConfigured) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["password"],
         message: "password is required when serverUrl is configured",
+      });
+    }
+    if (serverUrl && !webhookSecretConfigured) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["webhookSecret"],
+        message: "webhookSecret is required when serverUrl is configured",
       });
     }
   });

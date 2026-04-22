@@ -250,7 +250,9 @@ describe("BlueBubbles webhook monitor", () => {
   }
 
   function createPasswordlessWebhookTarget() {
-    return createWebhookTarget(createMockAccount({ password: undefined }));
+    return createWebhookTarget(
+      createMockAccount({ password: undefined, webhookSecret: undefined }),
+    );
   }
 
   function createProtectedPasswordQueryRequestParams(password = TEST_WEBHOOK_PASSWORD) {
@@ -440,6 +442,28 @@ describe("BlueBubbles webhook monitor", () => {
       await expectWebhookRequestStatusForTest(
         createPasswordQueryRequestParamsForTest({ password: "webhook-secret" }),
         200,
+      );
+    });
+
+    it("rejects password-only webhook auth until a webhookSecret is configured", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "api-password",
+          webhookSecret: undefined,
+        }),
+      });
+
+      await expectWebhookRequestStatusForTest(
+        createPasswordQueryRequestParamsForTest({ password: "api-password" }),
+        401,
+      );
+      await expectWebhookRequestStatusForTest(
+        createRemoteWebhookRequestParamsForTest({
+          overrides: {
+            headers: { "x-password": "api-password" },
+          },
+        }),
+        401,
       );
     });
 

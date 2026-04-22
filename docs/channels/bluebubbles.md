@@ -54,7 +54,7 @@ Security note:
 
 - Always set a dedicated webhook secret.
 - Set `channels.bluebubbles.webhookSecret` to a value distinct from `channels.bluebubbles.password` and use that secret on the public webhook URL.
-- Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.webhookSecret` when configured, or `channels.bluebubbles.password` as a legacy fallback (for example `?guid=<webhook-secret>` or `x-password`).
+- Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.webhookSecret` (for example `?guid=<webhook-secret>` or `x-password`).
 - Password authentication is checked before reading/parsing full webhook bodies.
 
 ## Keeping Messages.app alive (VM / headless setups)

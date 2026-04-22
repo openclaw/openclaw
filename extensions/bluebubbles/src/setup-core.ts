@@ -65,14 +65,17 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
     }),
   validateInput: createSetupInputPresenceValidator({
     validate: ({ input }) => {
-      if (!input.httpUrl && !input.password) {
-        return "BlueBubbles requires --http-url and --password.";
+      if (!input.httpUrl && !input.password && !input.webhookSecret) {
+        return "BlueBubbles requires --http-url, --password, and --webhook-secret.";
       }
       if (!input.httpUrl) {
         return "BlueBubbles requires --http-url.";
       }
       if (!input.password) {
         return "BlueBubbles requires --password.";
+      }
+      if (!input.webhookSecret) {
+        return "BlueBubbles requires --webhook-secret.";
       }
       return null;
     },

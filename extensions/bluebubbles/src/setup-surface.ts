@@ -200,7 +200,7 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       inspect: ({ cfg, accountId }) => {
         const existingPassword = resolveBlueBubblesAccount({ cfg, accountId }).config.password;
         return {
-          accountConfigured: resolveBlueBubblesAccount({ cfg, accountId }).configured,
+          accountConfigured: hasConfiguredSecretInput(existingPassword),
           hasConfiguredValue: hasConfiguredSecretInput(existingPassword),
           resolvedValue: normalizeSecretInputString(existingPassword) ?? undefined,
         };
@@ -225,7 +225,7 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       inspect: ({ cfg, accountId }) => {
         const existingSecret = resolveBlueBubblesAccount({ cfg, accountId }).config.webhookSecret;
         return {
-          accountConfigured: resolveBlueBubblesAccount({ cfg, accountId }).configured,
+          accountConfigured: hasConfiguredSecretInput(existingSecret),
           hasConfiguredValue: hasConfiguredSecretInput(existingSecret),
           resolvedValue: normalizeSecretInputString(existingSecret) ?? undefined,
         };
