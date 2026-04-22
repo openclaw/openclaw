@@ -21,6 +21,7 @@ import {
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordInboundSessionAndDispatchReply } from "../plugin-sdk/inbound-reply-dispatch.js";
+import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -141,6 +142,46 @@ function buildRestartContinuationMessageId(params: {
   return `restart-sentinel:${params.sessionKey}:${params.kind}:${params.ts}`;
 }
 
+type RestartContinuationRoute = {
+  channel: string;
+  to: string;
+  accountId?: string;
+  replyToId?: string;
+  threadId?: string;
+};
+
+function resolveRestartContinuationRoute(params: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  replyToId?: string;
+  threadId?: string;
+}): RestartContinuationRoute | undefined {
+  if (!params.channel || !params.to) {
+    return undefined;
+  }
+  return {
+    channel: params.channel,
+    to: params.to,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+    ...(params.threadId ? { threadId: params.threadId } : {}),
+  };
+}
+
+function resolveRestartContinuationOutboundPayload(params: {
+  payload: OutboundReplyPayload;
+  messageId: string;
+  replyToId?: string;
+}): OutboundReplyPayload {
+  if (params.payload.replyToId !== params.messageId) {
+    return params.payload;
+  }
+  const payload: OutboundReplyPayload = { ...params.payload };
+  delete payload.replyToId;
+  return params.replyToId ? { ...payload, replyToId: params.replyToId } : payload;
+}
+
 async function dispatchRestartSentinelContinuation(params: {
   deps: CliDeps;
   cfg: ReturnType<typeof loadSessionEntry>["cfg"];
@@ -148,22 +189,18 @@ async function dispatchRestartSentinelContinuation(params: {
   sessionKey: string;
   continuation: RestartSentinelContinuation;
   ts: number;
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  replyToId?: string;
-  threadId?: string;
+  route?: RestartContinuationRoute;
 }) {
   if (params.continuation.kind === "systemEvent") {
     enqueueSystemEvent(params.continuation.text, {
       sessionKey: params.sessionKey,
-      ...(params.channel || params.to || params.accountId || params.threadId
+      ...(params.route
         ? {
             deliveryContext: {
-              ...(params.channel ? { channel: params.channel } : {}),
-              ...(params.to ? { to: params.to } : {}),
-              ...(params.accountId ? { accountId: params.accountId } : {}),
-              ...(params.threadId ? { threadId: params.threadId } : {}),
+              channel: params.route.channel,
+              to: params.route.to,
+              ...(params.route.accountId ? { accountId: params.route.accountId } : {}),
+              ...(params.route.threadId ? { threadId: params.route.threadId } : {}),
             },
           }
         : {}),
@@ -172,17 +209,16 @@ async function dispatchRestartSentinelContinuation(params: {
     return;
   }
 
-  if (!params.channel || !params.to) {
+  if (!params.route) {
     throw new Error("restart continuation route unavailable");
   }
 
+  const route = params.route;
   const messageId = buildRestartContinuationMessageId({
     sessionKey: params.sessionKey,
     kind: params.continuation.kind,
     ts: params.ts,
   });
-  const continuationChannel = params.channel;
-  const continuationTo = params.to;
   const userMessage = params.continuation.message.trim();
   const agentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
@@ -191,8 +227,8 @@ async function dispatchRestartSentinelContinuation(params: {
   let dispatchError: unknown;
   await recordInboundSessionAndDispatchReply({
     cfg: params.cfg,
-    channel: continuationChannel,
-    accountId: params.accountId,
+    channel: route.channel,
+    accountId: route.accountId,
     agentId,
     routeSessionKey: params.sessionKey,
     storePath: params.storePath,
@@ -204,18 +240,18 @@ async function dispatchRestartSentinelContinuation(params: {
         RawBody: userMessage,
         CommandBody: userMessage,
         SessionKey: params.sessionKey,
-        AccountId: params.accountId,
+        AccountId: route.accountId,
         MessageSid: messageId,
         Timestamp: Date.now(),
-        Provider: continuationChannel,
-        Surface: continuationChannel,
+        Provider: route.channel,
+        Surface: route.channel,
         ChatType: "direct",
         CommandAuthorized: true,
-        ReplyToId: params.replyToId,
-        OriginatingChannel: continuationChannel,
-        OriginatingTo: continuationTo,
+        ReplyToId: route.replyToId,
+        OriginatingChannel: route.channel,
+        OriginatingTo: route.to,
         ExplicitDeliverRoute: true,
-        MessageThreadId: params.threadId,
+        MessageThreadId: route.threadId,
       },
       {
         forceBodyForCommands: true,
@@ -225,17 +261,18 @@ async function dispatchRestartSentinelContinuation(params: {
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
     deliver: async (payload) => {
-      const outboundPayload =
-        payload.replyToId === messageId && params.replyToId
-          ? { ...payload, replyToId: params.replyToId }
-          : payload;
+      const outboundPayload = resolveRestartContinuationOutboundPayload({
+        payload,
+        messageId,
+        replyToId: route.replyToId,
+      });
       const results = await deliverOutboundPayloads({
         cfg: params.cfg,
-        channel: continuationChannel,
-        to: continuationTo,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
+        channel: route.channel,
+        to: route.to,
+        accountId: route.accountId,
+        replyToId: route.replyToId,
+        threadId: route.threadId,
         payloads: [outboundPayload],
         session: buildOutboundSessionContext({
           cfg: params.cfg,
@@ -381,11 +418,13 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
       sessionKey: canonicalKey,
       continuation: payload.continuation,
       ts: payload.ts,
-      channel: channel ?? undefined,
-      to: resolvedTo,
-      accountId: origin?.accountId,
-      replyToId,
-      threadId: resolvedThreadId,
+      route: resolveRestartContinuationRoute({
+        channel: channel ?? undefined,
+        to: resolvedTo,
+        accountId: origin?.accountId,
+        replyToId,
+        threadId: resolvedThreadId,
+      }),
     });
   } catch (err) {
     log.warn(`${summary}: continuation delivery failed: ${String(err)}`, {
