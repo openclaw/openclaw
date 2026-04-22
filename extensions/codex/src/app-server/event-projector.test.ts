@@ -292,6 +292,25 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([]);
   });
 
+  it("ignores notifications that omit top-level thread and turn ids", async () => {
+    const projector = createProjector();
+
+    await projector.handleNotification({
+      method: "turn/completed",
+      params: {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "wrong turn" }],
+        },
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+  });
+
   it("preserves sessions_yield detection in attempt results", () => {
     const projector = new CodexAppServerEventProjector(
       {

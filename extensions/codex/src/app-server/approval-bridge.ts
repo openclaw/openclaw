@@ -176,18 +176,12 @@ function matchesCurrentTurn(
   turnId: string,
 ): boolean {
   if (!requestParams) {
-    return true;
+    return false;
   }
   const requestThreadId =
     readString(requestParams, "threadId") ?? readString(requestParams, "conversationId");
   const requestTurnId = readString(requestParams, "turnId");
-  if (requestThreadId && requestThreadId !== threadId) {
-    return false;
-  }
-  if (requestTurnId && requestTurnId !== turnId) {
-    return false;
-  }
-  return true;
+  return requestThreadId === threadId && requestTurnId === turnId;
 }
 
 function buildApprovalContext(params: {

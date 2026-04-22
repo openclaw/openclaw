@@ -577,7 +577,7 @@ export class CodexAppServerEventProjector {
   private isNotificationForTurn(params: JsonObject): boolean {
     const threadId = readString(params, "threadId");
     const turnId = readString(params, "turnId");
-    return (!threadId || threadId === this.threadId) && (!turnId || turnId === this.turnId);
+    return threadId === this.threadId && turnId === this.turnId;
   }
 }
 

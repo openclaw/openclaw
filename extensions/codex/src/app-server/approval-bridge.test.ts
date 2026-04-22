@@ -234,6 +234,25 @@ describe("Codex app-server approval bridge", () => {
     expect(description).toContain("High-risk targets:");
   });
 
+  it("ignores approval requests that are missing explicit thread or turn ids", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        itemId: "cmd-2",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toBeUndefined();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(params.onAgentEvent).not.toHaveBeenCalled();
+  });
+
   it("maps app-server approval response families separately", () => {
     expect(
       buildApprovalResponse(
