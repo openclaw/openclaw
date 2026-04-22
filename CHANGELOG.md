@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Models/CLI: show bundled provider-owned static catalog rows in `models list --all` before auth is configured, including Kimi K2.6 rows for Moonshot, OpenRouter, and Vercel AI Gateway, while keeping local-only and workspace plugin catalog paths isolated. (#69909) Thanks @shakkernerd.
 - Configure: skip generic CLI startup bootstrap for `openclaw configure` and bound hint-only gateway probes so the onboarding TUI reaches its first prompt faster when the Gateway is unavailable. (#69984) Thanks @obviyus.
 - Agents/harness: surface selected plugin harness failures directly instead of replaying the same turn through embedded PI, preventing misleading secondary PI auth errors and avoiding duplicate side effects.
+- OpenAI Codex: add a ChatGPT device-code auth option beside browser OAuth, so headless or callback-hostile setups can sign in without relying on the localhost browser callback. (#69557) Thanks @vincentkoc.
 
 ## 2026.4.21
 
@@ -100,7 +101,6 @@ Docs: https://docs.openclaw.ai
 - Terminal/logging: optimize `sanitizeForLog()` by replacing the iterative control-character stripping loop with a single regex pass while preserving the existing ANSI-first sanitization behavior. (#67205) Thanks @bulutmuf.
 - QA/CI: make `openclaw qa suite` and `openclaw qa telegram` fail by default when scenarios fail, add `--allow-failures` for artifact-only runs, and tighten live-lane defaults for CI automation. (#69122) Thanks @joshavant.
 - Mattermost: stream thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when safe. (#47838) thanks @ninjaa.
-- OpenAI Codex: add a ChatGPT device-code auth option beside browser OAuth, so headless or callback-hostile setups can sign in without relying on the localhost browser callback. (#69557) Thanks @vincentkoc.
 
 ### Fixes
 
