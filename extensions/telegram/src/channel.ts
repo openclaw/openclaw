@@ -4,7 +4,12 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
-import { clearAccountEntryFields, createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  buildThreadAwareOutboundSessionRoute,
+  clearAccountEntryFields,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -21,12 +26,7 @@ import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-runtime";
-import {
-  buildOutboundBaseSessionKey,
-  normalizeOutboundThreadId,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/routing";
+import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -445,30 +445,22 @@ function shouldStripTelegramThreadFromAnnounceOrigin(params: {
   return entryTarget.to !== requesterTarget.to;
 }
 
-function buildTelegramBaseSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-}) {
-  return buildOutboundBaseSessionKey({ ...params, channel: "telegram" });
-}
-
 function resolveTelegramOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   agentId: string;
   accountId?: string | null;
   target: string;
   resolvedTarget?: { kind: string };
+  replyToId?: string | null;
   threadId?: string | number | null;
+  currentSessionKey?: string | null;
 }) {
   const parsed = parseTelegramTarget(params.target);
   const chatId = parsed.chatId.trim();
   if (!chatId) {
     return null;
   }
-  const fallbackThreadId = normalizeOutboundThreadId(params.threadId);
-  const resolvedThreadId = parsed.messageThreadId ?? parseTelegramThreadId(fallbackThreadId);
+  const resolvedThreadId = parsed.messageThreadId ?? parseTelegramThreadId(params.threadId);
   const isGroup =
     parsed.chatType === "group" ||
     (parsed.chatType === "unknown" &&
@@ -480,19 +472,11 @@ function resolveTelegramOutboundSessionRoute(params: {
     kind: isGroup ? "group" : "direct",
     id: peerId,
   };
-  const baseSessionKey = buildTelegramBaseSessionKey({
+  const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
+    channel: "telegram",
     accountId: params.accountId,
-    peer,
-  });
-  const threadKeys =
-    resolvedThreadId && !isGroup
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(resolvedThreadId) })
-      : null;
-  return {
-    sessionKey: threadKeys?.sessionKey ?? baseSessionKey,
-    baseSessionKey,
     peer,
     chatType: isGroup ? ("group" as const) : ("direct" as const),
     from: isGroup
@@ -501,7 +485,25 @@ function resolveTelegramOutboundSessionRoute(params: {
         ? `telegram:${chatId}:topic:${resolvedThreadId}`
         : `telegram:${chatId}`,
     to: `telegram:${chatId}`,
+    ...(isGroup && resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
+  });
+  if (isGroup) {
+    return baseRoute;
+  }
+  const route = buildThreadAwareOutboundSessionRoute({
+    route: baseRoute,
     threadId: resolvedThreadId,
+    currentSessionKey: params.currentSessionKey,
+    precedence: ["threadId", "currentSession"],
+    canRecoverCurrentThread: ({ route }) =>
+      route.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
+  });
+  return {
+    ...route,
+    from:
+      route.threadId !== undefined
+        ? `telegram:${chatId}:topic:${route.threadId}`
+        : `telegram:${chatId}`,
   };
 }
 
