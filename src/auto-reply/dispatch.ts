@@ -1,5 +1,10 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  deriveInboundMessageHookContext,
+  toPluginMessageContext,
+} from "../hooks/message-hook-mappers.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
@@ -9,12 +14,13 @@ import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
+  type ReplyDispatchBeforeDeliver,
   type ReplyDispatcherOptions,
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { GetReplyOptions } from "./types.js";
+import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 function resolveDispatcherSilentReplyContext(
   ctx: MsgContext | FinalizedMsgContext,
@@ -41,6 +47,37 @@ function resolveDispatcherSilentReplyContext(
     sessionKey: policySessionKey,
     surface: finalized.Surface ?? finalized.Provider,
     conversationType,
+  };
+}
+
+function buildMessageSendingBeforeDeliver(
+  ctx: MsgContext | FinalizedMsgContext,
+): ReplyDispatchBeforeDeliver | undefined {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sending")) {
+    return undefined;
+  }
+
+  const finalized = finalizeInboundContext(ctx);
+  const hookCtx = deriveInboundMessageHookContext(finalized);
+
+  return async (payload: ReplyPayload): Promise<ReplyPayload | null> => {
+    if (!payload.text) {
+      return payload;
+    }
+
+    const result = await hookRunner.runMessageSending(
+      { content: payload.text, to: hookCtx.to ?? "" },
+      toPluginMessageContext(hookCtx),
+    );
+
+    if (result?.cancel) {
+      return null;
+    }
+    if (result?.content != null) {
+      return { ...payload, text: result.content };
+    }
+    return payload;
   };
 }
 
@@ -76,9 +113,12 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
+  const beforeDeliver =
+    params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx);
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
+      beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
   try {
@@ -108,6 +148,8 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
+    beforeDeliver:
+      params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx),
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
   return await dispatchInboundMessage({
