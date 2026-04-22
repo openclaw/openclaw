@@ -9,6 +9,7 @@ UPDATE_BASELINE_VERSION="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION:-202
 RUN_CHANNEL_SCENARIOS="${OPENCLAW_BUNDLED_CHANNEL_SCENARIOS:-1}"
 RUN_UPDATE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO:-1}"
 RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
+RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
 
 echo "Building Docker image..."
 run_logged bundled-channel-deps-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
@@ -490,6 +491,115 @@ EOF
   rm -f "$run_log"
 }
 
+run_setup_entry_scenario() {
+  local run_log
+  run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-setup-entry.XXXXXX")"
+
+  echo "Running bundled channel setup-entry runtime deps Docker E2E..."
+  if ! docker run --rm \
+    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+set -euo pipefail
+
+export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-setup-entry.XXXXXX")"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+export OPENCLAW_NO_ONBOARD=1
+export OPENCLAW_PLUGIN_STAGE_DIR="$HOME/.openclaw/plugin-runtime-deps"
+
+CHANNEL="feishu"
+DEP_SENTINEL="@larksuiteoapi/node-sdk"
+
+package_root() {
+  printf "%s/openclaw" "$(npm root -g)"
+}
+
+echo "Packing and installing current OpenClaw build..."
+pack_dir="$(mktemp -d "/tmp/openclaw-setup-entry-pack.XXXXXX")"
+npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-setup-entry-pack.log 2>&1
+package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
+if [ -z "$package_tgz" ]; then
+  cat /tmp/openclaw-setup-entry-pack.log
+  echo "missing packed OpenClaw tarball" >&2
+  exit 1
+fi
+npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-setup-entry-install.log 2>&1
+
+root="$(package_root)"
+test -d "$root/dist/extensions/$CHANNEL"
+if [ -d "$root/dist/extensions/$CHANNEL/node_modules" ]; then
+  echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
+  find "$root/dist/extensions/$CHANNEL/node_modules" -maxdepth 3 -type f | head -40 >&2 || true
+  exit 1
+fi
+if [ -f "$root/node_modules/$DEP_SENTINEL/package.json" ]; then
+  echo "$DEP_SENTINEL should not be installed at package root before setup-entry load" >&2
+  exit 1
+fi
+
+echo "Loading real Feishu bundled setup entry from installed package..."
+(
+  cd "$root"
+  node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const root = process.cwd();
+const distDir = path.join(root, "dist");
+const bundledPath = fs
+  .readdirSync(distDir)
+  .filter((entry) => /^bundled-[A-Za-z0-9_-]+\.js$/.test(entry))
+  .map((entry) => path.join(distDir, entry))
+  .find((entry) => fs.readFileSync(entry, "utf8").includes("src/channels/plugins/bundled.ts"));
+if (!bundledPath) {
+  throw new Error("missing packaged bundled channel loader artifact");
+}
+const bundled = await import(pathToFileURL(bundledPath));
+let plugin = null;
+for (const value of Object.values(bundled)) {
+  if (typeof value !== "function" || value.length !== 1) {
+    continue;
+  }
+  try {
+    const candidate = value("feishu");
+    if (candidate?.id === "feishu" && candidate?.setupWizard) {
+      plugin = candidate;
+      break;
+    }
+  } catch {
+    // Ignore unrelated one-argument helper exports from the bundled chunk.
+  }
+}
+if (!plugin) {
+  throw new Error("missing Feishu setup plugin");
+}
+console.log("Feishu setup plugin loaded");
+NODE
+)
+
+if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
+  echo "expected setup-entry deps to be installed externally, not into bundled plugin tree" >&2
+  exit 1
+fi
+if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$DEP_SENTINEL/package.json" -type f | grep -q .; then
+  echo "missing external staged setup-entry dependency sentinel for $DEP_SENTINEL" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+  exit 1
+fi
+
+echo "bundled channel setup-entry runtime deps Docker E2E passed"
+EOF
+  then
+    cat "$run_log"
+    rm -f "$run_log"
+    exit 1
+  fi
+
+  cat "$run_log"
+  rm -f "$run_log"
+}
+
 run_update_scenario() {
   local run_log
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-update.XXXXXX")"
@@ -801,4 +911,7 @@ if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
 fi
 if [ "$RUN_ROOT_OWNED_SCENARIO" != "0" ]; then
   run_root_owned_global_scenario
+fi
+if [ "$RUN_SETUP_ENTRY_SCENARIO" != "0" ]; then
+  run_setup_entry_scenario
 fi

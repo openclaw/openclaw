@@ -138,7 +138,11 @@ import {
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
-import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
+import {
+  normalizeAssistantReplayContent,
+  sanitizeSessionHistory,
+  validateReplayTurns,
+} from "../replay-history.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -1140,6 +1144,9 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
+      activeSession.agent.convertToLlm = async (messages) =>
+        await baseConvertToLlm(normalizeAssistantReplayContent(messages));
       let prePromptMessageCount = activeSession.messages.length;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
@@ -2179,8 +2186,14 @@ export async function runEmbeddedAttempt(
           }
 
           if (!skipPromptSubmission) {
+            const normalizedReplayMessages = normalizeAssistantReplayContent(
+              activeSession.messages,
+            );
+            if (normalizedReplayMessages !== activeSession.messages) {
+              activeSession.agent.state.messages = normalizedReplayMessages;
+            }
             finalPromptText = effectivePrompt;
-            const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+            const btwSnapshotMessages = normalizedReplayMessages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,

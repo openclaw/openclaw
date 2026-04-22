@@ -385,6 +385,10 @@ export type ChannelThreadingAdapter = {
     toolContext?: ChannelThreadingToolContext;
     replyToId?: string | null;
   }) => string | undefined;
+  resolveCurrentChannelId?: (params: {
+    to: string;
+    threadId?: string | number | null;
+  }) => string | undefined;
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

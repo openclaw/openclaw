@@ -13,6 +13,7 @@ import type {
   CronJob,
   CronRunTelemetry,
 } from "../types.js";
+import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import {
   isHeartbeatOnlyResponse,
   resolveCronPayloadOutcome,
@@ -785,7 +786,9 @@ async function finalizeCronRun(params: {
     payloads,
     runLevelError: finalRunResult.meta?.error,
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
-    preferFinalAssistantVisibleText: prepared.resolvedDelivery.channel === "telegram",
+    preferFinalAssistantVisibleText: (
+      await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
+    ).preferFinalAssistantVisibleText,
   });
   const resolveRunOutcome = (result?: {
     delivered?: boolean;

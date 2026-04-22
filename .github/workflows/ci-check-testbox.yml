@@ -8,7 +8,7 @@ on:
         required: true
   pull_request:
     paths:
-      - '.github/workflows/**'
+      - ".github/workflows/**"
 
 permissions:
   contents: read

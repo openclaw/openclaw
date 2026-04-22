@@ -20,7 +20,7 @@ env:
 jobs:
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
@@ -57,13 +57,6 @@ jobs:
           fi
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
-
-      - name: Setup Node environment
-        if: steps.docs_scope.outputs.docs_only != 'true'
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          install-deps: "false"
 
       - name: Build install-smoke CI manifest
         id: manifest
