@@ -38,6 +38,7 @@ export type RunCliAgentParams = {
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
+  isHeartbeat?: boolean;
 };
 
 export type CliPreparedBackend = {

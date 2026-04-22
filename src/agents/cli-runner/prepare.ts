@@ -107,7 +107,13 @@ export async function prepareCliRunContext(
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
+  // Heartbeat runs use a different provider in their inbound meta prompt, which would
+  // produce a different extraSystemPromptHash than user-chat runs. Preserve the stored
+  // hash during heartbeat runs so the CLI session is not invalidated and the user-chat
+  // hash is not overwritten.
+  const extraSystemPromptHash = params.isHeartbeat
+    ? (params.cliSessionBinding?.extraSystemPromptHash ?? hashCliSessionText(extraSystemPrompt))
+    : hashCliSessionText(extraSystemPrompt);
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
