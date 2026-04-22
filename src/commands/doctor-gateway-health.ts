@@ -17,13 +17,23 @@ export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
   timeoutMs?: number;
+  nonInteractive?: boolean;
+  deep?: boolean;
 }) {
   const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
   const timeoutMs =
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
   try {
-    await healthCommand({ json: false, timeoutMs, config: params.cfg }, params.runtime);
+    if (params.nonInteractive === true) {
+      await callGateway({
+        method: "health",
+        timeoutMs,
+        config: params.cfg,
+      });
+    } else {
+      await healthCommand({ json: false, timeoutMs, config: params.cfg }, params.runtime);
+    }
     healthOk = true;
   } catch (err) {
     const message = String(err);
@@ -35,7 +45,7 @@ export async function checkGatewayHealth(params: {
     }
   }
 
-  if (healthOk) {
+  if (healthOk && (params.nonInteractive !== true || params.deep === true)) {
     try {
       const status = await callGateway({
         method: "channels.status",

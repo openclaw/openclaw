@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findExtraGatewayServices } from "./inspect.js";
 
@@ -81,6 +84,90 @@ describe("findExtraGatewayServices (win32)", () => {
         scope: "system",
         marker: "moltbot",
         legacy: true,
+      },
+    ]);
+  });
+});
+
+describe("findExtraGatewayServices (darwin)", () => {
+  const originalPlatform = process.platform;
+  let tempHome: string;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "darwin",
+    });
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-launchd-"));
+    fs.mkdirSync(path.join(tempHome, "Library", "LaunchAgents"), { recursive: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  function writePlist(fileName: string, label: string, body: string) {
+    const plistPath = path.join(tempHome, "Library", "LaunchAgents", fileName);
+    fs.writeFileSync(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        "<plist>",
+        "<dict>",
+        "<key>Label</key>",
+        `<string>${label}</string>`,
+        body,
+        "</dict>",
+        "</plist>",
+      ].join("\n"),
+    );
+    return plistPath;
+  }
+
+  it("ignores OpenClaw support launch agents while keeping unrelated openclaw services visible", async () => {
+    writePlist(
+      "ai.openclaw.node.plist",
+      "ai.openclaw.node",
+      [
+        "<key>EnvironmentVariables</key>",
+        "<dict>",
+        "<key>OPENCLAW_SERVICE_MARKER</key>",
+        "<string>openclaw</string>",
+        "<key>OPENCLAW_SERVICE_KIND</key>",
+        "<string>node</string>",
+        "</dict>",
+      ].join("\n"),
+    );
+    writePlist(
+      "com.nats.server.plist",
+      "com.nats.server",
+      "<string>/Users/example/.openclaw/data/nats/server.conf</string>",
+    );
+    writePlist(
+      "com.signal-cli.daemon.plist",
+      "com.signal-cli.daemon",
+      "<string>/Users/example/.openclaw/logs/signal-cli/default.log</string>",
+    );
+    const unrelatedPath = writePlist(
+      "ai.openclaw.worker.plist",
+      "ai.openclaw.worker",
+      "<string>openclaw helper worker</string>",
+    );
+
+    const result = await findExtraGatewayServices({ HOME: tempHome });
+
+    expect(result).toEqual([
+      {
+        platform: "darwin",
+        label: "ai.openclaw.worker",
+        detail: `plist: ${unrelatedPath}`,
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
       },
     ]);
   });

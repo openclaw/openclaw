@@ -87,6 +87,21 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("returns whether read-only config repairs are pending", async () => {
+    const clean = await runDoctorConfigWithInput({
+      config: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect((clean as { pendingChanges?: boolean }).pendingChanges).toBe(false);
+
+    const dirty = await runDoctorConfigWithInput({
+      config: { unknownTopLevelKey: true },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect((dirty as { pendingChanges?: boolean }).pendingChanges).toBe(true);
+    expect((dirty as { shouldWriteConfig?: boolean }).shouldWriteConfig).toBe(false);
+  });
+
   it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {

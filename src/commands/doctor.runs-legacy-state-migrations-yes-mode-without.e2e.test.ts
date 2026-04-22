@@ -9,6 +9,16 @@ import {
   serviceRestart,
   writeConfigFile,
 } from "./doctor.e2e-harness.js";
+import "./doctor.fast-path-mocks.js";
+
+vi.mock("./doctor-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-auth.js")>();
+  return {
+    ...actual,
+    maybeRemoveDeprecatedCliAuthProfiles: vi.fn(async (cfg: unknown) => cfg),
+    noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 let healthCommand: typeof import("./health.js").healthCommand;
@@ -32,7 +42,7 @@ describe("doctor command", () => {
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
-  it("runs legacy state migrations in non-interactive mode without prompting", async () => {
+  it("skips legacy state migrations in non-interactive fast path", async () => {
     const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
@@ -41,7 +51,7 @@ describe("doctor command", () => {
       { nonInteractive: true },
     );
 
-    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
+    expect(runLegacyStateMigrations).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 

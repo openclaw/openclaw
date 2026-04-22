@@ -21,7 +21,7 @@ describe("doctor command", () => {
     terminalNoteMock.mockClear();
   });
 
-  it("warns when the state directory is missing", async () => {
+  it("skips the missing state directory check in non-interactive fast path", async () => {
     mockDoctorConfigSnapshot();
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
@@ -29,6 +29,24 @@ describe("doctor command", () => {
     process.env.OPENCLAW_STATE_DIR = missingDir;
     await doctorCommand(createDoctorRuntime(), {
       nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const stateNote = terminalNoteMock.mock.calls.find(([message]) =>
+      String(message).includes("state directory missing"),
+    );
+    expect(stateNote).toBeUndefined();
+  });
+
+  it("warns when the state directory is missing in deep non-interactive mode", async () => {
+    mockDoctorConfigSnapshot();
+
+    const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
+    fs.rmSync(missingDir, { recursive: true, force: true });
+    process.env.OPENCLAW_STATE_DIR = missingDir;
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      deep: true,
       workspaceSuggestions: false,
     });
 

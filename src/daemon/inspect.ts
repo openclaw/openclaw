@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  resolveNodeLaunchAgentLabel,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -87,6 +88,23 @@ function isOpenClawGatewayLaunchdService(label: string, contents: string): boole
     return false;
   }
   return label.startsWith("ai.openclaw.");
+}
+
+function isOpenClawSupportLaunchdService(label: string, contents: string): boolean {
+  const lowerContents = contents.toLowerCase();
+  if (label === resolveNodeLaunchAgentLabel()) {
+    return lowerContents.includes("openclaw_service_kind") && lowerContents.includes("node");
+  }
+  if (label === "com.nats.server") {
+    return (
+      lowerContents.includes("/.openclaw/data/nats") ||
+      lowerContents.includes("/.openclaw/logs/nats")
+    );
+  }
+  if (label === "com.signal-cli.daemon") {
+    return lowerContents.includes("/.openclaw/logs/signal-cli");
+  }
+  return false;
 }
 
 function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
@@ -207,6 +225,9 @@ async function scanLaunchdDir(params: {
       continue;
     }
     if (isIgnoredLaunchdLabel(label)) {
+      continue;
+    }
+    if (marker === "openclaw" && isOpenClawSupportLaunchdService(label, contents)) {
       continue;
     }
     if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {

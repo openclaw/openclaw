@@ -47,7 +47,11 @@ import {
   noteMacLaunchctlGatewayEnvOverrides,
   noteStartupOptimizationHints,
 } from "./doctor-platform-notes.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import {
+  createDoctorPrompter,
+  type DoctorOptions,
+  type DoctorPrompter,
+} from "./doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
 import { noteSecurityWarnings } from "./doctor-security.js";
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
@@ -71,11 +75,19 @@ function resolveMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
+function shouldRunDetailedDoctorChecks(
+  options: DoctorOptions,
+  prompter: Pick<DoctorPrompter, "shouldRepair">,
+): boolean {
+  return prompter.shouldRepair || options.deep === true || options.nonInteractive !== true;
+}
+
 export async function doctorCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DoctorOptions = {},
 ) {
   const prompter = createDoctorPrompter({ runtime, options });
+  const runDetailedChecks = shouldRunDetailedDoctorChecks(options, prompter);
   printWizardHeader(runtime);
   intro("OpenClaw doctor");
 
@@ -132,13 +144,15 @@ export async function doctorCommand(
     );
   }
 
-  cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
-  cfg = await maybeRemoveDeprecatedCliAuthProfiles(cfg, prompter);
-  await noteAuthProfileHealth({
-    cfg,
-    prompter,
-    allowKeychainPrompt: options.nonInteractive !== true && Boolean(process.stdin.isTTY),
-  });
+  if (runDetailedChecks) {
+    cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
+    cfg = await maybeRemoveDeprecatedCliAuthProfiles(cfg, prompter);
+    await noteAuthProfileHealth({
+      cfg,
+      prompter,
+      allowKeychainPrompt: options.nonInteractive !== true && Boolean(process.stdin.isTTY),
+    });
+  }
   const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
   if (gatewayDetails.remoteFallbackNote) {
     note(gatewayDetails.remoteFallbackNote, "Gateway");
@@ -196,44 +210,50 @@ export async function doctorCommand(
     }
   }
 
-  const legacyState = await detectLegacyStateMigrations({ cfg });
-  if (legacyState.preview.length > 0) {
-    note(legacyState.preview.join("\n"), "Legacy state detected");
-    const migrate =
-      options.nonInteractive === true
-        ? true
-        : await prompter.confirm({
-            message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
-            initialValue: true,
-          });
-    if (migrate) {
-      const migrated = await runLegacyStateMigrations({
-        detected: legacyState,
-      });
-      if (migrated.changes.length > 0) {
-        note(migrated.changes.join("\n"), "Doctor changes");
-      }
-      if (migrated.warnings.length > 0) {
-        note(migrated.warnings.join("\n"), "Doctor warnings");
+  if (runDetailedChecks) {
+    const legacyState = await detectLegacyStateMigrations({ cfg });
+    if (legacyState.preview.length > 0) {
+      note(legacyState.preview.join("\n"), "Legacy state detected");
+      const migrate =
+        options.nonInteractive === true
+          ? true
+          : await prompter.confirm({
+              message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
+              initialValue: true,
+            });
+      if (migrate) {
+        const migrated = await runLegacyStateMigrations({
+          detected: legacyState,
+        });
+        if (migrated.changes.length > 0) {
+          note(migrated.changes.join("\n"), "Doctor changes");
+        }
+        if (migrated.warnings.length > 0) {
+          note(migrated.warnings.join("\n"), "Doctor warnings");
+        }
       }
     }
   }
 
-  await noteStateIntegrity(cfg, prompter, configResult.path ?? CONFIG_PATH);
-  await noteSessionLockHealth({ shouldRepair: prompter.shouldRepair });
-  await maybeRepairLegacyCronStore({
-    cfg,
-    options,
-    prompter,
-  });
+  if (runDetailedChecks) {
+    await noteStateIntegrity(cfg, prompter, configResult.path ?? CONFIG_PATH);
+    await noteSessionLockHealth({ shouldRepair: prompter.shouldRepair });
+    await maybeRepairLegacyCronStore({
+      cfg,
+      options,
+      prompter,
+    });
+  }
 
   cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
   noteSandboxScopeWarnings(cfg);
 
-  await maybeScanExtraGatewayServices(options, runtime, prompter);
-  await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
-  await noteMacLaunchAgentOverrides();
-  await noteMacLaunchctlGatewayEnvOverrides(cfg);
+  if (runDetailedChecks) {
+    await maybeScanExtraGatewayServices(options, runtime, prompter);
+    await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
+    await noteMacLaunchAgentOverrides();
+    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+  }
 
   if (prompter.shouldRepair) {
     await runStartupMatrixMigration({
@@ -249,7 +269,9 @@ export async function doctorCommand(
   }
 
   await noteSecurityWarnings(cfg);
-  await noteChromeMcpBrowserReadiness(cfg);
+  if (runDetailedChecks) {
+    await noteChromeMcpBrowserReadiness(cfg);
+  }
   await noteOpenAIOAuthTlsPrerequisites({
     cfg,
     deep: options.deep === true,
@@ -319,34 +341,41 @@ export async function doctorCommand(
     }
   }
 
-  noteWorkspaceStatus(cfg);
-  await noteBootstrapFileSize(cfg);
+  if (runDetailedChecks) {
+    noteWorkspaceStatus(cfg);
+    await noteBootstrapFileSize(cfg);
+  }
 
   // Check and fix shell completion
   await doctorShellCompletion(runtime, prompter, {
     nonInteractive: options.nonInteractive,
   });
 
-  const { healthOk } = await checkGatewayHealth({
-    runtime,
-    cfg,
-    timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
-  });
-  const gatewayMemoryProbe = healthOk
-    ? await probeGatewayMemoryStatus({
-        cfg,
-        timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
-      })
-    : { checked: false, ready: false };
-  await noteMemorySearchHealth(cfg, { gatewayMemoryProbe });
-  await maybeRepairGatewayDaemon({
-    cfg,
-    runtime,
-    prompter,
-    options,
-    gatewayDetailsMessage: gatewayDetails.message,
-    healthOk,
-  });
+  let healthOk = false;
+  if (runDetailedChecks) {
+    ({ healthOk } = await checkGatewayHealth({
+      runtime,
+      cfg,
+      timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
+      nonInteractive: options.nonInteractive,
+      deep: options.deep,
+    }));
+    const gatewayMemoryProbe = healthOk
+      ? await probeGatewayMemoryStatus({
+          cfg,
+          timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
+        })
+      : { checked: false, ready: false };
+    await noteMemorySearchHealth(cfg, { gatewayMemoryProbe });
+    await maybeRepairGatewayDaemon({
+      cfg,
+      runtime,
+      prompter,
+      options,
+      gatewayDetailsMessage: gatewayDetails.message,
+      healthOk,
+    });
+  }
 
   const shouldWriteConfig =
     configResult.shouldWriteConfig || JSON.stringify(cfg) !== JSON.stringify(cfgForPersistence);
@@ -358,7 +387,7 @@ export async function doctorCommand(
     if (fs.existsSync(backupPath)) {
       runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }
-  } else if (!prompter.shouldRepair) {
+  } else if (!prompter.shouldRepair && configResult.pendingChanges) {
     runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 
