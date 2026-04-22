@@ -106,7 +106,12 @@ async function prepareThreadContextCase(params: ThreadContextCaseParams) {
 describe("prepareSlackMessage thread context allowlists", () => {
   afterAll(() => {
     if (fixtureRoot) {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      fs.rmSync(fixtureRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
       fixtureRoot = "";
     }
   });
@@ -135,8 +140,8 @@ describe("prepareSlackMessage thread context allowlists", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter from room user");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("starter from room user");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("allowed follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
@@ -164,8 +169,8 @@ describe("prepareSlackMessage thread context allowlists", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter from open room");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("starter from open room");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("open-room follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
@@ -187,8 +192,8 @@ describe("prepareSlackMessage thread context allowlists", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter from open dm");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("starter from open dm");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("dm follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
@@ -210,8 +215,8 @@ describe("prepareSlackMessage thread context allowlists", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter from mpim");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("starter from mpim");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("mpim follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });

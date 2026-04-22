@@ -173,6 +173,15 @@ For channel plugins, the SDK surface is
 call lets a plugin return its visible actions, capabilities, and schema
 contributions together so those pieces do not drift apart.
 
+When a channel-specific message-tool param carries a media source such as a
+local path or remote media URL, the plugin should also return
+`mediaSourceParams` from `describeMessageTool(...)`. Core uses that explicit
+list to apply sandbox path normalization and outbound media-access hints
+without hardcoding plugin-owned param names.
+Prefer action-scoped maps there, not one channel-wide flat list, so a
+profile-only media param does not get normalized on unrelated actions like
+`send`.
+
 Core passes runtime scope into that discovery step. Important fields include:
 
 - `accountId`
@@ -649,7 +658,7 @@ Provider plugins now have two layers:
   `buildAuthDoctorHint`, `matchesContextOverflowError`,
   `classifyFailoverReason`, `isCacheTtlEligible`,
   `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`,
-  `isBinaryThinking`, `supportsXHighThinking`,
+  `resolveThinkingProfile`, `isBinaryThinking`, `supportsXHighThinking`,
   `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`,
   `resolveUsageAuth`, `fetchUsageSnapshot`, `createEmbeddingProvider`,
   `buildReplayPolicy`,
@@ -713,18 +722,19 @@ The "When to use" column is the quick decision guide.
 | 30  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                               |
 | 31  | `suppressBuiltInModel`            | Stale upstream model suppression plus optional user-facing error hint                                          | Provider needs to hide stale upstream rows or replace them with a vendor hint                                                               |
 | 32  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                   |
-| 33  | `isBinaryThinking`                | On/off reasoning toggle for binary-thinking providers                                                          | Provider exposes only binary thinking on/off                                                                                                |
-| 34  | `supportsXHighThinking`           | `xhigh` reasoning support for selected models                                                                  | Provider wants `xhigh` on only a subset of models                                                                                           |
-| 35  | `resolveDefaultThinkingLevel`     | Default `/think` level for a specific model family                                                             | Provider owns default `/think` policy for a model family                                                                                    |
-| 36  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                           |
-| 37  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                           |
-| 38  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                             |
-| 39  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                         |
-| 40  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                  |
-| 41  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                             |
-| 42  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                           |
-| 43  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                  |
-| 44  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                |
+| 33  | `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                               |
+| 34  | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                |
+| 35  | `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                           |
+| 36  | `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                    |
+| 37  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                           |
+| 38  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                           |
+| 39  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                             |
+| 40  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                         |
+| 41  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                  |
+| 42  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                             |
+| 43  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                           |
+| 44  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                  |
+| 45  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                |
 
 `normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
 matched provider plugin, then fall through other hook-capable provider plugins
@@ -796,7 +806,7 @@ api.registerProvider({
 
 - Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
   `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
-  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  `resolveThinkingProfile`, `applyConfigDefaults`, `isModernModelRef`,
   and `wrapStreamFn` because it owns Claude 4.6 forward-compat,
   provider-family hints, auth repair guidance, usage endpoint integration,
   prompt-cache eligibility, auth-aware config defaults, Claude
@@ -810,7 +820,7 @@ api.registerProvider({
   provider's beta-header rules.
 - OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
   `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
-  `augmentModelCatalog`, `supportsXHighThinking`, and `isModernModelRef`
+  `augmentModelCatalog`, `resolveThinkingProfile`, and `isModernModelRef`
   because it owns GPT-5.4 forward-compat, the direct OpenAI
   `openai-completions` -> `openai-responses` normalization, Codex-aware auth
   hints, Spark suppression, synthetic OpenAI list rows, and GPT-5 thinking /
@@ -852,7 +862,7 @@ api.registerProvider({
   `anthropic-by-model` replay family so Claude-specific replay cleanup stays
   scoped to Claude ids instead of every `anthropic-messages` transport.
 - Amazon Bedrock uses `buildReplayPolicy`, `matchesContextOverflowError`,
-  `classifyFailoverReason`, and `resolveDefaultThinkingLevel` because it owns
+  `classifyFailoverReason`, and `resolveThinkingProfile` because it owns
   Bedrock-specific throttle/not-ready/context-overflow error classification
   for Anthropic-on-Bedrock traffic; its replay policy still shares the same
   Claude-only `anthropic-by-model` guard.
@@ -867,7 +877,7 @@ api.registerProvider({
   thinking-block dropping on the Anthropic side while overriding reasoning
   output mode back to native, and the `minimax-fast-mode` stream family owns
   fast-mode model rewrites on the shared stream path.
-- Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
+- Moonshot uses `catalog`, `resolveThinkingProfile`, and `wrapStreamFn` because it still uses the shared
   OpenAI transport but needs provider-owned thinking payload normalization; the
   `moonshot-thinking` stream family maps config plus `/think` state onto its
   native binary thinking payload.
@@ -878,7 +888,7 @@ api.registerProvider({
   injection on the shared proxy stream path while skipping `kilo/auto` and
   other proxy model ids that do not support explicit reasoning payloads.
 - Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
-  `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
+  `isCacheTtlEligible`, `resolveThinkingProfile`, `isModernModelRef`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
   `tool_stream` defaults, binary thinking UX, modern-model matching, and both
   usage auth + quota fetching; the `tool-stream-default-on` stream family keeps
@@ -1241,16 +1251,21 @@ Compatibility note:
 ## Message tool schemas
 
 Plugins should own channel-specific `describeMessageTool(...)` schema
-contributions. Keep provider-specific fields in the plugin, not in shared core.
+contributions for non-message primitives such as reactions, reads, and polls.
+Shared send presentation should use the generic `MessagePresentation` contract
+instead of provider-native button, component, block, or card fields.
+See [Message Presentation](/plugins/message-presentation) for the contract,
+fallback rules, provider mapping, and plugin author checklist.
 
-For shared portable schema fragments, reuse the generic helpers exported through
-`openclaw/plugin-sdk/channel-actions`:
+Send-capable plugins declare what they can render through message capabilities:
 
-- `createMessageToolButtonsSchema()` for button-grid style payloads
-- `createMessageToolCardSchema()` for structured card payloads
+- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `buttons`, `select`)
+- `delivery-pin` for pinned-delivery requests
 
-If a schema shape only makes sense for one provider, define it in that plugin's
-own source instead of promoting it into the shared SDK.
+Core decides whether to render the presentation natively or degrade it to text.
+Do not expose provider-native UI escape hatches from the generic message tool.
+Deprecated SDK helpers for legacy native schemas remain exported for existing
+third-party plugins, but new plugins should not use them.
 
 ## Channel target resolution
 

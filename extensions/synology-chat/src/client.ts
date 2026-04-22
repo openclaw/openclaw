@@ -6,11 +6,18 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  formatErrorMessage,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -128,9 +135,16 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = false,
 ): Promise<boolean> {
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
-
   try {
+    const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
+    const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
+
+    const now = Date.now();
+    const elapsed = now - lastSendTime;
+    if (elapsed < MIN_SEND_INTERVAL_MS) {
+      await sleep(MIN_SEND_INTERVAL_MS - elapsed);
+    }
+
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
     lastSendTime = Date.now();
     return ok;
@@ -204,6 +218,22 @@ export async function fetchChatUsers(
         resolve(cached?.users ?? []);
       });
   });
+}
+
+async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(fileUrl);
+  } catch (err) {
+    throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Synology Chat file URL must use HTTP or HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  return parsed.toString();
 }
 
 /**

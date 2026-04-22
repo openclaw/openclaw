@@ -9,7 +9,10 @@ const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 
-vi.mock("../channels/plugins/index.js", () => ({
+vi.mock("../channels/plugins/index.js", async () => ({
+  ...(await vi.importActual<typeof import("../channels/plugins/index.js")>(
+    "../channels/plugins/index.js",
+  )),
   listChannelPlugins: () => [],
 }));
 
@@ -80,36 +83,12 @@ describe("createGatewayCloseHandler", () => {
   it("unsubscribes lifecycle listeners during shutdown", async () => {
     const lifecycleUnsub = vi.fn();
     const stopTaskRegistryMaintenance = vi.fn();
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
-      updateCheckStop: null,
-      stopTaskRegistryMaintenance,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      mediaCleanup: null,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set<GatewayCloseClient>(),
-      configReloader: { stop: vi.fn(async () => undefined) },
-      wss: { close: (cb: () => void) => cb() } as never,
-      httpServer: {
-        close: (cb: (err?: Error | null) => void) => cb(null),
-        closeIdleConnections: vi.fn(),
-      } as never,
-    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        stopTaskRegistryMaintenance,
+        lifecycleUnsub,
+      }),
+    );
 
     await close({ reason: "test shutdown" });
 
@@ -180,39 +159,17 @@ describe("createGatewayCloseHandler", () => {
     const closeAllConnections = vi.fn(() => {
       closeCallback?.(null);
     });
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
-      updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      mediaCleanup: null,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub: null,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => undefined) },
-      wss: { close: (cb: () => void) => cb() } as never,
-      httpServer: {
-        close: (cb: (err?: Error | null) => void) => {
-          closeCallback = cb;
-        },
-        closeAllConnections,
-        closeIdleConnections: vi.fn(),
-      } as never,
-    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        httpServer: {
+          close: (cb: (err?: Error | null) => void) => {
+            closeCallback = cb;
+          },
+          closeAllConnections,
+          closeIdleConnections: vi.fn(),
+        } as never,
+      }),
+    );
 
     const closePromise = close({ reason: "test shutdown" });
     await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS);
@@ -230,6 +187,26 @@ describe("createGatewayCloseHandler", () => {
   it("fails shutdown when http server close still hangs after force close", async () => {
     vi.useFakeTimers();
 
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        httpServer: {
+          close: () => undefined,
+          closeAllConnections: vi.fn(),
+          closeIdleConnections: vi.fn(),
+        } as never,
+      }),
+    );
+
+    const closePromise = close({ reason: "test shutdown" });
+    const closeExpectation = expect(closePromise).rejects.toThrow(
+      "http server close still pending after forced connection shutdown (5000ms)",
+    );
+    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
+    await closeExpectation;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ignores unbound http servers during shutdown", async () => {
     const close = createGatewayCloseHandler({
       bonjourStop: null,
       tailscaleCleanup: null,
@@ -240,7 +217,6 @@ describe("createGatewayCloseHandler", () => {
       cron: { stop: vi.fn() },
       heartbeatRunner: { stop: vi.fn() } as never,
       updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
       nodePresenceTimers: new Map(),
       broadcast: vi.fn(),
       tickInterval: setInterval(() => undefined, 60_000),
@@ -256,18 +232,14 @@ describe("createGatewayCloseHandler", () => {
       configReloader: { stop: vi.fn(async () => undefined) },
       wss: { close: (cb: () => void) => cb() } as never,
       httpServer: {
-        close: () => undefined,
-        closeAllConnections: vi.fn(),
+        close: (cb: (err?: NodeJS.ErrnoException | null) => void) =>
+          cb(
+            Object.assign(new Error("Server is not running."), { code: "ERR_SERVER_NOT_RUNNING" }),
+          ),
         closeIdleConnections: vi.fn(),
       } as never,
     });
 
-    const closePromise = close({ reason: "test shutdown" });
-    const closeExpectation = expect(closePromise).rejects.toThrow(
-      "http server close still pending after forced connection shutdown (5000ms)",
-    );
-    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
-    await closeExpectation;
-    expect(vi.getTimerCount()).toBe(0);
+    await expect(close({ reason: "startup failed before bind" })).resolves.toBeUndefined();
   });
 });

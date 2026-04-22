@@ -5,10 +5,14 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import {
+  agentCommandFromIngress,
+  getTtsProvider,
+  resolveAgentDir,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  type ResolvedTtsConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -325,7 +329,6 @@ export class DiscordVoiceManager {
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom: string[];
-  private readonly allowDangerousNameMatching: boolean;
   private readonly minRmsEnergy: number;
   private readonly wakeWordConfig: DiscordVoiceWakeWordConfig | undefined;
   private wakeWordSidecar: WakeWordSidecar | null = null;
@@ -355,7 +358,6 @@ export class DiscordVoiceManager {
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
     this.ownerAllowFrom =
       params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
-    this.allowDangerousNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
     this.minRmsEnergy = params.discordConfig.voice?.capture?.minRmsEnergy ?? 15;
     this.wakeWordConfig = params.discordConfig.voice?.wakeWord;
   }
@@ -1170,6 +1172,7 @@ export class DiscordVoiceManager {
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {
       cfg: ttsCfg,
       providerConfigs: ttsConfig.providerConfigs,
+      preferredProviderId: getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig)),
     });
     const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
     const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, speaker.label);

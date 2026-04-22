@@ -13,13 +13,113 @@ import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-gu
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+export type ProviderOperationDeadline = {
+  deadlineAtMs?: number;
+  label: string;
+  timeoutMs?: number;
+};
+
+export function createProviderOperationDeadline(params: {
+  timeoutMs?: number;
+  label: string;
+}): ProviderOperationDeadline {
+  if (
+    typeof params.timeoutMs !== "number" ||
+    !Number.isFinite(params.timeoutMs) ||
+    params.timeoutMs <= 0
+  ) {
+    return { label: params.label };
+  }
+  const timeoutMs = Math.floor(params.timeoutMs);
+  return {
+    deadlineAtMs: Date.now() + timeoutMs,
+    label: params.label,
+    timeoutMs,
+  };
+}
+
+export function resolveProviderOperationTimeoutMs(params: {
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+}): number {
+  const deadlineAtMs = params.deadline.deadlineAtMs;
+  if (typeof deadlineAtMs !== "number") {
+    return params.defaultTimeoutMs;
+  }
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+  }
+  return Math.max(1, Math.min(params.defaultTimeoutMs, remainingMs));
+}
+
+export async function waitProviderOperationPollInterval(params: {
+  deadline: ProviderOperationDeadline;
+  pollIntervalMs: number;
+}): Promise<void> {
+  const deadlineAtMs = params.deadline.deadlineAtMs;
+  if (typeof deadlineAtMs !== "number") {
+    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    return;
+  }
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, Math.min(params.pollIntervalMs, remainingMs)));
+}
+
+export async function pollProviderOperationJson<TPayload>(params: {
+  url: string;
+  headers: Headers;
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+  fetchFn: typeof fetch;
+  maxAttempts: number;
+  pollIntervalMs: number;
+  requestFailedMessage: string;
+  timeoutMessage: string;
+  isComplete: (payload: TPayload) => boolean;
+  getFailureMessage?: (payload: TPayload) => string | undefined;
+}): Promise<TPayload> {
+  for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+    const response = await fetchWithTimeout(
+      params.url,
+      {
+        method: "GET",
+        headers: params.headers,
+      },
+      resolveProviderOperationTimeoutMs({
+        deadline: params.deadline,
+        defaultTimeoutMs: params.defaultTimeoutMs,
+      }),
+      params.fetchFn,
+    );
+    await assertOkOrThrowHttpError(response, params.requestFailedMessage);
+    const payload = (await response.json()) as TPayload;
+    if (params.isComplete(payload)) {
+      return payload;
+    }
+    const failureMessage = params.getFailureMessage?.(payload);
+    if (failureMessage) {
+      throw new Error(failureMessage);
+    }
+    await waitProviderOperationPollInterval({
+      deadline: params.deadline,
+      pollIntervalMs: params.pollIntervalMs,
+    });
+  }
+  throw new Error(params.timeoutMessage);
+}
 
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {

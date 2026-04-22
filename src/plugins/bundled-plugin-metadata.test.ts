@@ -131,11 +131,12 @@ describe("bundled plugin metadata", () => {
     },
   );
 
-  it("excludes private QA sidecars from the packaged runtime sidecar baseline", () => {
+  it("excludes non-packaged QA sidecars from the packaged runtime sidecar baseline", () => {
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
       "dist/extensions/qa-channel/runtime-api.js",
     );
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
   });
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
@@ -164,6 +165,37 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
+    // Regression for #69317: the bundled channel entry now points its
+    // runtime.specifier at runtime-setter-api.js to avoid loading the full
+    // runtime-api barrel during register(). The setter file must therefore
+    // be discoverable as part of Slack's public surface.
+    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
+    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Telegram's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const telegram = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "telegram");
+    expectArtifactPresence(telegram?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(telegram?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Discord's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
       expect.objectContaining({
@@ -183,6 +215,13 @@ describe("bundled plugin metadata", () => {
     expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyMatrixAuth",
+    });
+  });
+
+  it("keeps Matrix's narrow runtime-setter sidecar on the bundled public surface", () => {
+    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expectArtifactPresence(matrix?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
     });
   });
 
@@ -271,6 +310,72 @@ describe("bundled plugin metadata", () => {
       "alpha",
       path.join("dist", "extensions", "alpha", "index.js"),
     );
+  });
+
+  it("scans direct plugin-tree overrides and resolves generated paths from that scan dir", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-tree-");
+    const pluginsDir = path.join(tempRoot, "bundled-plugins");
+    const pluginRoot = path.join(pluginsDir, "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      channels: ["alpha"],
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+
+    clearBundledPluginMetadataCache();
+    expect(
+      listBundledPluginMetadata({
+        rootDir: tempRoot,
+        scanDir: pluginsDir,
+      }).map((entry) => entry.manifest.id),
+    ).toEqual(["alpha"]);
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: "./index.ts",
+          built: "index.js",
+        },
+        "alpha",
+        pluginsDir,
+      ),
+    ).toBe(path.join(pluginRoot, "index.ts"));
+  });
+
+  it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
+    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
+    const pluginRoot = path.join(pluginsDir, "alpha");
+    const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
+
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(nestedDistPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const source = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(nestedDistPluginRoot, "index.js"),
+      "export const built = true;\n",
+      "utf8",
+    );
+
+    expect(
+      resolveBundledPluginGeneratedPath(
+        pluginsDir,
+        {
+          source: "./index.ts",
+          built: "index.js",
+        },
+        "alpha",
+        pluginsDir,
+      ),
+    ).toBe(path.join(pluginRoot, "index.js"));
   });
 
   it("resolves bundled repo entry paths from dist before workspace source", () => {

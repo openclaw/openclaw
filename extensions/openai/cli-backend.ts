@@ -3,6 +3,8 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./openai-codex-cli-auth.js";
+import { prepareOpenAICodexCliExecution } from "./openai-codex-cli-bridge.js";
 
 const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.4";
 
@@ -20,6 +22,9 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "codex-config-overrides",
+    defaultAuthProfileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    authEpochMode: "profile-only",
+    prepareExecution: prepareOpenAICodexCliExecution,
     config: {
       command: "codex",
       args: [
@@ -31,7 +36,14 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "workspace-write",
         "--skip-git-repo-check",
       ],
-      resumeArgs: ["exec", "resume", "{sessionId}", "--dangerously-bypass-approvals-and-sandbox"],
+      resumeArgs: [
+        "exec",
+        "resume",
+        "{sessionId}",
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "--skip-git-repo-check",
+      ],
       output: "jsonl",
       resumeOutput: "text",
       input: "arg",

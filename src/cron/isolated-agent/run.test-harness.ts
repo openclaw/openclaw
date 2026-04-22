@@ -68,6 +68,7 @@ export const isHeartbeatOnlyResponseMock = createMock();
 export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
+export const getChannelPluginMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -78,6 +79,8 @@ const hasNonzeroUsageMock = createMock();
 const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
 const normalizeVerboseLevelMock = createMock();
+const isThinkingLevelSupportedMock = createMock();
+const resolveSupportedThinkingLevelMock = createMock();
 const supportsXHighThinkingMock = createMock();
 const resolveSessionTranscriptPathMock = createMock();
 const setSessionRuntimeModelMock = createMock();
@@ -109,6 +112,8 @@ vi.mock("./run.runtime.js", () => ({
   DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   normalizeThinkLevel: normalizeThinkLevelMock,
+  isThinkingLevelSupported: isThinkingLevelSupportedMock,
+  resolveSupportedThinkingLevel: resolveSupportedThinkingLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
@@ -220,6 +225,10 @@ vi.mock("./helpers.js", () => ({
   resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
 
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+}));
+
 vi.mock("./session.js", () => ({
   resolveCronSession: resolveCronSessionMock,
 }));
@@ -306,6 +315,8 @@ function resetRunConfigMocks(): void {
   hasNonzeroUsageMock.mockReturnValue(true);
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);
+  isThinkingLevelSupportedMock.mockReturnValue(true);
+  resolveSupportedThinkingLevelMock.mockImplementation(({ level }: { level?: unknown }) => level);
   supportsXHighThinkingMock.mockReturnValue(false);
   buildSafeExternalPromptMock.mockImplementation(
     ({ message }: { message?: string }) => message ?? "",
@@ -368,9 +379,12 @@ function resetRunOutcomeMocks(): void {
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   resolveDeliveryTargetMock.mockReset();
   resolveDeliveryTargetMock.mockResolvedValue({
-    channel: "discord",
-    to: undefined,
+    ok: true,
+    channel: "messagechat",
+    to: "test-target",
     accountId: undefined,
+    threadId: undefined,
+    mode: "explicit",
     error: undefined,
   });
   dispatchCronDeliveryMock.mockReset();
@@ -383,11 +397,22 @@ function resetRunOutcomeMocks(): void {
       deliveryRequested,
       skipHeartbeatDelivery,
       skipMessagingToolDelivery,
+      resolvedDelivery,
     }) => ({
       result: undefined,
-      delivered: Boolean(deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery),
+      delivered: Boolean(
+        skipMessagingToolDelivery ||
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
+      ),
       deliveryAttempted: Boolean(
-        deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery,
+        skipMessagingToolDelivery ||
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
       ),
       summary,
       outputText,

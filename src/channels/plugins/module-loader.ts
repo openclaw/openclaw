@@ -1,46 +1,29 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginLoaderJitiConfig,
-} from "../../plugins/sdk-alias.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-
-const nodeRequire = createRequire(import.meta.url);
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../../plugins/jiti-loader-cache.js";
+import { tryNativeRequireJavaScriptModule } from "../../plugins/native-module-require.js";
+export { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 
 function createModuleLoader() {
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const jitiLoaders: PluginJitiLoaderCache = new Map();
 
   return (modulePath: string) => {
-    const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    return getCachedPluginJitiLoader({
+      cache: jitiLoaders,
       modulePath,
-      argv1: process.argv[1],
-      moduleUrl: import.meta.url,
+      importerUrl: import.meta.url,
+      argvEntry: process.argv[1],
       preferBuiltDist: true,
+      jitiFilename: import.meta.url,
     });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
-      tryNative,
-    });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
   };
 }
 
 let loadModule = createModuleLoader();
-
-export function isJavaScriptModulePath(modulePath: string): boolean {
-  return [".js", ".mjs", ".cjs"].includes(
-    normalizeLowercaseStringOrEmpty(path.extname(modulePath)),
-  );
-}
 
 export function resolveCompiledBundledModulePath(modulePath: string): string {
   const compiledDistModulePath = modulePath.replace(
@@ -62,8 +45,10 @@ export function resolvePluginModuleCandidates(rootDir: string, specifier: string
   return [
     resolvedPath,
     `${resolvedPath}.ts`,
+    `${resolvedPath}.mts`,
     `${resolvedPath}.js`,
     `${resolvedPath}.mjs`,
+    `${resolvedPath}.cts`,
     `${resolvedPath}.cjs`,
   ];
 }
@@ -98,11 +83,12 @@ export function loadChannelPluginModule(params: {
   }
   const safePath = opened.path;
   fs.closeSync(opened.fd);
-  if (process.platform === "win32" && params.shouldTryNativeRequire?.(safePath)) {
-    try {
-      return nodeRequire(safePath);
-    } catch {
-      // Fall back to the Jiti loader path when require() cannot handle the entry.
+  if (params.shouldTryNativeRequire?.(safePath)) {
+    const nativeModule = tryNativeRequireJavaScriptModule(safePath, {
+      allowWindows: true,
+    });
+    if (nativeModule.ok) {
+      return nativeModule.moduleExport;
     }
   }
   return loadModule(safePath)(safePath);

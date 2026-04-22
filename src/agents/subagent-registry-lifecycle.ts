@@ -1,5 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
+import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -7,13 +7,9 @@ import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
-} from "../tasks/task-executor.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import {
-  captureSubagentCompletionReply,
-  runSubagentAnnounceFlow,
-  type SubagentRunOutcome,
-} from "./subagent-announce.js";
+} from "../tasks/detached-task-runtime.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
@@ -22,7 +18,7 @@ import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
-import { runOutcomesEqual } from "./subagent-registry-completion.js";
+import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -35,6 +31,23 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type CaptureSubagentCompletionReply =
+  (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
+type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+type BrowserCleanupModule = Pick<
+  typeof import("../browser-lifecycle-cleanup.js"),
+  "cleanupBrowserSessionsForLifecycleEnd"
+>;
+
+let browserCleanupPromise: Promise<BrowserCleanupModule> | null = null;
+
+async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
+  BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
+> {
+  browserCleanupPromise ??= import("../browser-lifecycle-cleanup.js");
+  return (await browserCleanupPromise).cleanupBrowserSessionsForLifecycleEnd;
+}
 
 export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -60,11 +73,32 @@ export function createSubagentRegistryLifecycleController(params: {
     workspaceDir?: string;
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
-  captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
+  captureSubagentCompletionReply: CaptureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd?: typeof cleanupBrowserSessionsForLifecycleEnd;
-  runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
+  runSubagentAnnounceFlow: RunSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
+  const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  const scheduleResumeSubagentRun = (runId: string, entry: SubagentRunRecord, delayMs: number) => {
+    const timer = setTimeout(() => {
+      scheduledResumeTimers.delete(timer);
+      if (params.runs.get(runId) !== entry) {
+        return;
+      }
+      params.resumeSubagentRun(runId);
+    }, delayMs);
+    timer.unref?.();
+    scheduledResumeTimers.add(timer);
+  };
+
+  const clearScheduledResumeTimers = () => {
+    for (const timer of scheduledResumeTimers) {
+      clearTimeout(timer);
+    }
+    scheduledResumeTimers.clear();
+  };
+
   const maskRunId = (runId: string): string => {
     const trimmed = runId.trim();
     if (!trimmed) {
@@ -153,13 +187,22 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
-  const freezeRunResultAtCompletion = async (entry: SubagentRunRecord): Promise<boolean> => {
+  const freezeRunResultAtCompletion = async (
+    entry: SubagentRunRecord,
+    outcome: SubagentRunOutcome,
+  ): Promise<boolean> => {
     if (entry.frozenResultText !== undefined) {
       return false;
+    }
+    if (outcome.status === "error") {
+      entry.frozenResultText = null;
+      entry.frozenResultCapturedAt = Date.now();
+      return true;
     }
     try {
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
+        outcome,
       });
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
@@ -194,14 +237,16 @@ export function createSubagentRegistryLifecycleController(params: {
   };
 
   const refreshFrozenResultFromSession = async (sessionKey: string): Promise<boolean> => {
-    const candidates = listPendingCompletionRunsForSession(sessionKey);
+    const candidates = listPendingCompletionRunsForSession(sessionKey).filter(
+      (entry) => entry.outcome?.status !== "error",
+    );
     if (candidates.length === 0) {
       return false;
     }
 
     let captured: string | undefined;
     try {
-      captured = await captureSubagentCompletionReply(sessionKey);
+      captured = await params.captureSubagentCompletionReply(sessionKey);
     } catch {
       return false;
     }
@@ -422,9 +467,7 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.cleanupHandled = false;
       params.resumedRuns.delete(runId);
       params.persist();
-      setTimeout(() => {
-        params.resumeSubagentRun(runId);
-      }, deferredDecision.delayMs).unref?.();
+      scheduleResumeSubagentRun(runId, entry, deferredDecision.delayMs);
       return;
     }
 
@@ -466,9 +509,7 @@ export function createSubagentRegistryLifecycleController(params: {
     if (deferredDecision.resumeDelayMs == null) {
       return;
     }
-    setTimeout(() => {
-      params.resumeSubagentRun(runId);
-    }, deferredDecision.resumeDelayMs).unref?.();
+    scheduleResumeSubagentRun(runId, entry, deferredDecision.resumeDelayMs);
   };
 
   const startSubagentAnnounceCleanupFlow = (runId: string, entry: SubagentRunRecord): boolean => {
@@ -572,8 +613,12 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.endedAt = endedAt;
       mutated = true;
     }
-    if (!runOutcomesEqual(entry.outcome, completeParams.outcome)) {
-      entry.outcome = completeParams.outcome;
+    const outcome = withSubagentOutcomeTiming(completeParams.outcome, {
+      startedAt: entry.startedAt,
+      endedAt,
+    });
+    if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
+      entry.outcome = outcome;
       mutated = true;
     }
     if (entry.endedReason !== completeParams.reason) {
@@ -581,7 +626,7 @@ export function createSubagentRegistryLifecycleController(params: {
       mutated = true;
     }
 
-    if (await freezeRunResultAtCompletion(entry)) {
+    if (await freezeRunResultAtCompletion(entry, outcome)) {
       mutated = true;
     }
 
@@ -590,7 +635,7 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     safeFinalizeSubagentTaskRun({
       entry,
-      outcome: completeParams.outcome,
+      outcome,
     });
 
     try {
@@ -636,7 +681,10 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
-    await (params.cleanupBrowserSessionsForLifecycleEnd ?? cleanupBrowserSessionsForLifecycleEnd)({
+    const cleanupBrowserSessions =
+      params.cleanupBrowserSessionsForLifecycleEnd ??
+      (await loadCleanupBrowserSessionsForLifecycleEnd());
+    await cleanupBrowserSessions({
       sessionKeys: [entry.childSessionKey],
       onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
     });
@@ -645,6 +693,7 @@ export function createSubagentRegistryLifecycleController(params: {
   };
 
   return {
+    clearScheduledResumeTimers,
     completeCleanupBookkeeping,
     completeSubagentRun,
     finalizeResumedAnnounceGiveUp,

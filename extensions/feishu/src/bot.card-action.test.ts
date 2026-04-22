@@ -9,6 +9,10 @@ import {
 } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
+  expectFirstSentCardUsesFillWidthOnly,
+  expectSentCardHasP2pAction,
+} from "./card-test-helpers.js";
+import {
   FEISHU_APPROVAL_CANCEL_ACTION,
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
@@ -25,8 +29,13 @@ vi.mock("./bot.js", () => ({
   handleFeishuMessage: vi.fn(),
 }));
 
+const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+}));
 
 vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
@@ -89,6 +98,13 @@ describe("Feishu Card Action Handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    createFeishuClientMock.mockReset().mockReturnValue({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "group" } }),
+        },
+      },
+    });
     vi.mocked(handleFeishuMessage)
       .mockReset()
       .mockResolvedValue(undefined as never);
@@ -227,21 +243,7 @@ describe("Feishu Card Action Handler", () => {
         }),
       }),
     );
-    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
-      | {
-          card?: {
-            config?: {
-              width_mode?: string;
-              wide_screen_mode?: boolean;
-              enable_forward?: boolean;
-            };
-          };
-        }
-      | undefined;
-    const sentCard = firstSendArg?.card;
-    expect(sentCard).toBeDefined();
-    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
-    expect(sentCard?.config?.enable_forward).toBeUndefined();
+    expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
@@ -354,6 +356,121 @@ describe("Feishu Card Action Handler", () => {
     );
   });
 
+  it("resolves DM chat type from the Feishu chat API when card context omits it", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "p2p" } }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9b",
+      chatId: "oc_dm_chat_123",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_id: "oc_dm_chat_123",
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+    expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses resolved DM chat type when building approval cards without stored context", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_mode: "p2p" } }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9c",
+      chatId: "oc_dm_chat_234",
+      actionValue: createFeishuCardInteractionEnvelope({
+        k: "meta",
+        a: FEISHU_APPROVAL_REQUEST_ACTION,
+        m: {
+          command: "/new",
+          prompt: "Start a fresh session?",
+        },
+        c: {
+          u: "u123",
+          h: "oc_dm_chat_234",
+          e: Date.now() + 60_000,
+        },
+      }),
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
+
+    expectSentCardHasP2pAction(sendCardFeishuMock);
+    expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to p2p when Feishu chat API returns an error", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 99, msg: "not found" }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9d",
+      chatId: "oc_unknown_chat_456",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("falls back to p2p when Feishu chat API throws", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockRejectedValue(new Error("network failure")),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9e",
+      chatId: "oc_broken_chat_789",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("drops duplicate structured callback tokens", async () => {
     const event = createStructuredQuickActionEvent({
       token: "tok10",
@@ -365,6 +482,29 @@ describe("Feishu Card Action Handler", () => {
     await handleFeishuCardAction({ cfg, event, runtime });
 
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects empty callback tokens before dispatch", async () => {
+    const log = vi.fn();
+    const event = createStructuredQuickActionEvent({
+      token: "   ",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+
+    await handleFeishuCardAction({
+      cfg,
+      event,
+      runtime: {
+        ...runtime,
+        log,
+      },
+    });
+
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "feishu[mock-account]: rejected card action from u123: missing token",
+    );
   });
 
   it("keeps a claimed token completed after a non-retryable dispatch failure", async () => {

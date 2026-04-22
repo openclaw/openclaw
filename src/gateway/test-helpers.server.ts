@@ -712,11 +712,7 @@ export async function createGatewaySuiteHarness(opts?: {
   };
 }
 
-export async function startServerWithClient(
-  token?: string,
-  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
-) {
-  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+export async function startServer(token?: string, opts?: GatewayServerOptions) {
   let port = await getFreePort();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -735,19 +731,29 @@ export async function startServerWithClient(
   }
 
   const resolvedGatewayOpts: GatewayServerOptions =
-    fallbackToken && !gatewayOpts.auth
+    fallbackToken && !opts?.auth
       ? {
-          ...gatewayOpts,
+          ...opts,
           auth: { mode: "token", token: fallbackToken },
         }
-      : gatewayOpts;
+      : (opts ?? {});
 
   const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
   port = started.port;
   const server = started.server;
 
+  return { server, port, prevToken: prev, envSnapshot };
+}
+
+export async function startServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+  const started = await startServer(token, gatewayOpts);
+  const { server, port, prevToken, envSnapshot } = started;
   const ws = await openTrackedWebSocket({ port, headers: wsHeaders });
-  return { server, ws, port, prevToken: prev, envSnapshot };
+  return { server, ws, port, prevToken, envSnapshot };
 }
 
 export async function startConnectedServerWithClient(
@@ -944,6 +950,14 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
+  const isResponseForId = (o: unknown): boolean => {
+    if (!o || typeof o !== "object" || Array.isArray(o)) {
+      return false;
+    }
+    const rec = o as Record<string, unknown>;
+    return rec.type === "res" && rec.id === id;
+  };
+  const responsePromise = onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
   ws.send(
     JSON.stringify({
       type: "req",
@@ -971,14 +985,7 @@ export async function connectReq(
       },
     }),
   );
-  const isResponseForId = (o: unknown): boolean => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) {
-      return false;
-    }
-    const rec = o as Record<string, unknown>;
-    return rec.type === "res" && rec.id === id;
-  };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
+  return await responsePromise;
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
@@ -1026,6 +1033,7 @@ export async function connectWebchatClient(params: {
   return ws;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
 export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
@@ -1042,8 +1050,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   clearSessionStoreCacheForTest();
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
-  ws.send(JSON.stringify({ type: "req", id, method, params }));
-  return await onceMessage<{
+  const responsePromise = onceMessage<{
     type: "res";
     id: string;
     ok: boolean;
@@ -1060,6 +1067,8 @@ export async function rpcReq<T extends Record<string, unknown>>(
     },
     timeoutMs,
   );
+  ws.send(JSON.stringify({ type: "req", id, method, params }));
+  return await responsePromise;
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {

@@ -31,14 +31,16 @@ provider in two different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/gpt-4o
+        openclaw models set github-copilot/claude-opus-4.7
         ```
 
         Or in config:
 
         ```json5
         {
-          agents: { defaults: { model: { primary: "github-copilot/gpt-4o" } } },
+          agents: {
+            defaults: { model: { primary: "github-copilot/claude-opus-4.7" } },
+          },
         }
         ```
       </Step>
@@ -118,6 +120,46 @@ openclaw models auth login --provider github-copilot --method device --set-defau
 Requires an interactive TTY. Run the login command directly in a terminal, not
 inside a headless script or CI job.
 </Warning>
+
+## Memory search embeddings
+
+GitHub Copilot can also serve as an embedding provider for
+[memory search](/concepts/memory-search). If you have a Copilot subscription and
+have logged in, OpenClaw can use it for embeddings without a separate API key.
+
+### Auto-detection
+
+When `memorySearch.provider` is `"auto"` (the default), GitHub Copilot is tried
+at priority 15 -- after local embeddings but before OpenAI and other paid
+providers. If a GitHub token is available, OpenClaw discovers available
+embedding models from the Copilot API and picks the best one automatically.
+
+### Explicit config
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "github-copilot",
+        // Optional: override the auto-discovered model
+        model: "text-embedding-3-small",
+      },
+    },
+  },
+}
+```
+
+### How it works
+
+1. OpenClaw resolves your GitHub token (from env vars or auth profile).
+2. Exchanges it for a short-lived Copilot API token.
+3. Queries the Copilot `/models` endpoint to discover available embedding models.
+4. Picks the best model (prefers `text-embedding-3-small`).
+5. Sends embedding requests to the Copilot `/embeddings` endpoint.
+
+Model availability depends on your GitHub plan. If no embedding models are
+available, OpenClaw skips Copilot and tries the next provider.
 
 ## Related
 

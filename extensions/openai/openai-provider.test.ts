@@ -121,16 +121,20 @@ describe("buildOpenAIProvider", () => {
     const provider = buildOpenAIProvider();
 
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-      } as never),
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.4-mini",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
     ).toBe(true);
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openai",
-        modelId: "gpt-5.4-nano",
-      } as never),
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.4-nano",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
     ).toBe(true);
 
     const entries = provider.augmentModelCatalog?.({
@@ -209,7 +213,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai-codex",
       id: "gpt-5.4",
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
@@ -351,6 +355,63 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });
+  });
+
+  it("preserves explicit OpenAI responses transport and warmup overrides", () => {
+    const provider = buildOpenAIProvider();
+
+    const explicit = {
+      transport: "websocket",
+      openaiWsWarmup: false,
+      fastMode: true,
+    };
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        extraParams: explicit,
+      } as never),
+    ).toBe(explicit);
+  });
+
+  it("defaults Codex responses transport without forcing warmup flags", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        extraParams: { effort: "high" },
+      } as never),
+    ).toEqual({
+      effort: "high",
+      transport: "auto",
+    });
+
+    const explicit = {
+      transport: "sse",
+      openaiWsWarmup: false,
+    };
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        extraParams: explicit,
+      } as never),
+    ).toBe(explicit);
+  });
+
+  it("shares OpenAI responses wrapper composition across provider variants", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
+
+    expect(provider.wrapStreamFn).toBe(codexProvider.wrapStreamFn);
+    expect(provider.buildReplayPolicy).toBe(codexProvider.buildReplayPolicy);
+    expect(provider.resolveTransportTurnState).toBe(codexProvider.resolveTransportTurnState);
+    expect(provider.resolveWebSocketSessionPolicy).toBe(
+      codexProvider.resolveWebSocketSessionPolicy,
+    );
   });
 
   it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {

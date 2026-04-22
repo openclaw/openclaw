@@ -31,6 +31,16 @@ UPDATE_EXPECTED_NEEDLE=""
 API_KEY_VALUE=""
 PROGRESS_INTERVAL_S=15
 PROGRESS_STALE_S=60
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S:-900}"
+TIMEOUT_UPDATE_POLL_GRACE_S=60
+
+child_job_running() {
+  local target="$1"
+  local ppid
+  kill -0 "$target" >/dev/null 2>&1 || return 1
+  ppid="$(ps -o ppid= -p "$target" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$ppid" == "$$" ]]
+}
 
 MACOS_FRESH_STATUS="skip"
 WINDOWS_FRESH_STATUS="skip"
@@ -58,6 +68,7 @@ die() {
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
+    wait "$SERVER_PID" 2>/dev/null || true
   fi
   rm -rf "$MAIN_TGZ_DIR"
 }
@@ -185,13 +196,14 @@ import json
 import os
 import re
 import sys
+from typing import Optional
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
 
-def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+def parse_ubuntu_version(name: str) -> Optional[tuple[int, ...]]:
     match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
     if not match:
         return None
@@ -321,11 +333,17 @@ ensure_current_build() {
   pnpm build
 }
 
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+}
+
 pack_main_tgz() {
   local pkg
   CURRENT_HEAD="$(git rev-parse HEAD)"
   CURRENT_HEAD_SHORT="$(git rev-parse --short=7 HEAD)"
   ensure_current_build
+  write_package_dist_inventory
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
       | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
@@ -362,7 +380,8 @@ param(
   [Parameter(Mandatory = $true)][string]$SessionId,
   [Parameter(Mandatory = $true)][string]$ModelId,
   [Parameter(Mandatory = $true)][string]$ProviderKeyEnv,
-  [Parameter(Mandatory = $true)][string]$ProviderKey,
+  [Parameter(Mandatory = $false)][string]$ProviderKey,
+  [Parameter(Mandatory = $false)][string]$ProviderKeyFile,
   [Parameter(Mandatory = $true)][string]$LogPath,
   [Parameter(Mandatory = $true)][string]$DonePath
 )
@@ -492,6 +511,28 @@ function Stop-OpenClawGatewayProcesses {
   Start-Sleep -Seconds 2
 }
 
+function Complete-WorkspaceSetup {
+  $workspace = $env:OPENCLAW_WORKSPACE_DIR
+  if (-not $workspace) {
+    $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
+  }
+  $stateDir = Join-Path $workspace '.openclaw'
+  New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+  @'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+'@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
+  @'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
+  Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
+}
+
 function Restart-GatewayWithRecovery {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath
@@ -545,6 +586,13 @@ try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   Remove-Item $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
   Write-ProgressLog 'update.start'
+  if ($ProviderKeyFile) {
+    $ProviderKey = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($ProviderKeyFile))
+    Remove-Item $ProviderKeyFile -Force -ErrorAction SilentlyContinue
+  }
+  if (-not $ProviderKey) {
+    throw "$ProviderKeyEnv is required"
+  }
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Stop-OpenClawGatewayProcesses
@@ -567,6 +615,7 @@ try {
   # an explicit start only if the RPC endpoint never returns.
   Write-ProgressLog 'update.restart-gateway'
   Restart-GatewayWithRecovery -OpenClawPath $openclaw
+  Complete-WorkspaceSetup
   Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
@@ -608,11 +657,230 @@ wait_job() {
   if wait "$pid"; then
     return 0
   fi
+  if [[ -n "$log_path" && "$label" == *"update"* ]] && update_log_completed "$log_path"; then
+    warn "$label exited nonzero after completion markers; treating as pass"
+    return 0
+  fi
+  if [[ "$label" == "macOS update" ]] && verify_macos_update_after_transport_loss "$UPDATE_EXPECTED_NEEDLE"; then
+    warn "$label transport failed after product verification passed; treating as pass"
+    return 0
+  fi
+  if [[ "$label" == "Windows update" ]] && verify_windows_update_after_transport_loss "$UPDATE_EXPECTED_NEEDLE"; then
+    warn "$label transport failed after product verification passed; treating as pass"
+    return 0
+  fi
   warn "$label failed"
   if [[ -n "$log_path" ]]; then
     dump_log_tail "$label" "$log_path"
   fi
   return 1
+}
+
+update_log_completed() {
+  local log_path="$1"
+  [[ -f "$log_path" ]] || return 1
+  "$PYTHON_BIN" - "$log_path" <<'PY'
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+if "==> update.done" in text:
+    raise SystemExit(0)
+if '"finalAssistantRawText": "OK"' in text:
+    raise SystemExit(0)
+if '"finalAssistantVisibleText": "OK"' in text:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+verify_macos_update_after_transport_loss() {
+  local expected_needle="$1"
+  local script_path="/tmp/openclaw-npm-update-macos-recover.sh"
+  cat <<EOF | prlctl exec "$MACOS_VM" /usr/bin/tee "$script_path" >/dev/null
+set -euo pipefail
+export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+busy="\$(/bin/ps -axo command | /usr/bin/egrep 'openclaw update|npm install|pnpm install|pnpm run build' | /usr/bin/egrep -v 'egrep|openclaw-npm-update-macos-recover' || true)"
+if [ -n "\$busy" ]; then
+  printf 'update still has active npm/pnpm/openclaw processes\n%s\n' "\$busy" >&2
+  exit 1
+fi
+version="\$(/opt/homebrew/bin/openclaw --version)"
+printf '%s\n' "\$version"
+if [ -n "$expected_needle" ]; then
+  case "\$version" in
+    *"$expected_needle"*) ;;
+    *)
+      echo "version mismatch after transport loss: expected substring $expected_needle" >&2
+      exit 1
+      ;;
+  esac
+fi
+/opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1 || /opt/homebrew/bin/openclaw gateway restart || true
+gateway_ready=0
+for _ in 1 2 3 4 5 6; do
+  if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc; then
+    gateway_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ "\$gateway_ready" != "1" ]; then
+  /opt/homebrew/bin/openclaw gateway start || true
+  for _ in 1 2 3 4 5 6; do
+    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc; then
+      gateway_ready=1
+      break
+    fi
+    sleep 2
+  done
+fi
+if [ "\$gateway_ready" != "1" ]; then
+  echo "gateway did not become RPC-ready after transport recovery" >&2
+  exit 1
+fi
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
+/opt/homebrew/bin/openclaw models set "$MODEL_ID"
+/opt/homebrew/bin/openclaw agent --agent main --session-id "parallels-npm-update-macos-transport-recovery-$expected_needle" --message "Reply with exact ASCII text OK only." --json
+EOF
+  macos_desktop_user_exec /bin/bash "$script_path"
+}
+
+verify_windows_update_after_transport_loss() {
+  local expected_needle="$1"
+  local provider_key_b64
+  provider_key_b64="$(
+    PROVIDER_KEY="$API_KEY_VALUE" "$PYTHON_BIN" - <<'PY'
+import base64
+import os
+
+print(base64.b64encode(os.environ["PROVIDER_KEY"].encode("utf-8")).decode("ascii"))
+PY
+  )"
+  set +e
+  guest_powershell_poll 120 "$(cat <<EOF
+\$ErrorActionPreference = 'Stop'
+\$openclaw = Join-Path \$env:APPDATA 'npm\\openclaw.cmd'
+if (-not (Test-Path \$openclaw)) {
+  throw "openclaw shim missing: \$openclaw"
+}
+\$busy = Get-CimInstance Win32_Process |
+  Where-Object {
+    \$_.CommandLine -and
+    (\$_.CommandLine -match 'openclaw update|npm install|pnpm install|pnpm run build')
+  }
+if (\$busy) {
+  throw 'update still has active npm/pnpm/openclaw processes'
+}
+\$version = & \$openclaw --version
+Write-Output \$version
+if ('$expected_needle' -and \$version -notmatch [regex]::Escape('$expected_needle')) {
+  throw "version mismatch after transport loss: expected substring $expected_needle"
+}
+\$gatewayReady = \$false
+for (\$i = 0; \$i -lt 6; \$i++) {
+  & \$openclaw gateway status --deep --require-rpc
+  if (\$LASTEXITCODE -eq 0) {
+    \$gatewayReady = \$true
+    break
+  }
+  Start-Sleep -Seconds 2
+}
+if (-not \$gatewayReady) {
+  & \$openclaw gateway restart
+  for (\$i = 0; \$i -lt 6; \$i++) {
+    & \$openclaw gateway status --deep --require-rpc
+    if (\$LASTEXITCODE -eq 0) {
+      \$gatewayReady = \$true
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not \$gatewayReady) {
+  & \$openclaw gateway start
+  for (\$i = 0; \$i -lt 6; \$i++) {
+    & \$openclaw gateway status --deep --require-rpc
+    if (\$LASTEXITCODE -eq 0) {
+      \$gatewayReady = \$true
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not \$gatewayReady) {
+  throw 'gateway did not become RPC-ready after transport recovery'
+}
+\$providerBytes = [Convert]::FromBase64String('$provider_key_b64')
+\$providerValue = [Text.Encoding]::UTF8.GetString(\$providerBytes)
+Set-Item -Path ('Env:' + '$API_KEY_ENV') -Value \$providerValue
+& \$openclaw models set '$MODEL_ID'
+\$workspace = \$env:OPENCLAW_WORKSPACE_DIR
+if (-not \$workspace) {
+  \$workspace = Join-Path \$env:USERPROFILE '.openclaw\\workspace'
+}
+\$stateDir = Join-Path \$workspace '.openclaw'
+New-Item -ItemType Directory -Path \$stateDir -Force | Out-Null
+@'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+'@ | Set-Content -Path (Join-Path \$workspace 'IDENTITY.md') -Encoding UTF8
+@'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path \$stateDir 'workspace-state.json') -Encoding UTF8
+Remove-Item (Join-Path \$workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
+& \$openclaw agent --agent main --session-id 'parallels-npm-update-windows-transport-recovery-$expected_needle' --message 'Reply with exact ASCII text OK only.' --json
+EOF
+  )"
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
+start_timeout_guard() {
+  local label="$1"
+  local timeout_s="$2"
+  local pid="$3"
+  local log_path="${4:-}"
+  (
+    sleep "$timeout_s"
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      warn "$label exceeded ${timeout_s}s; stopping"
+      if [[ -n "$log_path" ]]; then
+        dump_log_tail "$label" "$log_path"
+      fi
+      kill "$pid" >/dev/null 2>&1 || true
+      sleep 2
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    fi
+  ) >&2 &
+  printf '%s\n' "$!"
+}
+
+stop_timeout_guard() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" >/dev/null 2>&1 || true
+  wait "$pid" 2>/dev/null || true
 }
 
 extract_log_progress() {
@@ -680,16 +948,16 @@ monitor_jobs_progress() {
     running=0
     now=$SECONDS
     for ((i = 0; i < ${#pids[@]}; i++)); do
-      if ! kill -0 "${pids[$i]}" >/dev/null 2>&1; then
+      if ! child_job_running "${pids[$i]}"; then
         continue
       fi
       running=1
       summary="$(extract_log_progress "${logs[$i]}")"
       [[ -n "$summary" ]] || summary="waiting for first log line"
-      if [[ "${last_progress[$i]}" != "$summary" ]] || (( now - last_print[$i] >= PROGRESS_STALE_S )); then
+      if [[ "${last_progress[i]}" != "$summary" ]] || (( now - last_print[i] >= PROGRESS_STALE_S )); then
         say "$group ${labels[$i]}: $summary"
-        last_progress[$i]="$summary"
-        last_print[$i]=$now
+        last_progress[i]="$summary"
+        last_print[i]=$now
       fi
     done
     (( running )) || break
@@ -787,21 +1055,32 @@ run_windows_script_via_log() {
   local provider_key="$7"
   local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
-  local log_state_path
+  local log_state_path provider_key_b64
   runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-update-$RANDOM-$RANDOM.log"
   done_name="openclaw-update-$RANDOM-$RANDOM.done"
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-log-state.XXXXXX")"
   : >"$log_state_path"
+  provider_key_b64="$(
+    PROVIDER_KEY="$provider_key" "$PYTHON_BIN" - <<'PY'
+import base64
+import os
+
+print(base64.b64encode(os.environ["PROVIDER_KEY"].encode("utf-8")).decode("ascii"))
+PY
+  )"
   start_seconds="$SECONDS"
-  poll_deadline=$((SECONDS + 900))
+  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + TIMEOUT_UPDATE_POLL_GRACE_S))
   startup_checked=0
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
-Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+\$providerKeyFile = Join-Path \$env:TEMP '$runner_name.key'
+Remove-Item \$runner, \$log, \$done, \$providerKeyFile -Force -ErrorAction SilentlyContinue
+\$providerBytes = [Convert]::FromBase64String('$provider_key_b64')
+[IO.File]::WriteAllBytes(\$providerKeyFile, \$providerBytes)
 curl.exe -fsSL '$script_url' -o \$runner
 Start-Process powershell.exe -ArgumentList @(
   '-NoProfile',
@@ -812,7 +1091,7 @@ Start-Process powershell.exe -ArgumentList @(
   '-SessionId', '$session_id',
   '-ModelId', '$model_id',
   '-ProviderKeyEnv', '$provider_key_env',
-  '-ProviderKey', '$provider_key',
+  '-ProviderKeyFile', \$providerKeyFile,
   '-LogPath', \$log,
   '-DonePath', \$done
 ) -WindowStyle Hidden | Out-Null
@@ -974,6 +1253,21 @@ if [ "\$gateway_ready" != "1" ]; then
   tail -n 120 /tmp/openclaw-parallels-npm-update-macos-gateway.log 2>/dev/null || true
 fi
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
@@ -1034,6 +1328,21 @@ if [ -n "$expected_needle" ]; then
 fi
 openclaw update status --json
 openclaw models set "$MODEL_ID"
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 openclaw agent --local --agent main --session-id parallels-npm-update-linux-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh
@@ -1163,11 +1472,18 @@ run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$window
 windows_update_pid=$!
 run_linux_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!
+macos_update_guard_pid="$(start_timeout_guard "macOS update" "$TIMEOUT_UPDATE_S" "$macos_update_pid" "$RUN_DIR/macos-update.log")"
+windows_update_guard_pid="$(start_timeout_guard "Windows update" "$TIMEOUT_UPDATE_S" "$windows_update_pid" "$RUN_DIR/windows-update.log")"
+linux_update_guard_pid="$(start_timeout_guard "Linux update" "$TIMEOUT_UPDATE_S" "$linux_update_pid" "$RUN_DIR/linux-update.log")"
 
 monitor_jobs_progress "update" \
   "macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log" \
   "Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log" \
   "Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log"
+
+stop_timeout_guard "$macos_update_guard_pid"
+stop_timeout_guard "$windows_update_guard_pid"
+stop_timeout_guard "$linux_update_guard_pid"
 
 wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
 wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"

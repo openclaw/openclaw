@@ -14,7 +14,12 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasMessagePresentationBlocks,
+  hasReplyPayloadContent,
+  normalizeMessagePresentation,
+} from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -42,15 +47,15 @@ import {
 import type { OutboundSendDeps } from "./deliver.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
+  collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
-  parseButtonsParam,
-  parseCardParam,
-  parseComponentsParam,
   parseInteractiveParam,
+  parseJsonMessageParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
+  resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import {
   prepareOutboundMirrorRoute,
@@ -203,38 +208,31 @@ async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Prom
   const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
   return randomIdempotencyKey();
 }
-
-function collectActionMediaSourceHints(params: Record<string, unknown>): string[] {
-  const sources: string[] = [];
-  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const source = typeof params[key] === "string" ? params[key] : undefined;
-    const normalized = normalizeOptionalString(source);
-    if (normalized && source) {
-      sources.push(source);
-    }
-  }
-  return sources;
-}
-
 function applyCrossContextMessageDecoration({
   params,
   message,
   decoration,
-  preferComponents,
+  preferPresentation,
 }: {
   params: Record<string, unknown>;
   message: string;
   decoration: CrossContextDecoration;
-  preferComponents: boolean;
+  preferPresentation: boolean;
 }): string {
   const applied = applyCrossContextDecoration({
     message,
     decoration,
-    preferComponents,
+    preferPresentation,
   });
   params.message = applied.message;
-  if (applied.componentsBuilder) {
-    params.components = applied.componentsBuilder;
+  if (applied.presentation) {
+    const existing = normalizeMessagePresentation(params.presentation);
+    params.presentation = existing
+      ? {
+          ...existing,
+          blocks: [...applied.presentation.blocks, ...existing.blocks],
+        }
+      : applied.presentation;
   }
   return applied.message;
 }
@@ -248,7 +246,7 @@ async function maybeApplyCrossContextMarker(params: {
   accountId?: string | null;
   args: Record<string, unknown>;
   message: string;
-  preferComponents: boolean;
+  preferPresentation: boolean;
 }): Promise<string> {
   if (!shouldApplyCrossContextMarker(params.action) || !params.toolContext) {
     return params.message;
@@ -267,7 +265,7 @@ async function maybeApplyCrossContextMarker(params: {
     params: params.args,
     message: params.message,
     decoration,
-    preferComponents: params.preferComponents,
+    preferPresentation: params.preferPresentation,
   });
 }
 
@@ -476,6 +474,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
+  if (params.pin === true && params.delivery == null) {
+    params.delivery = { pin: { enabled: true } };
+  }
   // Support media, path, and filePath parameters for attachments
   const mediaHint =
     readStringParam(params, "media", { trim: false }) ??
@@ -483,18 +484,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false }) ??
     readStringParam(params, "fileUrl", { trim: false });
-  const hasButtons = Array.isArray(params.buttons) && params.buttons.length > 0;
-  const hasCard = params.card != null && typeof params.card === "object";
-  const hasComponents = params.components != null && typeof params.components === "object";
+  const hasPresentation = hasMessagePresentationBlocks(params.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(params.interactive);
-  const hasBlocks =
-    (Array.isArray(params.blocks) && params.blocks.length > 0) ||
-    (typeof params.blocks === "string" && params.blocks.trim().length > 0);
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
-      required:
-        !mediaHint && !hasButtons && !hasCard && !hasComponents && !hasInteractive && !hasBlocks,
+      required: !mediaHint && !hasPresentation && !hasInteractive,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -550,22 +545,18 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     args: params,
     message,
-    preferComponents: true,
+    preferPresentation: true,
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
   if (
-    !hasReplyPayloadContent(
-      {
-        text: message,
-        mediaUrl,
-        mediaUrls: mergedMediaUrls,
-        interactive: params.interactive,
-      },
-      {
-        extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
-      },
-    )
+    !hasReplyPayloadContent({
+      text: message,
+      mediaUrl,
+      mediaUrls: mergedMediaUrls,
+      presentation: params.presentation,
+      interactive: params.interactive,
+    })
   ) {
     throw new Error("send requires text or media");
   }
@@ -609,6 +600,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
+      senderIsOwner: input.senderIsOwner,
+      sessionId: input.sessionId,
       gateway,
       toolContext: input.toolContext,
       deps: input.deps,
@@ -650,7 +643,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
+  const { cfg, params, channel, accountId, dryRun, gateway, input, agentId, abortSignal } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
   const to = readStringParam(params, "to", { required: true });
@@ -674,7 +667,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     args: params,
     message: base,
-    preferComponents: false,
+    preferPresentation: false,
   });
 
   const poll = await executePollAction({
@@ -683,6 +676,11 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       channel,
       params,
       accountId: accountId ?? undefined,
+      agentId,
+      requesterSenderId: input.requesterSenderId ?? undefined,
+      senderIsOwner: input.senderIsOwner,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
       gateway,
       toolContext: input.toolContext,
       dryRun,
@@ -829,9 +827,8 @@ export async function runMessageAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
-  parseButtonsParam(params);
-  parseCardParam(params);
-  parseComponentsParam(params);
+  parseJsonMessageParam(params, "presentation");
+  parseJsonMessageParam(params, "delivery");
   parseInteractiveParam(params);
 
   const action = input.action;
@@ -861,16 +858,29 @@ export async function runMessageAction(
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
   });
+  const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
+    cfg,
+    action,
+    args: params,
+    channel,
+    accountId,
+    sessionKey: input.sessionKey,
+    sessionId: input.sessionId,
+    agentId: resolvedAgentId,
+    requesterSenderId: input.requesterSenderId,
+    senderIsOwner: input.senderIsOwner,
+  });
 
   await normalizeSandboxMediaParams({
     args: params,
     mediaPolicy: normalizationPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
   });
 
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
     agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params),
+    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,

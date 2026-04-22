@@ -30,11 +30,15 @@ vi.mock("../infra/net/proxy-env.js", async () => {
 });
 
 import {
+  createProviderOperationDeadline,
   fetchWithTimeoutGuarded,
+  pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
   readErrorResponse,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  waitProviderOperationPollInterval,
 } from "./shared.js";
 
 beforeEach(() => {
@@ -44,6 +48,129 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
+});
+
+describe("provider operation deadlines", () => {
+  it("keeps default per-call timeouts when no operation timeout is configured", () => {
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+    });
+
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(60_000);
+  });
+
+  it("clamps per-call timeouts to the remaining operation deadline", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 5_000,
+    });
+
+    vi.setSystemTime(4_250);
+
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
+  });
+
+  it("throws once the operation deadline has expired", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 2_000,
+    });
+
+    vi.setSystemTime(3_001);
+
+    expect(() => resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toThrow(
+      "video generation timed out after 2000ms",
+    );
+  });
+
+  it("clamps poll waits to the remaining operation deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 1_000,
+    });
+    const wait = waitProviderOperationPollInterval({
+      deadline,
+      pollIntervalMs: 10_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    let settled = false;
+    void wait.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("polls provider status JSON until a payload is complete", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "in_progress" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed" })));
+
+    const result = pollProviderOperationJson<{ status?: string }>({
+      url: "https://api.example.com/v1/videos/task-1",
+      headers: new Headers({ authorization: "Bearer test" }),
+      deadline: createProviderOperationDeadline({
+        label: "video generation task task-1",
+        timeoutMs: 10_000,
+      }),
+      defaultTimeoutMs: 5_000,
+      fetchFn,
+      maxAttempts: 3,
+      pollIntervalMs: 1_000,
+      requestFailedMessage: "status failed",
+      timeoutMessage: "task timed out",
+      isComplete: (payload) => payload.status === "completed",
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(result).resolves.toEqual({ status: "completed" });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws provider failure messages while polling status JSON", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "failed", error: { message: "model rejected" } })),
+      );
+
+    await expect(
+      pollProviderOperationJson<{ status?: string; error?: { message?: string } }>({
+        url: "https://api.example.com/v1/videos/task-1",
+        headers: new Headers(),
+        deadline: createProviderOperationDeadline({
+          label: "video generation task task-1",
+        }),
+        defaultTimeoutMs: 5_000,
+        fetchFn,
+        maxAttempts: 3,
+        pollIntervalMs: 1_000,
+        requestFailedMessage: "status failed",
+        timeoutMessage: "task timed out",
+        isComplete: (payload) => payload.status === "completed",
+        getFailureMessage: (payload) =>
+          payload.status === "failed" ? payload.error?.message : undefined,
+      }),
+    ).rejects.toThrow("model rejected");
+  });
 });
 
 describe("resolveProviderHttpRequestConfig", () => {

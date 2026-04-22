@@ -1,6 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
+import {
+  MIN_PROMPT_BUDGET_RATIO,
+  MIN_PROMPT_BUDGET_TOKENS,
+} from "../../pi-compaction-constants.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -9,8 +13,6 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
-const MIN_PROMPT_BUDGET_TOKENS = 8_000;
-const MIN_PROMPT_BUDGET_RATIO = 0.5;
 
 export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -42,6 +44,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   prompt: string;
   contextTokenBudget: number;
   reserveTokens: number;
+  toolResultMaxChars?: number;
 }): {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
@@ -67,6 +70,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const toolResultPotential = estimateToolResultReductionPotential({
     messages: params.messages,
     contextWindowTokens: params.contextTokenBudget,
+    maxCharsOverride: params.toolResultMaxChars,
   });
   const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
   const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;

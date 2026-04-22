@@ -5,6 +5,7 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
+import { getCoreSecretTargetRegistry } from "./target-registry-data.js";
 import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
@@ -41,5 +42,34 @@ describe("secret target registry", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 
     expect(target).toBeNull();
+  });
+
+  it("derives bundled web provider api key target paths from plugin manifests", () => {
+    const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
+    expect(coreTargetIds.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(false);
+    expect(coreTargetIds.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
+
+    const target = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "exa",
+      "config",
+      "webSearch",
+      "apiKey",
+    ]);
+
+    expect(target).not.toBeNull();
+    expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
+
+    const fetchTarget = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "firecrawl",
+      "config",
+      "webFetch",
+      "apiKey",
+    ]);
+    expect(fetchTarget).not.toBeNull();
+    expect(fetchTarget?.entry?.id).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
   });
 });

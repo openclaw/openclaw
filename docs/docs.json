@@ -457,6 +457,14 @@
       "destination": "/channels/telegram"
     },
     {
+      "source": "/channels/openclaw-weixin",
+      "destination": "/channels/wechat"
+    },
+    {
+      "source": "/channels/weixin",
+      "destination": "/channels/wechat"
+    },
+    {
       "source": "/group-messages",
       "destination": "/channels/group-messages"
     },
@@ -1028,6 +1036,7 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "channels/wechat",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1062,7 +1071,8 @@
                   "concepts/agent-workspace",
                   "concepts/soul",
                   "concepts/oauth",
-                  "start/bootstrapping"
+                  "start/bootstrapping",
+                  "concepts/experimental-features"
                 ]
               },
               {
@@ -1216,6 +1226,7 @@
                   "tools/pdf",
                   "tools/reactions",
                   "tools/thinking",
+                  "tools/tokenjuice",
                   "tools/video-generation"
                 ]
               },
@@ -1282,6 +1293,7 @@
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
+                  "providers/tencent",
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",

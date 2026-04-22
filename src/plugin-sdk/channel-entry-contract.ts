@@ -2,17 +2,23 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
+import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
-  buildPluginLoaderJitiOptions,
-  resolveLoaderPackageRoot,
-  resolvePluginLoaderJitiConfig,
-} from "../plugins/sdk-alias.js";
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../plugins/jiti-loader-cache.js";
+import {
+  createProfiler,
+  formatPluginLoadProfileLine,
+  shouldProfilePluginLoader,
+} from "../plugins/plugin-load-profile.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
@@ -37,6 +43,8 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   secrets?: BundledEntryModuleRef;
   configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   runtime?: BundledEntryModuleRef;
+  accountInspect?: BundledEntryModuleRef;
+  features?: BundledChannelEntryFeatures;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
@@ -45,7 +53,39 @@ type DefineBundledChannelSetupEntryOptions = {
   importMetaUrl: string;
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
+  runtime?: BundledEntryModuleRef;
+  legacyStateMigrations?: BundledEntryModuleRef;
+  legacySessionSurface?: BundledEntryModuleRef;
+  features?: BundledChannelSetupEntryFeatures;
 };
+
+export type BundledChannelSetupEntryFeatures = {
+  legacyStateMigrations?: boolean;
+  legacySessionSurfaces?: boolean;
+};
+
+export type BundledChannelEntryFeatures = {
+  accountInspect?: boolean;
+};
+
+export type BundledChannelLegacySessionSurface = {
+  isLegacyGroupSessionKey?: (key: string) => boolean;
+  canonicalizeLegacySessionKey?: (params: {
+    key: string;
+    agentId: string;
+  }) => string | null | undefined;
+};
+
+export type BundledChannelLegacyStateMigrationDetector = (params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+}) =>
+  | ChannelLegacyStateMigrationPlan[]
+  | Promise<ChannelLegacyStateMigrationPlan[] | null | undefined>
+  | null
+  | undefined;
 
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-entry";
@@ -53,9 +93,11 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   name: string;
   description: string;
   configSchema: ChannelEntryConfigSchema<TPlugin>;
+  features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: () => TPlugin;
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -63,10 +105,14 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-setup-entry";
   loadSetupPlugin: () => TPlugin;
   loadSetupSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadLegacyStateMigrationDetector?: () => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: () => BundledChannelLegacySessionSurface;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  features?: BundledChannelSetupEntryFeatures;
 };
 
 const nodeRequire = createRequire(import.meta.url);
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
@@ -261,22 +307,23 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 }
 
 function getJiti(modulePath: string) {
-  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+  return getCachedPluginJitiLoader({
+    cache: jitiLoaders,
     modulePath,
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
+    importerUrl: import.meta.url,
     preferBuiltDist: true,
+    jitiFilename: import.meta.url,
   });
-  const cached = jitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(cacheKey, loader);
-  return loader;
+}
+
+function canTryNodeRequireBuiltModule(modulePath: string): boolean {
+  const isBuiltBundledArtifact =
+    modulePath.includes(`${path.sep}dist${path.sep}`) ||
+    modulePath.includes(`${path.sep}dist-runtime${path.sep}`);
+  return (
+    isBuiltBundledArtifact &&
+    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
+  );
 }
 
 function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): unknown {
@@ -286,23 +333,52 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
     return cached;
   }
   let loaded: unknown;
-  if (
-    process.platform === "win32" &&
-    modulePath.includes(`${path.sep}dist${path.sep}`) &&
-    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
-  ) {
+  const profile = shouldProfilePluginLoader();
+  const loadStartMs = profile ? performance.now() : 0;
+  let getJitiEndMs = 0;
+  if (canTryNodeRequireBuiltModule(modulePath)) {
     try {
       loaded = nodeRequire(modulePath);
     } catch {
-      loaded = getJiti(modulePath)(modulePath);
+      const jiti = getJiti(modulePath);
+      getJitiEndMs = profile ? performance.now() : 0;
+      loaded = jiti(modulePath);
     }
   } else {
-    loaded = getJiti(modulePath)(modulePath);
+    const jiti = getJiti(modulePath);
+    getJitiEndMs = profile ? performance.now() : 0;
+    loaded = jiti(modulePath);
+  }
+  if (profile) {
+    const endMs = performance.now();
+    // Use shared formatter — but split timing fields ourselves so we can
+    // attribute time spent in `getJiti(...)` factory creation vs the actual
+    // graph-walking `__j(modulePath)` call. Both are emitted as extras
+    // alongside the canonical `elapsedMs=<total>` field.
+    console.error(
+      formatPluginLoadProfileLine({
+        phase: "bundled-entry-module-load",
+        pluginId: "(bundled-entry)",
+        source: modulePath,
+        elapsedMs: endMs - loadStartMs,
+        // When the built-artifact fast-path resolves the module via `nodeRequire`,
+        // `getJitiEndMs` stays `0` because the `catch` block (the only place
+        // it gets stamped) never runs. Reporting `getJitiMs` /
+        // `jitiCallMs` as `0` for that path keeps the breakdown honest:
+        // `elapsedMs=` already captures the nodeRequire time, and we don't
+        // want to mis-attribute it to jiti sub-steps.
+        extras: [
+          ["getJitiMs", getJitiEndMs ? getJitiEndMs - loadStartMs : 0],
+          ["jitiCallMs", getJitiEndMs ? endMs - getJitiEndMs : 0],
+        ],
+      }),
+    );
   }
   loadedModuleExports.set(modulePath, loaded);
   return loaded;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic entry export loaders use caller-supplied export types.
 export function loadBundledEntryExportSync<T>(
   importMetaUrl: string,
   reference: BundledEntryModuleRef,
@@ -333,6 +409,8 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   secrets,
   configSchema,
   runtime,
+  accountInspect,
+  features,
   registerCliMetadata,
   registerFull,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
@@ -343,6 +421,13 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   const loadChannelPlugin = () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin);
   const loadChannelSecrets = secrets
     ? () => loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(importMetaUrl, secrets)
+    : undefined;
+  const loadChannelAccountInspector = accountInspect
+    ? () =>
+        loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
+          importMetaUrl,
+          accountInspect,
+        )
     : undefined;
   const setChannelRuntime = runtime
     ? (pluginRuntime: PluginRuntime) => {
@@ -360,21 +445,29 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     name,
     description,
     configSchema: resolvedConfigSchema,
+    ...(features || accountInspect
+      ? { features: { ...features, ...(accountInspect ? { accountInspect: true } : {}) } }
+      : {}),
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
         return;
       }
-      setChannelRuntime?.(api.runtime);
-      api.registerChannel({ plugin: loadChannelPlugin() as ChannelPlugin });
+      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
+      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
+      const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
+      profile("bundled-register:registerChannel", () =>
+        api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
+      );
       if (api.registrationMode !== "full") {
         return;
       }
-      registerCliMetadata?.(api);
-      registerFull?.(api);
+      profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
+      profile("bundled-register:registerFull", () => registerFull?.(api));
     },
     loadChannelPlugin,
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
+    ...(loadChannelAccountInspector ? { loadChannelAccountInspector } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
   };
 }
@@ -383,7 +476,37 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   importMetaUrl,
   plugin,
   secrets,
+  runtime,
+  legacyStateMigrations,
+  legacySessionSurface,
+  features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
+  // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
+  // When runtime wiring is needed, expose only the setter so the loader can hand
+  // the setup surface the active runtime without importing the full channel entry.
+  const setChannelRuntime = runtime
+    ? (pluginRuntime: PluginRuntime) => {
+        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
+          importMetaUrl,
+          runtime,
+        );
+        setter(pluginRuntime);
+      }
+    : undefined;
+  const loadLegacyStateMigrationDetector = legacyStateMigrations
+    ? () =>
+        loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
+          importMetaUrl,
+          legacyStateMigrations,
+        )
+    : undefined;
+  const loadLegacySessionSurface = legacySessionSurface
+    ? () =>
+        loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
+          importMetaUrl,
+          legacySessionSurface,
+        )
+    : undefined;
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin),
@@ -396,5 +519,9 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
             ),
         }
       : {}),
+    ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
+    ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
+    ...(setChannelRuntime ? { setChannelRuntime } : {}),
+    ...(features ? { features } : {}),
   };
 }

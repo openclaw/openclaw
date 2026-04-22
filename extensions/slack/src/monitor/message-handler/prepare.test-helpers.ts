@@ -23,6 +23,7 @@ export function createInboundSlackTestContext(params: {
     app: { client: params.appClient ?? {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "B1",
+    botId: "B1",
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,
@@ -86,7 +87,12 @@ export function createSlackSessionStoreFixture(prefix: string) {
       if (!fixtureRoot) {
         return;
       }
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      fs.rmSync(fixtureRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
       fixtureRoot = "";
     },
     makeTmpStorePath() {

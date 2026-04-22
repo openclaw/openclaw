@@ -26,10 +26,10 @@ function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
       {
-        pluginId: "slack",
+        pluginId: "workspace",
         source: "test",
         plugin: {
-          id: "slack",
+          id: "workspace",
           meta: { aliases: [] },
           conversationBindings: {
             supportsCurrentConversationBinding: true,
@@ -37,10 +37,10 @@ function setMinimalCurrentConversationRegistry(): void {
         },
       },
       {
-        pluginId: "msteams",
+        pluginId: "teamchat",
         source: "test",
         plugin: {
-          id: "msteams",
+          id: "teamchat",
           meta: { aliases: [] },
           conversationBindings: {
             supportsCurrentConversationBinding: true,
@@ -251,12 +251,12 @@ describe("session binding service", () => {
     });
   });
 
-  it("falls back to generic current-conversation bindings for built-in channels", async () => {
+  it("falls back to generic current-conversation bindings for registered channels", async () => {
     const service = getSessionBindingService();
 
     expect(
       service.getCapabilities({
-        channel: "Slack",
+        channel: "Workspace",
         accountId: " DEFAULT ",
       }),
     ).toEqual({
@@ -267,62 +267,62 @@ describe("session binding service", () => {
     });
 
     const bound = await service.bind({
-      targetSessionKey: "agent:codex:acp:slack-dm",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
       conversation: {
-        channel: " Slack ",
+        channel: " Workspace ",
         accountId: " DEFAULT ",
         conversationId: " user:U123 ",
       },
       metadata: {
-        label: "slack-dm",
+        label: "workspace-dm",
       },
       ttlMs: 60_000,
     });
 
     expect(bound).toMatchObject({
-      bindingId: "generic:slack\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:slack-dm",
+      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
       conversation: {
-        channel: "slack",
+        channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
       },
       status: "active",
       metadata: expect.objectContaining({
-        label: "slack-dm",
+        label: "workspace-dm",
       }),
     });
 
     const resolved = service.resolveByConversation({
-      channel: "slack",
+      channel: "workspace",
       accountId: "default",
       conversationId: "user:U123",
     });
     expect(resolved).toMatchObject({
       bindingId: bound.bindingId,
-      targetSessionKey: "agent:codex:acp:slack-dm",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
     });
-    expect(service.listBySession("agent:codex:acp:slack-dm")).toEqual([resolved]);
+    expect(service.listBySession("agent:codex:acp:workspace-dm")).toEqual([resolved]);
 
     service.touch(bound.bindingId, 1234);
     expect(
       service.resolveByConversation({
-        channel: "slack",
+        channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
       })?.metadata,
     ).toEqual(
       expect.objectContaining({
-        label: "slack-dm",
+        label: "workspace-dm",
         lastActivityAt: 1234,
       }),
     );
 
     await expect(
       service.unbind({
-        targetSessionKey: "agent:codex:acp:slack-dm",
+        targetSessionKey: "agent:codex:acp:workspace-dm",
         reason: "test cleanup",
       }),
     ).resolves.toEqual([
@@ -332,7 +332,7 @@ describe("session binding service", () => {
     ]);
     expect(
       service.resolveByConversation({
-        channel: "slack",
+        channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
       }),
@@ -344,7 +344,7 @@ describe("session binding service", () => {
 
     expect(
       service.getCapabilities({
-        channel: "msteams",
+        channel: "teamchat",
         accountId: "default",
       }),
     ).toEqual({
@@ -356,10 +356,10 @@ describe("session binding service", () => {
 
     await expect(
       service.bind({
-        targetSessionKey: "agent:codex:acp:msteams-room",
+        targetSessionKey: "agent:codex:acp:teamchat-room",
         targetKind: "session",
         conversation: {
-          channel: "msteams",
+          channel: "teamchat",
           accountId: "default",
           conversationId: "19:chatid@thread.v2",
         },
@@ -368,7 +368,7 @@ describe("session binding service", () => {
     ).rejects.toMatchObject({
       code: "BINDING_CAPABILITY_UNSUPPORTED",
       details: {
-        channel: "msteams",
+        channel: "teamchat",
         accountId: "default",
         placement: "child",
       },
@@ -376,17 +376,17 @@ describe("session binding service", () => {
 
     await expect(
       service.bind({
-        targetSessionKey: "agent:codex:acp:msteams-room",
+        targetSessionKey: "agent:codex:acp:teamchat-room",
         targetKind: "session",
         conversation: {
-          channel: "msteams",
+          channel: "teamchat",
           accountId: "default",
           conversationId: "19:chatid@thread.v2",
         },
       }),
     ).resolves.toMatchObject({
       conversation: {
-        channel: "msteams",
+        channel: "teamchat",
         accountId: "default",
         conversationId: "19:chatid@thread.v2",
       },
@@ -437,7 +437,7 @@ describe("session binding service", () => {
     }
   });
 
-  it("keeps the first live adapter authoritative until it unregisters", () => {
+  it("keeps the newest live adapter authoritative until it unregisters", () => {
     const firstBinding = {
       bindingId: "first-binding",
       targetSessionKey: "agent:main",
@@ -457,17 +457,30 @@ describe("session binding service", () => {
         targetSessionKey === "agent:main" ? [firstBinding] : [],
       resolveByConversation: () => null,
     };
+    const secondBinding = {
+      bindingId: "second-binding",
+      targetSessionKey: "agent:main",
+      targetKind: "session" as const,
+      conversation: {
+        channel: "demo-binding",
+        accountId: "default",
+        conversationId: "thread-2",
+      },
+      status: "active" as const,
+      boundAt: 2,
+    };
     const secondAdapter: SessionBindingAdapter = {
       channel: "Demo-Binding",
       accountId: "DEFAULT",
-      listBySession: () => [],
+      listBySession: (targetSessionKey) =>
+        targetSessionKey === "agent:main" ? [secondBinding] : [],
       resolveByConversation: () => null,
     };
 
     registerSessionBindingAdapter(firstAdapter);
     registerSessionBindingAdapter(secondAdapter);
 
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
+    expect(getSessionBindingService().listBySession("agent:main")).toEqual([secondBinding]);
 
     unregisterSessionBindingAdapter({
       channel: "demo-binding",
@@ -529,13 +542,13 @@ describe("session binding service", () => {
         conversationId: "thread-1",
       }),
     });
-    expect(firstBind).toHaveBeenCalledTimes(1);
-    expect(secondBind).not.toHaveBeenCalled();
+    expect(firstBind).not.toHaveBeenCalled();
+    expect(secondBind).toHaveBeenCalledTimes(1);
 
-    first.unregisterSessionBindingAdapter({
+    second.unregisterSessionBindingAdapter({
       channel: "demo-binding",
       accountId: "default",
-      adapter: firstAdapter,
+      adapter: secondAdapter,
     });
 
     await expect(
@@ -558,10 +571,10 @@ describe("session binding service", () => {
     expect(firstBind).toHaveBeenCalledTimes(1);
     expect(secondBind).toHaveBeenCalledTimes(1);
 
-    second.unregisterSessionBindingAdapter({
+    first.unregisterSessionBindingAdapter({
       channel: "demo-binding",
       accountId: "default",
-      adapter: secondAdapter,
+      adapter: firstAdapter,
     });
 
     await expect(
