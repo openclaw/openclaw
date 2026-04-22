@@ -512,18 +512,19 @@ describe("openshell fs bridges", () => {
       },
     });
 
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const { createOpenShellFsBridge, setReadOpenFlagsResolverForTest } = await import(
+      "./fs-bridge.js"
+    );
     const bridge = createOpenShellFsBridge({ sandbox, backend });
     // Force the fallback path so the leaf-lstat guard is exercised.
     const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
-    // Simulate a host that lacks `O_NOFOLLOW` (e.g. Windows) by making
-    // `fs.constants.O_NOFOLLOW` look undefined to the bridge.
-    const originalNoFollow = (nodeFs.constants as Record<string, number | undefined>).O_NOFOLLOW;
-    Object.defineProperty(nodeFs.constants, "O_NOFOLLOW", {
-      configurable: true,
-      writable: true,
-      value: undefined,
-    });
+    // Simulate a host that lacks `O_NOFOLLOW` (e.g. Windows) without touching
+    // the non-configurable native `fs.constants` data property. The bridge
+    // exposes a test-only seam for exactly this case.
+    setReadOpenFlagsResolverForTest(() => ({
+      flags: nodeFs.constants.O_RDONLY,
+      supportsNoFollow: false,
+    }));
 
     try {
       await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
@@ -531,11 +532,7 @@ describe("openshell fs bridges", () => {
       );
       expect(readlinkSpy).toHaveBeenCalled();
     } finally {
-      Object.defineProperty(nodeFs.constants, "O_NOFOLLOW", {
-        configurable: true,
-        writable: true,
-        value: originalNoFollow,
-      });
+      setReadOpenFlagsResolverForTest(undefined);
       readlinkSpy.mockRestore();
     }
   });

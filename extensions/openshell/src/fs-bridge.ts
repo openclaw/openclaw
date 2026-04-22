@@ -377,11 +377,7 @@ async function openPinnedReadableFile(params: {
   if (!isPathInside(literalRoot, literalPath)) {
     throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`);
   }
-  const openCloseOnExecFlag = (fs.constants as Record<string, number>).O_CLOEXEC ?? 0;
-  const openReadFlags =
-    fs.constants.O_RDONLY |
-    (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0) |
-    openCloseOnExecFlag;
+  const { flags: openReadFlags, supportsNoFollow } = resolveOpenReadFlags();
   // Open first so every later check runs against an fd that is already pinned
   // to one specific inode. `O_NOFOLLOW` prevents the final path component from
   // being a symlink; the ancestor walk below handles parent-directory symlink
@@ -421,7 +417,7 @@ async function openPinnedReadableFile(params: {
       // On platforms where `O_NOFOLLOW` is unavailable (Windows), the open
       // call would have transparently followed a final-component symlink, so
       // the ancestor walk has to lstat the leaf as well.
-      includeLeaf: typeof fs.constants.O_NOFOLLOW !== "number",
+      includeLeaf: !supportsNoFollow,
     });
     const currentResolvedStat = await fsPromises.stat(literalPath);
     if (!sameFileIdentity(currentResolvedStat, openedStat)) {
@@ -477,6 +473,37 @@ async function assertAncestorChainHasNoSymlinks(
       throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
     }
   }
+}
+
+type ReadOpenFlagsResolution = { flags: number; supportsNoFollow: boolean };
+
+let readOpenFlagsResolverForTest: (() => ReadOpenFlagsResolution) | undefined;
+
+function resolveOpenReadFlags(): ReadOpenFlagsResolution {
+  if (readOpenFlagsResolverForTest) {
+    return readOpenFlagsResolverForTest();
+  }
+  const closeOnExec = (fs.constants as Record<string, number>).O_CLOEXEC ?? 0;
+  const supportsNoFollow = typeof fs.constants.O_NOFOLLOW === "number";
+  const noFollow = supportsNoFollow ? fs.constants.O_NOFOLLOW : 0;
+  return {
+    flags: fs.constants.O_RDONLY | noFollow | closeOnExec,
+    supportsNoFollow,
+  };
+}
+
+/**
+ * Test-only seam for forcing the open-flag/`O_NOFOLLOW` resolution. Used to
+ * exercise the Windows-style fallback (no `O_NOFOLLOW`, ancestor walk
+ * includes the leaf) on platforms where `fs.constants.O_NOFOLLOW` is a
+ * non-configurable native data property and cannot be patched directly.
+ *
+ * @internal
+ */
+export function setReadOpenFlagsResolverForTest(
+  resolver: (() => ReadOpenFlagsResolution) | undefined,
+): void {
+  readOpenFlagsResolverForTest = resolver;
 }
 
 // Resolves the absolute path associated with an open fd via the kernel-backed
