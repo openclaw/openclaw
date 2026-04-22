@@ -1,5 +1,4 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import { evaluateShellAllowlist, resolveAllowAlwaysPatterns, resolveSafeBins } from "./exec-approvals.js";
 
