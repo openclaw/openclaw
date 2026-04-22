@@ -576,7 +576,12 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat?.isolatedSession === true
       ? forcedIsRealHeartbeatSession && forcedSession
         ? forcedSession
-        : configuredSession
+        : {
+            ...configuredSession,
+            suppressOriginatingContext:
+              configuredSession.suppressOriginatingContext ||
+              forcedSession?.suppressOriginatingContext === true,
+          }
       : (forcedSession ?? configuredSession);
   const inspectionSession =
     (forcedIsConfiguredIsolatedLane || forcedIsRealHeartbeatSession) && forcedSession
