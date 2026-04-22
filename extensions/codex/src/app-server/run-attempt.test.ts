@@ -378,6 +378,11 @@ describe("runCodexAppServerAttempt", () => {
         { hookName: "agent_end", handler: agentEnd },
       ]),
     );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("existing context", Date.now()),
+    );
     createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
         throw new Error("turn start exploded");
@@ -385,11 +390,9 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(
-      runCodexAppServerAttempt(
-        createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      ),
-    ).rejects.toThrow("turn start exploded");
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "turn start exploded",
+    );
 
     await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
@@ -408,7 +411,34 @@ describe("runCodexAppServerAttempt", () => {
       expect.objectContaining({
         success: false,
         error: "turn start exploded",
-        messages: [],
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "assistant" }),
+          expect.objectContaining({ role: "user" }),
+        ]),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("fires agent_end with success false when the codex turn is aborted", async () => {
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const { waitForMethod } = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    await waitForMethod("turn/start");
+    expect(abortAgentHarnessRun("session-1")).toBe(true);
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
       }),
       expect.any(Object),
     );

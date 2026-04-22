@@ -116,7 +116,7 @@ export async function runCodexAppServerAttempt(
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
+    sessionKey: sandboxSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
     messageProvider: params.messageProvider ?? undefined,
@@ -233,6 +233,13 @@ export async function runCodexAppServerAttempt(
     historyMessages,
     imagesCount: params.images?.length ?? 0,
   };
+  const turnStartFailureMessages = [
+    ...historyMessages,
+    {
+      role: "user",
+      content: [{ type: "text", text: promptBuild.prompt }],
+    },
+  ];
 
   let turn: CodexTurnStartResponse;
   try {
@@ -263,7 +270,7 @@ export async function runCodexAppServerAttempt(
     });
     runAgentHarnessAgentEndHook({
       event: {
-        messages: [],
+        messages: turnStartFailureMessages,
         success: false,
         error: formatErrorMessage(error),
         durationMs: Date.now() - attemptStartedAt,
@@ -323,6 +330,9 @@ export async function runCodexAppServerAttempt(
   try {
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
+    const finalAborted = result.aborted || runAbortController.signal.aborted;
+    const finalPromptError = timedOut ? "codex app-server attempt timed out" : result.promptError;
+    const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
@@ -346,8 +356,8 @@ export async function runCodexAppServerAttempt(
     runAgentHarnessAgentEndHook({
       event: {
         messages: result.messagesSnapshot,
-        success: !result.aborted && !result.promptError,
-        ...(result.promptError ? { error: formatErrorMessage(result.promptError) } : {}),
+        success: !finalAborted && !finalPromptError,
+        ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
       },
       ctx: hookContext,
@@ -355,9 +365,9 @@ export async function runCodexAppServerAttempt(
     return {
       ...result,
       timedOut,
-      aborted: result.aborted || runAbortController.signal.aborted,
-      promptError: timedOut ? "codex app-server attempt timed out" : result.promptError,
-      promptErrorSource: timedOut ? "prompt" : result.promptErrorSource,
+      aborted: finalAborted,
+      promptError: finalPromptError,
+      promptErrorSource: finalPromptErrorSource,
     };
   } finally {
     clearTimeout(timeout);
