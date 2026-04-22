@@ -1152,9 +1152,13 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
   "agents.list.*.embeddedHarness.fallback":
     "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+  "agents.defaults.model.timeoutMs":
+    "Reserved for future use. Accepted by the schema but not yet wired through this runtime. Today only `agents.defaults.imageGenerationModel.timeoutMs` is honored.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.imageModel.timeoutMs":
+    "Reserved for future use. Accepted by the schema but not yet wired through this runtime. Today only `agents.defaults.imageGenerationModel.timeoutMs` is honored.",
   "agents.defaults.imageGenerationModel.primary":
     "Optional image-generation model (provider/model) used by the shared image generation capability.",
   "agents.defaults.imageGenerationModel.fallbacks":
@@ -1165,15 +1169,21 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional video-generation model (provider/model) used by the shared video generation capability.",
   "agents.defaults.videoGenerationModel.fallbacks":
     "Ordered fallback video-generation models (provider/model).",
+  "agents.defaults.videoGenerationModel.timeoutMs":
+    "Reserved for future use. Accepted by the schema but not yet wired through this runtime. Today only `agents.defaults.imageGenerationModel.timeoutMs` is honored.",
   "agents.defaults.musicGenerationModel.primary":
     "Optional music-generation model (provider/model) used by the shared music generation capability.",
   "agents.defaults.musicGenerationModel.fallbacks":
     "Ordered fallback music-generation models (provider/model).",
+  "agents.defaults.musicGenerationModel.timeoutMs":
+    "Reserved for future use. Accepted by the schema but not yet wired through this runtime. Today only `agents.defaults.imageGenerationModel.timeoutMs` is honored.",
   "agents.defaults.mediaGenerationAutoProviderFallback":
     "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
+  "agents.defaults.pdfModel.timeoutMs":
+    "Reserved for future use. Accepted by the schema but not yet wired through this runtime. Today only `agents.defaults.imageGenerationModel.timeoutMs` is honored.",
   "agents.defaults.pdfMaxBytesMb":
     "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
