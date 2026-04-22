@@ -214,14 +214,10 @@ export async function buildModelsJsonAuthProfilesFingerprint(agentDir: string): 
       version: AUTH_PROFILES_FINGERPRINT_VERSION,
       status: "ok",
       storeVersion: isRecord(parsed) ? (parsed.version ?? null) : null,
-      profiles: Object.fromEntries(
-        Object.entries(profiles)
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([profileId, credential]) => [
-            profileId,
-            buildAuthCredentialFingerprint(credential),
-          ]),
-      ),
+      profiles: Object.entries(profiles).map(([profileId, credential]) => ({
+        profileId,
+        credential: buildAuthCredentialFingerprint(credential),
+      })),
     };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;

@@ -96,6 +96,52 @@ describe("models-config auth profiles semantic fingerprint", () => {
     });
   });
 
+  it("invalidates the models-config cache when auth profile order changes", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const modelsPath = path.join(agentDir, "models.json");
+      await writeJson(modelsPath, { providers: {} });
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-default",
+          },
+          "openai:work": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-work",
+          },
+        },
+      });
+      await ensureOpenClawModelsJson({}, agentDir);
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:work": {
+            provider: "openai",
+            key: "sk-test-work",
+            type: "api_key",
+          },
+          "openai:default": {
+            provider: "openai",
+            key: "sk-test-default",
+            type: "api_key",
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("continues to invalidate when models.json changes", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
