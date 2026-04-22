@@ -25,6 +25,7 @@ export async function startOrResumeThread(params: {
   cwd: string;
   dynamicTools: JsonValue[];
   appServer: CodexAppServerRuntimeOptions;
+  developerInstructions?: string;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
   const binding = await readCodexAppServerBinding(params.params.sessionFile);
@@ -49,6 +50,7 @@ export async function startOrResumeThread(params: {
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
             appServer: params.appServer,
+            developerInstructions: params.developerInstructions,
           }),
         );
         const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
@@ -88,7 +90,8 @@ export async function startOrResumeThread(params: {
     sandbox: params.appServer.sandbox,
     ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
-    developerInstructions: buildDeveloperInstructions(params.params),
+    developerInstructions:
+      params.developerInstructions ?? buildDeveloperInstructions(params.params),
     dynamicTools: params.dynamicTools,
     experimentalRawEvents: true,
     persistExtendedHistory: true,
@@ -122,6 +125,7 @@ export function buildThreadResumeParams(
   options: {
     threadId: string;
     appServer: CodexAppServerRuntimeOptions;
+    developerInstructions?: string;
   },
 ): CodexThreadResumeParams {
   return {
@@ -132,7 +136,7 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    developerInstructions: buildDeveloperInstructions(params),
+    developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
 }
@@ -143,11 +147,12 @@ export function buildTurnStartParams(
     threadId: string;
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
+    promptText?: string;
   },
 ): CodexTurnStartParams {
   return {
     threadId: options.threadId,
-    input: buildUserInput(params),
+    input: buildUserInput(params, options.promptText),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
@@ -177,7 +182,7 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
   return stable;
 }
 
-function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
@@ -188,9 +193,12 @@ function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
 }
 
-function buildUserInput(params: EmbeddedRunAttemptParams): CodexUserInput[] {
+function buildUserInput(
+  params: EmbeddedRunAttemptParams,
+  promptText: string = params.prompt,
+): CodexUserInput[] {
   return [
-    { type: "text", text: params.prompt },
+    { type: "text", text: promptText },
     ...(params.images ?? []).map(
       (image): CodexUserInput => ({
         type: "image",

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   buildEmbeddedAttemptToolRunContext,
   clearActiveEmbeddedRun,
@@ -12,6 +13,7 @@ import {
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
+  resolveAgentHarnessBeforePromptBuildResult,
   setActiveEmbeddedRun,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
@@ -36,7 +38,11 @@ import {
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { clearSharedCodexAppServerClient } from "./shared-client.js";
-import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  buildDeveloperInstructions,
+  buildTurnStartParams,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 let clientFactory = defaultCodexAppServerClientFactory;
@@ -95,6 +101,22 @@ export async function runCodexAppServerAttempt(
     tools,
     signal: runAbortController.signal,
   });
+  const historyMessages = readMirroredSessionHistoryMessages(params.sessionFile);
+  const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
+    prompt: params.prompt,
+    developerInstructions: buildDeveloperInstructions(params),
+    messages: historyMessages,
+    ctx: {
+      runId: params.runId,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      messageProvider: params.messageProvider ?? undefined,
+      trigger: params.trigger,
+      channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+    },
+  });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
   try {
@@ -110,6 +132,7 @@ export async function runCodexAppServerAttempt(
           cwd: effectiveWorkspace,
           dynamicTools: toolBridge.specs,
           appServer,
+          developerInstructions: promptBuild.developerInstructions,
         });
         return { client: startupClient, thread: startupThread };
       },
@@ -196,6 +219,7 @@ export async function runCodexAppServerAttempt(
         threadId: thread.threadId,
         cwd: effectiveWorkspace,
         appServer,
+        promptText: promptBuild.prompt,
       }),
       { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
@@ -474,6 +498,18 @@ function isTurnNotification(value: JsonValue | undefined, turnId: string): boole
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function readMirroredSessionHistoryMessages(sessionFile: string): unknown[] {
+  try {
+    return SessionManager.open(sessionFile).buildSessionContext().messages;
+  } catch (error) {
+    embeddedAgentLog.warn("failed to read mirrored session history for codex prompt hooks", {
+      error,
+      sessionFile,
+    });
+    return [];
+  }
 }
 
 async function mirrorTranscriptBestEffort(params: {

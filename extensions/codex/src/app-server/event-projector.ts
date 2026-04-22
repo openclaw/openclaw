@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   formatErrorMessage,
   normalizeUsage,
-  type NormalizedUsage,
+  runAgentHarnessAfterCompactionHook,
+  runAgentHarnessBeforeCompactionHook,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type MessagingToolSend,
@@ -67,7 +69,7 @@ export class CodexAppServerEventProjector {
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private aborted = false;
-  private tokenUsage: NormalizedUsage | undefined;
+  private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
 
@@ -98,10 +100,10 @@ export class CodexAppServerEventProjector {
         this.handleTurnPlanUpdated(params);
         break;
       case "item/started":
-        this.handleItemStarted(params);
+        await this.handleItemStarted(params);
         break;
       case "item/completed":
-        this.handleItemCompleted(params);
+        await this.handleItemCompleted(params);
         break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
@@ -271,7 +273,7 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private handleItemStarted(params: JsonObject): void {
+  private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
@@ -279,6 +281,20 @@ export class CodexAppServerEventProjector {
     }
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.add(itemId);
+      await runAgentHarnessBeforeCompactionHook({
+        sessionFile: this.params.sessionFile,
+        messages: this.readMirroredSessionMessages(),
+        ctx: {
+          runId: this.params.runId,
+          agentId: this.params.agentId,
+          sessionKey: this.params.sessionKey,
+          sessionId: this.params.sessionId,
+          workspaceDir: this.params.workspaceDir,
+          messageProvider: this.params.messageProvider ?? undefined,
+          trigger: this.params.trigger,
+          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+        },
+      });
       this.emitAgentEvent({
         stream: "compaction",
         data: {
@@ -297,7 +313,7 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private handleItemCompleted(params: JsonObject): void {
+  private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
@@ -315,6 +331,21 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
+      await runAgentHarnessAfterCompactionHook({
+        sessionFile: this.params.sessionFile,
+        messages: this.readMirroredSessionMessages(),
+        compactedCount: -1,
+        ctx: {
+          runId: this.params.runId,
+          agentId: this.params.agentId,
+          sessionKey: this.params.sessionKey,
+          sessionId: this.params.sessionId,
+          workspaceDir: this.params.workspaceDir,
+          messageProvider: this.params.messageProvider ?? undefined,
+          trigger: this.params.trigger,
+          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+        },
+      });
       this.emitAgentEvent({
         stream: "compaction",
         data: {
@@ -476,6 +507,14 @@ export class CodexAppServerEventProjector {
     this.assistantItemOrder.push(itemId);
   }
 
+  private readMirroredSessionMessages(): AgentMessage[] {
+    try {
+      return SessionManager.open(this.params.sessionFile).buildSessionContext().messages;
+    } catch {
+      return [];
+    }
+  }
+
   private createAssistantMessage(text: string): AssistantMessage {
     const usage: Usage = this.tokenUsage
       ? {
@@ -563,7 +602,7 @@ function readNumberAlias(record: JsonObject, keys: readonly string[]): number | 
   return undefined;
 }
 
-function normalizeCodexTokenUsage(record: JsonObject): NormalizedUsage | undefined {
+function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
   return normalizeUsage({
     input: readNumberAlias(record, ["inputTokens", "input_tokens", "input", "promptTokens"]),
     output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),

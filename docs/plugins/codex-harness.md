@@ -17,6 +17,10 @@ discovery, native thread resume, native compaction, and app-server execution.
 OpenClaw still owns chat channels, session files, model selection, tools,
 approvals, media delivery, and the visible transcript mirror.
 
+Native Codex turns also respect the shared `before_prompt_build`,
+`before_compaction`, and `after_compaction` plugin hooks, so prompt shims and
+compaction-aware automation can stay aligned with the PI harness.
+
 The harness is off by default. It is selected only when the `codex` plugin is
 enabled and the resolved model is a `codex/*` model, or when you explicitly
 force `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex`.

@@ -1,12 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   abortAgentHarnessRun,
   queueAgentHarnessMessage,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../../src/plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
@@ -157,8 +163,63 @@ describe("runCodexAppServerAttempt", () => {
 
   afterEach(async () => {
     __testing.resetCodexAppServerClientFactoryForTests();
+    resetGlobalHookRunner();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
+    const beforePromptBuild = vi.fn(async () => ({
+      systemPrompt: "custom codex system",
+      prependSystemContext: "pre system",
+      appendSystemContext: "post system",
+      prependContext: "queued context",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "previous turn" }],
+      timestamp: Date.now(),
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(beforePromptBuild).toHaveBeenCalledWith(
+      {
+        prompt: "hello",
+        messages: [expect.objectContaining({ role: "assistant" })],
+      },
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
+    );
+    expect(harness.requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "thread/start",
+          params: expect.objectContaining({
+            developerInstructions: expect.stringContaining("pre system\n\ncustom codex system"),
+          }),
+        },
+        {
+          method: "turn/start",
+          params: expect.objectContaining({
+            input: [{ type: "text", text: "queued context\n\nhello" }],
+          }),
+        },
+      ]),
+    );
   });
 
   it("forwards queued user input and aborts the active app-server turn", async () => {
