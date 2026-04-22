@@ -10,6 +10,7 @@ import {
 import { resolveHookEntries } from "../hooks/policy.js";
 import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
@@ -153,7 +154,7 @@ function writeHooksOutput(value: string, json: boolean | undefined): void {
 }
 
 function shouldForceExitAfterHooksInspection(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.VITEST !== "true";
+  return !isVitestRuntimeEnv(env);
 }
 
 function exitAfterHooksInspection(): void {

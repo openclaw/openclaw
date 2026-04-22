@@ -91,5 +91,23 @@ describe("hooks cli formatting", () => {
     expect(
       __testing.shouldForceExitAfterHooksInspection({ VITEST: "true" } as NodeJS.ProcessEnv),
     ).toBe(false);
+    expect(
+      __testing.shouldForceExitAfterHooksInspection({ VITEST: "1" } as NodeJS.ProcessEnv),
+    ).toBe(false);
+    expect(
+      __testing.shouldForceExitAfterHooksInspection({
+        VITEST_POOL_ID: "1",
+      } as NodeJS.ProcessEnv),
+    ).toBe(false);
+    expect(
+      __testing.shouldForceExitAfterHooksInspection({
+        VITEST_WORKER_ID: "1",
+      } as NodeJS.ProcessEnv),
+    ).toBe(false);
+    expect(
+      __testing.shouldForceExitAfterHooksInspection({
+        NODE_ENV: "test",
+      } as NodeJS.ProcessEnv),
+    ).toBe(false);
   });
 });
