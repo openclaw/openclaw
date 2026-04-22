@@ -541,6 +541,20 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             maxAgeMs,
           }).map(toConversationLifecycleBinding),
       },
+      heartbeat: {
+        sendTyping: async ({ to, accountId, threadId }) => {
+          const resolvedTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
+          const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
+          if (!target || target.kind !== "channel") {
+            return;
+          }
+          await (
+            await loadDiscordSendModule()
+          ).sendTypingDiscord(target.id, {
+            accountId: accountId ?? undefined,
+          });
+        },
+      },
       status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           connected: false,
