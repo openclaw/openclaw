@@ -485,10 +485,22 @@ export type SearchMessagesMSTeamsResult = {
 
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
+const SEARCH_LIST_WINDOW_MIN = 50;
+const SEARCH_LIST_WINDOW_MAX = 200;
+const SEARCH_LIST_WINDOW_MULTIPLIER = 10;
 
 /**
  * Search messages in a chat or channel by content via Graph API.
- * Uses `$search` for full-text body search and optional `$filter` for sender.
+ *
+ * Graph does not support `$search` on `/chats/{id}/messages` or
+ * `/teams/{id}/channels/{id}/messages` under Application permissions — the
+ * only app-only-compatible path is to list recent messages and filter
+ * locally. This keeps the action working for the most common app-only bot
+ * configuration at the cost of only searching the recent window; full-archive
+ * search requires Delegated auth and is out of scope here.
+ *
+ * Sender filtering still pushes down to Graph via `$filter` when provided,
+ * since `$filter` is supported for app-only on this endpoint.
  */
 export async function searchMessagesMSTeams(
   params: SearchMessagesMSTeamsParams,
@@ -502,13 +514,18 @@ export async function searchMessagesMSTeams(
     ? Math.min(Math.max(Math.floor(rawLimit), 1), SEARCH_MAX_LIMIT)
     : SEARCH_DEFAULT_LIMIT;
 
-  // Strip double quotes from the query to prevent OData $search injection
-  const sanitizedQuery = params.query.replace(/"/g, "");
+  const listWindow = Math.min(
+    SEARCH_LIST_WINDOW_MAX,
+    Math.max(top * SEARCH_LIST_WINDOW_MULTIPLIER, SEARCH_LIST_WINDOW_MIN),
+  );
+
+  // Strip double quotes from the query so an unquoted needle still matches
+  // content that contains quoted substrings, mirroring the previous behavior.
+  const needle = params.query.replace(/"/g, "").toLowerCase();
 
   // Build query string manually (not URLSearchParams) to preserve literal $
   // in OData parameter names, consistent with other Graph calls in this module.
-  const parts = [`$search=${encodeURIComponent(`"${sanitizedQuery}"`)}`];
-  parts.push(`$top=${top}`);
+  const parts = [`$top=${listWindow}`];
   if (params.from) {
     parts.push(
       `$filter=${encodeURIComponent(`from/user/displayName eq '${escapeOData(params.from)}'`)}`,
@@ -516,14 +533,14 @@ export async function searchMessagesMSTeams(
   }
 
   const path = `${basePath}/messages?${parts.join("&")}`;
-  // ConsistencyLevel: eventual is required by Graph API for $search queries
-  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({
-    token,
-    path,
-    headers: { ConsistencyLevel: "eventual" },
-  });
+  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({ token, path });
 
-  const messages = (res.value ?? []).map((msg) => ({
+  const matches =
+    needle.length === 0
+      ? (res.value ?? [])
+      : (res.value ?? []).filter((msg) => (msg.body?.content ?? "").toLowerCase().includes(needle));
+
+  const messages = matches.slice(0, top).map((msg) => ({
     id: msg.id ?? "",
     text: msg.body?.content,
     from: msg.from,
