@@ -2,10 +2,22 @@
   "name": "@openclaw/kudosity-sms",
   "version": "2026.3.2",
   "private": true,
+  "description": "OpenClaw Kudosity SMS channel plugin",
   "type": "module",
   "openclaw": {
     "extensions": [
-      "index.ts"
-    ]
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "kudosity-sms",
+      "label": "SMS Kudosity",
+      "selectionLabel": "SMS Kudosity",
+      "detailLabel": "SMS Kudosity",
+      "docsPath": "/channels/kudosity-sms",
+      "docsLabel": "kudosity-sms",
+      "blurb": "cloud SMS via the Kudosity API — works on any phone, no app needed. https://developers.kudosity.com",
+      "systemImage": "phone.badge.waveform",
+      "order": 90
+    }
   }
 }
