@@ -67,6 +67,20 @@ export async function ensureLoaded(
     if (typeof hydrated.enabled !== "boolean") {
       hydrated.enabled = true;
     }
+    // Same shape: persisted jobs missing `sessionTarget` crash on the next
+    // tick via `assertSupportedJobSpec`. Mirror the defaulter applied at
+    // create time: systemEvent payloads -> "main", agentTurn -> "isolated".
+    if (typeof hydrated.sessionTarget !== "string") {
+      const payloadKind =
+        hydrated.payload && typeof hydrated.payload === "object" && "kind" in hydrated.payload
+          ? (hydrated.payload as { kind?: unknown }).kind
+          : undefined;
+      if (payloadKind === "systemEvent") {
+        hydrated.sessionTarget = "main";
+      } else if (payloadKind === "agentTurn") {
+        hydrated.sessionTarget = "isolated";
+      }
+    }
   }
   state.store = {
     version: 1,
