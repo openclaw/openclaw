@@ -740,6 +740,12 @@ describe("gateway server cron", () => {
           appToken: "xapp-slack-token",
         },
       },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+          slack: { enabled: true },
+        },
+      },
     });
 
     const { server, ws } = await startServerWithClient();
@@ -763,6 +769,43 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("ignores ambient disabled channel env when validating announce delivery", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-ambient");
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "ambient-telegram");
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-ambient-disabled-delivery-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      plugins: {
+        allow: ["memory-core"],
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "ambient disabled announce",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "announce" },
+      });
+
+      expect(addRes.ok).toBe(true);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("rejects ambiguous announce delivery on update when multiple channels are configured", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-ambiguous-delivery-update-",
@@ -780,6 +823,12 @@ describe("gateway server cron", () => {
         slack: {
           botToken: "xoxb-slack-token",
           appToken: "xapp-slack-token",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+          slack: { enabled: true },
         },
       },
     });
@@ -830,6 +879,11 @@ describe("gateway server cron", () => {
         slack: {
           botToken: "xoxb-slack-token",
           appToken: "xapp-slack-token",
+        },
+      },
+      plugins: {
+        entries: {
+          slack: { enabled: true },
         },
       },
     });
