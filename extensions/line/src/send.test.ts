@@ -11,6 +11,7 @@ const {
   resolveLineChannelAccessTokenMock,
   recordChannelActivityMock,
   logVerboseMock,
+  resolvePinnedHostnameWithPolicyMock,
 } = vi.hoisted(() => {
   const pushMessageMock = vi.fn();
   const replyMessageMock = vi.fn();
@@ -29,6 +30,7 @@ const {
   const resolveLineChannelAccessTokenMock = vi.fn(() => "line-token");
   const recordChannelActivityMock = vi.fn();
   const logVerboseMock = vi.fn();
+  const resolvePinnedHostnameWithPolicyMock = vi.fn();
   return {
     pushMessageMock,
     replyMessageMock,
@@ -40,6 +42,7 @@ const {
     resolveLineChannelAccessTokenMock,
     recordChannelActivityMock,
     logVerboseMock,
+    resolvePinnedHostnameWithPolicyMock,
   };
 });
 
@@ -73,6 +76,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+}));
+
 let sendModule: typeof import("./send.js");
 
 describe("LINE send helpers", () => {
@@ -88,6 +95,7 @@ describe("LINE send helpers", () => {
     resolveLineChannelAccessTokenMock.mockReset();
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
+    resolvePinnedHostnameWithPolicyMock.mockReset();
 
     MessagingApiClientMock.mockImplementation(function () {
       return {
@@ -100,6 +108,10 @@ describe("LINE send helpers", () => {
     loadConfigMock.mockReturnValue({});
     resolveLineAccountMock.mockReturnValue({ accountId: "default" });
     resolveLineChannelAccessTokenMock.mockReturnValue("line-token");
+    resolvePinnedHostnameWithPolicyMock.mockResolvedValue({
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
     pushMessageMock.mockResolvedValue({});
     replyMessageMock.mockResolvedValue({});
     showLoadingAnimationMock.mockResolvedValue({});
@@ -203,6 +215,20 @@ describe("LINE send helpers", () => {
         mediaKind: "video",
       }),
     ).rejects.toThrow(/require previewimageurl/i);
+  });
+
+  it("blocks private-network media URLs before calling LINE", async () => {
+    resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
+      new Error("SSRF blocked private network target"),
+    );
+
+    await expect(
+      sendModule.sendMessageLine("line:user:U200", "Image", {
+        mediaUrl: "https://127.0.0.1/image.jpg",
+      }),
+    ).rejects.toThrow(/private network/i);
+
+    expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
   it("omits trackingId for non-user destinations", async () => {
