@@ -4,7 +4,10 @@ import {
   createFlatAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildThreadAwareOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createChannelDirectoryAdapter,
@@ -13,12 +16,7 @@ import {
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-import {
-  buildOutboundBaseSessionKey,
-  normalizeOutboundThreadId,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/routing";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -186,6 +184,18 @@ function buildSlackBaseSessionKey(params: {
   return buildOutboundBaseSessionKey({ ...params, channel: "slack" });
 }
 
+function shouldRecoverSlackThreadFromCurrentSession(params: {
+  cfg: OpenClawConfig;
+  peerKind: RoutePeer["kind"];
+}): boolean {
+  // Shared DM sessions (dmScope="main") do not encode the DM peer in the base key,
+  // so inheriting a prior thread can bleed across unrelated direct-message targets.
+  if (params.peerKind === "direct" && (params.cfg.session?.dmScope ?? "main") === "main") {
+    return false;
+  }
+  return true;
+}
+
 async function resolveSlackOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -193,6 +203,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   target: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  currentSessionKey?: string | null;
 }) {
   const parsed = parseSlackTarget(params.target, { defaultKind: "channel" });
   if (!parsed) {
@@ -223,25 +234,29 @@ async function resolveSlackOutboundSessionRoute(params: {
     accountId: params.accountId,
     peer,
   });
-  const threadId = normalizeOutboundThreadId(params.threadId ?? params.replyToId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId,
+  return buildThreadAwareOutboundSessionRoute({
+    route: {
+      sessionKey: baseSessionKey,
+      baseSessionKey,
+      peer,
+      chatType: peerKind === "direct" ? ("direct" as const) : ("channel" as const),
+      from:
+        peerKind === "direct"
+          ? `slack:${parsed.id}`
+          : peerKind === "group"
+            ? `slack:group:${parsed.id}`
+            : `slack:channel:${parsed.id}`,
+      to: peerKind === "direct" ? `user:${parsed.id}` : `channel:${parsed.id}`,
+    },
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    currentSessionKey: params.currentSessionKey,
+    canRecoverCurrentThread: () =>
+      shouldRecoverSlackThreadFromCurrentSession({
+        cfg: params.cfg,
+        peerKind,
+      }),
   });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer,
-    chatType: peerKind === "direct" ? ("direct" as const) : ("channel" as const),
-    from:
-      peerKind === "direct"
-        ? `slack:${parsed.id}`
-        : peerKind === "group"
-          ? `slack:group:${parsed.id}`
-          : `slack:channel:${parsed.id}`,
-    to: peerKind === "direct" ? `user:${parsed.id}` : `channel:${parsed.id}`,
-    threadId,
-  };
 }
 
 function formatSlackScopeDiagnostic(params: {

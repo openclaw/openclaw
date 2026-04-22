@@ -152,7 +152,9 @@ describe("uploadFile memex upload hardening", () => {
       maxRedirects: 0,
     });
     const firstCall = mockGuardedFetch.mock.calls[0]?.[0];
-    const firstBody = JSON.parse(String(firstCall?.init?.body)) as Record<string, unknown>;
+    const firstBodyRaw = firstCall?.init?.body;
+    expect(typeof firstBodyRaw).toBe("string");
+    const firstBody = JSON.parse(firstBodyRaw as string) as Record<string, unknown>;
     expect(firstBody).toMatchObject({
       token: "genuine-secret",
       contentLength: 11,

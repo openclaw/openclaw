@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChromeMcpArgs,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
+  navigateChromeMcpPage,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -95,6 +96,10 @@ function createFakeSession(): ChromeMcpSession {
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
@@ -340,6 +345,66 @@ describe("chrome MCP page parsing", () => {
 
     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
 
+    const tabs = await listChromeMcpTabs("chrome-live");
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toHaveLength(2);
+  });
+
+  it("always passes a default timeout to navigate_page when none is specified", async () => {
+    const session = createFakeSession();
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await navigateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "1",
+      url: "https://example.com",
+      // intentionally no timeoutMs
+    });
+
+    expect(session.client.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "navigate_page",
+        arguments: expect.objectContaining({ timeout: 20_000 }),
+      }),
+    );
+  });
+
+  it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {
+    vi.useFakeTimers();
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      if (factoryCalls === 1) {
+        // First session: all tool calls hang — simulates a Chrome MCP subprocess that is
+        // completely blocked (e.g., stuck waiting for a slow navigation to complete).
+        session.client.callTool = vi.fn(
+          async () => new Promise<never>(() => {}),
+        ) as typeof session.client.callTool;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    // Start navigation — will hang.
+    const navPromise = navigateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "1",
+      url: "https://slow-site.example",
+    });
+    // Suppress unhandled-rejection detection: navPromise rejects during timer
+    // advancement, before the expect below attaches its handler.
+    void navPromise.catch(() => {});
+
+    // Advance past the 25 s safety-net (CHROME_MCP_NAVIGATE_TIMEOUT_MS 20 s + 5 s buffer).
+    await vi.advanceTimersByTimeAsync(25_001);
+
+    await expect(navPromise).rejects.toThrow(/Chrome MCP "navigate_page".*timed out/);
+
+    // Switch back to real timers before testing reconnect behaviour.
+    vi.useRealTimers();
+
+    // Next call must use a fresh session — factory is called a second time.
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
