@@ -149,6 +149,12 @@ describe("diagnostic support export", () => {
           time: "2026-04-22T12:00:00.100Z",
         }),
         JSON.stringify({
+          time: "2026-04-22T12:00:00.200Z",
+          level: "info",
+          component: "gateway/server",
+          msg: "user said structured secret payload",
+        }),
+        JSON.stringify({
           "0": JSON.stringify({ subsystem: "gateway/channels/matrix" }),
           "1": privateChat,
           _meta: {
@@ -156,7 +162,7 @@ describe("diagnostic support export", () => {
             name: "gateway-runtime",
             hostname: "support-host",
           },
-          time: "2026-04-22T12:00:00.200Z",
+          time: "2026-04-22T12:00:00.300Z",
         }),
         `plain fallback ${privateChat} ${fakeToken}`,
       ],
@@ -246,6 +252,7 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(os.hostname());
     expect(combined).not.toContain("QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
     expect(combined).not.toContain("sid=secret");
+    expect(combined).not.toContain("structured secret payload");
     expect(combined).not.toContain(fakeAwsKey);
     expect(combined).not.toContain(fakeJwt);
     expect(combined).toContain("payload.large");
@@ -377,6 +384,7 @@ describe("diagnostic support export", () => {
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
         "connect wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
       ],
+      ["connect https://token@gateway.example/ws", "connect https://<redacted>@gateway.example/ws"],
       ["auth Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==", "auth Basic <redacted>"],
       ["Cookie: sid=secret; theme=light", "Cookie: <redacted>"],
       [`aws ${fakeAwsKey}`, "aws <redacted-aws-key>"],

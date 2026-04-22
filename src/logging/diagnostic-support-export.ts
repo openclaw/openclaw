@@ -272,6 +272,7 @@ function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionConte
 
 function configShapeReadFailure(params: {
   configPath: string;
+  redaction: SupportRedactionContext;
   stat?: fs.Stats;
   error?: string;
 }): ConfigShape {
@@ -286,7 +287,7 @@ function configShapeReadFailure(params: {
     shape.mtime = params.stat.mtime.toISOString();
   }
   if (params.error) {
-    shape.error = redactTextForSupport(params.error);
+    shape.error = redactSupportString(params.error, params.redaction);
   }
   return shape;
 }
@@ -300,7 +301,7 @@ function readConfigExport(options: {
   const stat = fs.existsSync(options.configPath) ? fs.statSync(options.configPath) : null;
   if (!stat) {
     return {
-      shape: configShapeReadFailure({ configPath: redactedConfigPath }),
+      shape: configShapeReadFailure({ configPath: redactedConfigPath, redaction: options }),
     };
   }
   try {
@@ -309,6 +310,7 @@ function readConfigExport(options: {
       return {
         shape: configShapeReadFailure({
           configPath: redactedConfigPath,
+          redaction: options,
           stat,
           error: parsed.error,
         }),
@@ -322,6 +324,7 @@ function readConfigExport(options: {
     return {
       shape: configShapeReadFailure({
         configPath: redactedConfigPath,
+        redaction: options,
         stat,
         error: error instanceof Error ? error.message : String(error),
       }),
@@ -541,7 +544,12 @@ function addSafeLogField(
     return;
   }
   if (typeof value === "string") {
-    sanitized[key] = sanitizeLogString(value, redaction);
+    const message = sanitizeLogString(value, redaction);
+    if (key === "msg" && (!message || UNSAFE_LOG_MESSAGE_RE.test(message))) {
+      addOmittedLogMessageMetadata(sanitized, value);
+      return;
+    }
+    sanitized[key] = message;
   } else if (typeof value === "number" || typeof value === "boolean" || value === null) {
     sanitized[key] = value;
   }
