@@ -1,21 +1,29 @@
 ## VI Dashboard Port Manifest
 
+Status: archived historical migration record
+
 Target branch: `integration/v2026.4.21-vi-dashboard`
 
 Source branch: `manhhai999/release/v2026.4.15-vi-dashboard`
 
 Source delta basis: final tree diff against `v2026.4.15`
 
-Goals:
+Purpose of this document:
 
-- Keep the new work fully isolated from the currently running runtime.
+- Preserve the completed migration record from the legacy `v2026.4.15` VI dashboard branch onto upstream `v2026.4.21`.
+- Document what was ported, what was treated as generated output, and how verification was performed.
+- Serve as audit/history context, not as the active operating document for the current runtime.
+
+Historical migration goals:
+
+- Keep the migration work isolated from the runtime that was active during the port.
 - Rebuild the VI dashboard customizations on top of upstream `v2026.4.21`.
 - Preserve the review surface first, then preserve supporting runtime/status behavior.
 - Regenerate generated artifacts on the `v2026.4.21` codebase instead of copying stale generated outputs from `v2026.4.15`.
 
-Rules:
+Historical migration rules:
 
-- Do not touch the currently running runtime or the existing `openclaw-v2026.4.15-vi-dashboard` checkout.
+- Do not modify an active production/runtime checkout without explicit confirmation.
 - Treat `ui/src/i18n/locales/*.ts`, `ui/src/i18n/.i18n/*.meta.json`, and `ui/src/ui/views/config-form.metadata.generated.ts` as generated output.
 - Port source-of-truth inputs first, then regenerate generated output on the new branch.
 - Prefer final-tree forward-porting over raw history replay because the source branch contains a large snapshot commit plus later hotfixes.
