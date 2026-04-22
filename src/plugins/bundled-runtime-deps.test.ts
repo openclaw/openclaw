@@ -508,6 +508,45 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
+  it("keeps source-checkout bundled runtime deps in the plugin root by default", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          tokenjuice: "0.6.1",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "tokenjuice",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["tokenjuice@0.6.1"],
+      retainSpecs: ["tokenjuice@0.6.1"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        missingSpecs: ["tokenjuice@0.6.1"],
+        installSpecs: ["tokenjuice@0.6.1"],
+      },
+    ]);
+    expect(resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} })).toBe(pluginRoot);
+  });
+
   it("does not trust package-root runtime deps for source-checkout bundled plugins", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();

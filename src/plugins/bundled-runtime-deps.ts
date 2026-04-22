@@ -177,15 +177,6 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
-function resolveSourceCheckoutBundledPluginPackageRoot(pluginRoot: string): string | null {
-  const extensionsDir = path.dirname(path.resolve(pluginRoot));
-  if (path.basename(extensionsDir) !== "extensions") {
-    return null;
-  }
-  const packageRoot = path.dirname(extensionsDir);
-  return isSourceCheckoutRoot(packageRoot) ? packageRoot : null;
-}
-
 function resolveSourceCheckoutDistPackageRoot(pluginRoot: string): string | null {
   const extensionsDir = path.dirname(pluginRoot);
   const buildDir = path.dirname(extensionsDir);
@@ -730,7 +721,6 @@ export function resolveBundledRuntimeDependencyInstallRoot(
   const env = options.env ?? process.env;
   if (
     options.forceExternal ||
-    resolveSourceCheckoutBundledPluginPackageRoot(pluginRoot) ||
     env.OPENCLAW_PLUGIN_STAGE_DIR?.trim() ||
     env.STATE_DIRECTORY?.trim()
   ) {

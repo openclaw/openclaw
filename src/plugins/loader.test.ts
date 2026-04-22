@@ -1190,6 +1190,88 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
   });
 
+  it("loads source-checkout bundled runtime deps without mirroring the repo tree", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const bundledDir = path.join(packageRoot, "extensions");
+    const plugin = writePlugin({
+      id: "tokenjuice",
+      dir: path.join(bundledDir, "tokenjuice"),
+      filename: "index.cjs",
+      body: `
+        const runtimeDep = require("external-runtime");
+        module.exports = {
+          id: "tokenjuice",
+          register(api) {
+            api.registerCommand({ name: "external-runtime", handler: () => runtimeDep.marker });
+          }
+        };
+      `,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/tokenjuice",
+          version: "1.0.0",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "tokenjuice",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const installRoots: string[] = [];
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        installRoots.push(fs.realpathSync(installRoot));
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({ name: "external-runtime", version: "1.0.0", main: "index.cjs" }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.cjs"),
+          "module.exports = { marker: 'source-checkout-ok' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(installRoots).toEqual([fs.realpathSync(plugin.dir)]);
+    expect(registry.plugins.find((entry) => entry.id === "tokenjuice")?.status).toBe("loaded");
+    expect(resolveLoadedPluginSource(registry, "tokenjuice")).toBe(
+      fs.realpathSync(path.join(plugin.dir, "index.cjs")),
+    );
+  });
+
   it("registers standalone text transforms", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
