@@ -378,7 +378,11 @@ export function resolveEmptyResponseRetryInstruction(params: {
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
 }): boolean {
+  if (params.executionContract === "strict-agentic") {
+    return true;
+  }
   return isStrictAgenticSupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,
