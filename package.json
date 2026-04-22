@@ -1568,6 +1568,7 @@
     "undici": "8.1.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
