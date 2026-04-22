@@ -264,15 +264,15 @@ export async function handleSessionHistoryHttpRequest(
 
   const unsubscribe = onSessionTranscriptUpdate((update) => {
     queueStreamWork(async () => {
-      if (!(await isStreamStillAuthorized())) {
-        closeStream();
-        return;
-      }
       if (res.writableEnded || !entry?.sessionId) {
         return;
       }
       const updatePath = canonicalizePath(update.sessionFile);
       if (!updatePath || !transcriptCandidates.has(updatePath)) {
+        return;
+      }
+      if (!(await isStreamStillAuthorized())) {
+        closeStream();
         return;
       }
       if (update.message !== undefined) {

@@ -15,6 +15,7 @@ let gatewayConfig: {
   allowRealIpFallback: false,
   webchat: { chatHistoryMaxChars: 2000 },
 };
+let authCheckCalls = 0;
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({
@@ -51,6 +52,7 @@ vi.mock("./http-utils.js", () => ({
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
   }) => {
+    authCheckCalls += 1;
     if (authRevoked) {
       return {
         ok: false as const,
@@ -163,6 +165,7 @@ class MockRes extends EventEmitter {
 afterEach(() => {
   transcriptUpdateHandler = undefined;
   authRevoked = false;
+  authCheckCalls = 0;
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -234,5 +237,41 @@ describe("session history SSE auth revocation", () => {
     expect(joined).not.toContain("event: message");
     expect(joined).not.toContain("stale-proxy event");
     expect(res.writableEnded).toBe(true);
+  });
+
+  it("skips SSE reauth for transcript updates outside this stream", async () => {
+    const req = new MockReq("/sessions/agent%3Amain/history");
+    const res = new MockRes();
+
+    const handled = await handleSessionHistoryHttpRequest(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      {
+        auth: { mode: "trusted-proxy" } as never,
+        trustedProxies: ["10.0.0.1"],
+        allowRealIpFallback: false,
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(transcriptUpdateHandler).toBeTypeOf("function");
+
+    authCheckCalls = 0;
+    gatewayConfig = {
+      webchat: { chatHistoryMaxChars: 2000 },
+    };
+
+    transcriptUpdateHandler?.({
+      sessionFile: "/tmp/other-session.jsonl",
+      message: { role: "assistant", content: [{ type: "text", text: "other session" }] },
+      messageId: "m-3",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const joined = res.writes.join("");
+    expect(authCheckCalls).toBe(0);
+    expect(joined).not.toContain("other session");
+    expect(res.writableEnded).toBe(false);
   });
 });
