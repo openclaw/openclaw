@@ -316,6 +316,16 @@ function getJiti(modulePath: string) {
   });
 }
 
+function canTryNodeRequireBuiltModule(modulePath: string): boolean {
+  const isBuiltBundledArtifact =
+    modulePath.includes(`${path.sep}dist${path.sep}`) ||
+    modulePath.includes(`${path.sep}dist-runtime${path.sep}`);
+  return (
+    isBuiltBundledArtifact &&
+    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
+  );
+}
+
 function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): unknown {
   const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
   const cached = loadedModuleExports.get(modulePath);
@@ -326,11 +336,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
   const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;
   let getJitiEndMs = 0;
-  if (
-    process.platform === "win32" &&
-    modulePath.includes(`${path.sep}dist${path.sep}`) &&
-    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
-  ) {
+  if (canTryNodeRequireBuiltModule(modulePath)) {
     try {
       loaded = nodeRequire(modulePath);
     } catch {
@@ -355,7 +361,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
         pluginId: "(bundled-entry)",
         source: modulePath,
         elapsedMs: endMs - loadStartMs,
-        // When the Win32 fast-path resolves the module via `nodeRequire`,
+        // When the built-artifact fast-path resolves the module via `nodeRequire`,
         // `getJitiEndMs` stays `0` because the `catch` block (the only place
         // it gets stamped) never runs. Reporting `getJitiMs` /
         // `jitiCallMs` as `0` for that path keeps the breakdown honest:
