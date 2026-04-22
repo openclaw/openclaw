@@ -61,14 +61,14 @@ static const ShellSectionDisplayEntry section_display_order[] = {
     { SECTION_CRON,         SHELL_SECTION_GROUP_PARITY },
     { SECTION_SKILLS,       SHELL_SECTION_GROUP_PARITY },
     { SECTION_ABOUT,        SHELL_SECTION_GROUP_PARITY },
-    { SECTION_AGENTS,       SHELL_SECTION_GROUP_EXTRAS },
-    { SECTION_USAGE,        SHELL_SECTION_GROUP_EXTRAS },
-    { SECTION_WORKFLOWS,    SHELL_SECTION_GROUP_EXTRAS },
-    { SECTION_CONTROL_ROOM, SHELL_SECTION_GROUP_EXTRAS },
-    { SECTION_ENVIRONMENT,  SHELL_SECTION_GROUP_EXTRAS },
-    { SECTION_DIAGNOSTICS,  SHELL_SECTION_GROUP_EXTRAS },
-    { SECTION_LOGS,         SHELL_SECTION_GROUP_EXTRAS },
-    { SECTION_DEBUG,        SHELL_SECTION_GROUP_EXTRAS },
+    { SECTION_AGENTS,       SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL },
+    { SECTION_USAGE,        SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL },
+    { SECTION_WORKFLOWS,    SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL },
+    { SECTION_CONTROL_ROOM, SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL },
+    { SECTION_ENVIRONMENT,  SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC },
+    { SECTION_DIAGNOSTICS,  SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC },
+    { SECTION_LOGS,         SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC },
+    { SECTION_DEBUG,        SHELL_SECTION_GROUP_EXTRAS_DEBUG },
 };
 
 gboolean shell_sections_is_embedded(AppSection section) {
@@ -85,6 +85,21 @@ const ShellSectionMeta* shell_sections_meta(AppSection section) {
     }
 
     return &section_meta[section];
+}
+
+const char* shell_sections_group_heading(ShellSectionGroup group) {
+    switch (group) {
+    case SHELL_SECTION_GROUP_PARITY:
+        return NULL;
+    case SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL:
+        return "Operational";
+    case SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC:
+        return "Diagnostics";
+    case SHELL_SECTION_GROUP_EXTRAS_DEBUG:
+        return "Developer";
+    default:
+        return NULL;
+    }
 }
 
 gsize shell_sections_display_count(void) {

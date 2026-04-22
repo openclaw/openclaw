@@ -7,7 +7,9 @@
 
 typedef enum {
     SHELL_SECTION_GROUP_PARITY = 0,
-    SHELL_SECTION_GROUP_EXTRAS = 1,
+    SHELL_SECTION_GROUP_EXTRAS_OPERATIONAL = 1,
+    SHELL_SECTION_GROUP_EXTRAS_DIAGNOSTIC = 2,
+    SHELL_SECTION_GROUP_EXTRAS_DEBUG = 3,
 } ShellSectionGroup;
 
 typedef struct {
@@ -23,6 +25,7 @@ typedef struct {
 
 gboolean shell_sections_is_embedded(AppSection section);
 const ShellSectionMeta* shell_sections_meta(AppSection section);
+const char* shell_sections_group_heading(ShellSectionGroup group);
 const SectionController* shell_sections_controller(AppSection section);
 gsize shell_sections_display_count(void);
 const ShellSectionDisplayEntry* shell_sections_display_at(gsize index);
