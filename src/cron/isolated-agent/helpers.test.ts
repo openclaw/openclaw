@@ -5,6 +5,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 describe("pickSummaryFromPayloads", () => {
@@ -167,5 +168,64 @@ describe("isHeartbeatOnlyResponse", () => {
         ACK_MAX,
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolveCronPayloadOutcome — runLevelError handling (#69889)", () => {
+  it("treats a run-level error as fatal even when no payload has isError", () => {
+    // Reporter scenario: Gemini returns HTTP 400 with no body on quota
+    // exhaustion. The assistant message ends with stopReason:"error" and
+    // errorMessage set, but the outbound delivery payload is empty content
+    // with no isError flag. Without this fix, cron stores status="ok"
+    // delivered=false and operators chase the delivery layer.
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [{ text: "" }],
+      runLevelError: "400 status code (no body)",
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(true);
+    expect(outcome.embeddedRunError).toBe("400 status code (no body)");
+  });
+
+  it("prefers the error-payload text over runLevelError when both are present", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [{ text: "tool call rate limited", isError: true }],
+      runLevelError: "generic run error",
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(true);
+    expect(outcome.embeddedRunError).toBe("tool call rate limited");
+  });
+
+  it("keeps status=ok when neither runLevelError nor isError is set", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [{ text: "Here is your summary." }],
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+    expect(outcome.embeddedRunError).toBeUndefined();
+  });
+
+  it("still ignores a successful payload after an isError one only when runLevelError is absent", () => {
+    // Prior invariant: a successful text after the error means the run
+    // recovered — status stays ok. Must not regress this when runLevelError
+    // is undefined.
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "retrying…", isError: true },
+        { text: "Final answer: 42" },
+      ],
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+  });
+
+  it("runLevelError overrides the successful-payload-after-error recovery path", () => {
+    // If the run itself errored (runLevelError set), a trailing successful
+    // text shouldn't paper over it — the run is still fatal.
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "retrying…", isError: true },
+        { text: "Partial answer" },
+      ],
+      runLevelError: "stream aborted",
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(true);
   });
 });

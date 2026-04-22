@@ -157,7 +157,14 @@ export function resolveCronPayloadOutcome(params: {
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  // A run-level error (e.g. assistant message stopReason:"error" with
+  // errorMessage set and empty content, seen when Gemini returns HTTP 400
+  // with no body due to quota exhaustion) must also mark the run as
+  // fatally errored — otherwise cron records status="ok", delivered=false
+  // and operators chase the delivery layer for hours when the real
+  // failure was at the model call. (#69889)
+  const hasFatalErrorPayload =
+    Boolean(params.runLevelError) || (hasErrorPayload && !hasSuccessfulPayloadAfterLastError);
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
@@ -189,6 +196,9 @@ export function resolveCronPayloadOutcome(params: {
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
+  const runLevelErrorText = normalizeOptionalString(
+    typeof params.runLevelError === "string" ? params.runLevelError : undefined,
+  );
   return {
     summary,
     outputText,
@@ -198,7 +208,9 @@ export function resolveCronPayloadOutcome(params: {
     deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
     embeddedRunError: hasFatalErrorPayload
-      ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+      ? (lastErrorPayloadText ??
+          runLevelErrorText ??
+          "cron isolated run returned an error payload")
       : undefined,
   };
 }
