@@ -51,6 +51,24 @@ jobs:
         run: |
           echo "image=${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
+      # 6. Wait for any in-progress Cognitive Services provisioning to settle
+      # ARM rejects modifications to resources in non-terminal states (RequestConflict).
+      - name: Wait for Cognitive Services provisioning to complete
+        run: |
+          echo "Checking Cognitive Services provisioning state..."
+          for i in $(seq 1 30); do
+            STATES=$(az cognitiveservices account list \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --query "[].properties.provisioningState" -o tsv 2>/dev/null || true)
+            echo "States: $STATES"
+            if ! echo "$STATES" | grep -qE "^(Creating|Updating|Deleting|Moving)$"; then
+              echo "All Cognitive Services accounts are in a terminal state."
+              break
+            fi
+            echo "Non-terminal state detected, waiting 15s... (attempt $i/30)"
+            sleep 15
+          done
+
       # 7. Execute the Bicep template (always runs)
       - name: Deploy Infrastructure and App via Bicep
         uses: azure/arm-deploy@v2
