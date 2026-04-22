@@ -77,9 +77,6 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
-      '@wecom/aibot-node-sdk':
-        specifier: ^1.0.6
-        version: 1.0.6
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
