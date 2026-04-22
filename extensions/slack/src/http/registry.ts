@@ -16,16 +16,15 @@ type RegisterSlackHttpHandlerArgs = {
 };
 
 const SLACK_HTTP_ROUTES_KEY = Symbol.for("openclaw.slackHttpRoutes");
-let slackHttpRoutes: Map<string, SlackHttpRequestHandler> | undefined;
 
 function getSlackHttpRoutes(): Map<string, SlackHttpRequestHandler> {
-  if (!slackHttpRoutes) {
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    slackHttpRoutes = (globalStore[SLACK_HTTP_ROUTES_KEY] as
-      | Map<string, SlackHttpRequestHandler>
-      | undefined) ?? new Map<string, SlackHttpRequestHandler>();
-    globalStore[SLACK_HTTP_ROUTES_KEY] = slackHttpRoutes;
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[SLACK_HTTP_ROUTES_KEY] as Map<string, SlackHttpRequestHandler> | undefined;
+  if (existing instanceof Map) {
+    return existing;
   }
+  const slackHttpRoutes = new Map<string, SlackHttpRequestHandler>();
+  globalStore[SLACK_HTTP_ROUTES_KEY] = slackHttpRoutes;
   return slackHttpRoutes;
 }
 
