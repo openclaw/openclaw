@@ -55,11 +55,10 @@ if [ "$(stat -c %U "${STATE_DIR}" 2>/dev/null || echo root)" != "node" ]; then
   chown -R node:node "${STATE_DIR}"
 fi
 
-# Pool mode: always overwrite config with the full skeleton on every boot.
-# This ensures image updates propagate the correct config (gateway, plugins,
-# browser fields that would trigger a restart if changed at adopt time).
-# Safe on every restart because pool machines have no user config to preserve.
-if [ "${BLINK_POOL_MODE:-}" = "true" ]; then
+# Pool mode: overwrite config with skeleton ONLY if not yet adopted.
+# The claim flow writes /data/.adopted after writing the real openclaw.json.
+# Without this guard, every restart clobbers the user's config with the skeleton.
+if [ "${BLINK_POOL_MODE:-}" = "true" ] && [ ! -f "${STATE_DIR}/.adopted" ]; then
   rm -f "${STATE_DIR}/logs/config-health.json" "${CONFIG_FILE}.bak"
   cat > "${CONFIG_FILE}" <<'POOL_SKELETON'
 {"agents":{"defaults":{"workspace":"/data/workspace"}},"plugins":{"slots":{"memory":"none"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true},"http":{"endpoints":{"chatCompletions":{"enabled":true}}}},"browser":{"headless":true,"noSandbox":true,"profiles":{"user":{"driver":"openclaw","cdpPort":18800,"color":"#00AA00"}}},"session":{"maintenance":{"mode":"enforce","pruneAfter":"30d","maxEntries":200}}}
