@@ -121,9 +121,11 @@ describe("diagnostic stability bundles", () => {
       },
     );
 
-    expect(result.status).toBe("written");
-    const bundle = readBundle(result.status === "written" ? result.path : "");
-    const raw = fs.readFileSync(result.status === "written" ? result.path : "", "utf8");
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const bundle = readBundle(result.path);
+    const raw = fs.readFileSync(result.path, "utf8");
     expect(bundle).toMatchObject({
       reason: "gateway.restart_startup_failed",
       error: {

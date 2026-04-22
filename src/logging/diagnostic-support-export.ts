@@ -291,6 +291,13 @@ function isMissingPathError(error: unknown): boolean {
   return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
+function configReadErrorMessage(error: unknown, stat?: fs.Stats): string | undefined {
+  if (!stat && isMissingPathError(error)) {
+    return undefined;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 function readConfigExport(options: {
   configPath: string;
   env: NodeJS.ProcessEnv;
@@ -316,13 +323,12 @@ function readConfigExport(options: {
       sanitized: sanitizeConfigDetails(parsed.parsed, options),
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       shape: configShapeReadFailure({
         configPath: redactedConfigPath,
         redaction: options,
         stat,
-        error: !stat && isMissingPathError(error) ? undefined : errorMessage,
+        error: configReadErrorMessage(error, stat),
       }),
     };
   }
