@@ -105,8 +105,8 @@ export function createSessionsListTool(opts?: {
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
       const search = readStringParam(params, "search");
-      const includeDerivedTitles = params.includeDerivedTitles === true;
-      const includeLastMessage = params.includeLastMessage === true;
+      const includeDerivedTitles = params.includeDerivedTitles === true ? true : undefined;
+      const includeLastMessage = params.includeLastMessage === true ? true : undefined;
       const gatewayCall = opts?.callGateway ?? callGateway;
 
       const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
@@ -201,21 +201,23 @@ export function createSessionsListTool(opts?: {
         const sessionId = readStringValue(entry.sessionId);
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
+        const resolvedAgentId = resolveAgentIdFromSessionKey(key);
         let transcriptPath: string | undefined;
         if (sessionId) {
           try {
-            const agentId = resolveAgentIdFromSessionKey(key);
             const trimmedStorePath = storePath?.trim();
             let effectiveStorePath: string | undefined;
             if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
               if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
-                effectiveStorePath = resolveStorePath(trimmedStorePath, { agentId });
+                effectiveStorePath = resolveStorePath(trimmedStorePath, {
+                  agentId: resolvedAgentId,
+                });
               } else if (path.isAbsolute(trimmedStorePath)) {
                 effectiveStorePath = trimmedStorePath;
               }
             }
             const filePathOpts = resolveSessionFilePathOptions({
-              agentId,
+              agentId: resolvedAgentId,
               storePath: effectiveStorePath,
             });
             transcriptPath = resolveSessionFilePath(
@@ -230,7 +232,7 @@ export function createSessionsListTool(opts?: {
 
         const row: SessionListRow = {
           key: displayKey,
-          agentId: resolveAgentIdFromSessionKey(key),
+          agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,
           origin:
