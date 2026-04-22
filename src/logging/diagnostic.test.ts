@@ -146,9 +146,12 @@ describe("stuck session diagnostics threshold", () => {
     expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
       expect.objectContaining({
         type: "session.state",
-        sessionId: "s1",
+        outcome: "processing",
       }),
     );
+    const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
+    expect(event).not.toHaveProperty("sessionId");
+    expect(event).not.toHaveProperty("sessionKey");
 
     resetDiagnosticStateForTest();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });

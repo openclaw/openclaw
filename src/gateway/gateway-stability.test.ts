@@ -9,7 +9,6 @@ import {
   resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
-  type DiagnosticStabilityEventRecord,
 } from "../logging/diagnostic-stability.js";
 
 const MB = 1024 * 1024;
@@ -95,18 +94,6 @@ function emitSyntheticGatewayStabilityLoad(): number {
   return maxRssBytes;
 }
 
-function latestSessionStates(
-  events: DiagnosticStabilityEventRecord[],
-): Map<string, DiagnosticStabilityEventRecord> {
-  const latest = new Map<string, DiagnosticStabilityEventRecord>();
-  for (const event of events) {
-    if (event.type === "session.state" && event.sessionKey) {
-      latest.set(event.sessionKey, event);
-    }
-  }
-  return latest;
-}
-
 describe("gateway stability lane", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
@@ -145,13 +132,16 @@ describe("gateway stability lane", () => {
     expect(snapshot.summary.payloadLarge?.chunked).toBeGreaterThan(0);
     expect(snapshot.summary.payloadLarge?.bySurface["gateway.stability.probe"]).toBeGreaterThan(0);
 
-    const latestStates = latestSessionStates(snapshot.events);
-    expect(latestStates.size).toBe(SYNTHETIC_SESSION_COUNT);
-    for (const event of latestStates.values()) {
-      expect(event.outcome).toBe("idle");
-      expect(event.queueDepth).toBe(0);
-      expect(event.reason).toBe(STABILITY_REASON);
+    const sessionEvents = snapshot.events.filter((event) => event.type === "session.state");
+    expect(sessionEvents.length).toBeGreaterThan(0);
+    for (const event of sessionEvents) {
+      expect(event).not.toHaveProperty("sessionId");
+      expect(event).not.toHaveProperty("sessionKey");
     }
+    expect(sessionEvents.some((event) => event.outcome === "idle" && event.queueDepth === 0)).toBe(
+      true,
+    );
+    expect(sessionEvents.every((event) => event.reason === STABILITY_REASON)).toBe(true);
 
     stopDiagnosticStabilityRecorder();
     emitDiagnosticEvent({

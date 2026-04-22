@@ -21,7 +21,6 @@ import {
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
-import { redactSensitiveText } from "./redact.js";
 
 export const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
@@ -209,7 +208,7 @@ function safeScalar(value: unknown): unknown {
     return value;
   }
   if (typeof value === "string") {
-    const redacted = redactSensitiveText(value);
+    const redacted = redactTextForSupport(value);
     return redacted === value && /^[A-Za-z0-9_.:-]{1,120}$/u.test(value) ? value : "<redacted>";
   }
   return undefined;
@@ -287,7 +286,7 @@ function configShapeReadFailure(params: {
     shape.mtime = params.stat.mtime.toISOString();
   }
   if (params.error) {
-    shape.error = redactSensitiveText(params.error);
+    shape.error = redactTextForSupport(params.error);
   }
   return shape;
 }

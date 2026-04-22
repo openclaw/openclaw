@@ -99,7 +99,7 @@ export function redactPathForSupport(file: string, options: SupportRedactionCont
       return `${label}${next.slice(prefix.length)}`;
     }
   }
-  return redactSensitiveText(next);
+  return redactSensitiveTextForSupport(next);
 }
 
 function redactKnownPathPrefixesForSupport(
@@ -114,11 +114,15 @@ function redactKnownPathPrefixesForSupport(
 }
 
 export function redactTextForSupport(value: string): string {
-  let redacted = redactSensitiveText(value);
+  let redacted = redactSensitiveTextForSupport(value);
   redacted = redactUrlSecretsForSupport(redacted);
   redacted = redactServiceIdentifiersForSupport(redacted);
   redacted = redactContactIdentifiersForSupport(redacted);
   return redactLongIdentifiersForSupport(redacted);
+}
+
+function redactSensitiveTextForSupport(value: string): string {
+  return redactSensitiveText(value, { mode: "tools" });
 }
 
 function redactUrlSecretsForSupport(value: string): string {

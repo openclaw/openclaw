@@ -66,6 +66,9 @@ describe("diagnostic support export", () => {
               token: fakeToken,
             },
           },
+          logging: {
+            redactSensitive: "off",
+          },
           channels: {
             telegram: {
               accounts: {
@@ -319,6 +322,9 @@ describe("diagnostic support export", () => {
           accounts?: Record<string, { botToken?: string; allowFrom?: { redacted?: boolean } }>;
         };
       };
+      logging?: {
+        redactSensitive?: string;
+      };
       agents?: Array<{ name?: string; instructions?: string }>;
     };
     expect(sanitizedConfig.gateway).toMatchObject({
@@ -328,6 +334,9 @@ describe("diagnostic support export", () => {
         mode: "token",
         token: "<redacted>",
       },
+    });
+    expect(sanitizedConfig.logging).toMatchObject({
+      redactSensitive: "off",
     });
     expect(Object.keys(sanitizedConfig.channels?.telegram?.accounts ?? {})).toEqual([
       "<redacted-account-1>",

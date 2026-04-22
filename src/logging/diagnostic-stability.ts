@@ -14,8 +14,6 @@ export type DiagnosticStabilityEventRecord = {
   seq: number;
   ts: number;
   type: DiagnosticEventPayload["type"];
-  sessionKey?: string;
-  sessionId?: string;
   channel?: string;
   pluginId?: string;
   source?: string;
@@ -172,8 +170,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
 
   switch (event.type) {
     case "model.usage":
-      record.sessionKey = event.sessionKey;
-      record.sessionId = event.sessionId;
       record.channel = event.channel;
       record.provider = event.provider;
       record.model = event.model;
@@ -193,30 +189,22 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.channel = event.channel;
       break;
     case "message.queued":
-      record.sessionKey = event.sessionKey;
-      record.sessionId = event.sessionId;
       record.channel = event.channel;
       record.source = event.source;
       record.queueDepth = event.queueDepth;
       break;
     case "message.processed":
-      record.sessionKey = event.sessionKey;
-      record.sessionId = event.sessionId;
       record.channel = event.channel;
       record.durationMs = event.durationMs;
       record.outcome = event.outcome;
       assignReasonCode(record, event.reason);
       break;
     case "session.state":
-      record.sessionKey = event.sessionKey;
-      record.sessionId = event.sessionId;
       record.outcome = event.state;
       assignReasonCode(record, event.reason);
       record.queueDepth = event.queueDepth;
       break;
     case "session.stuck":
-      record.sessionKey = event.sessionKey;
-      record.sessionId = event.sessionId;
       record.outcome = event.state;
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
@@ -231,8 +219,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.waitMs = event.waitMs;
       break;
     case "run.attempt":
-      record.sessionKey = event.sessionKey;
-      record.sessionId = event.sessionId;
       record.count = event.attempt;
       break;
     case "diagnostic.heartbeat":
@@ -242,8 +228,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.queued = event.queued;
       break;
     case "tool.loop":
-      record.sessionKey = event.sessionKey;
-      record.sessionId = event.sessionId;
       record.toolName = event.toolName;
       record.level = event.level;
       record.action = event.action;

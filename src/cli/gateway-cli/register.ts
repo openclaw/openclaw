@@ -195,7 +195,6 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.surface ? `surface=${record.surface}` : "",
     record.channel ? `channel=${record.channel}` : "",
     record.pluginId ? `plugin=${record.pluginId}` : "",
-    record.sessionId ? `session=${record.sessionId}` : "",
     record.reason ? `reason=${record.reason}` : "",
     record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
     record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",

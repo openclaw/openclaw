@@ -64,6 +64,8 @@ describe("diagnostic stability recorder", () => {
       count: 3,
     });
     expect(snapshot.events[1]).not.toHaveProperty("message");
+    expect(snapshot.events[1]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[1]).not.toHaveProperty("sessionKey");
   });
 
   it("keeps stable reason codes but drops free-form reason text", () => {
