@@ -157,8 +157,8 @@ async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
 function isQaSuiteInfraRetryableError(error: unknown) {
   const message = formatErrorMessage(error).toLowerCase();
   return (
-    message.includes("timed out") ||
-    message.includes("timeout") ||
+    message.includes("agent.wait timeout") ||
+    message.includes("qa cli timed out") ||
     message.includes("readyz") ||
     message.includes("gateway healthy") ||
     message.includes("transport ready") ||
@@ -212,6 +212,7 @@ async function runQaParityPreflight(params: {
   providerMode: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
+  allowFailures?: boolean;
 }) {
   const outputDir = path.join(
     params.repoRoot,
@@ -233,8 +234,15 @@ async function runQaParityPreflight(params: {
   process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
   process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
-  if ((await readQaFailedScenarioCountFromSummary(result.summaryPath)) > 0) {
-    process.exitCode = 1;
+  const failedScenarioCount = await readQaFailedScenarioCountFromSummary(result.summaryPath);
+  if (failedScenarioCount > 0) {
+    if (params.allowFailures === true) {
+      process.exitCode = 1;
+      return;
+    }
+    throw new Error(
+      `QA parity preflight failed with ${failedScenarioCount} failing scenario${failedScenarioCount === 1 ? "" : "s"}.`,
+    );
   }
 }
 
@@ -520,6 +528,7 @@ export async function runQaSuiteCommand(opts: {
       providerMode,
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
+      allowFailures,
     });
     return;
   }
