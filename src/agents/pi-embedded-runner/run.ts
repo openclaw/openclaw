@@ -109,6 +109,7 @@ import {
   resolveRunLivenessState,
 } from "./run/incomplete-turn.js";
 import {
+  createExecutionProfileLifecycleSeam,
   createEmbeddedRunLifecycleBaseEvent,
   createEmbeddedRunLifecycleCorrelationId,
   resolveEmbeddedRunPassTransitionDecision,
@@ -161,6 +162,25 @@ function derivePassEndOutcome(
     return "assistant_retry";
   }
   return "success";
+}
+
+function canContinueAfterPassDispatch(
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | "clientToolCall"
+    | "yieldDetected"
+    | "didSendViaMessagingTool"
+    | "didSendDeterministicApprovalPrompt"
+    | "successfulCronAdds"
+  >,
+): boolean {
+  if (attempt.clientToolCall || attempt.yieldDetected) {
+    return false;
+  }
+  if (attempt.didSendViaMessagingTool || attempt.didSendDeterministicApprovalPrompt) {
+    return false;
+  }
+  return (attempt.successfulCronAdds?.length ?? 0) === 0;
 }
 
 function buildTraceToolSummary(params: {
@@ -335,6 +355,7 @@ export async function runEmbeddedPiAgent(
       });
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
+      const hookLifecycleControllerPlan = hookSelection.lifecycleControllerPlan;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
 
       const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
@@ -639,9 +660,13 @@ export async function runEmbeddedPiAgent(
         };
         let authRetryPending = false;
         let accumulatedReplayState = createEmbeddedRunReplayState();
-        const lifecycleSeam = params.lifecycleSeam;
+        const lifecycleSeam =
+          params.lifecycleSeam ??
+          (hookLifecycleControllerPlan
+            ? createExecutionProfileLifecycleSeam(hookLifecycleControllerPlan)
+            : undefined);
         const lifecycleDecisionMode: EmbeddedRunLifecycleDecisionMode =
-          params.lifecycleDecisionMode ?? "observe_only";
+          params.lifecycleDecisionMode ?? (hookLifecycleControllerPlan ? "decide" : "observe_only");
         const emitPassStart = async (params2: {
           passIndex: number;
           passKind: EmbeddedRunPassKind;
@@ -2222,6 +2247,32 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTargets: attempt.messagingToolSentTargets,
               successfulCronAdds: attempt.successfulCronAdds,
             };
+          }
+
+          if (canContinueAfterPassDispatch(attempt)) {
+            const passDispatchTransitionDecision = await resolvePassTransitionDecision({
+              passIndex,
+              passKind,
+              correlationId: passCorrelationId,
+              provider,
+              modelId,
+              source: "pass_dispatch",
+              proposedAction: "complete_pass",
+              proposedReason:
+                (sessionLastAssistant?.stopReason as string | undefined) ?? "completed_pass",
+            });
+            throwIfTransitionHalted({
+              decision: passDispatchTransitionDecision,
+              source: "pass_dispatch",
+              proposedAction: "complete_pass",
+            });
+            if (passDispatchTransitionDecision.next === "continue") {
+              log.info(
+                `embedded run lifecycle requested another pass: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${provider}/${modelId} passIndex=${passIndex}${formatTransitionDecisionDetails(passDispatchTransitionDecision)}`,
+              );
+              continue;
+            }
           }
 
           log.debug(

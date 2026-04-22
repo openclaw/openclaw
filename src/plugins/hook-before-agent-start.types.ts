@@ -9,6 +9,16 @@ export type PluginHookBeforeModelResolveResult = {
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "ollama" */
   providerOverride?: string;
+  /** Optional bounded execution-profile plan to bridge pre-call policy into the embedded runner. */
+  lifecycleControllerPlan?: PluginHookLifecycleControllerPlan;
+};
+
+export type PluginHookLifecycleControllerProfile = "single-pass" | "double-pass" | "verifier-heavy";
+
+export type PluginHookLifecycleControllerPlan = {
+  requestedProfile: PluginHookLifecycleControllerProfile;
+  plannedMaxPasses: number;
+  controllerLabel?: string;
 };
 
 // before_prompt_build hook

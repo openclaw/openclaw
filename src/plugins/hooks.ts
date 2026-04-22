@@ -226,6 +226,10 @@ export function createHookRunner(
     // Keep the first defined override so higher-priority hooks win.
     modelOverride: firstDefined(acc?.modelOverride, next.modelOverride),
     providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
+    lifecycleControllerPlan: firstDefined(
+      acc?.lifecycleControllerPlan,
+      next.lifecycleControllerPlan,
+    ),
   });
 
   const mergeBeforePromptBuild = (

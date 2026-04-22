@@ -9,7 +9,10 @@ import {
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./pi-embedded-runner/run.overflow-compaction.harness.js";
-import { buildEmbeddedRunLifecycleReceipt } from "./pi-embedded-runner/run/lifecycle-seam.js";
+import {
+  buildEmbeddedRunLifecycleReceipt,
+  createExecutionProfileLifecycleSeam,
+} from "./pi-embedded-runner/run/lifecycle-seam.js";
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 
@@ -79,41 +82,30 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
       ...baseline.meta,
       durationMs: withSeam.meta.durationMs,
     });
-    expect(receipts).toEqual([
-      {
-        runtimeSurface: "m13_lifecycle_seam_v1",
-        lifecycleSeamVersion: 1,
-        event: "pass_start",
-        passIndex: 1,
-        passKind: "model_call",
-        correlationId: receipts[0]?.correlationId,
-        envelopeOnly: true,
-        decisionEffective: false,
-        outcome: "observed",
-      },
-      {
-        runtimeSurface: "m13_lifecycle_seam_v1",
-        lifecycleSeamVersion: 1,
-        event: "pass_end",
-        passIndex: 1,
-        passKind: "model_call",
-        correlationId: receipts[0]?.correlationId,
-        envelopeOnly: true,
-        decisionEffective: false,
-        outcome: "observed",
-      },
-      {
-        runtimeSurface: "m13_lifecycle_seam_v1",
-        lifecycleSeamVersion: 1,
-        event: "pass_transition_decision",
-        passIndex: 1,
-        passKind: "model_call",
-        correlationId: receipts[0]?.correlationId,
-        envelopeOnly: true,
-        decisionEffective: false,
-        outcome: "noop",
-      },
-    ]);
+    expect(receipts[0]).toMatchObject({
+      runtimeSurface: "m13_lifecycle_seam_v1",
+      lifecycleSeamVersion: 1,
+      event: "pass_start",
+      passIndex: 1,
+      passKind: "model_call",
+      envelopeOnly: true,
+      decisionEffective: false,
+      outcome: "observed",
+    });
+    expect(receipts[1]).toMatchObject({
+      runtimeSurface: "m13_lifecycle_seam_v1",
+      lifecycleSeamVersion: 1,
+      event: "pass_end",
+      passIndex: 1,
+      passKind: "model_call",
+      correlationId: receipts[0]?.correlationId,
+      envelopeOnly: true,
+      decisionEffective: false,
+      outcome: "observed",
+    });
+    const transitionReceipts = receipts.filter((receipt) => receipt.event === "pass_transition_decision");
+    expect(transitionReceipts.length).toBeGreaterThanOrEqual(1);
+    expect(transitionReceipts.every((receipt) => receipt.outcome === "noop")).toBe(true);
   });
 
   it("threads the observe_only decision mode through the runner without changing behavior", async () => {
@@ -132,7 +124,9 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
     });
 
     expect(result.meta.error).toBeUndefined();
-    expect(decisions).toEqual([{ event: "pass_transition_decision", next: "noop" }]);
+    expect(decisions.length).toBeGreaterThanOrEqual(1);
+    expect(decisions.every((decision) => decision.event === "pass_transition_decision")).toBe(true);
+    expect(decisions.every((decision) => decision.next === "noop")).toBe(true);
   });
 
   it("emits assistant_retry when the assistant ends the pass with an error", async () => {
@@ -216,7 +210,9 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
       ...overflowBaseRunParams,
       lifecycleDecisionMode: "decide",
       lifecycleSeam: {
-        onPassTransitionDecision: vi.fn(async () => ({ next: "continue" as const })),
+        onPassTransitionDecision: vi.fn(async (event) =>
+          event.source === "prompt" ? { next: "continue" as const } : { next: "noop" as const },
+        ),
       },
     });
 
@@ -254,5 +250,92 @@ describe("runEmbeddedPiAgent B1 lifecycle seam scaffold", () => {
 
     expect(result.meta.error).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("supports successful pass dispatch continuation in decide mode", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const sources: string[] = [];
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lifecycleDecisionMode: "decide",
+      lifecycleSeam: {
+        onPassTransitionDecision: vi.fn(async (event) => {
+          sources.push(`${event.source}:${event.passIndex}`);
+          if (event.source === "pass_dispatch" && event.passIndex === 1) {
+            return { next: "continue" as const, reason: "execution_profile:double-pass" };
+          }
+          return { next: "noop" as const };
+        }),
+      },
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(sources).toContain("pass_dispatch:1");
+    expect(sources).toContain("pass_dispatch:2");
+  });
+
+  it("policy-bound execution-profile seam continues until the planned max pass count", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lifecycleDecisionMode: "decide",
+      lifecycleSeam: createExecutionProfileLifecycleSeam({
+        requestedProfile: "double-pass",
+        plannedMaxPasses: 2,
+        controllerLabel: "test_policy_bridge",
+      }),
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not continue pass_dispatch when the pass ended with pending tool calls", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        clientToolCall: {
+          name: "demo_tool",
+          params: { value: 1 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lifecycleDecisionMode: "decide",
+      lifecycleSeam: createExecutionProfileLifecycleSeam({
+        requestedProfile: "double-pass",
+        plannedMaxPasses: 2,
+        controllerLabel: "test_policy_bridge",
+      }),
+    });
+
+    expect(result.meta.pendingToolCalls).toBeTruthy();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes malformed plannedMaxPasses to a single bounded pass", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lifecycleDecisionMode: "decide",
+      lifecycleSeam: createExecutionProfileLifecycleSeam({
+        requestedProfile: "double-pass",
+        plannedMaxPasses: Number.POSITIVE_INFINITY,
+        controllerLabel: "test_policy_bridge",
+      }),
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 });

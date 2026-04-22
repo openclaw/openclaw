@@ -6,7 +6,18 @@ export const EMBEDDED_RUN_LIFECYCLE_SURFACE = "m13_lifecycle_seam_v1" as const;
 export const EMBEDDED_RUN_LIFECYCLE_SEAM_VERSION = 1 as const;
 
 export type EmbeddedRunPassKind = "model_call" | "tool_round" | "compaction";
-export type EmbeddedRunTransitionSource = "retry_limit" | "prompt" | "assistant";
+export type EmbeddedRunTransitionSource = "retry_limit" | "prompt" | "assistant" | "pass_dispatch";
+
+export type EmbeddedRunLifecycleControllerProfile =
+  | "single-pass"
+  | "double-pass"
+  | "verifier-heavy";
+
+export type EmbeddedRunLifecycleControllerPlan = {
+  requestedProfile: EmbeddedRunLifecycleControllerProfile;
+  plannedMaxPasses: number;
+  controllerLabel?: string;
+};
 
 export const EMBEDDED_RUN_LIFECYCLE_DECISION_MODES = ["observe_only", "decide"] as const;
 export type EmbeddedRunLifecycleDecisionMode =
@@ -84,6 +95,41 @@ export type EmbeddedRunLifecycleSeam = {
     | void
     | Promise<EmbeddedRunLifecycleDecisionResult | void>;
 };
+
+export function createExecutionProfileLifecycleSeam(
+  plan: EmbeddedRunLifecycleControllerPlan,
+): EmbeddedRunLifecycleSeam {
+  const normalizedPassCount = Number.isFinite(plan.plannedMaxPasses)
+    ? Math.trunc(plan.plannedMaxPasses)
+    : 1;
+  const maxPasses = Math.max(1, normalizedPassCount);
+  return {
+    async onPassTransitionDecision(event) {
+      if (event.source !== "pass_dispatch") {
+        return { next: "noop" };
+      }
+      if (event.passIndex >= maxPasses) {
+        return {
+          next: "noop",
+          annotations: {
+            requestedProfile: plan.requestedProfile,
+            plannedMaxPasses: maxPasses,
+            controllerLabel: plan.controllerLabel ?? "policy_bound_lifecycle_bridge",
+          },
+        };
+      }
+      return {
+        next: "continue",
+        reason: `execution_profile:${plan.requestedProfile}`,
+        annotations: {
+          requestedProfile: plan.requestedProfile,
+          plannedMaxPasses: maxPasses,
+          controllerLabel: plan.controllerLabel ?? "policy_bound_lifecycle_bridge",
+        },
+      };
+    },
+  };
+}
 
 export function createEmbeddedRunLifecycleCorrelationId(): string {
   return randomBytes(8).toString("hex");

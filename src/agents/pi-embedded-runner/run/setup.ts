@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
-import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
+import type {
+  PluginHookBeforeAgentStartResult,
+  PluginHookLifecycleControllerPlan,
+} from "../../../plugins/types.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -30,7 +33,14 @@ type HookRunnerLike = {
   runBeforeModelResolve(
     input: { prompt: string },
     context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
+  ): Promise<
+    | {
+        providerOverride?: string;
+        modelOverride?: string;
+        lifecycleControllerPlan?: PluginHookLifecycleControllerPlan;
+      }
+    | undefined
+  >;
   runBeforeAgentStart(
     input: { prompt: string },
     context: HookContext,
@@ -46,7 +56,13 @@ export async function resolveHookModelSelection(params: {
 }) {
   let provider = params.provider;
   let modelId = params.modelId;
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+  let modelResolveOverride:
+    | {
+        providerOverride?: string;
+        modelOverride?: string;
+        lifecycleControllerPlan?: PluginHookLifecycleControllerPlan;
+      }
+    | undefined;
   let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;
 
@@ -77,6 +93,9 @@ export async function resolveHookModelSelection(params: {
           modelResolveOverride?.providerOverride ?? legacyBeforeAgentStartResult?.providerOverride,
         modelOverride:
           modelResolveOverride?.modelOverride ?? legacyBeforeAgentStartResult?.modelOverride,
+        lifecycleControllerPlan:
+          modelResolveOverride?.lifecycleControllerPlan ??
+          legacyBeforeAgentStartResult?.lifecycleControllerPlan,
       };
     } catch (hookErr) {
       log.warn(`before_agent_start hook (legacy model resolve path) failed: ${String(hookErr)}`);
@@ -95,6 +114,7 @@ export async function resolveHookModelSelection(params: {
   return {
     provider,
     modelId,
+    lifecycleControllerPlan: modelResolveOverride?.lifecycleControllerPlan,
     legacyBeforeAgentStartResult,
   };
 }
