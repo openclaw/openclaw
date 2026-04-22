@@ -10,6 +10,7 @@ export type ChannelHealthSnapshot = {
   activeRuns?: number;
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
@@ -35,8 +36,6 @@ export type ChannelHealthPolicy = {
   now: number;
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
-  skipStaleSocketCheck?: boolean;
-  staleSocketHealthCheckModes?: readonly string[];
 };
 
 export type ChannelRestartReason =
@@ -56,24 +55,10 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 
-function shouldCheckStaleSocketForMode(
-  mode: string | undefined,
-  healthCheckModes: readonly string[] | undefined,
-): boolean {
-  if (healthCheckModes) {
-    const normalizedModes = new Set(
-      healthCheckModes.map((entry) => entry.trim().toLowerCase()).filter(Boolean),
-    );
-    return Boolean(mode && normalizedModes.has(mode));
-  }
-  return mode !== "webhook";
-}
-
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
 ): ChannelHealthEvaluation {
-  const mode = typeof snapshot.mode === "string" ? snapshot.mode.trim().toLowerCase() : undefined;
   if (!isManagedAccount(snapshot)) {
     return { healthy: true, reason: "unmanaged" };
   }
@@ -93,9 +78,10 @@ export function evaluateChannelHealth(
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
       : null;
-  const lastEventAt =
-    typeof snapshot.lastEventAt === "number" && Number.isFinite(snapshot.lastEventAt)
-      ? snapshot.lastEventAt
+  const lastTransportActivityAt =
+    typeof snapshot.lastTransportActivityAt === "number" &&
+    Number.isFinite(snapshot.lastTransportActivityAt)
+      ? snapshot.lastTransportActivityAt
       : null;
   const busyStateInitializedForLifecycle =
     lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
@@ -126,20 +112,18 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  const shouldCheckStaleSocket =
-    policy.skipStaleSocketCheck !== true &&
-    snapshot.connected === true &&
-    lastEventAt != null &&
-    shouldCheckStaleSocketForMode(mode, policy.staleSocketHealthCheckModes);
+  // App-level events are not socket liveness: quiet Slack/Discord workspaces can
+  // go idle while their upstream clients maintain heartbeats internally.
+  const shouldCheckStaleSocket = snapshot.connected === true && lastTransportActivityAt != null;
   if (shouldCheckStaleSocket) {
-    if (lastStartAt != null && lastEventAt < lastStartAt) {
+    if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
       if (lifecycleEventGap <= policy.staleEventThresholdMs) {
         return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stale-socket" };
     }
-    const eventAge = policy.now - lastEventAt;
+    const eventAge = policy.now - lastTransportActivityAt;
     if (eventAge > policy.staleEventThresholdMs) {
       return { healthy: false, reason: "stale-socket" };
     }
