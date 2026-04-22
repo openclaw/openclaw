@@ -316,7 +316,7 @@ describe("CodexAppServerEventProjector", () => {
 
   it("projects guardian review lifecycle details into agent events", async () => {
     const onAgentEvent = vi.fn();
-    const projector = createProjector({ ...createParams(), onAgentEvent });
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
     await projector.handleNotification(
       forCurrentTurn("item/autoApprovalReview/started", {
