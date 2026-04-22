@@ -216,6 +216,29 @@ describe("resolveDeliveryTarget", () => {
     expect(result.to).toBe("room-allowed");
   });
 
+  it("applies allowFrom rerouting to dry-run delivery previews", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-preview",
+      lastChannel: "alpha",
+      lastTo: "room-denied",
+    });
+    setStoredAlphaAllowFrom(["room-allowed"]);
+
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const result = await resolveDeliveryTarget(
+      cfg,
+      AGENT_ID,
+      {
+        channel: "last",
+        to: undefined,
+      },
+      { dryRun: true },
+    );
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
+  });
+
   it("keeps explicit delivery target unchanged", async () => {
     setLastSessionEntry({
       sessionId: "sess-w2",
@@ -333,6 +356,25 @@ describe("resolveDeliveryTarget", () => {
         input: "123456789",
       }),
     );
+  });
+
+  it("skips id-like target normalization for dry-run delivery previews", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(maybeResolveIdLikeTarget).mockClear();
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "forum",
+        to: "123456789",
+      },
+      { dryRun: true },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("123456789");
+    expect(maybeResolveIdLikeTarget).not.toHaveBeenCalled();
   });
 
   it("falls back to the runtime target resolver when the channel plugin is not already loaded", async () => {

@@ -140,7 +140,7 @@ export function resolveCodexAppServerRuntimeOptions(
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
-      "workspace-write",
+      "danger-full-access",
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
       (env.OPENCLAW_CODEX_APP_SERVER_GUARDIAN === "1" ? "guardian_subagent" : "user"),

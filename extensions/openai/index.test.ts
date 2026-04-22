@@ -12,9 +12,8 @@ import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.
 import plugin from "./index.js";
 import {
   OPENAI_FRIENDLY_PROMPT_OVERLAY,
-  OPENAI_GPT5_EXECUTION_BIAS,
-  OPENAI_GPT5_OUTPUT_CONTRACT,
-  OPENAI_GPT5_TOOL_CALL_STYLE,
+  OPENAI_GPT5_BEHAVIOR_CONTRACT,
+  shouldApplyOpenAIPromptOverlay,
 } from "./prompt-overlay.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -88,7 +87,7 @@ function expectOpenAIPromptContribution(
       agentId: undefined,
     }),
   ).toEqual({
-    stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
+    stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
     sectionOverrides,
   });
 }
@@ -142,10 +141,12 @@ describe("openai plugin", () => {
     const authStore = { version: 1, profiles: {} };
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "draw a cat",
       cfg: {},
       authStore,
+      count: 2,
+      size: "2048x2048",
     });
 
     expect(resolveApiKeySpy).toHaveBeenCalledWith(
@@ -158,10 +159,10 @@ describe("openai plugin", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/generations",
         body: {
-          model: "gpt-image-1",
+          model: "gpt-image-2",
           prompt: "draw a cat",
-          n: 1,
-          size: "1024x1024",
+          n: 2,
+          size: "2048x2048",
         },
       }),
     );
@@ -179,7 +180,7 @@ describe("openai plugin", () => {
           revisedPrompt: "revised",
         },
       ],
-      model: "gpt-image-1",
+      model: "gpt-image-2",
     });
   });
 
@@ -194,10 +195,12 @@ describe("openai plugin", () => {
 
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Edit this image",
       cfg: {},
       authStore,
+      count: 2,
+      size: "1536x1024",
       inputImages: [
         { buffer: Buffer.from("x"), mimeType: "image/png" },
         { buffer: Buffer.from("y"), mimeType: "image/jpeg", fileName: "ref.jpg" },
@@ -214,10 +217,10 @@ describe("openai plugin", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/edits",
         body: {
-          model: "gpt-image-1",
+          model: "gpt-image-2",
           prompt: "Edit this image",
-          n: 1,
-          size: "1024x1024",
+          n: 2,
+          size: "1536x1024",
           images: [
             {
               image_url: "data:image/png;base64,eA==",
@@ -237,7 +240,7 @@ describe("openai plugin", () => {
           fileName: "image-1.png",
         },
       ],
-      model: "gpt-image-1",
+      model: "gpt-image-2",
     });
   });
 
@@ -254,7 +257,7 @@ describe("openai plugin", () => {
     await expect(
       provider.generateImage({
         provider: "openai",
-        model: "gpt-image-1",
+        model: "gpt-image-2",
         prompt: "draw a cat",
         cfg: {
           models: {
@@ -391,10 +394,9 @@ describe("openai plugin", () => {
     };
 
     expect(openaiProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
+      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-        execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
       },
     });
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
@@ -408,10 +410,20 @@ describe("openai plugin", () => {
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
+      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-        execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+      },
+    });
+    expect(
+      openaiProvider.resolveSystemPromptContribution?.({
+        ...contributionContext,
+        modelId: "openai/gpt-5.4-mini",
+      }),
+    ).toEqual({
+      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+      sectionOverrides: {
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
     expect(
@@ -420,18 +432,16 @@ describe("openai plugin", () => {
         modelId: "gpt-image-1",
       }),
     ).toBeUndefined();
+    expect(shouldApplyOpenAIPromptOverlay({ modelProviderId: "openai", modelId: "gpt-4.1" })).toBe(
+      false,
+    );
+    expect(
+      shouldApplyOpenAIPromptOverlay({ modelProviderId: "anthropic", modelId: "gpt-5.4" }),
+    ).toBe(false);
   });
 
-  it("includes stronger execution guidance in the OpenAI prompt overlay", () => {
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "If the user asks you to do the work, start in the same turn instead of restating the plan.",
-    );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      'If the latest user message is a short approval like "ok do it" or "go ahead", skip the recap and start acting.',
-    );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Commentary-only turns are incomplete when the next action is clear.",
-    );
+  it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Keep progress updates clear and concrete.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
@@ -480,31 +490,26 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
-    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
-      "Use a real tool call or concrete action FIRST when the task is actionable. Do not stop at a plan or promise-to-act reply.",
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<execution_policy>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<tool_discipline>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<output_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completion_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "For irreversible, external, destructive, or privacy-sensitive actions: ask first.",
     );
-    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
-      "If the work will take multiple steps, keep calling tools until the task is done or you hit a real blocker. Do not stop after one step to ask permission.",
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "Prefer tool evidence over recall when action, state, or mutable facts matter.",
     );
-    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
-      "Do prerequisite lookup or discovery before dependent actions.",
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "If more tool work would likely change the answer, do it before replying.",
     );
-    expect(OPENAI_GPT5_TOOL_CALL_STYLE).toContain(
-      "Call tools directly without narrating what you are about to do. Do not describe a plan before each tool call.",
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Return requested sections/order only.");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "Treat the task as incomplete until every requested item is handled",
     );
-    expect(OPENAI_GPT5_TOOL_CALL_STYLE).toContain(
-      "When a first-class tool exists for an action, use the tool instead of asking the user to run a command.",
-    );
-    expect(OPENAI_GPT5_TOOL_CALL_STYLE).not.toContain("/approve");
-    expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
-      "Return the requested sections only, in the requested order.",
-    );
-    expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
-      "Prefer commas, periods, or parentheses over em dashes in normal prose.",
-    );
-    expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
-      "Do not use em dashes unless the user explicitly asks for them or they are required in quoted text.",
-    );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("/approve");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");
   });
 
   it("defaults to the friendly OpenAI interaction-style overlay", async () => {
@@ -514,7 +519,6 @@ describe("openai plugin", () => {
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {
       interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-      execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
     });
   });
 
@@ -525,9 +529,7 @@ describe("openai plugin", () => {
 
     expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
     const openaiProvider = requireRegisteredProvider(providers, "openai");
-    expectOpenAIPromptContribution(openaiProvider, {
-      execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-    });
+    expectOpenAIPromptContribution(openaiProvider, {});
   });
 
   it("treats mixed-case off values as disabling the friendly prompt overlay", async () => {
@@ -536,9 +538,7 @@ describe("openai plugin", () => {
     });
 
     const openaiProvider = requireRegisteredProvider(providers, "openai");
-    expectOpenAIPromptContribution(openaiProvider, {
-      execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-    });
+    expectOpenAIPromptContribution(openaiProvider, {});
   });
 
   it("supports explicitly configuring the friendly prompt overlay", async () => {
@@ -550,7 +550,6 @@ describe("openai plugin", () => {
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {
       interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-      execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
     });
   });
 
@@ -562,7 +561,6 @@ describe("openai plugin", () => {
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {
       interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-      execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
     });
   });
 });

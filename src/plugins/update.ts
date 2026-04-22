@@ -248,7 +248,7 @@ function createPluginUpdateIntegrityDriftHandler(params: {
     params.logger.warn?.(
       `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
     );
-    return true;
+    return false;
   };
 }
 

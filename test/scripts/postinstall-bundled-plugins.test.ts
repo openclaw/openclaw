@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createBundledRuntimeDependencyInstallArgs,
+  createBundledRuntimeDependencyInstallEnv,
   createNestedNpmInstallEnv,
+  isDirectPostinstallInvocation,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
@@ -47,14 +50,7 @@ async function writePluginPackage(
 
 describe("bundled plugin postinstall", () => {
   function createNpmInstallArgs(...packages: string[]) {
-    return [
-      "install",
-      "--omit=dev",
-      "--no-save",
-      "--package-lock=false",
-      "--legacy-peer-deps",
-      ...packages,
-    ];
+    return createBundledRuntimeDependencyInstallArgs(packages);
   }
 
   function createBareNpmRunner(packages: string[]) {
@@ -86,6 +82,20 @@ describe("bundled plugin postinstall", () => {
       windowsVerbatimArguments: undefined,
     });
   }
+
+  it("recognizes direct invocation through symlinked temp prefixes", () => {
+    const realpathSync = vi.fn((value: string) =>
+      value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
+    );
+
+    expect(
+      isDirectPostinstallInvocation({
+        entryPath: "/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        modulePath: "/private/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        realpathSync,
+      }),
+    ).toBe(true);
+  });
 
   async function writeDiscordDaveyOptionalDependencyFixture(
     extensionsDir: string,
@@ -119,6 +129,25 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toEqual({
       HOME: "/tmp/home",
+    });
+  });
+
+  it("uses package-manager-neutral runtime install args with npm config env", () => {
+    expect(createBundledRuntimeDependencyInstallArgs(["acpx@0.4.1"])).toEqual([
+      "install",
+      "--ignore-scripts",
+      "acpx@0.4.1",
+    ]);
+    expect(
+      createBundledRuntimeDependencyInstallEnv({
+        HOME: "/tmp/home",
+        npm_config_prefix: "/opt/homebrew",
+      }),
+    ).toEqual({
+      HOME: "/tmp/home",
+      npm_config_legacy_peer_deps: "true",
+      npm_config_package_lock: "false",
+      npm_config_save: "false",
     });
   });
 
@@ -405,6 +434,27 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toThrow("unsafe dist entry: dist/escape");
+  });
+
+  it("ignores staged bundled plugin node_modules when pruning packaged dist", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-runtime-deps-");
+    const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
+    const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
+    const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    await fs.mkdir(path.dirname(staleFile), { recursive: true });
+    await fs.mkdir(path.dirname(packageJson), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(staleFile, "export {};\n");
+    await fs.writeFile(packageJson, "{}\n");
+    await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        expectedFiles: new Set(["dist/extensions/slack/package.json"]),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/stale-runtime.js"]);
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {

@@ -9,6 +9,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolvePluginConfigObject,
   resolveSessionStoreEntry,
   updateSessionStore,
   type OpenClawConfig,
@@ -216,7 +217,8 @@ type ActiveMemoryThinkingLevel =
   | "medium"
   | "high"
   | "xhigh"
-  | "adaptive";
+  | "adaptive"
+  | "max";
 type ActiveMemoryPromptStyle =
   | "balanced"
   | "strict"
@@ -572,12 +574,8 @@ function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   if (entry?.enabled === false) {
     return false;
   }
-  const pluginConfig = asRecord(entry?.config);
+  const pluginConfig = resolvePluginConfigObject(cfg, "active-memory");
   return pluginConfig?.enabled !== false;
-}
-
-function resolveActiveMemoryPluginConfigFromConfig(cfg: OpenClawConfig): unknown {
-  return asRecord(cfg.plugins?.entries?.["active-memory"])?.config;
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(
@@ -698,7 +696,8 @@ function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
     thinking === "medium" ||
     thinking === "high" ||
     thinking === "xhigh" ||
-    thinking === "adaptive"
+    thinking === "adaptive" ||
+    thinking === "max"
   ) {
     return thinking;
   }
@@ -1885,7 +1884,7 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig =
-        resolveActiveMemoryPluginConfigFromConfig(api.runtime.config.loadConfig()) ??
+        resolvePluginConfigObject(api.runtime.config.loadConfig(), "active-memory") ??
         api.pluginConfig;
       config = normalizePluginConfig(livePluginConfig);
       warnDeprecatedModelFallbackPolicy(livePluginConfig);
@@ -1958,83 +1957,94 @@ export default definePluginEntry({
     });
 
     api.on("before_prompt_build", async (event, ctx) => {
-      const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
-      const resolvedSessionKey =
-        ctx.sessionKey?.trim() ||
-        (resolvedAgentId
-          ? resolveCanonicalSessionKeyFromSessionId({
-              api,
-              agentId: resolvedAgentId,
-              sessionId: ctx.sessionId,
-            })
-          : undefined);
-      const effectiveAgentId =
-        resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
-      if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
-        await persistPluginStatusLines({
+      try {
+        refreshLiveConfigFromRuntime();
+        const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
+        const resolvedSessionKey =
+          ctx.sessionKey?.trim() ||
+          (resolvedAgentId
+            ? resolveCanonicalSessionKeyFromSessionId({
+                api,
+                agentId: resolvedAgentId,
+                sessionId: ctx.sessionId,
+              })
+            : undefined);
+        const effectiveAgentId =
+          resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+        if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        if (!isEnabledForAgent(config, effectiveAgentId)) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        if (!isEligibleInteractiveSession(ctx)) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        if (
+          !isAllowedChatType(config, {
+            ...ctx,
+            sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+            mainKey: api.config.session?.mainKey,
+          })
+        ) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        const query = buildQuery({
+          latestUserMessage: event.prompt,
+          recentTurns: extractRecentTurns(event.messages),
+          config,
+        });
+        const result = await maybeResolveActiveRecall({
           api,
+          config,
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
+          sessionId: ctx.sessionId,
+          messageProvider: ctx.messageProvider,
+          channelId: ctx.channelId,
+          query,
+          currentModelProviderId: ctx.modelProviderId,
+          currentModelId: ctx.modelId,
         });
+        if (!result.summary) {
+          return undefined;
+        }
+        const promptPrefix = buildPromptPrefix(result.summary);
+        if (!promptPrefix) {
+          return undefined;
+        }
+        return {
+          prependContext: promptPrefix,
+        };
+      } catch (error) {
+        const message = toSingleLineLogValue(
+          error instanceof Error ? error.message : String(error),
+        );
+        api.logger.warn?.(
+          `active-memory: before_prompt_build failed, skipping memory lookup: ${message}`,
+        );
         return undefined;
       }
-      if (!isEnabledForAgent(config, effectiveAgentId)) {
-        await persistPluginStatusLines({
-          api,
-          agentId: effectiveAgentId,
-          sessionKey: resolvedSessionKey,
-        });
-        return undefined;
-      }
-      if (!isEligibleInteractiveSession(ctx)) {
-        await persistPluginStatusLines({
-          api,
-          agentId: effectiveAgentId,
-          sessionKey: resolvedSessionKey,
-        });
-        return undefined;
-      }
-      if (
-        !isAllowedChatType(config, {
-          ...ctx,
-          sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-          mainKey: api.config.session?.mainKey,
-        })
-      ) {
-        await persistPluginStatusLines({
-          api,
-          agentId: effectiveAgentId,
-          sessionKey: resolvedSessionKey,
-        });
-        return undefined;
-      }
-      const query = buildQuery({
-        latestUserMessage: event.prompt,
-        recentTurns: extractRecentTurns(event.messages),
-        config,
-      });
-      const result = await maybeResolveActiveRecall({
-        api,
-        config,
-        agentId: effectiveAgentId,
-        sessionKey: resolvedSessionKey,
-        sessionId: ctx.sessionId,
-        messageProvider: ctx.messageProvider,
-        channelId: ctx.channelId,
-        query,
-        currentModelProviderId: ctx.modelProviderId,
-        currentModelId: ctx.modelId,
-      });
-      if (!result.summary) {
-        return undefined;
-      }
-      const promptPrefix = buildPromptPrefix(result.summary);
-      if (!promptPrefix) {
-        return undefined;
-      }
-      return {
-        prependContext: promptPrefix,
-      };
     });
   },
 });

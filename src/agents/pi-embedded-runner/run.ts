@@ -777,6 +777,7 @@ export async function runEmbeddedPiAgent(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             toolsAllow: params.toolsAllow,
             disableMessageTool: params.disableMessageTool,
+            forceMessageTool: params.forceMessageTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,
             bootstrapPromptWarningSignaturesSeen,
@@ -1708,6 +1709,7 @@ export async function runEmbeddedPiAgent(
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
+            executionContract,
             prompt: params.prompt,
             aborted,
             timedOut,
@@ -1716,6 +1718,7 @@ export async function runEmbeddedPiAgent(
           const nextReasoningOnlyRetryInstruction = resolveReasoningOnlyRetryInstruction({
             provider: activeErrorContext.provider,
             modelId: activeErrorContext.model,
+            executionContract,
             aborted,
             timedOut,
             attempt,
@@ -1723,6 +1726,7 @@ export async function runEmbeddedPiAgent(
           const nextEmptyResponseRetryInstruction = resolveEmptyResponseRetryInstruction({
             provider: activeErrorContext.provider,
             modelId: activeErrorContext.model,
+            executionContract,
             payloadCount,
             aborted,
             timedOut,

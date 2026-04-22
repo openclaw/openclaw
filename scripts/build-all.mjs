@@ -116,6 +116,7 @@ export const BUILD_ALL_PROFILES = {
     "write-cli-startup-metadata",
     "write-cli-compat",
   ],
+  gatewayWatch: ["tsdown", "runtime-postbuild", "build-stamp"],
 };
 
 export function resolveBuildAllSteps(profile = "full") {

@@ -1643,6 +1643,17 @@ async function runRemDreaming(params: {
   }
 }
 
+async function deleteNarrativeSessionBestEffort(
+  subagent: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"],
+  sessionKey: string,
+): Promise<void> {
+  try {
+    await subagent.deleteSession({ sessionKey });
+  } catch {
+    // Cleanup is best-effort; request-scoped runtimes can throw synchronously.
+  }
+}
+
 export async function runDreamingSweepPhases(params: {
   workspaceDir: string;
   pluginConfig?: Record<string, unknown>;
@@ -1675,9 +1686,7 @@ export async function runDreamingSweepPhases(params: {
         phase: "light",
         nowMs: sweepNowMs,
       });
-      await params.subagent.deleteSession({ sessionKey: lightSessionKey }).catch(() => {
-        // Swallow errors — this is best-effort cleanup.
-      });
+      await deleteNarrativeSessionBestEffort(params.subagent, lightSessionKey);
     }
   }
 
@@ -1701,9 +1710,7 @@ export async function runDreamingSweepPhases(params: {
         phase: "rem",
         nowMs: sweepNowMs,
       });
-      await params.subagent.deleteSession({ sessionKey: remSessionKey }).catch(() => {
-        // Swallow errors — this is best-effort cleanup.
-      });
+      await deleteNarrativeSessionBestEffort(params.subagent, remSessionKey);
     }
   }
 }

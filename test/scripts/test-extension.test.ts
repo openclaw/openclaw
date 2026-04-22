@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -12,6 +12,10 @@ import {
   resolveExtensionBatchPlan,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
+import {
+  resolveExtensionBatchParallelism,
+  runExtensionBatchPlan,
+} from "../../scripts/test-extension-batch.mjs";
 import { bundledPluginFile, bundledPluginRoot } from "../helpers/bundled-plugin-paths.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
@@ -434,6 +438,88 @@ describe("scripts/test-extension.mjs", () => {
     expect(msTeamsShardIndex).toBeGreaterThanOrEqual(0);
     expect(feishuShardIndex).toBeGreaterThanOrEqual(0);
     expect(msTeamsShardIndex).not.toBe(feishuShardIndex);
+  });
+
+  it("runs extension batch config groups concurrently when requested", async () => {
+    const started: string[] = [];
+    const resolvers: Array<() => void> = [];
+    const runGroup = vi.fn(
+      (params: {
+        args: string[];
+        config: string;
+        env: Record<string, string | undefined>;
+        targets: string[];
+      }) => {
+        started.push(params.config);
+        return new Promise<number>((resolve) => {
+          resolvers.push(() => resolve(0));
+        });
+      },
+    );
+    const runPromise = runExtensionBatchPlan(
+      {
+        extensionCount: 3,
+        extensionIds: ["one", "two", "three"],
+        estimatedCost: 60,
+        hasTests: true,
+        planGroups: [
+          {
+            config: "light",
+            estimatedCost: 10,
+            extensionIds: ["one"],
+            roots: ["extensions/one"],
+            testFileCount: 1,
+          },
+          {
+            config: "heavy",
+            estimatedCost: 30,
+            extensionIds: ["two"],
+            roots: ["extensions/two"],
+            testFileCount: 3,
+          },
+          {
+            config: "middle",
+            estimatedCost: 20,
+            extensionIds: ["three"],
+            roots: ["extensions/three"],
+            testFileCount: 2,
+          },
+        ],
+        testFileCount: 6,
+      },
+      {
+        env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+        runGroup,
+        vitestArgs: ["--reporter=dot"],
+      },
+    );
+
+    await Promise.resolve();
+    expect(started).toEqual(["heavy", "middle"]);
+    resolvers.shift()?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(started).toEqual(["heavy", "middle", "light"]);
+    while (resolvers.length > 0) {
+      resolvers.shift()?.();
+    }
+    await expect(runPromise).resolves.toBe(0);
+    expect(runGroup).toHaveBeenCalledTimes(3);
+    expect(runGroup.mock.calls[0]?.[0]).toMatchObject({
+      args: ["--reporter=dot"],
+      config: "heavy",
+      targets: ["extensions/two"],
+    });
+    expect(runGroup.mock.calls[0]?.[0].env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toContain(
+      path.join("node_modules", ".experimental-vitest-cache", "extension-batch", "0-heavy"),
+    );
+  });
+
+  it("keeps extension batch parallelism bounded by group count", () => {
+    expect(resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" })).toBe(2);
+    expect(resolveExtensionBatchParallelism(1, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "4" })).toBe(1);
+    expect(resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "nope" })).toBe(
+      1,
+    );
   });
 
   it("treats extensions without tests as a no-op by default", () => {

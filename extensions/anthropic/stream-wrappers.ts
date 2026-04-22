@@ -8,7 +8,11 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeFastMode,
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -62,23 +66,6 @@ function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
   return enabled ? "auto" : "standard_only";
-}
-
-function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (!raw) {
-    return undefined;
-  }
-  const key = normalizeLowercaseStringOrEmpty(raw);
-  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
-    return false;
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
-    return true;
-  }
-  return undefined;
 }
 
 function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {

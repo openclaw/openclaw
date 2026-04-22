@@ -23,23 +23,23 @@ const CONTRACT_FILE_WEIGHTS = new Map([
 function resolveContractFileWeight(file) {
   const name = file.replaceAll("\\", "/").split("/").pop();
   if (name.startsWith("plugin.registry-backed-shard-")) {
-    return 5;
+    return 40;
   }
   if (name.startsWith("surfaces-only.registry-backed-shard-")) {
-    return 5;
+    return 40;
   }
   if (name.startsWith("directory.registry-backed-shard-")) {
-    return 4;
+    return 24;
   }
   if (name.startsWith("threading.registry-backed-shard-")) {
-    return 4;
+    return 18;
   }
   return CONTRACT_FILE_WEIGHTS.get(name) ?? 8;
 }
 
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
-  const suffixes = ["a", "b", "c", "d", "e", "f", "g", "h"];
+  const suffixes = ["a", "b", "c", "d"];
   const groups = Object.fromEntries(
     ["registry", "core"].flatMap((family) =>
       suffixes.map((suffix) => [`checks-fast-contracts-channels-${family}-${suffix}`, []]),

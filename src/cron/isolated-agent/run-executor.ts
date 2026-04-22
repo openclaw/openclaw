@@ -3,6 +3,10 @@ import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
+import {
+  resolveCronChannelOutputPolicy,
+  resolveCurrentChannelTarget,
+} from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   getCliSessionId,
@@ -32,20 +36,6 @@ type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtim
 
 let cronEmbeddedRuntimePromise: Promise<CronEmbeddedRuntime> | undefined;
 let cronSubagentRegistryRuntimePromise: Promise<CronSubagentRegistryRuntime> | undefined;
-
-function resolveCurrentChannelTarget(params: {
-  channel?: string;
-  to?: string;
-  threadId?: string | number;
-}): string | undefined {
-  if (!params.to) {
-    return undefined;
-  }
-  if (params.channel !== "telegram" || params.threadId == null) {
-    return params.to;
-  }
-  return params.to.includes(":topic:") ? params.to : `${params.to}:topic:${params.threadId}`;
-}
 
 async function loadCronEmbeddedRuntime() {
   cronEmbeddedRuntimePromise ??= import("./run-embedded.runtime.js");
@@ -87,6 +77,7 @@ export function createCronPromptExecutor(params: {
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
+    forceMessageTool: boolean;
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
@@ -159,6 +150,11 @@ export function createCronPromptExecutor(params: {
         }
         const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
           await loadCronEmbeddedRuntime();
+        const currentChannelId = await resolveCurrentChannelTarget({
+          channel: params.messageChannel,
+          to: params.resolvedDelivery.to,
+          threadId: params.resolvedDelivery.threadId,
+        });
         const result = await runEmbeddedPiAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.agentSessionKey,
@@ -170,11 +166,7 @@ export function createCronPromptExecutor(params: {
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
-          currentChannelId: resolveCurrentChannelTarget({
-            channel: params.messageChannel,
-            to: params.resolvedDelivery.to,
-            threadId: params.resolvedDelivery.threadId,
-          }),
+          currentChannelId,
           sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
@@ -204,6 +196,7 @@ export function createCronPromptExecutor(params: {
           runId: params.cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,
+          forceMessageTool: params.toolPolicy.forceMessageTool,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           bootstrapPromptWarningSignaturesSeen,
@@ -253,6 +246,7 @@ export async function executeCronRun(params: {
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
+    forceMessageTool: boolean;
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
@@ -352,7 +346,9 @@ export async function executeCronRun(params: {
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
       finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
-      preferFinalAssistantVisibleText: params.resolvedDelivery.channel === "telegram",
+      preferFinalAssistantVisibleText: (
+        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
+      ).preferFinalAssistantVisibleText,
     });
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =

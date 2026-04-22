@@ -136,13 +136,23 @@ export async function runCodexAppServerAttempt(
       pendingNotifications.push(notification);
       return;
     }
-    await projector.handleNotification(notification);
-    if (
-      notification.method === "turn/completed" &&
-      isTurnNotification(notification.params, turnId)
-    ) {
-      completed = true;
-      resolveCompletion?.();
+    // Determine terminal-turn status before invoking the projector so a throw
+    // inside projector.handleNotification still releases the session lane.
+    // See openclaw/openclaw#67996.
+    const isTurnCompletion =
+      notification.method === "turn/completed" && isTurnNotification(notification.params, turnId);
+    try {
+      await projector.handleNotification(notification);
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server projector notification threw", {
+        method: notification.method,
+        error,
+      });
+    } finally {
+      if (isTurnCompletion) {
+        completed = true;
+        resolveCompletion?.();
+      }
     }
   };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
@@ -355,10 +365,14 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
+  const visionFilteredTools = filterToolsForVisionInputs(allTools, {
+    modelHasVision,
+    hasInboundImages: (params.images?.length ?? 0) > 0,
+  });
   const filteredTools =
     params.toolsAllow && params.toolsAllow.length > 0
-      ? allTools.filter((tool) => params.toolsAllow?.includes(tool.name))
-      : allTools;
+      ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
+      : visionFilteredTools;
   return normalizeProviderToolSchemas({
     tools: filteredTools,
     provider: params.provider,
@@ -369,6 +383,19 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function filterToolsForVisionInputs<T extends { name?: string }>(
+  tools: T[],
+  params: {
+    modelHasVision: boolean;
+    hasInboundImages: boolean;
+  },
+): T[] {
+  if (!params.modelHasVision || !params.hasInboundImages) {
+    return tools;
+  }
+  return tools.filter((tool) => tool.name !== "image");
 }
 
 async function withCodexStartupTimeout<T>(params: {
@@ -485,6 +512,9 @@ function handleApprovalRequest(params: {
   });
 }
 
-export const __testing = createCodexAppServerClientFactoryTestHooks((factory) => {
-  clientFactory = factory;
-});
+export const __testing = {
+  filterToolsForVisionInputs,
+  ...createCodexAppServerClientFactoryTestHooks((factory) => {
+    clientFactory = factory;
+  }),
+} as const;

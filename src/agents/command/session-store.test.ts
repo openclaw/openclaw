@@ -6,13 +6,59 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded.js";
-import { updateSessionStoreAfterAgentRun } from "./session-store.js";
+import { clearCliSessionInStore, updateSessionStoreAfterAgentRun } from "./session-store.js";
 import { resolveSession } from "./session.js";
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, cfg?: OpenClawConfig) =>
     Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+type MockCost = {
+  input?: number;
+  output?: number;
+};
+
+type MockProviderModel = {
+  id: string;
+  cost?: MockCost;
+};
+
+type MockUsageFormatConfig = {
+  models?: {
+    providers?: Record<string, { models?: MockProviderModel[] }>;
+  };
+};
+
+vi.mock("../../utils/usage-format.js", () => ({
+  estimateUsageCost: (params: { usage?: { input?: number; output?: number }; cost?: MockCost }) => {
+    if (!params.usage || !params.cost) {
+      return undefined;
+    }
+    const input = params.usage.input ?? 0;
+    const output = params.usage.output ?? 0;
+    const costInput = params.cost.input ?? 0;
+    const costOutput = params.cost.output ?? 0;
+    const total = input * costInput + output * costOutput;
+    if (!Number.isFinite(total)) {
+      return undefined;
+    }
+    return total / 1e6;
+  },
+  resolveModelCostConfig: (params: { provider?: string; model?: string; config?: unknown }) => {
+    const providers = (params.config as MockUsageFormatConfig | undefined)?.models?.providers;
+    if (!providers) {
+      return undefined;
+    }
+    const model = providers[params.provider ?? ""]?.models?.find(
+      (entry) => entry.id === params.model,
+    );
+    if (!model) {
+      return undefined;
+    }
+    return model.cost;
+  },
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -381,6 +427,171 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.totalTokens).toBe(21225);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+    });
+  });
+
+  it("snapshots cost instead of accumulating (fixes #69347)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              models: [
+                {
+                  id: "gpt-4",
+                  cost: {
+                    input: 10,
+                    output: 30,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cost-snapshot";
+      const sessionId = "test-cost-snapshot-session";
+
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Simulate a run with 10k input + 5k output tokens
+      // Cost = (10000 * 10 + 5000 * 30) / 1e6 = $0.25
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-4",
+            usage: {
+              input: 10000,
+              output: 5000,
+            },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4",
+        result,
+      });
+
+      // First run: cost should be $0.25
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
+
+      // Simulate a second persist with the SAME cumulative usage (e.g., from a heartbeat or
+      // redundant persist). Before the fix, this would double the cost.
+      // After the fix, cost should remain the same because it's snapshotted.
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4",
+        result, // Same usage again
+      });
+
+      // After second persist with same usage, cost should STILL be $0.25 (not $0.50)
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
+    });
+  });
+});
+
+describe("clearCliSessionInStore", () => {
+  it("persists cleared Claude CLI bindings through session-store merge", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-clear-claude-cli";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-session-1",
+            authEpoch: "epoch-1",
+          },
+          "codex-cli": {
+            sessionId: "codex-session-1",
+          },
+        },
+        cliSessionIds: {
+          "claude-cli": "claude-session-1",
+          "codex-cli": "codex-session-1",
+        },
+        claudeCliSessionId: "claude-session-1",
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const cleared = await clearCliSessionInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+      });
+
+      expect(cleared?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(cleared?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session-1",
+      });
+      expect(cleared?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(cleared?.cliSessionIds?.["codex-cli"]).toBe("codex-session-1");
+      expect(cleared?.claudeCliSessionId).toBeUndefined();
+      expect(sessionStore[sessionKey]).toEqual(cleared);
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session-1",
+      });
+      expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionIds?.["codex-cli"]).toBe("codex-session-1");
+      expect(persisted?.claudeCliSessionId).toBeUndefined();
+    });
+  });
+
+  it("leaves the caller snapshot intact when the session entry is missing", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const existingKey = "agent:main:explicit:existing";
+      const sessionStore: Record<string, SessionEntry> = {
+        [existingKey]: {
+          sessionId: "openclaw-session-1",
+          updatedAt: 1,
+          claudeCliSessionId: "claude-session-1",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const cleared = await clearCliSessionInStore({
+        provider: "claude-cli",
+        sessionKey: "agent:main:explicit:missing",
+        sessionStore,
+        storePath,
+      });
+
+      expect(cleared).toBeUndefined();
+      expect(sessionStore[existingKey]?.claudeCliSessionId).toBe("claude-session-1");
+      expect(
+        loadSessionStore(storePath, { skipCache: true })[existingKey]?.claudeCliSessionId,
+      ).toBe("claude-session-1");
     });
   });
 });

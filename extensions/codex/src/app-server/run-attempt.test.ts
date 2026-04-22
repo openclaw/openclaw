@@ -7,6 +7,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
@@ -188,6 +189,9 @@ describe("runCodexAppServerAttempt", () => {
           params: expect.objectContaining({
             model: "gpt-5.4-codex",
             modelProvider: "openai",
+            approvalPolicy: "never",
+            sandbox: "danger-full-access",
+            developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
           }),
         },
         {
@@ -295,6 +299,61 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("releases completion when a projector callback throws during turn/completed", async () => {
+    // Regression for openclaw/openclaw#67996: a throw inside the projector's
+    // turn/completed handler must not strand resolveCompletion, otherwise the
+    // gateway session lane stays locked and every follow-up message queues
+    // behind a run that will never resolve.
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+      }
+      if (method === "turn/start") {
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onAgentEvent = () => {
+      throw new Error("downstream consumer exploded");
+    };
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+    );
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ id: "plan-1", type: "plan", text: "step one\nstep two" }],
+        },
+      },
+    });
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+    });
+  });
+
   it("times out app-server startup before thread setup can hang forever", async () => {
     __testing.setCodexAppServerClientFactoryForTests(() => new Promise<never>(() => undefined));
     const params = createParams(
@@ -382,7 +441,8 @@ describe("runCodexAppServerAttempt", () => {
       modelProvider: "openai",
       approvalPolicy: "never",
       approvalsReviewer: "user",
-      sandbox: "workspace-write",
+      sandbox: "danger-full-access",
+      developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
   });
@@ -415,6 +475,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
+      developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
     expect(requests).toEqual(
@@ -456,6 +517,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
+      developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
     expect(

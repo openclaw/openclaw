@@ -143,6 +143,14 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("uses a minimal built runtime profile for gateway watch regression", () => {
+    expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
+      "tsdown",
+      "runtime-postbuild",
+      "build-stamp",
+    ]);
+  });
+
   it("does not cache plugin-sdk entry shims over compiled JS", () => {
     const step = BUILD_ALL_STEPS.find((entry) => entry.label === "write-plugin-sdk-entry-dts");
     expect(step).toBeTruthy();

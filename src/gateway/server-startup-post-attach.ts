@@ -5,6 +5,7 @@ import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
@@ -38,6 +39,11 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 
 function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
   return cfg.memory?.backend === "qmd";
+}
+
+async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
+  const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
+  return hasInternalHookListeners("gateway", "startup");
 }
 
 async function prewarmConfiguredPrimaryModel(params: {
@@ -232,7 +238,9 @@ export async function startGatewaySidecars(params: {
     }
   });
 
-  if (internalHooksConfigured) {
+  const shouldDispatchGatewayStartupInternalHook =
+    internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
+  if (shouldDispatchGatewayStartupInternalHook) {
     setTimeout(() => {
       void import("../hooks/internal-hooks.js").then(
         ({ createInternalHookEvent, triggerInternalHook }) => {
@@ -385,6 +393,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
+    awaitSidecars?: boolean;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -466,7 +475,15 @@ export async function startGatewayPostAttachRuntime(
       const hookRunner = await runtimeDeps.getGlobalHookRunner();
       if (hookRunner?.hasHooks("gateway_start")) {
         void hookRunner
-          .runGatewayStart({ port: params.port }, { port: params.port })
+          .runGatewayStart(
+            { port: params.port },
+            {
+              port: params.port,
+              config: params.gatewayPluginConfigAtStart,
+              workspaceDir: params.defaultWorkspaceDir,
+              getCron: () => params.deps.cron as PluginHookGatewayCronService | undefined,
+            },
+          )
           .catch((err) => {
             params.log.warn(`gateway_start hook failed: ${String(err)}`);
           });
@@ -475,6 +492,19 @@ export async function startGatewayPostAttachRuntime(
     .catch((err) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
+
+  if (params.awaitSidecars === true) {
+    const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
+      stopGatewayUpdateCheckPromise,
+      tailscaleCleanupPromise,
+      sidecarsPromise,
+    ]);
+    return {
+      stopGatewayUpdateCheck,
+      tailscaleCleanup,
+      pluginServices: sidecarsResult.pluginServices,
+    };
+  }
 
   const [stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
     stopGatewayUpdateCheckPromise,

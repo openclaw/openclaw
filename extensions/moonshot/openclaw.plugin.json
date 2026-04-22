@@ -52,6 +52,21 @@
     "mediaUnderstandingProviders": ["moonshot"],
     "webSearchProviders": ["kimi"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "moonshot": {
+      "capabilities": ["image", "video"],
+      "defaultModels": {
+        "image": "kimi-k2.6",
+        "video": "kimi-k2.6"
+      },
+      "autoPriority": {
+        "video": 20
+      }
+    }
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

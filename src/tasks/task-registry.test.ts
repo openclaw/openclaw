@@ -78,6 +78,11 @@ vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 
+vi.mock("../utils/message-channel.js", () => ({
+  isDeliverableMessageChannel: (channel: string) =>
+    channel === "notifychat" || channel === "guildchat",
+}));
+
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
@@ -536,8 +541,8 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "telegram:123",
+        channel: "notifychat",
+        to: "notifychat:123",
         via: "direct",
       });
 
@@ -546,8 +551,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
           threadId: "321",
         },
         childSessionKey: "agent:main:acp:child",
@@ -576,8 +581,8 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            channel: "telegram",
-            to: "telegram:123",
+            channel: "notifychat",
+            to: "notifychat:123",
             threadId: "321",
             content: expect.stringContaining("Background task done: ACP background task"),
             mirror: expect.objectContaining({
@@ -594,15 +599,15 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      hoisted.sendMessageMock.mockRejectedValueOnce(new Error("telegram unavailable"));
+      hoisted.sendMessageMock.mockRejectedValueOnce(new Error("notifychat unavailable"));
 
       createTaskRecord({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-delivery-fail",
@@ -641,15 +646,15 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      hoisted.sendMessageMock.mockRejectedValueOnce(new Error("telegram unavailable"));
+      hoisted.sendMessageMock.mockRejectedValueOnce(new Error("notifychat unavailable"));
 
       createTaskRecord({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-delivery-blocked",
@@ -752,8 +757,8 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "telegram:123",
+        channel: "notifychat",
+        to: "notifychat:123",
         via: "direct",
       });
 
@@ -762,8 +767,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
           threadId: "321",
         },
         childSessionKey: "agent:main:acp:child",
@@ -804,8 +809,8 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "telegram:123",
+        channel: "notifychat",
+        to: "notifychat:123",
         via: "direct",
       });
 
@@ -814,8 +819,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-blocked-outcome",
@@ -846,8 +851,8 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "telegram:123",
+        channel: "notifychat",
+        to: "notifychat:123",
         via: "direct",
       });
 
@@ -856,8 +861,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-succeeded-outcome",
@@ -972,8 +977,8 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "telegram:123",
+        channel: "notifychat",
+        to: "notifychat:123",
         via: "direct",
       });
 
@@ -982,8 +987,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-shared-delivery",
@@ -996,8 +1001,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-shared-delivery",
@@ -1084,8 +1089,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-collapse-preferred",
@@ -1099,8 +1104,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-collapse-preferred",
@@ -1130,8 +1135,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-collapse",
@@ -1145,8 +1150,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-collapse",
@@ -1167,8 +1172,8 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "telegram:123",
+        channel: "notifychat",
+        to: "notifychat:123",
         via: "direct",
       });
 
@@ -1177,8 +1182,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:acp:child",
         runId: "run-racing-delivery",
@@ -1640,8 +1645,8 @@ describe("task-registry", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "discord",
-        to: "discord:123",
+        channel: "guildchat",
+        to: "guildchat:123",
         via: "direct",
       });
 
@@ -1650,8 +1655,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "discord",
-          to: "discord:123",
+          channel: "guildchat",
+          to: "guildchat:123",
         },
         childSessionKey: "agent:codex:acp:child",
         runId: "run-state-change",
@@ -1697,8 +1702,8 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
       resetSystemEventsForTest();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "discord",
-        to: "discord:123",
+        channel: "guildchat",
+        to: "guildchat:123",
         via: "direct",
       });
       vi.useFakeTimers();
@@ -1708,8 +1713,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "discord",
-          to: "discord:123",
+          channel: "guildchat",
+          to: "guildchat:123",
         },
         childSessionKey: "agent:codex:acp:child",
         runId: "run-quiet-terminal",
@@ -1754,8 +1759,8 @@ describe("task-registry", () => {
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          channel: "discord",
-          to: "discord:123",
+          channel: "guildchat",
+          to: "guildchat:123",
           content: "Background task done: ACP background task (run run-quie).",
         }),
       );
@@ -1771,8 +1776,8 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
       resetSystemEventsForTest();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "discord",
-        to: "discord:123",
+        channel: "guildchat",
+        to: "guildchat:123",
         via: "direct",
       });
 
@@ -1781,8 +1786,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "discord",
-          to: "discord:123",
+          channel: "guildchat",
+          to: "guildchat:123",
         },
         childSessionKey: "agent:codex:acp:child",
         runId: "run-failure-terminal",
@@ -1806,8 +1811,8 @@ describe("task-registry", () => {
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          channel: "discord",
-          to: "discord:123",
+          channel: "guildchat",
+          to: "guildchat:123",
           content:
             "Background task failed: ACP background task (run run-fail). Permission denied by ACP runtime",
         }),
@@ -1822,8 +1827,8 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
       resetSystemEventsForTest();
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "discord",
-        to: "discord:123",
+        channel: "guildchat",
+        to: "guildchat:123",
         via: "direct",
       });
       vi.useFakeTimers();
@@ -1833,8 +1838,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "discord",
-          to: "discord:123",
+          channel: "guildchat",
+          to: "guildchat:123",
         },
         childSessionKey: "agent:codex:acp:child",
         runId: "run-state-stream",
@@ -1889,8 +1894,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:codex:acp:child",
         runId: "run-cancel-acp",
@@ -1923,8 +1928,8 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            channel: "telegram",
-            to: "telegram:123",
+            channel: "notifychat",
+            to: "notifychat:123",
             content: "Background task cancelled: ACP background task (run run-canc).",
           }),
         ),
@@ -1945,8 +1950,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:worker:subagent:child",
         runId: "run-cancel-subagent",
@@ -1978,8 +1983,8 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            channel: "telegram",
-            to: "telegram:123",
+            channel: "notifychat",
+            to: "notifychat:123",
             content: "Background task cancelled: Subagent task (run run-canc).",
           }),
         ),
@@ -1998,8 +2003,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         childSessionKey: "agent:main:main",
         runId: "run-cancel-cli",
@@ -2027,8 +2032,8 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            channel: "telegram",
-            to: "telegram:123",
+            channel: "notifychat",
+            to: "notifychat:123",
             content: "Background task cancelled: Investigate issue (run run-canc).",
           }),
         ),
@@ -2044,8 +2049,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         scopeKind: "session",
         requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
+          channel: "notifychat",
+          to: "notifychat:123",
         },
         runId: "run-cli-no-child",
         task: "Legacy row",
