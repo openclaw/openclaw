@@ -6,11 +6,18 @@ import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
+import ai.openclaw.app.chat.ChatCompactionStatus
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatFallbackStatus
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatModelCatalogEntry
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatSessionDefaults
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatTimelineItem
+import ai.openclaw.app.chat.DeleteSessionOutcome
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.deleteSessionThroughGateway
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
@@ -24,6 +31,7 @@ import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -48,6 +57,10 @@ class NodeRuntime(
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
   private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
 ) {
+  private companion object {
+    private val operatorAdminScopes = listOf("operator.admin")
+    private const val scopedOperatorConnectTimeoutMs = 12_000L
+  }
   data class GatewayConnectAuth(
     val token: String?,
     val bootstrapToken: String?,
@@ -339,6 +352,7 @@ class NodeRuntime(
       session = operatorSession,
       json = json,
       supportsChatSubscribe = false,
+      deleteSessionRequest = ::deleteChatSessionWithOperatorAdmin,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -582,13 +596,19 @@ class NodeRuntime(
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
+  val chatTimeline: StateFlow<List<ChatTimelineItem>> = chat.timeline
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSessionDefaults: StateFlow<ChatSessionDefaults> = chat.sessionDefaults
+  val chatModelCatalog: StateFlow<List<ChatModelCatalogEntry>> = chat.modelCatalog
+  val chatCompactionStatus: StateFlow<ChatCompactionStatus?> = chat.compactionStatus
+  val chatFallbackStatus: StateFlow<ChatFallbackStatus?> = chat.fallbackStatus
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
+  val chatSessionActionInFlight: StateFlow<Boolean> = chat.sessionActionInFlight
 
   init {
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
@@ -945,6 +965,92 @@ class NodeRuntime(
     return deviceAuthStore.loadToken(deviceId, role)
   }
 
+  private suspend fun deleteChatSessionWithOperatorAdmin(sessionKey: String): DeleteSessionOutcome {
+    return deleteSessionThroughGateway(
+      request = { method, paramsJson -> requestOperatorAdminRpc(method = method, paramsJson = paramsJson) },
+      sessionKey = sessionKey,
+    )
+  }
+
+  private suspend fun requestOperatorAdminRpc(
+    method: String,
+    paramsJson: String,
+    timeoutMs: Long = 15_000L,
+  ): GatewaySession.RpcResult {
+    val endpoint =
+      connectedEndpoint
+        ?: return scopedOperatorErrorResult(
+          code = "UNAVAILABLE",
+          message = "Connect to your gateway first.",
+        )
+    val auth = activeGatewayAuth ?: resolveGatewayConnectAuth()
+    val tls = connectionManager.resolveTlsParams(endpoint)
+    val connected = CompletableDeferred<Unit>()
+    val failed = CompletableDeferred<String>()
+    val scopedSession =
+      GatewaySession(
+        scope = scope,
+        identityStore = identityStore,
+        deviceAuthStore = deviceAuthStore,
+        onConnected = { _, _, _ ->
+          if (!connected.isCompleted) {
+            connected.complete(Unit)
+          }
+        },
+        onDisconnected = { message ->
+          if (
+            message != "Connecting…" &&
+              message != "Reconnecting…" &&
+              !connected.isCompleted &&
+              !failed.isCompleted
+          ) {
+            failed.complete(message)
+          }
+        },
+        onEvent = { _, _ -> },
+      )
+
+    return try {
+      scopedSession.connect(
+        endpoint = endpoint,
+        token = auth.token,
+        bootstrapToken = auth.bootstrapToken,
+        password = auth.password,
+        options = connectionManager.buildOperatorConnectOptions(scopes = operatorAdminScopes),
+        tls = tls,
+      )
+      awaitScopedOperatorSessionConnection(connected = connected, failed = failed)
+      remapDeleteChatScopeUpgradeResult(
+        scopedSession.requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs),
+      )
+    } catch (err: Throwable) {
+      scopedOperatorErrorResult(
+        code = "UNAVAILABLE",
+        message = resolveDeleteChatErrorMessage(err.message),
+      )
+    } finally {
+      scopedSession.disconnect()
+    }
+  }
+
+  private suspend fun awaitScopedOperatorSessionConnection(
+    connected: CompletableDeferred<Unit>,
+    failed: CompletableDeferred<String>,
+  ) {
+    withTimeout(scopedOperatorConnectTimeoutMs) {
+      while (true) {
+        if (connected.isCompleted) {
+          connected.await()
+          return@withTimeout
+        }
+        if (failed.isCompleted) {
+          throw IllegalStateException(failed.await())
+        }
+        delay(25L)
+      }
+    }
+  }
+
   private fun maybeStartOperatorSessionAfterNodeConnect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
@@ -1066,12 +1172,28 @@ class NodeRuntime(
     chat.refreshSessions(limit = limit)
   }
 
+  fun refreshChatModelCatalog() {
+    chat.refreshModelCatalog()
+  }
+
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
   }
 
+  fun setChatModel(model: String?) {
+    chat.setModel(model)
+  }
+
   fun switchChatSession(sessionKey: String) {
     chat.switchSession(sessionKey)
+  }
+
+  fun createChatSession() {
+    chat.createSession()
+  }
+
+  fun deleteCurrentChatSession() {
+    chat.deleteCurrentSession()
   }
 
   fun abortChat() {
@@ -1306,6 +1428,63 @@ class NodeRuntime(
   }
 
 }
+
+private fun remapDeleteChatScopeUpgradeResult(result: GatewaySession.RpcResult): GatewaySession.RpcResult {
+  if (result.ok) return result
+  val error = result.error
+  val message = resolveDeleteChatErrorMessage(error?.message, error)
+  if (message == error?.message) return result
+  return GatewaySession.RpcResult(
+    ok = false,
+    payloadJson = result.payloadJson,
+    error =
+      GatewaySession.ErrorShape(
+        code = error?.code ?: "FORBIDDEN",
+        message = message,
+        details = error?.details,
+      ),
+  )
+}
+
+private fun scopedOperatorErrorResult(
+  code: String,
+  message: String,
+): GatewaySession.RpcResult =
+  GatewaySession.RpcResult(
+    ok = false,
+    payloadJson = null,
+    error = GatewaySession.ErrorShape(code = code, message = message),
+  )
+
+internal fun resolveDeleteChatErrorMessage(
+  message: String?,
+  error: GatewaySession.ErrorShape? = null,
+): String {
+  return if (requiresOperatorAdminScopeUpgrade(error = error, message = message)) {
+    operatorAdminScopeUpgradeMessage(actionLabel = "Delete chat")
+  } else {
+    message?.trim().takeIf { !it.isNullOrEmpty() } ?: "Chat delete failed."
+  }
+}
+
+internal fun requiresOperatorAdminScopeUpgrade(
+  error: GatewaySession.ErrorShape? = null,
+  message: String? = error?.message,
+): Boolean {
+  val detailCode = error?.details?.code?.trim().orEmpty()
+  if (detailCode == "PAIRING_REQUIRED") {
+    return true
+  }
+  val lower = message?.trim()?.lowercase().orEmpty()
+  return lower.contains("pairing") ||
+    lower.contains("operator.admin") ||
+    lower.contains("missing scope") ||
+    lower.contains("scope upgrade") ||
+    lower.contains("approval required")
+}
+
+internal fun operatorAdminScopeUpgradeMessage(actionLabel: String): String =
+  "$actionLabel needs operator.admin approval. Reconnect and approve the scope upgrade, then try again."
 
 internal fun resolveOperatorSessionConnectAuth(
   auth: NodeRuntime.GatewayConnectAuth,

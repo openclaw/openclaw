@@ -305,7 +305,7 @@ class GatewaySessionInvokeTest {
       assertEquals(emptyList<String>(), nodeEntry?.scopes)
       assertEquals("bootstrap-operator-token", operatorEntry?.token)
       assertEquals(
-        listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+        listOf("operator.admin", "operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
         operatorEntry?.scopes,
       )
     } finally {

@@ -174,6 +174,24 @@ describe("readFirstUserMessageFromTranscript", () => {
     const result = readFirstUserMessageFromTranscript(sessionId, storePath);
     expect(result).toBe("Second message");
   });
+
+  test("skips inbound metadata wrapper blocks to find real first user message", () => {
+    const sessionId = "test-session-inbound-meta";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({
+        message: {
+          role: "user",
+          content:
+            'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nSender (untrusted metadata):\n```json\n{"label":"Dmitry Kuznetsov"}\n```\n\nActual Telegram message',
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    expect(result).toBe("Actual Telegram message");
+  });
 });
 
 describe("readLastMessagePreviewFromTranscript", () => {

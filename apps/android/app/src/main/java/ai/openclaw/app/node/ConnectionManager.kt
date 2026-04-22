@@ -26,6 +26,13 @@ class ConnectionManager(
   private val manualTls: () -> Boolean,
 ) {
   companion object {
+    private val defaultOperatorScopes =
+      listOf(
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.talk.secrets",
+      )
     internal fun resolveTlsParamsForEndpoint(
       endpoint: GatewayEndpoint,
       storedFingerprint: String?,
@@ -154,10 +161,16 @@ class ConnectionManager(
     )
   }
 
-  fun buildOperatorConnectOptions(): GatewayConnectOptions {
+  fun buildOperatorConnectOptions(scopes: List<String> = defaultOperatorScopes): GatewayConnectOptions {
+    val requestedScopes =
+      scopes
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .sorted()
     return GatewayConnectOptions(
       role = "operator",
-      scopes = listOf("operator.read", "operator.write", "operator.talk.secrets"),
+      scopes = requestedScopes,
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),

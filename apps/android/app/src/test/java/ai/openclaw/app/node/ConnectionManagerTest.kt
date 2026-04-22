@@ -234,6 +234,59 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildOperatorConnectOptionsDefaultsIncludeAdminScope() {
+    val app = RuntimeEnvironment.getApplication()
+    val manager =
+      ConnectionManager(
+        prefs = SecurePrefs(app),
+        cameraEnabled = { false },
+        locationMode = { LocationMode.Off },
+        voiceWakeMode = { VoiceWakeMode.Off },
+        motionActivityAvailable = { false },
+        motionPedometerAvailable = { false },
+        sendSmsAvailable = { false },
+        readSmsAvailable = { false },
+        smsSearchPossible = { false },
+        callLogAvailable = { false },
+        hasRecordAudioPermission = { false },
+        manualTls = { false },
+      )
+
+    val options = manager.buildOperatorConnectOptions()
+
+    assertEquals("operator", options.role)
+    assertEquals(
+      listOf("operator.admin", "operator.read", "operator.talk.secrets", "operator.write"),
+      options.scopes,
+    )
+  }
+
+  @Test
+  fun buildOperatorConnectOptionsAcceptsExplicitAdminScopeUpgrade() {
+    val app = RuntimeEnvironment.getApplication()
+    val manager =
+      ConnectionManager(
+        prefs = SecurePrefs(app),
+        cameraEnabled = { false },
+        locationMode = { LocationMode.Off },
+        voiceWakeMode = { VoiceWakeMode.Off },
+        motionActivityAvailable = { false },
+        motionPedometerAvailable = { false },
+        sendSmsAvailable = { false },
+        readSmsAvailable = { false },
+        smsSearchPossible = { false },
+        callLogAvailable = { false },
+        hasRecordAudioPermission = { false },
+        manualTls = { false },
+      )
+
+    val options = manager.buildOperatorConnectOptions(scopes = listOf("operator.admin"))
+
+    assertEquals("operator", options.role)
+    assertEquals(listOf("operator.admin"), options.scopes)
+  }
+
+  @Test
   fun isLoopbackGatewayHost_onlyTreatsEmulatorBridgeAsLocalWhenAllowed() {
     assertTrue(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = true))
     assertFalse(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = false))

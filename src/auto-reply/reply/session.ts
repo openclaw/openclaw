@@ -48,6 +48,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
+import { stripInboundMetadata } from "./strip-inbound-meta.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
@@ -649,8 +650,9 @@ export async function initSessionState(params: {
     sessionEntry.chatType = "direct";
   }
   const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
-  if (threadLabel) {
-    sessionEntry.displayName = threadLabel;
+  const sanitizedThreadLabel = threadLabel ? stripInboundMetadata(threadLabel).trim() : "";
+  if (sanitizedThreadLabel) {
+    sessionEntry.displayName = sanitizedThreadLabel;
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;

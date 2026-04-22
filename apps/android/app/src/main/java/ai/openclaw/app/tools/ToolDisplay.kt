@@ -69,7 +69,7 @@ object ToolDisplayRegistry {
     val spec = config.tools?.get(key)
     val fallback = config.fallback
 
-    val emoji = spec?.emoji ?: fallback?.emoji ?: "🧩"
+    val emoji = if (key == "read") fallback?.emoji ?: "🧩" else spec?.emoji ?: fallback?.emoji ?: "🧩"
     val title = spec?.title ?: titleFromName(trimmedName)
     val label = spec?.label ?: trimmedName
 

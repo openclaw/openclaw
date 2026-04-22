@@ -383,16 +383,17 @@ class GatewaySession(
 
     private suspend fun sendConnect(connectNonce: String) {
       val identity = identityStore.loadOrCreate()
-      val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)?.trim()
+      val storedEntry = deviceAuthStore.loadEntry(identity.deviceId, options.role)
+      val storedToken = storedEntry?.token?.trim()?.takeIf { it.isNotEmpty() }
       val selectedAuth =
         selectConnectAuth(
           endpoint = endpoint,
           tls = tls,
-          role = options.role,
           explicitGatewayToken = token?.trim()?.takeIf { it.isNotEmpty() },
           explicitBootstrapToken = bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
           explicitPassword = password?.trim()?.takeIf { it.isNotEmpty() },
-          storedToken = storedToken?.takeIf { it.isNotEmpty() },
+          storedEntry = storedEntry,
+          requestedScopes = options.scopes,
         )
       if (selectedAuth.attemptedDeviceTokenRetry) {
         pendingDeviceTokenRetry = false
@@ -442,6 +443,7 @@ class GatewaySession(
         "operator" -> {
           val allowedOperatorScopes =
             setOf(
+              "operator.admin",
               "operator.approvals",
               "operator.read",
               "operator.talk.secrets",
@@ -871,23 +873,28 @@ class GatewaySession(
   private fun selectConnectAuth(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams?,
-    role: String,
     explicitGatewayToken: String?,
     explicitBootstrapToken: String?,
     explicitPassword: String?,
-    storedToken: String?,
+    storedEntry: DeviceAuthEntry?,
+    requestedScopes: List<String>,
   ): SelectedConnectAuth {
+    val storedToken = storedEntry?.token?.trim()?.takeIf { it.isNotEmpty() }
     val shouldUseDeviceRetryToken =
       pendingDeviceTokenRetry &&
         explicitGatewayToken != null &&
         storedToken != null &&
         isTrustedDeviceRetryEndpoint(endpoint, tls)
+    val shouldUseStoredToken =
+      shouldUseStoredTokenForConnect(
+        storedEntry = storedEntry,
+        requestedScopes = requestedScopes,
+        explicitBootstrapToken = explicitBootstrapToken,
+        explicitPassword = explicitPassword,
+      )
     val authToken =
       explicitGatewayToken
-        ?: if (
-          explicitPassword == null &&
-            (explicitBootstrapToken == null || storedToken != null)
-        ) {
+        ?: if (shouldUseStoredToken) {
           storedToken
         } else {
           null
@@ -962,6 +969,45 @@ class GatewaySession(
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
+
+internal fun shouldUseStoredTokenForConnect(
+  storedEntry: DeviceAuthEntry?,
+  requestedScopes: List<String>,
+  explicitBootstrapToken: String?,
+  explicitPassword: String?,
+): Boolean {
+  val storedToken = storedEntry?.token?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+  if (explicitPassword != null) return false
+  if (explicitBootstrapToken == null) return storedToken.isNotEmpty()
+
+  val normalizedRole = storedEntry.role.trim().lowercase()
+  if (normalizedRole != "operator") {
+    return true
+  }
+
+  return gatewayScopesSatisfyRequestedScopes(storedEntry.scopes, requestedScopes)
+}
+
+internal fun gatewayScopesSatisfyRequestedScopes(
+  grantedScopes: List<String>,
+  requestedScopes: List<String>,
+): Boolean {
+  val normalizedRequested = normalizeGatewayScopes(requestedScopes)
+  if (normalizedRequested.isEmpty()) return true
+  val normalizedGranted = normalizeGatewayScopes(grantedScopes).toSet()
+  if (normalizedGranted.isEmpty()) return false
+  return normalizedRequested.all { scope ->
+    normalizedGranted.contains(scope) ||
+      (scope.startsWith("operator.") && normalizedGranted.contains("operator.admin"))
+  }
+}
+
+private fun normalizeGatewayScopes(scopes: List<String>): List<String> =
+  scopes
+    .map { it.trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+    .sorted()
 
 internal fun buildGatewayWebSocketUrl(host: String, port: Int, useTls: Boolean): String {
   val scheme = if (useTls) "wss" else "ws"

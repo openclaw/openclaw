@@ -875,6 +875,17 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBe("My Custom Session");
   });
 
+  test("strips inbound metadata wrappers from displayName before using it", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      displayName:
+        'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nSender (untrusted metadata):\n```json\n{"label":"Dmitry Kuznetsov"}\n```\n\nActual Telegram thread',
+      subject: "Group Chat",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Actual Telegram thread");
+  });
+
   test("falls back to subject when displayName is missing", () => {
     const entry = {
       sessionId: "abc123",
@@ -890,6 +901,14 @@ describe("deriveSessionTitle", () => {
       updatedAt: Date.now(),
     } as SessionEntry;
     expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("Hello, how are you?");
+  });
+
+  test("uses cleaned real user message after inbound metadata wrappers are stripped upstream", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "Actual Telegram message")).toBe("Actual Telegram message");
   });
 
   test("truncates long first user message to 60 chars with ellipsis", () => {

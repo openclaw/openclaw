@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,8 +18,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatTimelineItem
+import ai.openclaw.app.chat.ChatTimelineMessageItem
+import ai.openclaw.app.chat.ChatTimelineToolItem
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCardSurface
@@ -28,20 +31,26 @@ import ai.openclaw.app.ui.mobileTextSecondary
 
 @Composable
 fun ChatMessageListCard(
-  messages: List<ChatMessage>,
+  timeline: List<ChatTimelineItem>,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  uiState: ChatMessageUiState,
+  onRequestHideMessage: (String) -> Unit,
+  onRequestDeleteMessage: (String) -> Unit,
+  onConfirmDeleteMessage: (String) -> Unit,
+  onCancelDeleteMessage: (String?) -> Unit,
+  onToggleExpandedMessage: (String) -> Unit,
+  onOpenCanvas: ((String) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
-  val displayMessages = remember(messages) { messages.asReversed() }
+  val visibleItems = remember(timeline, uiState) { timeline.filter { shouldDisplayTimelineItem(it, uiState) } }
+  val displayItems = remember(visibleItems) { visibleItems.asReversed() }
   val stream = streamingAssistantText?.trim()
 
-  // New list items/tool rows should animate into view, but token streaming should not restart
-  // that animation on every delta.
-  LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size) {
+  LaunchedEffect(displayItems.size, pendingRunCount, pendingToolCalls.size) {
     listState.animateScrollToItem(index = 0)
   }
   LaunchedEffect(stream) {
@@ -58,15 +67,13 @@ fun ChatMessageListCard(
       verticalArrangement = Arrangement.spacedBy(10.dp),
       contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp),
     ) {
-      // With reverseLayout = true, index 0 renders at the BOTTOM.
-      // So we emit newest items first: streaming → tools → typing → messages (newest→oldest).
       if (!stream.isNullOrEmpty()) {
         item(key = "stream") {
           ChatStreamingAssistantBubble(text = stream)
         }
       }
 
-      if (pendingToolCalls.isNotEmpty()) {
+      if (uiState.showToolDetails && pendingToolCalls.isNotEmpty()) {
         item(key = "tools") {
           ChatPendingToolsBubble(toolCalls = pendingToolCalls)
         }
@@ -78,36 +85,61 @@ fun ChatMessageListCard(
         }
       }
 
-      items(items = displayMessages, key = { it.id }) { message ->
-        ChatMessageBubble(message = message)
+      items(items = displayItems, key = { it.id }) { item ->
+        when (item) {
+          is ChatTimelineMessageItem ->
+            ChatTimelineMessageBubble(
+              item = item,
+              uiState = uiState,
+              onOpenCanvas = onOpenCanvas,
+              onRequestHideMessage = onRequestHideMessage,
+              onRequestDeleteMessage = onRequestDeleteMessage,
+              onConfirmDeleteMessage = onConfirmDeleteMessage,
+              onCancelDeleteMessage = onCancelDeleteMessage,
+              onToggleExpandedMessage = onToggleExpandedMessage,
+            )
+          is ChatTimelineToolItem -> ChatCompletedToolBubble(item = item, onOpenCanvas = onOpenCanvas)
+        }
       }
     }
 
-    if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && streamingAssistantText.isNullOrBlank()) {
-      EmptyChatHint(modifier = Modifier.align(Alignment.Center), healthOk = healthOk)
+    if (displayItems.isEmpty() && pendingRunCount == 0 && (pendingToolCalls.isEmpty() || !uiState.showToolDetails) && streamingAssistantText.isNullOrBlank()) {
+      EmptyChatHint(
+        modifier = Modifier.align(Alignment.Center),
+        healthOk = healthOk,
+        hasFilteredHistory = timeline.isNotEmpty(),
+      )
     }
   }
 }
 
 @Composable
-private fun EmptyChatHint(modifier: Modifier = Modifier, healthOk: Boolean) {
+private fun EmptyChatHint(
+  modifier: Modifier = Modifier,
+  healthOk: Boolean,
+  hasFilteredHistory: Boolean,
+) {
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(14.dp),
     color = mobileCardSurface.copy(alpha = 0.9f),
-    border = androidx.compose.foundation.BorderStroke(1.dp, mobileBorder),
+    border = BorderStroke(1.dp, mobileBorder),
   ) {
     androidx.compose.foundation.layout.Column(
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      Text("No messages yet", style = mobileHeadline, color = mobileText)
+      Text(
+        text = if (hasFilteredHistory) "No visible messages" else "No messages yet",
+        style = mobileHeadline,
+        color = mobileText,
+      )
       Text(
         text =
-          if (healthOk) {
-            "Send the first prompt to start this session."
-          } else {
-            "Connect gateway first, then return to chat."
+          when {
+            hasFilteredHistory -> "Current filters or hidden-message controls are hiding this conversation."
+            healthOk -> "Send the first prompt to start this session."
+            else -> "Connect gateway first, then return to chat."
           },
         style = mobileCallout,
         color = mobileTextSecondary,

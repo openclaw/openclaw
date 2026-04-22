@@ -195,6 +195,27 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun resolveDeleteChatErrorMessagePromptsScopeUpgradeWhenAdminApprovalIsMissing() {
+    val error =
+      GatewaySession.ErrorShape(
+        code = "FORBIDDEN",
+        message = "missing scope: operator.admin",
+      )
+
+    assertTrue(requiresOperatorAdminScopeUpgrade(error = error))
+    assertEquals(
+      "Delete chat needs operator.admin approval. Reconnect and approve the scope upgrade, then try again.",
+      resolveDeleteChatErrorMessage(message = error.message, error = error),
+    )
+  }
+
+  @Test
+  fun resolveDeleteChatErrorMessageKeepsNonScopeFailuresVerbatim() {
+    assertFalse(requiresOperatorAdminScopeUpgrade(message = "request timeout"))
+    assertEquals("request timeout", resolveDeleteChatErrorMessage(message = "request timeout"))
+  }
+
+  @Test
   fun resetGatewaySetupAuth_clearsStoredGatewayAndDeviceTokens() {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =

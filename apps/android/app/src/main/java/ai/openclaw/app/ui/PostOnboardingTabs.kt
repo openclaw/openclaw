@@ -21,10 +21,13 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -45,9 +48,12 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.chat.friendlyAgentName
+import ai.openclaw.app.ui.chat.resolveAgentChoices
 
 private enum class HomeTab(
   val label: String,
@@ -73,6 +79,7 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
   var chatTabStarted by rememberSaveable { mutableStateOf(false) }
   var screenTabStarted by rememberSaveable { mutableStateOf(false) }
+  var hideCronSessions by rememberSaveable { mutableStateOf(true) }
   val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
 
   LaunchedEffect(requestedHomeDestination) {
@@ -125,8 +132,11 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
     contentWindowInsets = WindowInsets(0, 0, 0, 0),
     topBar = {
       TopStatusBar(
+        viewModel = viewModel,
         statusText = statusText,
         statusVisual = statusVisual,
+        showChatSessionChooser = activeTab == HomeTab.Chat,
+        hideCronSessions = hideCronSessions,
       )
     },
     bottomBar = {
@@ -154,7 +164,11 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
               .alpha(if (activeTab == HomeTab.Chat) 1f else 0f)
               .zIndex(if (activeTab == HomeTab.Chat) 1f else 0f),
         ) {
-          ChatSheet(viewModel = viewModel)
+          ChatSheet(
+            viewModel = viewModel,
+            hideCronSessions = hideCronSessions,
+            onHideCronSessionsChange = { hideCronSessions = it },
+          )
         }
       }
 
@@ -172,7 +186,13 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
 
       when (activeTab) {
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
-        HomeTab.Chat -> if (!chatTabStarted) ChatSheet(viewModel = viewModel)
+        HomeTab.Chat -> if (!chatTabStarted) {
+          ChatSheet(
+            viewModel = viewModel,
+            hideCronSessions = hideCronSessions,
+            onHideCronSessionsChange = { hideCronSessions = it },
+          )
+        }
         HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
         HomeTab.Screen -> Unit
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
@@ -200,8 +220,11 @@ private fun ScreenTabScreen(viewModel: MainViewModel, visible: Boolean, modifier
 
 @Composable
 private fun TopStatusBar(
+  viewModel: MainViewModel,
   statusText: String,
   statusVisual: StatusVisual,
+  showChatSessionChooser: Boolean,
+  hideCronSessions: Boolean,
 ) {
   val safeInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
@@ -244,6 +267,26 @@ private fun TopStatusBar(
         )
     }
 
+  val sessions by viewModel.chatSessions.collectAsState()
+  val currentSessionKey by viewModel.chatSessionKey.collectAsState()
+  val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  var expanded by remember { mutableStateOf(false) }
+
+  val selectedAgentId = remember(currentSessionKey, mainSessionKey) {
+    ai.openclaw.app.ui.chat.resolveSessionAgentId(currentSessionKey, mainSessionKey)
+  }
+  val agentChoices = remember(showChatSessionChooser, currentSessionKey, sessions, mainSessionKey) {
+    if (!showChatSessionChooser) {
+      emptyList()
+    } else {
+      resolveAgentChoices(
+        currentSessionKey = currentSessionKey,
+        sessions = sessions,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  }
+
   Surface(
     modifier = Modifier.fillMaxWidth().windowInsetsPadding(safeInsets),
     color = Color.Transparent,
@@ -252,13 +295,87 @@ private fun TopStatusBar(
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Text(
         text = "OpenClaw",
         style = mobileTitle2,
         color = mobileText,
       )
+
+      if (showChatSessionChooser && agentChoices.isNotEmpty()) {
+        Box(modifier = Modifier.weight(1f)) {
+          Surface(
+            onClick = {
+              viewModel.refreshChatSessions(limit = 50)
+              expanded = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(999.dp),
+            color = mobileAccentSoft,
+            border = BorderStroke(1.dp, mobileAccent),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = friendlyAgentName(selectedAgentId),
+                style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+                color = mobileText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+              )
+              Icon(
+                imageVector = Icons.Default.ArrowDropDown,
+                contentDescription = "Open chat session selector",
+                tint = mobileTextSecondary,
+              )
+            }
+          }
+
+          DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = mobileCardSurface,
+            tonalElevation = 0.dp,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, mobileBorder),
+          ) {
+            agentChoices.forEach { entry ->
+              val isCurrent = entry.id == selectedAgentId
+              DropdownMenuItem(
+                text = {
+                  Text(
+                    text = entry.label,
+                    style = mobileCallout,
+                    color = mobileText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                trailingIcon = {
+                  if (isCurrent) {
+                    Text("✓", style = mobileCallout, color = mobileAccent)
+                  }
+                },
+                onClick = {
+                  expanded = false
+                  if (!isCurrent) {
+                    viewModel.switchChatSession(entry.sessionKey)
+                  }
+                },
+              )
+            }
+          }
+        }
+      } else {
+        Box(modifier = Modifier.weight(1f))
+      }
+
       Surface(
         shape = RoundedCornerShape(999.dp),
         color = chipBg,
