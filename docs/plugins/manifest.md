@@ -148,36 +148,37 @@ Those belong in your plugin code and `package.json`.
 
 ## Top-level field reference
 
-| Field                               | Required | Type                             | What it means                                                                                                                                                                                                |
-| ----------------------------------- | -------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                                                                                                          |
-| `configSchema`                      | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                                                                                                 |
-| `enabledByDefault`                  | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                 |
-| `legacyPluginIds`                   | No       | `string[]`                       | Legacy ids that normalize to this canonical plugin id.                                                                                                                                                       |
-| `autoEnableWhenConfiguredProviders` | No       | `string[]`                       | Provider ids that should auto-enable this plugin when auth, config, or model refs mention them.                                                                                                              |
-| `kind`                              | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                                                                                                 |
-| `channels`                          | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                  |
-| `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                           |
-| `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
-| `providerEndpoints`                 | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                     |
-| `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
-| `syntheticAuthRefs`                 | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                       |
-| `nonSecretAuthMarkers`              | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                         |
-| `commandAliases`                    | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                         |
-| `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
-| `providerAuthAliases`               | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                   |
-| `channelEnvVars`                    | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                     |
-| `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
-| `activation`                        | No       | `object`                         | Cheap activation hints for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                    |
-| `setup`                             | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                             |
-| `qaRunners`                         | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                               |
-| `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
-| `channelConfigs`                    | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                   |
-| `skills`                            | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                      |
-| `name`                              | No       | `string`                         | Human-readable plugin name.                                                                                                                                                                                  |
-| `description`                       | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                                                                                                      |
-| `version`                           | No       | `string`                         | Informational plugin version.                                                                                                                                                                                |
-| `uiHints`                           | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                            |
+| Field                                | Required | Type                             | What it means                                                                                                                                                                                                |
+| ------------------------------------ | -------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                 | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                                                                                                          |
+| `configSchema`                       | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                                                                                                 |
+| `enabledByDefault`                   | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                 |
+| `legacyPluginIds`                    | No       | `string[]`                       | Legacy ids that normalize to this canonical plugin id.                                                                                                                                                       |
+| `autoEnableWhenConfiguredProviders`  | No       | `string[]`                       | Provider ids that should auto-enable this plugin when auth, config, or model refs mention them.                                                                                                              |
+| `kind`                               | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                                                                                                 |
+| `channels`                           | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                  |
+| `providers`                          | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                           |
+| `modelSupport`                       | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
+| `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                     |
+| `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
+| `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                       |
+| `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                         |
+| `commandAliases`                     | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                         |
+| `providerAuthEnvVars`                | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
+| `providerAuthAliases`                | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                   |
+| `channelEnvVars`                     | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                     |
+| `providerAuthChoices`                | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
+| `activation`                         | No       | `object`                         | Cheap activation hints for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                    |
+| `setup`                              | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                             |
+| `qaRunners`                          | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                               |
+| `contracts`                          | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
+| `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`         | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                     |
+| `channelConfigs`                     | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                   |
+| `skills`                             | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                      |
+| `name`                               | No       | `string`                         | Human-readable plugin name.                                                                                                                                                                                  |
+| `description`                        | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                                                                                                      |
+| `version`                            | No       | `string`                         | Informational plugin version.                                                                                                                                                                                |
+| `uiHints`                            | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                            |
 
 ## providerAuthChoices reference
 
@@ -407,6 +408,43 @@ Each list is optional:
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                       |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                      |
 | `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
+
+## mediaUnderstandingProviderMetadata reference
+
+Use `mediaUnderstandingProviderMetadata` when a media-understanding provider has
+default models, auto-auth fallback priority, or native document support that
+generic core helpers need before runtime loads. Keys must also be declared in
+`contracts.mediaUnderstandingProviders`.
+
+```json
+{
+  "contracts": {
+    "mediaUnderstandingProviders": ["example"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "example": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "example-vision-latest",
+        "audio": "example-transcribe-latest"
+      },
+      "autoPriority": {
+        "image": 40
+      },
+      "nativeDocumentInputs": ["pdf"]
+    }
+  }
+}
+```
+
+Each provider entry can include:
+
+| Field                  | Type                                | What it means                                                                |
+| ---------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
+| `capabilities`         | `("image" \| "audio" \| "video")[]` | Media capabilities exposed by this provider.                                 |
+| `defaultModels`        | `Record<string, string>`            | Capability-to-model defaults used when config does not specify a model.      |
+| `autoPriority`         | `Record<string, number>`            | Lower numbers sort earlier for automatic credential-based provider fallback. |
+| `nativeDocumentInputs` | `"pdf"[]`                           | Native document inputs supported by the provider.                            |
 
 ## channelConfigs reference
 
