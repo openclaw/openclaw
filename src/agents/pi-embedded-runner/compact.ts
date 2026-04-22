@@ -133,9 +133,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
-import {
-  collectAllowedToolNames,
-} from "./tool-name-allowlist.js";
+import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,

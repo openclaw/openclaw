@@ -175,10 +175,7 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
-import {
-  collectAllowedToolNames,
-  PI_RESERVED_TOOL_NAMES,
-} from "../tool-name-allowlist.js";
+import { collectAllowedToolNames, PI_RESERVED_TOOL_NAMES } from "../tool-name-allowlist.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
