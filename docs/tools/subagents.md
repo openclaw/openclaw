@@ -55,7 +55,7 @@ transcript path on disk when you need the raw full transcript.
   - thread-bound or conversation-bound completion routes win when available
   - if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works
 - The completion handoff to the requester session is runtime-generated internal context (not user-authored text) and includes:
-  - `Result` (latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text)
+  - `Result` (latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text; terminal failed runs do not reuse captured reply text)
   - `Status` (`completed successfully` / `failed` / `timed out` / `unknown`)
   - compact runtime/token stats
   - a delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata)
@@ -249,7 +249,7 @@ Sub-agents report back via an announce step:
   - child session key/id
   - announce type + task label
   - status line derived from runtime outcome (`success`, `error`, `timeout`, or `unknown`)
-  - result content selected from the latest visible assistant text, otherwise sanitized latest tool/toolResult text
+  - result content selected from the latest visible assistant text, otherwise sanitized latest tool/toolResult text; terminal failed runs report failure status without replaying captured reply text
   - a follow-up instruction describing when to reply vs. stay silent
 - `Status` is not inferred from model output; it comes from runtime outcome signals.
 - On timeout, if the child only got through tool calls, announce can collapse that history into a short partial-progress summary instead of replaying raw tool output.

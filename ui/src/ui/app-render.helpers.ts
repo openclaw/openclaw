@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
@@ -43,12 +44,8 @@ type ChatRefreshHost = AppViewState & {
   updateComplete?: Promise<unknown>;
 };
 
-export function resolveAssistantAttachmentAuthToken(
-  state: Pick<AppViewState, "settings" | "password">,
-) {
-  return (
-    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
-  );
+export function resolveAssistantAttachmentAuthToken(state: Pick<AppViewState, "hello" | "settings" | "password">) {
+  return resolveControlUiAuthToken(state);
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
