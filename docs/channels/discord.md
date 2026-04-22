@@ -61,15 +61,18 @@ You will need to create a new application with a bot, add the bot to your server
     - `bot`
     - `applications.commands`
 
-    A **Bot Permissions** section will appear below. Enable:
+    A **Bot Permissions** section will appear below. Enable at least:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Copy the generated URL at the bottom, paste it into your browser, select your server, and click **Continue** to connect. You should now see your bot in the Discord server.
 
   </Step>
@@ -520,13 +523,16 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
     Typical baseline permissions:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Avoid `Administrator` unless explicitly needed.
 
   </Accordion>
@@ -593,6 +599,8 @@ Default slash command settings:
     - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
     - `partial` edits a single preview message as tokens arrive.
     - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
+    - Media, error, and explicit-reply finals cancel pending preview edits without flushing a temporary draft before normal delivery.
+    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same draft preview message (default: `true`). Set `false` to keep separate tool/progress messages.
 
     Example:
 
@@ -1237,7 +1245,7 @@ High-signal Discord fields:
 - inbound worker: `inboundWorker.runTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
-- streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
+- streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
   - `mediaMaxMb` caps outbound Discord uploads (default: `100MB`)
 - actions: `actions.*`

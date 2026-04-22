@@ -26,25 +26,21 @@ vi.mock("../../config/config.js", () => ({
   writeConfigFile: configMocks.writeConfigFile,
 }));
 
-vi.mock("../../../extensions/ollama/src/provider-models.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../extensions/ollama/src/provider-models.js")>();
+vi.mock("../../../extensions/ollama/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../extensions/ollama/api.js")>();
   return {
     ...actual,
     queryOllamaModelShowInfo: ollamaMocks.queryOllamaModelShowInfo,
   };
 });
 
-vi.mock("../../../extensions/lmstudio/src/runtime.js", () => ({
-  resolveLmstudioRequestContext: lmstudioRuntimeMocks.resolveLmstudioRequestContext,
-}));
-
-vi.mock("../../../extensions/lmstudio/src/models.fetch.js", async () => {
+vi.mock("../../../extensions/lmstudio/runtime-api.js", async () => {
   const actual = await vi.importActual<
-    typeof import("../../../extensions/lmstudio/src/models.fetch.js")
-  >("../../../extensions/lmstudio/src/models.fetch.js");
+    typeof import("../../../extensions/lmstudio/runtime-api.js")
+  >("../../../extensions/lmstudio/runtime-api.js");
   return {
     ...actual,
+    resolveLmstudioRequestContext: lmstudioRuntimeMocks.resolveLmstudioRequestContext,
     fetchLmstudioModels: lmstudioFetchMocks.fetchLmstudioModels,
   };
 });

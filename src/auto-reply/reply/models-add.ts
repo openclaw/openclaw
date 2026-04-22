@@ -1,18 +1,16 @@
 import {
+  fetchLmstudioModels,
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
-} from "../../../extensions/lmstudio/src/defaults.js";
-import { fetchLmstudioModels } from "../../../extensions/lmstudio/src/models.fetch.js";
-import {
   mapLmstudioWireEntry,
   resolveLmstudioInferenceBase,
-} from "../../../extensions/lmstudio/src/models.js";
-import { resolveLmstudioRequestContext } from "../../../extensions/lmstudio/src/runtime.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../../../extensions/ollama/src/defaults.js";
+  resolveLmstudioRequestContext,
+} from "../../../extensions/lmstudio/runtime-api.js";
 import {
-  queryOllamaModelShowInfo,
   buildOllamaModelDefinition,
-} from "../../../extensions/ollama/src/provider-models.js";
+  OLLAMA_DEFAULT_BASE_URL,
+  queryOllamaModelShowInfo,
+} from "../../../extensions/ollama/api.js";
 import {
   buildConfiguredAllowlistKeys,
   normalizeProviderId,

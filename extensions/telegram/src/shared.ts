@@ -27,6 +27,7 @@ import {
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { telegramSecurityAdapter } from "./security.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
 export const TELEGRAM_CHANNEL = "telegram" as const;
@@ -122,6 +123,7 @@ export function createTelegramPluginBase(params: {
   | "capabilities"
   | "commands"
   | "doctor"
+  | "security"
   | "reload"
   | "configSchema"
   | "config"
@@ -155,6 +157,7 @@ export function createTelegramPluginBase(params: {
       buildModelBrowseChannelData: buildTelegramModelBrowseChannelData,
     },
     doctor: telegramDoctor,
+    security: telegramSecurityAdapter,
     reload: { configPrefixes: ["channels.telegram"] },
     configSchema: TelegramChannelConfigSchema,
     config: {
@@ -244,6 +247,7 @@ export function createTelegramPluginBase(params: {
     | "capabilities"
     | "commands"
     | "doctor"
+    | "security"
     | "reload"
     | "configSchema"
     | "config"

@@ -72,11 +72,15 @@ export async function runPreparedCliAgent(
                     ? { authProfileId: context.effectiveAuthProfileId }
                     : {}),
                   ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
+                  authEpochVersion: context.authEpochVersion,
                   ...(context.extraSystemPromptHash
                     ? { extraSystemPromptHash: context.extraSystemPromptHash }
                     : {}),
                   ...(context.preparedBackend.mcpConfigHash
                     ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
+                    : {}),
+                  ...(context.preparedBackend.mcpResumeHash
+                    ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
                     : {}),
                 },
               }

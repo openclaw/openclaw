@@ -3,6 +3,8 @@
 import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
+const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(["api.js", "runtime-api.js"]);
+
 const checker = createExtensionImportBoundaryChecker({
   roots: ["src"],
   boundaryLabel: "src",
@@ -10,6 +12,10 @@ const checker = createExtensionImportBoundaryChecker({
   cleanMessage: "No src import boundary violations found.",
   inventoryTitle: "Src extension import boundary inventory:",
   skipSourcesWithoutBundledPluginPrefix: true,
+  allowResolvedPath(resolvedPath) {
+    const basename = resolvedPath.split("/").at(-1) ?? "";
+    return ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES.has(basename);
+  },
   shouldSkipFile(relativeFile) {
     return (
       relativeFile.endsWith(".test.ts") ||
