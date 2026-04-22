@@ -272,6 +272,7 @@ async function buildMessageContext(
       core,
       cfg: config,
       accountConfig: account.config,
+      accountId: account.accountId,
       rawBody: messageBody,
       senderUserId: body.from.userid,
     });
@@ -744,6 +745,24 @@ async function prepareWeComMessage(params: {
     }),
   ]);
   const mediaList = [...imageMediaList, ...fileMediaList];
+
+  // Post-download empty-content guard: when a media-only inbound message
+  // arrives but every download/decrypt attempt failed (timeout, aeskey
+  // fallback refused, size rejected, etc.), mediaList ends up empty even
+  // though imageUrls/fileUrls were present. Without this guard we'd push
+  // an entry with empty `text` and empty `mediaList` into the reply
+  // pipeline, which produces a misleading model reply to effectively
+  // blank input. Drop the turn instead so the sender isn't answered with
+  // hallucinated content for a failed media ingest.
+  const hadMediaUrls = imageUrls.length > 0 || fileUrls.length > 0;
+  if (!text && hadMediaUrls && mediaList.length === 0) {
+    runtime.error?.(
+      `[wecom][plugin] All media downloads failed and no text/quote; ` +
+        `dropping turn (chat=${chatId}, imageUrls=${imageUrls.length}, ` +
+        `fileUrls=${fileUrls.length})`,
+    );
+    return null;
+  }
 
   return {
     frame,

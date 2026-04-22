@@ -30,6 +30,24 @@ function isWecomSenderAllowed(senderUserId: string, allowFrom: string[]): boolea
   return list.has(normalizedSender);
 }
 
+/**
+ * Read pairing-store approvals via both legacy and modern signatures
+ * (matches the compatibility behavior in `dm-policy.ts::checkDmPolicy`).
+ */
+async function readWecomPairingStoreApprovals(
+  core: PluginRuntime,
+  accountId: string | undefined,
+): Promise<string[]> {
+  const channel = "wecom";
+  const [oldStore, newStore] = await Promise.all([
+    // OpenClaw <= 2026.2.19 signature: readAllowFromStore(channel, env?, accountId?)
+    // @ts-expect-error — legacy 3-arg signature; newer versions use single-object param.
+    core.channel.pairing.readAllowFromStore(channel, undefined, accountId).catch(() => []),
+    core.channel.pairing.readAllowFromStore({ channel, accountId }).catch(() => []),
+  ]);
+  return [...oldStore, ...newStore];
+}
+
 /** Command authorization result */
 export interface WecomCommandAuthResult {
   shouldComputeAuth: boolean;
@@ -44,25 +62,44 @@ export async function resolveWecomCommandAuthorization(params: {
   core: PluginRuntime;
   cfg: OpenClawConfig;
   accountConfig: WecomCommandAuthAccountConfig;
+  /**
+   * Account ID for per-account pairing-store lookup. Required to honor
+   * pairing approvals in multi-account setups; safe to omit for
+   * single-account defaults.
+   */
+  accountId?: string;
   rawBody: string;
   senderUserId: string;
 }): Promise<WecomCommandAuthResult> {
-  const { core, cfg, accountConfig, rawBody, senderUserId } = params;
+  const { core, cfg, accountConfig, accountId, rawBody, senderUserId } = params;
 
   const dmPolicy = accountConfig.dmPolicy ?? "open";
   const configAllowFrom = (accountConfig.allowFrom ?? []).map((v) => String(v));
 
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, cfg);
-  // WeCom channel currently does NOT support the `openclaw pairing` CLI workflow
-  // ("Channel wecom does not support pairing"). So we must not rely on pairing
-  // store approvals for command authorization here.
-  //
+
   // Policy semantics:
-  // - open: commands are allowed for everyone by default (unless higher-level access-groups deny).
-  // - allowlist: commands require allowFrom entries.
-  // - pairing: treated the same as allowlist for WeCom (since pairing CLI is unsupported).
-  const effectiveAllowFrom =
-    dmPolicy === "disabled" ? [] : dmPolicy === "open" ? ["*"] : configAllowFrom;
+  // - open: commands allowed for everyone by default (unless higher-level
+  //   access-groups deny).
+  // - allowlist: commands require entries in config `allowFrom`.
+  // - pairing: commands require entries in config `allowFrom` OR
+  //   pairing-store approvals. This mirrors `checkDmPolicy` so DM
+  //   gating and command authorization stay consistent — a paired user
+  //   who can DM the bot is no longer rejected at the command gate just
+  //   because they weren't also manually added to config `allowFrom`.
+  // - disabled: everyone denied.
+  let effectiveAllowFrom: string[];
+  if (dmPolicy === "disabled") {
+    effectiveAllowFrom = [];
+  } else if (dmPolicy === "open") {
+    effectiveAllowFrom = ["*"];
+  } else if (dmPolicy === "pairing") {
+    const storeAllowFrom = await readWecomPairingStoreApprovals(core, accountId);
+    effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
+  } else {
+    // allowlist
+    effectiveAllowFrom = configAllowFrom;
+  }
 
   const senderAllowed = isWecomSenderAllowed(senderUserId, effectiveAllowFrom);
   const allowAllConfigured = effectiveAllowFrom.some(
