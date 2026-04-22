@@ -30,6 +30,9 @@ type BundleMcpSession = {
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedPiMcpConfig>;
 type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
+type CreateSessionMcpRuntime = (
+  params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
+) => SessionMcpRuntime;
 
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 
@@ -289,9 +292,12 @@ export function createSessionMcpRuntime(params: {
   };
 }
 
-function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
+function createSessionMcpRuntimeManager(
+  opts: { createRuntime?: CreateSessionMcpRuntime } = {},
+): SessionMcpRuntimeManager {
   const runtimesBySessionId = new Map<string, SessionMcpRuntime>();
   const sessionIdBySessionKey = new Map<string, string>();
+  const createRuntime = opts.createRuntime ?? createSessionMcpRuntime;
   const createInFlight = new Map<
     string,
     {
@@ -338,11 +344,12 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
         await staleRuntime?.dispose();
       }
       const created = Promise.resolve(
-        createSessionMcpRuntime({
+        createRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
+          configFingerprint: nextFingerprint,
         }),
       ).then((runtime) => {
         runtime.markUsed();
@@ -429,11 +436,30 @@ export async function disposeSessionMcpRuntime(sessionId: string): Promise<void>
   await getSessionMcpRuntimeManager().disposeSession(sessionId);
 }
 
+export async function retireSessionMcpRuntime(params: {
+  sessionId?: string | null;
+  reason: string;
+  onError?: (error: unknown, sessionId: string, reason: string) => void;
+}): Promise<boolean> {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (!sessionId) {
+    return false;
+  }
+  try {
+    await disposeSessionMcpRuntime(sessionId);
+    return true;
+  } catch (error) {
+    params.onError?.(error, sessionId, params.reason);
+    return false;
+  }
+}
+
 export async function disposeAllSessionMcpRuntimes(): Promise<void> {
   await getSessionMcpRuntimeManager().disposeAll();
 }
 
 export const __testing = {
+  createSessionMcpRuntimeManager,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
   },
