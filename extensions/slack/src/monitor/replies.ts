@@ -127,6 +127,7 @@ export function resolveSlackThreadTs(params: {
 }
 
 type SlackReplyDeliveryPlan = {
+  peekThreadTs: () => string | undefined;
   nextThreadTs: () => string | undefined;
   markSent: () => void;
 };
@@ -168,6 +169,7 @@ export function createSlackReplyDeliveryPlan(params: {
     isThreadReply: params.isThreadReply,
   });
   return {
+    peekThreadTs: () => replyReference.peek(),
     nextThreadTs: () => replyReference.use(),
     markSent: () => {
       replyReference.markSent();
