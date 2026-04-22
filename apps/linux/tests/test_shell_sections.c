@@ -22,6 +22,7 @@ static const SectionController dummy_controller = {0};
 
 DEFINE_SECTION_GETTER(section_dashboard_get)
 DEFINE_SECTION_GETTER(section_agents_get)
+DEFINE_SECTION_GETTER(section_about_get)
 DEFINE_SECTION_GETTER(section_usage_get)
 DEFINE_SECTION_GETTER(section_general_get)
 DEFINE_SECTION_GETTER(section_config_get)
@@ -69,8 +70,8 @@ static void test_controller_lookup(void) {
     g_assert_nonnull(shell_sections_controller(SECTION_DEBUG));
     g_assert_nonnull(shell_sections_controller(SECTION_AGENTS));
     g_assert_nonnull(shell_sections_controller(SECTION_INSTANCES));
+    g_assert_nonnull(shell_sections_controller(SECTION_ABOUT));
     g_assert_null(shell_sections_controller(SECTION_CHAT));
-    g_assert_null(shell_sections_controller(SECTION_ABOUT));
 }
 
 int main(int argc, char **argv) {
