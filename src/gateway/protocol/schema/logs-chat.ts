@@ -28,6 +28,12 @@ export const ChatHistoryParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
+    // runId (optional): when provided, the handler returns only messages whose
+    // serialized content references the run identifier (text match against
+    // markers like `run_id=<runId>` or `runId=<runId>`).  Intended for external
+    // reconciler callers that want to follow a single run's output without
+    // writing back into an active session (which sessions.send would do).
+    runId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

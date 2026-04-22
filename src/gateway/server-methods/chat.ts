@@ -84,6 +84,7 @@ import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
+import { filterMessagesByRunId } from "./chat.history-run-id-filter.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1617,10 +1618,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit, maxChars, runId } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      runId?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1633,12 +1635,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       provider: resolvedSessionModel.provider,
       localMessages,
     });
+    // Apply the runId filter on raw messages, before any size-budget pass.
+    // Sanitization/placeholder substitution would otherwise be able to hide a
+    // run's marker (`run_id=<runId>`) behind a truncation or placeholder and
+    // silently drop matching messages.
+    const runScopedRaw = filterMessagesByRunId(rawMessages, runId);
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sliced = runScopedRaw.length > max ? runScopedRaw.slice(-max) : runScopedRaw;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
