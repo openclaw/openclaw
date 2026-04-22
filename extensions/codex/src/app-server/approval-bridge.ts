@@ -105,6 +105,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
           signal: params.signal,
         });
     const outcome = mapExecDecisionToOutcome(decision);
+    const scope = approvalOutcomeScope(outcome);
 
     emitApprovalEvent(params.paramsForRun, {
       phase: "resolved",
@@ -118,7 +119,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
               ? "failed"
               : "approved",
       title: context.title,
-      ...(approvalOutcomeScope(outcome) ? { scope: approvalOutcomeScope(outcome) } : {}),
+      ...(scope ? { scope } : {}),
       approvalId,
       approvalSlug: approvalId,
       ...context.eventDetails,
