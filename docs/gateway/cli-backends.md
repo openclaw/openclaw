@@ -185,6 +185,9 @@ child process environment for the run.
   follow-up turns reuse the live Claude process while it is active. If the
   Gateway restarts or the idle process exits, OpenClaw resumes from the stored
   Claude session id.
+- Stored CLI sessions are provider-owned continuity. The implicit daily session
+  reset does not cut them; `/reset` and explicit `session.reset` policies still
+  do.
 
 Serialization notes:
 

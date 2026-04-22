@@ -111,6 +111,7 @@ function buildPreparedCliRunContext(params: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    authEpochVersion: 2,
   };
 }
 
@@ -170,6 +171,7 @@ describe("runCliAgent spawn path", () => {
       systemPrompt: "You are a helpful assistant.",
       systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
       bootstrapPromptWarningLines: [],
+      authEpochVersion: 2,
     };
     await executePreparedCliRun(context);
 

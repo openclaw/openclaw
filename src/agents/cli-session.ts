@@ -28,6 +28,7 @@ export function getCliSessionBinding(
       sessionId: bindingSessionId,
       authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
       authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
+      authEpochVersion: fromBindings?.authEpochVersion,
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
@@ -78,6 +79,9 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.authEpoch)
         ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
         : {}),
+      ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
+        ? { authEpochVersion: binding.authEpochVersion }
+        : {}),
       ...(normalizeOptionalString(binding.extraSystemPromptHash)
         ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
         : {}),
@@ -122,6 +126,7 @@ export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
   authEpoch?: string;
+  authEpochVersion: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -144,7 +149,10 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "auth-profile" };
   }
   const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
-  if (storedAuthEpoch !== currentAuthEpoch) {
+  if (
+    binding?.authEpochVersion === params.authEpochVersion &&
+    storedAuthEpoch !== currentAuthEpoch
+  ) {
     return { invalidatedReason: "auth-epoch" };
   }
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
@@ -152,7 +160,7 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "system-prompt" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
-  if (storedMcpResumeHash || currentMcpResumeHash) {
+  if (storedMcpResumeHash && currentMcpResumeHash) {
     if (storedMcpResumeHash !== currentMcpResumeHash) {
       return { invalidatedReason: "mcp" };
     }

@@ -188,6 +188,8 @@ describe("runCodexAppServerAttempt", () => {
           params: expect.objectContaining({
             model: "gpt-5.4-codex",
             modelProvider: "openai",
+            approvalPolicy: "never",
+            sandbox: "danger-full-access",
           }),
         },
         {
@@ -435,9 +437,9 @@ describe("runCodexAppServerAttempt", () => {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
       modelProvider: "openai",
-      approvalPolicy: "on-request",
+      approvalPolicy: "never",
       approvalsReviewer: "user",
-      sandbox: "workspace-write",
+      sandbox: "danger-full-access",
       persistExtendedHistory: true,
     });
   });

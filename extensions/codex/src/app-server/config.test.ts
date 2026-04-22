@@ -60,7 +60,7 @@ describe("Codex app-server config", () => {
     ).toThrow("appServer.url is required");
   });
 
-  it("defaults native Codex approvals to on-request", () => {
+  it("defaults native Codex approvals to unchained local execution", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {},
       env: {},
@@ -68,8 +68,8 @@ describe("Codex app-server config", () => {
 
     expect(runtime).toEqual(
       expect.objectContaining({
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
         approvalsReviewer: "user",
       }),
     );

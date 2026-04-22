@@ -242,7 +242,7 @@ function prepareBundledChannelRuntimeRoot(params: {
         left.localeCompare(right),
       ),
     );
-    log.info(
+    log.debug(
       `[channels] ${params.pluginId} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
     );
   }

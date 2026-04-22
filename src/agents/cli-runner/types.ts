@@ -68,5 +68,6 @@ export type PreparedCliRunContext = {
   bootstrapPromptWarningLines: string[];
   heartbeatPrompt?: string;
   authEpoch?: string;
+  authEpochVersion: number;
   extraSystemPromptHash?: string;
 };
