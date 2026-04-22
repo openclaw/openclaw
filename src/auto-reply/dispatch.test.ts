@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
@@ -6,12 +6,19 @@ import { buildTestCtx } from "./reply/test-ctx.js";
 type DispatchReplyFromConfigFn =
   typeof import("./reply/dispatch-from-config.js").dispatchReplyFromConfig;
 type FinalizeInboundContextFn = typeof import("./reply/inbound-context.js").finalizeInboundContext;
+type DeriveInboundMessageHookContextFn =
+  typeof import("../hooks/message-hook-mappers.js").deriveInboundMessageHookContext;
+type GetGlobalHookRunnerFn = typeof import("../plugins/hook-runner-global.js").getGlobalHookRunner;
+type CreateReplyDispatcherFn = typeof import("./reply/reply-dispatcher.js").createReplyDispatcher;
 type CreateReplyDispatcherWithTypingFn =
   typeof import("./reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
 
 const hoisted = vi.hoisted(() => ({
   dispatchReplyFromConfigMock: vi.fn(),
   finalizeInboundContextMock: vi.fn((ctx: unknown, _opts?: unknown) => ctx),
+  deriveInboundMessageHookContextMock: vi.fn(),
+  getGlobalHookRunnerMock: vi.fn(),
+  createReplyDispatcherMock: vi.fn(),
   createReplyDispatcherWithTypingMock: vi.fn(),
 }));
 
@@ -25,12 +32,33 @@ vi.mock("./reply/inbound-context.js", () => ({
     hoisted.finalizeInboundContextMock(...args),
 }));
 
+vi.mock("../hooks/message-hook-mappers.js", () => ({
+  deriveInboundMessageHookContext: (...args: Parameters<DeriveInboundMessageHookContextFn>) =>
+    hoisted.deriveInboundMessageHookContextMock(...args),
+  toPluginMessageContext: (canonical: {
+    channelId?: string;
+    accountId?: string;
+    conversationId?: string;
+  }) => ({
+    channelId: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: canonical.conversationId,
+  }),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: (...args: Parameters<GetGlobalHookRunnerFn>) =>
+    hoisted.getGlobalHookRunnerMock(...args),
+}));
+
 vi.mock("./reply/reply-dispatcher.js", async () => {
   const actual = await vi.importActual<typeof import("./reply/reply-dispatcher.js")>(
     "./reply/reply-dispatcher.js",
   );
   return {
     ...actual,
+    createReplyDispatcher: (...args: Parameters<CreateReplyDispatcherFn>) =>
+      hoisted.createReplyDispatcherMock(...args),
     createReplyDispatcherWithTyping: (...args: Parameters<CreateReplyDispatcherWithTypingFn>) =>
       hoisted.createReplyDispatcherWithTypingMock(...args),
   };
@@ -38,6 +66,7 @@ vi.mock("./reply/reply-dispatcher.js", async () => {
 
 const {
   dispatchInboundMessage,
+  dispatchInboundMessageWithDispatcher,
   dispatchInboundMessageWithBufferedDispatcher,
   withReplyDispatcher,
 } = await import("./dispatch.js");
@@ -59,6 +88,22 @@ function createDispatcher(record: string[]): ReplyDispatcher {
 }
 
 describe("withReplyDispatcher", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hoisted.finalizeInboundContextMock.mockImplementation((ctx: unknown) => ctx);
+    hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
+      channelId: "threads",
+      accountId: "acct-1",
+      conversationId: "conv-1",
+      isGroup: false,
+      to: "thread:1",
+    });
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+      runMessageSending: vi.fn(async () => undefined),
+    });
+  });
+
   it("dispatchInboundMessage owns dispatcher lifecycle", async () => {
     const order: string[] = [];
     const dispatcher = {
@@ -166,6 +211,43 @@ describe("withReplyDispatcher", () => {
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
     expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("runs message_sending hooks before inbound dispatcher delivery", async () => {
+    const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
+      runMessageSending,
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = hoisted.createReplyDispatcherMock.mock.calls[0]?.[0];
+    expect(dispatcherOptions?.beforeDeliver).toEqual(expect.any(Function));
+
+    const payload = await dispatcherOptions.beforeDeliver(
+      { text: "original reply" },
+      { kind: "final" },
+    );
+
+    expect(payload).toEqual({ text: "sanitized reply" });
+    expect(runMessageSending).toHaveBeenCalledWith(
+      { content: "original reply", to: "thread:1" },
+      {
+        channelId: "threads",
+        accountId: "acct-1",
+        conversationId: "conv-1",
+      },
+    );
   });
 
   it("uses CommandTargetSessionKey for silent-reply policy on native command turns", async () => {

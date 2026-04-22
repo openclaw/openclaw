@@ -28,6 +28,11 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
 
+export type ReplyDispatchBeforeDeliver = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+) => Promise<ReplyPayload | null> | ReplyPayload | null;
+
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
@@ -70,6 +75,8 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Called after normalization but before deliver. Return null to cancel or a modified payload. */
+  beforeDeliver?: ReplyDispatchBeforeDeliver;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -222,9 +229,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        let deliverPayload: ReplyPayload | null = normalized;
+        if (options.beforeDeliver) {
+          deliverPayload = await options.beforeDeliver(normalized, { kind });
+          if (!deliverPayload) {
+            return;
+          }
+        }
+        await options.deliver(deliverPayload, { kind });
       })
       .catch((err) => {
         failedCounts[kind] += 1;
