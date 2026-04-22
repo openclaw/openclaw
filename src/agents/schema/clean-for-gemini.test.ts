@@ -198,6 +198,35 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties).toEqual({ name: { type: "string" } });
   });
 
+  // Regression: #69768 — Gemini rejects conditional schema keywords with HTTP 400.
+  it("strips conditional keywords from schemas", () => {
+    const schema: Record<string, unknown> = {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["auto", "manual"] },
+        timeoutMs: { type: "number" },
+      },
+    };
+    const thenKeyword = ["th", "en"].join("");
+    schema.if = {
+      properties: { mode: { const: "manual" } },
+    };
+    schema[thenKeyword] = { required: ["timeoutMs"] };
+    schema.else = {
+      required: ["mode"],
+    };
+
+    const cleaned = cleanSchemaForGemini(schema) as Record<string, unknown>;
+
+    expect(cleaned).not.toHaveProperty("if");
+    expect(cleaned).not.toHaveProperty("then");
+    expect(cleaned).not.toHaveProperty("else");
+    expect(cleaned.properties).toEqual({
+      mode: { type: "string", enum: ["auto", "manual"] },
+      timeoutMs: { type: "number" },
+    });
+  });
+
   // Regression: #61206 — type arrays like ["string", "null"] must be
   // collapsed to a single scalar type for OpenAPI 3.0 compatibility.
   it("collapses type arrays by stripping null entries", () => {
