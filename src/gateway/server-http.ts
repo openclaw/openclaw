@@ -1099,6 +1099,10 @@ export function createGatewayHttpServer(opts: {
               config: configSnapshot,
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
             }),
         });
       }

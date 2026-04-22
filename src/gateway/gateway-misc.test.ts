@@ -83,7 +83,7 @@ describe("GatewayClient", () => {
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
     await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -96,7 +96,7 @@ describe("GatewayClient", () => {
   it("returns 404 for missing static assets with query strings", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg?v=1", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -109,7 +109,7 @@ describe("GatewayClient", () => {
   it("still serves SPA fallback for extensionless paths", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/chat", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -122,7 +122,7 @@ describe("GatewayClient", () => {
   it("HEAD returns 404 for missing static assets consistent with GET", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg", method: "HEAD" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -136,7 +136,7 @@ describe("GatewayClient", () => {
     await withControlUiRoot({}, async (tmp) => {
       for (const route of ["/webchat/user/jane.doe", "/webchat/v2.0", "/settings/v1.2"]) {
         const { res } = makeControlUiResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: route, method: "GET" } as IncomingMessage,
           res,
           { root: { kind: "resolved", path: tmp } },
@@ -150,7 +150,7 @@ describe("GatewayClient", () => {
   it("serves SPA fallback for .html paths that do not exist on disk", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/foo.html", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
