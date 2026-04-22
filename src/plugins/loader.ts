@@ -223,6 +223,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "config",
   "agent",
   "subagent",
+  "interSession",
   "system",
   "media",
   "tts",

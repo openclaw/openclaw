@@ -4,6 +4,12 @@ import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gatewa
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import {
+  OPENCLAW_INTERSESSION_SEND_DENIED,
+  OPENCLAW_INTERSESSION_SEND_FAILED,
+  OPENCLAW_INTERSESSION_SESSION_NOT_FOUND,
+  OPENCLAW_INTERSESSION_UNAVAILABLE,
+} from "../plugin-sdk/error-runtime.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", "telegram"]));
@@ -198,6 +204,28 @@ async function createSubagentRuntime(
   return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
+async function createInterSessionRuntime(
+  _serverPlugins: ServerPluginsModule,
+  cfg: Record<string, unknown> = {},
+): Promise<PluginRuntime["interSession"]> {
+  const log = createTestLog();
+  loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+  serverPluginBootstrapModule.loadGatewayStartupPlugins({
+    cfg,
+    workspaceDir: "/tmp",
+    log,
+    coreGatewayHandlers: {},
+    baseMethods: [],
+  });
+  const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
+    | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
+    | undefined;
+  if (call?.runtimeOptions?.allowGatewaySubagentBinding !== true) {
+    throw new Error("Expected loadGatewayPlugins to opt into gateway subagent binding");
+  }
+  return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).interSession;
+}
+
 async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
   vi.resetModules();
   return await import("./server-plugins.js");
@@ -249,6 +277,7 @@ beforeEach(() => {
   pluginRuntimeLoaderLogger.error.mockClear();
   pluginRuntimeLoaderLogger.debug.mockClear();
   handleGatewayRequest.mockReset();
+  runtimeModule.clearGatewayInterSessionRuntime();
   runtimeModule.clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
@@ -261,6 +290,9 @@ beforeEach(() => {
       case "sessions.get":
         opts.respond(true, { messages: [] });
         return;
+      case "sessions.send":
+        opts.respond(true, { runId: "send-run-1" });
+        return;
       case "sessions.delete":
         opts.respond(true, {});
         return;
@@ -271,6 +303,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  runtimeModule.clearGatewayInterSessionRuntime();
   runtimeModule.clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
 });
@@ -574,6 +607,55 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("forwards interSession.send through sessions.send with explicit idempotencyKey", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createInterSessionRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("interSession-send-explicit-idem"));
+
+    await expect(
+      runtime.send({
+        sessionKey: "s-inter-send",
+        message: "transport this",
+        idempotencyKey: "transport-key",
+      }),
+    ).resolves.toEqual({
+      messageRef: "send-run-1",
+    });
+
+    expect(handleGatewayRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        req: expect.objectContaining({
+          method: "sessions.send",
+        }),
+      }),
+    );
+    expect(getLastDispatchedParams()).toEqual({
+      key: "s-inter-send",
+      message: "transport this",
+      idempotencyKey: "transport-key",
+    });
+  });
+
+  test("generates an interSession.send idempotencyKey when the caller omits it", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createInterSessionRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("interSession-send-generate-idem"));
+
+    await runtime.send({
+      sessionKey: "s-inter-generate",
+      message: "transport this",
+    });
+
+    const params = getLastDispatchedParams();
+    expect(params).toBeDefined();
+    expect(params).toMatchObject({
+      key: "s-inter-generate",
+      message: "transport this",
+    });
+    expect(typeof params?.idempotencyKey).toBe("string");
+    expect((params?.idempotencyKey as string).length).toBeGreaterThan(0);
+  });
+
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
@@ -593,6 +675,124 @@ describe("loadGatewayPlugins", () => {
     const generated = params?.idempotencyKey;
     expect(typeof generated).toBe("string");
     expect((generated as string).length).toBeGreaterThan(0);
+  });
+
+  test("maps structured not-found sessions.send failures to OPENCLAW_INTERSESSION_SESSION_NOT_FOUND", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createInterSessionRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("interSession-send-not-found"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: "request failed",
+        details: {
+          reason: "session not found: s-missing",
+        },
+      });
+    });
+
+    await expect(
+      runtime.send({
+        sessionKey: "s-missing",
+        message: "transport this",
+      }),
+    ).rejects.toMatchObject({
+      code: OPENCLAW_INTERSESSION_SESSION_NOT_FOUND,
+      message: "request failed",
+    });
+  });
+
+  test("maps structured send-policy failures to OPENCLAW_INTERSESSION_SEND_DENIED", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createInterSessionRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("interSession-send-denied"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: "request failed",
+        details: {
+          policy: "send blocked by session policy",
+        },
+      });
+    });
+
+    await expect(
+      runtime.send({
+        sessionKey: "s-denied",
+        message: "transport this",
+      }),
+    ).rejects.toMatchObject({
+      code: OPENCLAW_INTERSESSION_SEND_DENIED,
+      message: "request failed",
+    });
+  });
+
+  test("maps UNAVAILABLE sessions.send failures to OPENCLAW_INTERSESSION_UNAVAILABLE", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createInterSessionRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("interSession-send-unavailable"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "gateway unavailable",
+      });
+    });
+
+    await expect(
+      runtime.send({
+        sessionKey: "s-unavailable",
+        message: "transport this",
+      }),
+    ).rejects.toMatchObject({
+      code: OPENCLAW_INTERSESSION_UNAVAILABLE,
+      message: "gateway unavailable",
+    });
+  });
+
+  test("falls back to message heuristics when sessions.send failures lack structured details", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createInterSessionRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("interSession-send-fallback-heuristic"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: 'Agent "deleted-agent" no longer exists in configuration',
+      });
+    });
+
+    await expect(
+      runtime.send({
+        sessionKey: "agent:deleted-agent:main",
+        message: "transport this",
+      }),
+    ).rejects.toMatchObject({
+      code: OPENCLAW_INTERSESSION_SESSION_NOT_FOUND,
+      message: 'Agent "deleted-agent" no longer exists in configuration',
+    });
+  });
+
+  test("maps malformed sessions.send success payloads to OPENCLAW_INTERSESSION_SEND_FAILED", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createInterSessionRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("interSession-send-invalid-payload"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, {});
+    });
+
+    await expect(
+      runtime.send({
+        sessionKey: "s-invalid-payload",
+        message: "transport this",
+      }),
+    ).rejects.toMatchObject({
+      code: OPENCLAW_INTERSESSION_SEND_FAILED,
+      message: "Gateway sessions.send returned an invalid runId.",
+    });
   });
 
   test("rejects provider/model overrides for fallback runs without explicit authorization", async () => {

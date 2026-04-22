@@ -1120,8 +1120,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
-        if (prop !== "subagent") {
+        if (prop !== "subagent" && prop !== "interSession") {
           return Reflect.get(target, prop, receiver);
+        }
+        if (prop === "interSession") {
+          const interSession = Reflect.get(target, prop, receiver);
+          return {
+            send: (params) =>
+              withPluginRuntimePluginIdScope(pluginId, () => interSession.send(params)),
+          } satisfies PluginRuntime["interSession"];
         }
         const subagent = Reflect.get(target, prop, receiver);
         return {

@@ -7,7 +7,10 @@ import {
   generateMusic as generateRuntimeMusic,
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
-import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
+import {
+  InterSessionRuntimeUnavailableError,
+  RequestScopedSubagentRuntimeError,
+} from "../../plugin-sdk/error-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -133,6 +136,15 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
+function createUnavailableInterSessionRuntime(): PluginRuntime["interSession"] {
+  const unavailable = () => {
+    throw new InterSessionRuntimeUnavailableError();
+  };
+  return {
+    send: unavailable,
+  };
+}
+
 // ── Process-global gateway subagent runtime ─────────────────────────
 // The gateway creates a real subagent runtime during startup, but gateway-owned
 // plugin registries may be loaded (and cached) before the gateway path runs.
@@ -173,6 +185,31 @@ export function clearGatewaySubagentRuntime(): void {
   gatewaySubagentState.subagent = undefined;
 }
 
+const GATEWAY_INTERSESSION_SYMBOL: unique symbol = Symbol.for(
+  "openclaw.plugin.gatewayInterSessionRuntime",
+) as unknown as typeof GATEWAY_INTERSESSION_SYMBOL;
+
+type GatewayInterSessionState = {
+  interSession: PluginRuntime["interSession"] | undefined;
+};
+
+const gatewayInterSessionState = resolveGlobalSingleton<GatewayInterSessionState>(
+  GATEWAY_INTERSESSION_SYMBOL,
+  () => ({
+    interSession: undefined,
+  }),
+);
+
+export function setGatewayInterSessionRuntime(
+  interSession: PluginRuntime["interSession"],
+): void {
+  gatewayInterSessionState.interSession = interSession;
+}
+
+export function clearGatewayInterSessionRuntime(): void {
+  gatewayInterSessionState.interSession = undefined;
+}
+
 /**
  * Create a late-binding subagent that resolves to:
  * 1. An explicitly provided subagent (from runtimeOptions), OR
@@ -200,6 +237,27 @@ function createLateBindingSubagent(
   });
 }
 
+function createLateBindingInterSession(
+  explicit?: PluginRuntime["interSession"],
+  allowGatewaySubagentBinding = false,
+): PluginRuntime["interSession"] {
+  if (explicit) {
+    return explicit;
+  }
+
+  const unavailable = createUnavailableInterSessionRuntime();
+  if (!allowGatewaySubagentBinding) {
+    return unavailable;
+  }
+
+  return new Proxy(unavailable, {
+    get(_target, prop, _receiver) {
+      const resolved = gatewayInterSessionState.interSession ?? unavailable;
+      return Reflect.get(resolved, prop, resolved);
+    },
+  });
+}
+
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -214,6 +272,10 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(
       _options.subagent,
+      _options.allowGatewaySubagentBinding === true,
+    ),
+    interSession: createLateBindingInterSession(
+      _options.interSession,
       _options.allowGatewaySubagentBinding === true,
     ),
     system: createRuntimeSystem(),

@@ -50,6 +50,17 @@ export type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+export type InterSessionSendParams = {
+  sessionKey: string;
+  message: string;
+  idempotencyKey?: string;
+};
+
+export type InterSessionSendResult = {
+  /** Opaque correlation/send handle retained for downstream compatibility. */
+  messageRef: string;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
@@ -62,10 +73,14 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
+  interSession: {
+    send: (params: InterSessionSendParams) => Promise<InterSessionSendResult>;
+  };
   channel: PluginRuntimeChannel;
 };
 
 export type CreatePluginRuntimeOptions = {
   subagent?: PluginRuntime["subagent"];
+  interSession?: PluginRuntime["interSession"];
   allowGatewaySubagentBinding?: boolean;
 };

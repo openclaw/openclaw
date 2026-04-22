@@ -6,10 +6,16 @@ import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
 import {
+  clearGatewayInterSessionRuntime,
   clearGatewaySubagentRuntime,
   createPluginRuntime,
+  setGatewayInterSessionRuntime,
   setGatewaySubagentRuntime,
 } from "./index.js";
+import {
+  INTERSESSION_RUNTIME_UNAVAILABLE_ERROR_MESSAGE,
+  OPENCLAW_INTERSESSION_UNAVAILABLE,
+} from "../../plugin-sdk/error-runtime.js";
 
 function createCommandResult() {
   return {
@@ -31,6 +37,12 @@ function createGatewaySubagentRuntime() {
     getSessionMessages: vi.fn(),
     getSession: vi.fn(),
     deleteSession: vi.fn(),
+  };
+}
+
+function createGatewayInterSessionRuntime() {
+  return {
+    send: vi.fn(),
   };
 }
 
@@ -64,6 +76,15 @@ function expectRuntimeSubagentRun(
   return runtime.subagent.run(params);
 }
 
+function expectGatewayInterSessionSendFailure(
+  runtime: ReturnType<typeof createPluginRuntime>,
+  params: { sessionKey: string; message: string },
+) {
+  expect(() => runtime.interSession.send(params)).toThrow(
+    INTERSESSION_RUNTIME_UNAVAILABLE_ERROR_MESSAGE,
+  );
+}
+
 function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?: boolean }) {
   const run = vi.fn().mockResolvedValue({ runId: "run-1" });
   const runtime = params?.allowGatewaySubagentBinding
@@ -76,6 +97,20 @@ function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?
   });
 
   return { run, runtime };
+}
+
+function createGatewayInterSessionSendFixture(params?: { allowGatewaySubagentBinding?: boolean }) {
+  const send = vi.fn().mockResolvedValue({ messageRef: "run-2" });
+  const runtime = params?.allowGatewaySubagentBinding
+    ? createPluginRuntime({ allowGatewaySubagentBinding: true })
+    : createPluginRuntime();
+
+  setGatewayInterSessionRuntime({
+    ...createGatewayInterSessionRuntime(),
+    send,
+  });
+
+  return { send, runtime };
 }
 
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
@@ -101,6 +136,7 @@ function expectRunCommandOutcome(params: {
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearGatewayInterSessionRuntime();
     clearGatewaySubagentRuntime();
   });
 
@@ -255,6 +291,22 @@ describe("plugin runtime command execution", () => {
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });
   });
 
+  it("exposes runtime.interSession.send and keeps it unavailable by default", async () => {
+    const { runtime } = createGatewayInterSessionSendFixture();
+
+    expect(typeof runtime.interSession.send).toBe("function");
+    try {
+      runtime.interSession.send({ sessionKey: "s-1", message: "hello" });
+      throw new Error("Expected interSession.send to throw");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: OPENCLAW_INTERSESSION_UNAVAILABLE,
+        message: INTERSESSION_RUNTIME_UNAVAILABLE_ERROR_MESSAGE,
+      });
+    }
+    expectGatewayInterSessionSendFailure(runtime, { sessionKey: "s-1", message: "hello" });
+  });
+
   it("late-binds to the gateway subagent when explicitly enabled", async () => {
     const { run, runtime } = createGatewaySubagentRunFixture({
       allowGatewaySubagentBinding: true,
@@ -266,5 +318,18 @@ describe("plugin runtime command execution", () => {
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
+  });
+
+  it("late-binds to the gateway interSession runtime when explicitly enabled", async () => {
+    const { send, runtime } = createGatewayInterSessionSendFixture({
+      allowGatewaySubagentBinding: true,
+    });
+
+    await expect(
+      runtime.interSession.send({ sessionKey: "s-2", message: "hello" }),
+    ).resolves.toEqual({
+      messageRef: "run-2",
+    });
+    expect(send).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
   });
 });

@@ -3,7 +3,7 @@ title: "Plugin Runtime Helpers"
 sidebarTitle: "Runtime Helpers"
 summary: "api.runtime -- the injected runtime helpers available to plugins"
 read_when:
-  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent)
+  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent, interSession)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
 ---
@@ -120,6 +120,22 @@ await api.runtime.subagent.deleteSession({
   `plugins.entries.<id>.subagent.allowModelOverride: true` in config.
   Untrusted plugins can still run subagents, but override requests are rejected.
 </Warning>
+
+### `api.runtime.interSession`
+
+Thin cross-session transport for plugin-driven sends.
+
+```typescript
+const { messageRef } = await api.runtime.interSession.send({
+  sessionKey: "agent:main:worker",
+  message: "Please continue from the latest handoff.",
+});
+```
+
+`messageRef` is an opaque correlation/send handle retained for downstream
+compatibility. In the current implementation it is returned as
+`{ messageRef: runId }` from accepted `sessions.send` calls, but plugins must
+not treat it as transcript identity, a reply target, or a lifecycle handle.
 
 ### `api.runtime.taskFlow`
 

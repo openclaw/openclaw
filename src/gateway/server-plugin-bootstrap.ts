@@ -3,9 +3,13 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import {
+  setGatewayInterSessionRuntime,
+  setGatewaySubagentRuntime,
+} from "../plugins/runtime/index.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
+  createGatewayInterSessionRuntime,
   createGatewaySubagentRuntime,
   loadGatewayPlugins,
   setPluginSubagentOverridePolicies,
@@ -35,6 +39,7 @@ type GatewayPluginBootstrapParams = {
 function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
   setPluginSubagentOverridePolicies(cfg);
   setGatewaySubagentRuntime(createGatewaySubagentRuntime());
+  setGatewayInterSessionRuntime(createGatewayInterSessionRuntime());
 }
 
 function logGatewayPluginDiagnostics(params: {
