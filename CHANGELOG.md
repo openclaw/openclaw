@@ -85,6 +85,7 @@ Docs: https://docs.openclaw.ai
 - Security/dotenv: block workspace `.env` overrides for Matrix, Mattermost, IRC, and Synology endpoint settings so cloned workspaces cannot redirect bundled connector traffic through local endpoint config. (#70240) Thanks @drobison00.
 - Telegram: require the same `/models` authorization for group model-picker callbacks, so unauthorized participants can no longer browse or change the session model through inline buttons. (#70235) Thanks @drobison00.
 - Agents/Pi: keep the filtered tool-name allowlist active for embedded OpenAI/OpenAI Codex GPT-5 runs and compaction sessions, so bundled and client tools still execute after the Pi `0.68.1` session-tool allowlist change instead of stopping at plan-only replies with no tool call. (#70281) Thanks @jalehman.
+- Agents/Pi: honor explicit `strict-agentic` execution contracts for incomplete-turn retry guards across providers, so manually opted-in local or compatible models get the same retry behavior without relying on OpenAI model inference. (#66750) Thanks @ziomancer.
 
 ## 2026.4.21
 
