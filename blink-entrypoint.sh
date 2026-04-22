@@ -50,7 +50,16 @@ if [ "$(stat -c %U "${STATE_DIR}" 2>/dev/null || echo root)" != "node" ]; then
   mkdir -p "${STATE_DIR}/workspace" "${AGENT_DIR}" "${STATE_DIR}/agents/main/sessions" \
            "${STATE_DIR}/scripts" "${STATE_DIR}/npm-global"
   if [ ! -f "${CONFIG_FILE}" ]; then
-    echo '{"agents":{"defaults":{"workspace":"/data/workspace"}},"browser":{"noSandbox":true},"gateway":{"auth":{"mode":"token"}}}' > "${CONFIG_FILE}"
+    if [ "${BLINK_POOL_MODE:-}" = "true" ]; then
+      # Pool mode: pre-bake all restart-triggering fields (plugins, gateway,
+      # browser) so that the adopt-time config write only changes hot-reloadable
+      # fields.
+      cat > "${CONFIG_FILE}" <<'POOL_SKELETON'
+{"agents":{"defaults":{"workspace":"/data/workspace"}},"plugins":{"slots":{"memory":"none"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true},"http":{"endpoints":{"chatCompletions":{"enabled":true}}}},"browser":{"headless":true,"noSandbox":true,"profiles":{"user":{"driver":"openclaw","cdpPort":18800,"color":"#00AA00"}}},"session":{"maintenance":{"mode":"enforce","pruneAfter":"30d","maxEntries":200}}}
+POOL_SKELETON
+    else
+      echo '{"agents":{"defaults":{"workspace":"/data/workspace"}},"browser":{"noSandbox":true},"gateway":{"auth":{"mode":"token"}}}' > "${CONFIG_FILE}"
+    fi
   fi
   chown -R node:node "${STATE_DIR}"
 fi
@@ -59,6 +68,14 @@ fi
 # never had this subdirectory — OpenClaw v2026.4.15 requires it).
 mkdir -p "${AGENT_DIR}"
 chown node:node "${AGENT_DIR}"
+
+# Source agent secrets (set via `blink secrets set` → /data/.env).
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+  set +a
+fi
 
 # Seed auth-profiles.json with the Blink provider credential.
 # This is required by upstream v2026.4.15+ where the gateway reads API keys
@@ -189,14 +206,6 @@ with open('${CONFIG_FILE}') as f: d = json.load(f)
 if 'secrets' in d: del d['secrets']
 with open('${CONFIG_FILE}', 'w') as f: json.dump(d, f, indent=2)
 " 2>/dev/null
-fi
-
-# Source agent secrets (set via `blink secrets set` → /data/.env).
-if [ -f "${ENV_FILE}" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "${ENV_FILE}"
-  set +a
 fi
 
 # Never let the gateway daemonize — Fly init supervises this process.

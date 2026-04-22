@@ -296,6 +296,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
+RUN sha256sum /app/openclaw.mjs | cut -d' ' -f1 > /app/.image-digest
+
 # Install Blink CLI + clawhub at build time so every rebuild ships the newest.
 # NPM_CONFIG_PREFIX points npm-global at the persistent Fly volume so the
 # `node` user can `npm install -g <pkg>` at runtime without sudo.
