@@ -90,9 +90,9 @@ describe("skills.update", () => {
 
     // Response must not expose plaintext secrets
     const config = (responseResult as { config: Record<string, unknown> }).config;
-    expect(config.apiKey).not.toBe("secret-api-key-123");
+    expect(config.apiKey).toBe("__OPENCLAW_REDACTED__");
     const env = config.env as Record<string, string>;
-    expect(env.GEMINI_API_KEY).not.toBe("secret-env-key-456");
+    expect(env.GEMINI_API_KEY).toBe("__OPENCLAW_REDACTED__");
     // Non-secret env values should still be present
     expect(env.BRAVE_REGION).toBe("us");
   });
