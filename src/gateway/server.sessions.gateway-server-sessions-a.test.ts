@@ -97,6 +97,9 @@ const acpManagerMocks = vi.hoisted(() => ({
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
+const bundleMcpRuntimeMocks = vi.hoisted(() => ({
+  disposeSessionMcpRuntime: vi.fn(async (_sessionId: string) => {}),
+}));
 
 vi.mock("../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
@@ -200,6 +203,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
   movePathToTrash: vi.fn(async () => {}),
+}));
+
+vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
+  disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
 }));
 
 installGatewayTestHooks({ scope: "suite" });
@@ -390,6 +397,8 @@ describe("gateway server sessions", () => {
     acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
+    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockClear();
+    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
   });
 
   test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
@@ -590,6 +599,9 @@ describe("gateway server sessions", () => {
 
   test("sessions.create can start the first agent turn from an initial task", async () => {
     await createSessionStoreDir();
+    // Register "ops" so the deleted-agent guard added in #65986 does not
+    // reject the auto-started chat.send triggered by `task:`.
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     const { ws } = await openClient();
 
     const created = await rpcReq<{
@@ -2376,6 +2388,7 @@ describe("gateway server sessions", () => {
       ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
       "sess-active",
     );
+    expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-active");
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
       sessionKeys: expect.arrayContaining([
@@ -2652,6 +2665,7 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
     expect(waitCallCountAtSnapshotClear).toEqual([1]);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({

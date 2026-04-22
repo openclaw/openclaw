@@ -48,6 +48,8 @@ import { throwInvalidConfig } from "./io.invalid-config.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
+  promoteConfigSnapshotToLastKnownGood as promoteConfigSnapshotToLastKnownGoodWithDeps,
+  recoverConfigFromLastKnownGood as recoverConfigFromLastKnownGoodWithDeps,
 } from "./io.observe-recovery.js";
 import { persistGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
@@ -126,6 +128,7 @@ type ConfigHealthFingerprint = {
 
 type ConfigHealthEntry = {
   lastKnownGood?: ConfigHealthFingerprint;
+  lastPromotedGood?: ConfigHealthFingerprint;
   lastObservedSuspiciousSignature?: string | null;
 };
 
@@ -160,6 +163,11 @@ export type ConfigWriteOptions = {
    * the post-write runtime snapshot refresh/reload tail entirely.
    */
   skipRuntimeSnapshotRefresh?: boolean;
+  /**
+   * Allow intentionally destructive config writes, such as explicit reset flows.
+   * Normal writers must keep this false so clobbers are rejected before disk commit.
+   */
+  allowDestructiveWrite?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -331,6 +339,12 @@ function resolveConfigWriteSuspiciousReasons(params: {
     reasons.push("gateway-mode-removed");
   }
   return reasons;
+}
+
+function resolveConfigWriteBlockingReasons(suspicious: string[]): string[] {
+  return suspicious.filter(
+    (reason) => reason.startsWith("size-drop:") || reason === "gateway-mode-removed",
+  );
 }
 
 async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<ConfigHealthState> {
@@ -601,6 +615,7 @@ async function observeConfigSnapshot(
   if (suspicious.length === 0) {
     if (snapshot.valid) {
       const nextEntry: ConfigHealthEntry = {
+        ...entry,
         lastKnownGood: current,
         lastObservedSuspiciousSignature: null,
       };
@@ -734,6 +749,7 @@ function observeConfigSnapshotSync(
   if (suspicious.length === 0) {
     if (snapshot.valid) {
       const nextEntry: ConfigHealthEntry = {
+        ...entry,
         lastKnownGood: current,
         lastObservedSuspiciousSignature: null,
       };
@@ -1182,7 +1198,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
           )
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        deps.logger.warn(`Config warnings:\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = materializeRuntimeConfig(validated.config, "load");
@@ -1241,9 +1257,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
     }
 
+    let fallbackRaw: string | null = null;
+    let fallbackParsed: unknown = {};
+    let fallbackSourceConfig: OpenClawConfig = {};
+    let fallbackHash = hashConfigRaw(null);
+
     try {
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const rawHash = hashConfigRaw(raw);
+      fallbackRaw = raw;
+      fallbackHash = rawHash;
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1262,6 +1285,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           }),
         });
       }
+      fallbackParsed = parsedRes.parsed;
+      fallbackSourceConfig = coerceConfig(parsedRes.parsed);
 
       // Resolve $include directives
       const recovered = await maybeRecoverSuspiciousConfigRead({
@@ -1273,6 +1298,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const effectiveRaw = recovered.raw;
       const effectiveParsed = recovered.parsed;
       const hash = hashConfigRaw(effectiveRaw);
+      fallbackRaw = effectiveRaw;
+      fallbackParsed = effectiveParsed;
+      fallbackSourceConfig = coerceConfig(effectiveParsed);
+      fallbackHash = hash;
 
       let resolved: unknown;
       try {
@@ -1313,6 +1342,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
+      fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1376,12 +1406,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: true,
-          raw: null,
-          parsed: {},
-          sourceConfig: {},
+          raw: fallbackRaw,
+          parsed: fallbackParsed,
+          sourceConfig: fallbackSourceConfig,
           valid: false,
-          runtimeConfig: {},
-          hash: hashConfigRaw(null),
+          runtimeConfig: fallbackSourceConfig,
+          hash: fallbackHash,
           issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
@@ -1393,6 +1423,27 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
     const result = await readConfigFileSnapshotInternal();
     return result.snapshot;
+  }
+
+  async function promoteConfigSnapshotToLastKnownGood(
+    snapshot: ConfigFileSnapshot,
+  ): Promise<boolean> {
+    return await promoteConfigSnapshotToLastKnownGoodWithDeps({
+      deps,
+      snapshot,
+      logger: deps.logger,
+    });
+  }
+
+  async function recoverConfigFromLastKnownGood(params: {
+    snapshot: ConfigFileSnapshot;
+    reason: string;
+  }): Promise<boolean> {
+    return await recoverConfigFromLastKnownGoodWithDeps({
+      deps,
+      snapshot: params.snapshot,
+      reason: params.reason,
+    });
   }
 
   async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
@@ -1656,6 +1707,26 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }),
       });
     };
+    const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons);
+    if (blockingReasons.length > 0 && options.allowDestructiveWrite !== true) {
+      const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
+      await deps.fs.promises
+        .writeFile(rejectedPath, json, {
+          encoding: "utf-8",
+          mode: 0o600,
+          flag: "wx",
+        })
+        .catch(() => {});
+      const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). Rejected payload saved to ${rejectedPath}.`;
+      const err = Object.assign(new Error(message), {
+        code: "CONFIG_WRITE_REJECTED",
+        rejectedPath,
+        reasons: blockingReasons,
+      });
+      deps.logger.warn(message);
+      await appendWriteAudit("rejected", err);
+      throw err;
+    }
 
     const tmp = path.join(
       dir,
@@ -1720,6 +1791,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     readSourceConfigBestEffort,
     readConfigFileSnapshot,
     readConfigFileSnapshotForWrite,
+    promoteConfigSnapshotToLastKnownGood,
+    recoverConfigFromLastKnownGood,
     writeConfigFile,
   };
 }
@@ -1820,6 +1893,19 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
 
+export async function promoteConfigSnapshotToLastKnownGood(
+  snapshot: ConfigFileSnapshot,
+): Promise<boolean> {
+  return await createConfigIO().promoteConfigSnapshotToLastKnownGood(snapshot);
+}
+
+export async function recoverConfigFromLastKnownGood(params: {
+  snapshot: ConfigFileSnapshot;
+  reason: string;
+}): Promise<boolean> {
+  return await createConfigIO().recoverConfigFromLastKnownGood(params);
+}
+
 export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
   return await readConfigFileSnapshot();
 }
@@ -1853,6 +1939,7 @@ export async function writeConfigFile(
       envSnapshotForRestore: options.envSnapshotForRestore,
     }),
     unsetPaths: options.unsetPaths,
+    allowDestructiveWrite: options.allowDestructiveWrite,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
   });
   if (

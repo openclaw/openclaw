@@ -7,6 +7,7 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import { disposeSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
@@ -21,6 +22,7 @@ import {
   updateSessionStore,
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -60,48 +62,6 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
-}
-
-type ResetPreservedSelectionState = Pick<
-  SessionEntry,
-  | "providerOverride"
-  | "modelOverride"
-  | "modelOverrideSource"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
->;
-
-function resolveResetPreservedSelection(params: {
-  entry?: SessionEntry;
-}): Partial<ResetPreservedSelectionState> {
-  const { entry } = params;
-  if (!entry) {
-    return {};
-  }
-
-  const preserved: Partial<ResetPreservedSelectionState> = {};
-  // `modelOverrideSource` is new. Older persisted sessions can still carry
-  // user-selected overrides without the source field, so treat an absent
-  // source as legacy user state during reset and backfill it forward.
-  const preserveLegacyUserModelOverride =
-    entry.modelOverrideSource === "user" ||
-    (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
-  if (preserveLegacyUserModelOverride && entry.modelOverride) {
-    preserved.providerOverride = entry.providerOverride;
-    preserved.modelOverride = entry.modelOverride;
-    preserved.modelOverrideSource = "user";
-  }
-
-  if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
-    preserved.authProfileOverride = entry.authProfileOverride;
-    preserved.authProfileOverrideSource = entry.authProfileOverrideSource;
-    if (entry.authProfileOverrideCompactionCount !== undefined) {
-      preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
-    }
-  }
-
-  return preserved;
 }
 
 export function archiveSessionTranscriptsForSession(params: {
@@ -266,6 +226,11 @@ async function ensureSessionRuntimeCleanup(params: {
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
+    await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
+      logVerbose(
+        `sessions cleanup: failed to dispose bundle MCP runtime for ${params.sessionId}: ${String(error)}`,
+      );
+    });
     await closeTrackedBrowserTabs();
     return undefined;
   }

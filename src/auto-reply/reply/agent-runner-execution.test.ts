@@ -11,12 +11,18 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
+  runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
+  isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+}));
+
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
 vi.mock("../../agents/model-fallback.js", () => ({
@@ -33,7 +39,7 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: () => false,
+    isCliProvider: (provider: unknown) => state.isCliProviderMock(provider),
   };
 });
 
@@ -118,6 +124,9 @@ vi.mock("./reply-delivery.js", () => ({
 }));
 
 vi.mock("./reply-media-paths.runtime.js", () => ({
+  createReplyMediaContext: () => ({
+    normalizePayload: (payload: unknown) => payload,
+  }),
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
@@ -228,7 +237,10 @@ function createMockReplyOperation(): {
 describe("runAgentTurnWithFallback", () => {
   beforeEach(() => {
     state.runEmbeddedPiAgentMock.mockReset();
+    state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
+    state.isCliProviderMock.mockReset();
+    state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
@@ -241,6 +253,59 @@ describe("runAgentTurnWithFallback", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("forwards the static extra system prompt to CLI backends", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
+    followupRun.run.extraSystemPromptStatic = "stable group prompt";
+
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
+        extraSystemPromptStatic: "stable group prompt",
+      }),
+    );
   });
 
   it("forwards media-only tool results without typing text", async () => {
@@ -858,6 +923,199 @@ describe("runAgentTurnWithFallback", () => {
         text: "🧹 Compacting context...",
         replyToId: "msg",
         replyToCurrent: true,
+        isCompactionNotice: true,
+      }),
+    );
+  });
+
+  it("emits a compaction completion notice when notifyUser is enabled", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            notifyUser: true,
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onBlockReply },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "🧹 Compacting context...",
+        replyToId: "msg",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      }),
+    );
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "🧹 Compaction complete",
+        replyToId: "msg",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      }),
+    );
+  });
+
+  it("prefers onCompactionEnd callback over default notice when notifyUser is enabled", async () => {
+    const onBlockReply = vi.fn();
+    const onCompactionEnd = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            notifyUser: true,
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onBlockReply, onCompactionEnd },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onCompactionEnd).toHaveBeenCalledTimes(1);
+    // The start notice still fires (no onCompactionStart callback provided),
+    // but the completion notice is suppressed in favor of the callback.
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "🧹 Compacting context...",
+        isCompactionNotice: true,
+      }),
+    );
+  });
+
+  it("emits an incomplete compaction notice when compaction ends without completing", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: false },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            notifyUser: true,
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onBlockReply },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "🧹 Compacting context...",
+        isCompactionNotice: true,
+      }),
+    );
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "🧹 Compaction incomplete",
         isCompactionNotice: true,
       }),
     );

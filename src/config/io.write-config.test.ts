@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
@@ -78,6 +79,26 @@ describe("config io write", () => {
       commands?: Record<string, unknown>;
     };
     return persisted.commands;
+  };
+
+  const createFastConfigIO = (home: string) =>
+    createConfigIO({
+      env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => home,
+      logger: silentLogger,
+    });
+
+  const writeGatewayPortAndReadConfig = async (home: string, configPath: string) => {
+    const io = createFastConfigIO(home);
+
+    await io.writeConfigFile({
+      gateway: { mode: "local", port: 18789 },
+    });
+
+    return JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      $schema?: string;
+      gateway?: { mode?: string; port?: number };
+    };
   };
 
   it.runIf(process.platform !== "win32")(
@@ -207,26 +228,92 @@ describe("config io write", () => {
         "utf-8",
       );
 
-      const io = createConfigIO({
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
-      });
-
-      await io.writeConfigFile({
-        gateway: { mode: "local", port: 18789 },
-      });
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        $schema?: string;
-        gateway?: { mode?: string; port?: number };
-      };
+      const persisted = await writeGatewayPortAndReadConfig(home, configPath);
       expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
       expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
     });
   });
 
-  it("does not inject include-only $schema into the root config during partial writes", async () => {
+  it("rejects destructive internal writes before replacing the config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+        channels: { telegram: { enabled: true, dmPolicy: "pairing" } },
+        agents: { list: [{ id: "main", default: true, workspace: "/tmp/openclaw-main" }] },
+        tools: { profile: "messaging" },
+        commands: { ownerDisplay: "hash" },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await expect(
+        io.writeConfigFile(
+          { update: { channel: "beta" } },
+          {
+            baseSnapshot,
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: "CONFIG_WRITE_REJECTED",
+      });
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+      const entries = await fs.readdir(path.dirname(configPath));
+      expect(entries.some((entry) => entry.includes(".rejected."))).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Config write rejected:"));
+    });
+  });
+
+  it("preserves parsed source config when snapshot validation throws", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+        channels: { "test-plugin-channel": { enabled: true } },
+      };
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      mockLoadPluginManifestRegistry.mockImplementationOnce(() => {
+        throw new Error("manifest registry unavailable");
+      });
+
+      const io = createFastConfigIO(home);
+
+      const snapshot = await io.readConfigFileSnapshot();
+
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.raw).toBe(originalRaw);
+      expect(snapshot.parsed).toEqual(original);
+      expect(snapshot.sourceConfig).toEqual(original);
+      expect(snapshot.config).toEqual(original);
+      expect(snapshot.issues[0]?.message).toContain("manifest registry unavailable");
+    });
+  });
+
+  it("rejects root-include partial writes instead of flattening the root config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const includePath = path.join(home, ".openclaw", "extra.json5");
@@ -241,23 +328,12 @@ describe("config io write", () => {
         `{\n  "$include": "./extra.json5",\n  "gateway": { "mode": "local" }\n}\n`,
         "utf-8",
       );
+      const originalRaw = await fs.readFile(configPath, "utf-8");
 
-      const io = createConfigIO({
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
-      });
-
-      await io.writeConfigFile({
-        gateway: { mode: "local", port: 18789 },
-      });
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        $schema?: string;
-        gateway?: { mode?: string; port?: number };
-      };
-      expect(persisted).not.toHaveProperty("$schema");
-      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+      await expect(writeGatewayPortAndReadConfig(home, configPath)).rejects.toThrow(
+        "Config write would flatten $include-owned config at <root>",
+      );
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
     });
   });
 

@@ -55,6 +55,7 @@ function buildPreparedContext(params?: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    authEpochVersion: 2,
   };
 }
 

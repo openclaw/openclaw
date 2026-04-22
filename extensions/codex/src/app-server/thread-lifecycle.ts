@@ -1,4 +1,5 @@
 import { embeddedAgentLog, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
@@ -50,9 +51,11 @@ export async function startOrResumeThread(params: {
             appServer: params.appServer,
           }),
         );
+        const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
+          authProfileId: boundAuthProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
           dynamicToolsFingerprint,
@@ -62,6 +65,7 @@ export async function startOrResumeThread(params: {
           ...binding,
           threadId: response.thread.id,
           cwd: params.cwd,
+          authProfileId: boundAuthProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
           dynamicToolsFingerprint,
@@ -93,6 +97,7 @@ export async function startOrResumeThread(params: {
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
     cwd: params.cwd,
+    authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
     dynamicToolsFingerprint,
@@ -103,6 +108,7 @@ export async function startOrResumeThread(params: {
     threadId: response.thread.id,
     sessionFile: params.params.sessionFile,
     cwd: params.cwd,
+    authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
     dynamicToolsFingerprint,
@@ -126,6 +132,7 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    developerInstructions: buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
 }
@@ -174,6 +181,7 @@ function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
+    renderCodexPromptOverlay({ modelId: params.modelId }),
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
   ];
