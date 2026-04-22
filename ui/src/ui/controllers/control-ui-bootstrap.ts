@@ -33,14 +33,16 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
   const url = basePath
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
-  const authHeader = resolveControlUiAuthHeader(state);
 
   try {
+    const authHeader = resolveControlUiAuthHeader(state);
+    const resolvedUrl = new URL(url, window.location.origin);
+    const includeAuthHeader = authHeader && resolvedUrl.origin === window.location.origin;
     const res = await fetch(url, {
       method: "GET",
       headers: {
         Accept: "application/json",
-        ...(authHeader ? { Authorization: authHeader } : {}),
+        ...(includeAuthHeader ? { Authorization: authHeader } : {}),
       },
       credentials: "same-origin",
     });

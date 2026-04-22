@@ -133,4 +133,37 @@ describe("loadControlUiBootstrapConfig", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("does not attach auth headers to protocol-relative bootstrap URLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "//evil.example",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      settings: { token: "session-token" },
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `//evil.example${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+        }),
+      }),
+    );
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
 });
