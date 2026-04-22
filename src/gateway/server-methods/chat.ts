@@ -50,6 +50,7 @@ import {
   describeOffloadedImagesForTextOnlyModel,
 } from "../chat-attachments.js";
 import { MediaOffloadError } from "../chat-attachments.js";
+import { deleteMediaBuffer } from "../../media/store.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
@@ -1947,6 +1948,18 @@ export const chatHandlers: GatewayRequestHandlers = {
             agentDir,
             log: context.logGateway,
           });
+
+          // Text-only description is complete — the physical media files are no
+          // longer needed because the image content has been converted to text
+          // descriptions. Clean up now to avoid orphaned files accumulating on
+          // disk, especially for ACP bridge clients where persistChatSendImages
+          // skips offloaded ref persistence entirely.
+          await Promise.allSettled(
+            parsed.offloadedRefs.map((ref) =>
+              deleteMediaBuffer(ref.id, "inbound").catch(() => {}),
+            ),
+          );
+
           parsedMessage = described.message;
           parsedImages = described.images;
           imageOrder = described.imageOrder;

@@ -597,12 +597,35 @@ export async function describeOffloadedImagesForTextOnlyModel(params: {
     return { ...parsed, message: neutralMessage };
   }
 
-  // Resolve the imageModel from config (e.g. agents.defaults.imageModel)
+  // Resolve the imageModel from config (e.g. agents.defaults.imageModel).
+  // resolveAutoImageModel checks activeModel then falls back to key-order,
+  // but it does NOT check agents.defaults.imageModel (that logic lives in
+  // resolveAutoEntries which is used by the `image` tool path, not here).
+  // So we resolve the configured imageModel first and pass it as activeModel
+  // so multi-provider setups route descriptions to the correct provider.
+  let activeModelFromConfig: { provider: string; model: string } | undefined;
+  if (typeof cfg.agents?.defaults?.imageModel === "string" && cfg.agents.defaults.imageModel.includes("/")) {
+    const slashIdx = cfg.agents.defaults.imageModel.indexOf("/");
+    activeModelFromConfig = {
+      provider: cfg.agents.defaults.imageModel.slice(0, slashIdx),
+      model: cfg.agents.defaults.imageModel.slice(slashIdx + 1),
+    };
+  } else if (cfg.agents?.defaults?.imageModel && typeof cfg.agents.defaults.imageModel === "object") {
+    const primary = cfg.agents.defaults.imageModel.primary;
+    if (primary && primary.includes("/")) {
+      const slashIdx = primary.indexOf("/");
+      activeModelFromConfig = {
+        provider: primary.slice(0, slashIdx),
+        model: primary.slice(slashIdx + 1),
+      };
+    }
+  }
+
   // Guard against resolveAutoImageModel throwing (e.g. provider misconfiguration)
   // so that a config error doesn't crash the entire message pipeline.
   let imageModel: Awaited<ReturnType<typeof resolveAutoImageModel>> | undefined;
   try {
-    imageModel = await resolveAutoImageModel({ cfg, agentDir });
+    imageModel = await resolveAutoImageModel({ cfg, agentDir, activeModel: activeModelFromConfig });
   } catch (err) {
     log?.warn(
       `describeOffloadedImages: resolveAutoImageModel failed: ${err instanceof Error ? err.message : String(err)}`,
