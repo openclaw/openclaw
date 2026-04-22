@@ -33,7 +33,6 @@ import {
   type ChatCommandDefinition,
   type CommandArgDefinition,
   type CommandArgValues,
-  type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
@@ -88,6 +87,10 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type DiscordCommandArgs = {
+  raw?: string;
+  values?: CommandArgValues;
+};
 const log = createSubsystemLogger("discord/native-command");
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
@@ -559,7 +562,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
 function readDiscordCommandArgs(
   interaction: CommandInteraction,
   definitions?: CommandArgDefinition[],
-): CommandArgs | undefined {
+): DiscordCommandArgs | undefined {
   if (!definitions || definitions.length === 0) {
     return undefined;
   }
@@ -726,7 +729,7 @@ export function createDiscordNativeCommand(params: {
         ? ({
             ...commandArgs,
             raw: serializeCommandArgs(commandDefinition, commandArgs) ?? commandArgs.raw,
-          } satisfies CommandArgs)
+          } satisfies DiscordCommandArgs)
         : undefined;
       const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
       await dispatchDiscordCommandInteraction({
@@ -742,6 +745,7 @@ export function createDiscordNativeCommand(params: {
         // follow-up/edit semantics instead of the initial reply endpoint.
         preferFollowUp: true,
         threadBindings,
+        responseEphemeral: ephemeralDefault,
       });
     }
   })();
@@ -751,13 +755,14 @@ async function dispatchDiscordCommandInteraction(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   prompt: string;
   command: ChatCommandDefinition;
-  commandArgs?: CommandArgs;
+  commandArgs?: DiscordCommandArgs;
   cfg: ReturnType<typeof loadConfig>;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;
   preferFollowUp: boolean;
   threadBindings: ThreadBindingManager;
+  responseEphemeral?: boolean;
   suppressReplies?: boolean;
 }) {
   const {
@@ -771,13 +776,15 @@ async function dispatchDiscordCommandInteraction(params: {
     sessionPrefix,
     preferFollowUp,
     threadBindings,
+    responseEphemeral,
     suppressReplies,
   } = params;
   const commandName = command.nativeName ?? command.key;
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
+    const ephemeral = options?.ephemeral ?? responseEphemeral;
     const payload = {
       content,
-      ...(options?.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
+      ...(ephemeral !== undefined ? { ephemeral } : {}),
     };
     await safeDiscordInteractionCall("interaction reply", async () => {
       if (preferFollowUp) {
@@ -1099,6 +1106,7 @@ async function dispatchDiscordCommandInteraction(params: {
       }),
       maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
       preferFollowUp,
+      responseEphemeral,
       chunkMode: resolveChunkMode(cfg, "discord", accountId),
     });
     return;
@@ -1168,6 +1176,7 @@ async function dispatchDiscordCommandInteraction(params: {
         }),
         maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
         preferFollowUp,
+        responseEphemeral,
         chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
       return;
@@ -1233,6 +1242,7 @@ async function dispatchDiscordCommandInteraction(params: {
             }),
             maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
             preferFollowUp: preferFollowUp || didReply,
+            responseEphemeral,
             chunkMode: resolveChunkMode(cfg, "discord", accountId),
           });
         } catch (error) {
@@ -1314,6 +1324,7 @@ async function deliverDiscordInteractionReply(params: {
   textLimit: number;
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
+  responseEphemeral?: boolean;
   chunkMode: "length" | "newline";
 }) {
   const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
@@ -1337,6 +1348,9 @@ async function deliverDiscordInteractionReply(params: {
         ? {
             content,
             ...(components ? { components } : {}),
+            ...(params.responseEphemeral !== undefined
+              ? { ephemeral: params.responseEphemeral }
+              : {}),
             files: files.map((file) => {
               if (file.data instanceof Blob) {
                 return { name: file.name, data: file.data };
@@ -1348,6 +1362,9 @@ async function deliverDiscordInteractionReply(params: {
         : {
             content,
             ...(components ? { components } : {}),
+            ...(params.responseEphemeral !== undefined
+              ? { ephemeral: params.responseEphemeral }
+              : {}),
           };
     await safeDiscordInteractionCall("interaction send", async () => {
       if (!preferFollowUp && !hasReplied) {
@@ -1388,7 +1405,7 @@ async function deliverDiscordInteractionReply(params: {
       if (!chunk.trim()) {
         continue;
       }
-      await interaction.followUp({ content: chunk });
+      await sendMessage(chunk);
     }
     return;
   }
