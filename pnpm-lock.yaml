@@ -54,17 +54,17 @@ importers:
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
       '@mariozechner/pi-agent-core':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-tui':
-        specifier: 0.67.68
-        version: 0.67.68
+        specifier: 0.68.1
+        version: 0.68.1
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -286,8 +286,8 @@ importers:
   extensions/anthropic:
     dependencies:
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -373,8 +373,8 @@ importers:
   extensions/codex:
     dependencies:
       '@mariozechner/pi-coding-agent':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -559,8 +559,8 @@ importers:
   extensions/fireworks:
     dependencies:
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -572,8 +572,8 @@ importers:
         specifier: ^1.2.0
         version: 1.2.0
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -585,8 +585,8 @@ importers:
         specifier: ^1.50.1
         version: 1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -647,8 +647,8 @@ importers:
   extensions/kimi-coding:
     dependencies:
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -689,8 +689,8 @@ importers:
   extensions/lmstudio:
     dependencies:
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
 
   extensions/lobster:
     dependencies:
@@ -912,8 +912,8 @@ importers:
   extensions/ollama:
     dependencies:
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
@@ -931,8 +931,8 @@ importers:
   extensions/openai:
     dependencies:
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -1325,8 +1325,8 @@ importers:
   extensions/xai:
     dependencies:
       '@mariozechner/pi-ai':
-        specifier: 0.67.68
-        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.68.1
+        version: 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
@@ -2630,22 +2630,22 @@ packages:
     resolution: {integrity: sha512-faGUlTcXka5l7rv0lP3K3vGW/ejRuOS24RR2aSFWREUQqzjgdsuWNo/IiPqL3kWRGt6Ahl2+qcDAwtdeWeuGUw==}
     hasBin: true
 
-  '@mariozechner/pi-agent-core@0.67.68':
-    resolution: {integrity: sha512-anwFuzeUL7Qjbyih4DWY7w1zrOTrBxaz1L6+duLUuuzpHOun0EiP4KWIGTXPT5oJA7ZaeRNTyXJ7PlWfGQG33g==}
+  '@mariozechner/pi-agent-core@0.68.1':
+    resolution: {integrity: sha512-7q0vHSc6IIlNNdfP5+4ktv/9Bidfo6dCFRRJVz96K9qjN+5rYJ+4V28quvcw/Vf0pfDgRMBRR0Yhjx51lb60tg==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.67.68':
-    resolution: {integrity: sha512-DWWQmcb3IV3mbGXmzYBScfKA6kA52n/stY029eiBikrIxVT7DGLG6n7KSvTA2R4qBSgi1iFL3nGHtwxmtIn6Lg==}
+  '@mariozechner/pi-ai@0.68.1':
+    resolution: {integrity: sha512-z52kMOZK1/fxzKu7nTwdfOCHhOE/G5GwGsxzR98X6LX7yAz384iqwG4DoXn7nI05ETH7jXLET6wUrYIHMo91Qw==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-coding-agent@0.67.68':
-    resolution: {integrity: sha512-Bai2yUBpgjftqGvg3GNV9pxcMAatqJwQYsqM+7j39+tm+IpoW7hbMBnzXZQvykAwXIrTXpZFF5yp5ajeDI5Atg==}
+  '@mariozechner/pi-coding-agent@0.68.1':
+    resolution: {integrity: sha512-EqNZrce9b1cjsxDJlIjPHhT44tUtGax5EvzYO9oPTnSBybWwjGddW9WmdhL0Gz1ulSekgNTa2zrlo4uoD7ecDg==}
     engines: {node: '>=20.6.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.67.68':
-    resolution: {integrity: sha512-RhcMaGz88lNOm5+9yx+YCIfXZALLbMxB2cwsoHzyOzs+OZAItw8tz6xJZPAnX0RHY+ENQEGMMDY9TF6pxxnkbA==}
+  '@mariozechner/pi-tui@0.68.1':
+    resolution: {integrity: sha512-j+XI22ehKo4c1gEAzohoSBcgA4X5+vVinTn8a9Osb7h9N8B/rvF23GArJpiMsmE001U47rsLw0mrPop5Kmta+w==}
     engines: {node: '>=20.0.0'}
 
   '@matrix-org/matrix-sdk-crypto-nodejs@0.4.0':
@@ -9327,9 +9327,9 @@ snapshots:
       std-env: 3.10.0
       yoctocolors: 2.1.2
 
-  '@mariozechner/pi-agent-core@0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
+  '@mariozechner/pi-agent-core@0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -9339,7 +9339,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.81.0(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.1032.0
@@ -9363,13 +9363,14 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
+  '@mariozechner/pi-coding-agent@0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/jiti': 2.6.5
-      '@mariozechner/pi-agent-core': 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.67.68
+      '@mariozechner/pi-agent-core': 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.68.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.68.1
       '@silvia-odwyer/photon-node': 0.3.4
+      '@sinclair/typebox': 0.34.49
       ajv: 8.18.0
       chalk: 5.6.2
       cli-highlight: 2.1.11
@@ -9397,7 +9398,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.67.68':
+  '@mariozechner/pi-tui@0.68.1':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2

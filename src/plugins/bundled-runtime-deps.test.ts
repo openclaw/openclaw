@@ -371,13 +371,13 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
         dependencies: {
-          "@mariozechner/pi-ai": "0.67.68",
+          "@mariozechner/pi-ai": "0.68.1",
         },
       }),
     );
     fs.writeFileSync(
       path.join(packageRoot, "node_modules", "@mariozechner", "pi-ai", "package.json"),
-      JSON.stringify({ name: "@mariozechner/pi-ai", version: "0.67.68" }),
+      JSON.stringify({ name: "@mariozechner/pi-ai", version: "0.68.1" }),
     );
 
     const result = ensureBundledPluginRuntimeDeps({
