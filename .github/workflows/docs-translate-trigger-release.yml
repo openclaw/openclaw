@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   dispatch-translate:
+    if: github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger locale translates in publish repo
