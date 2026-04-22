@@ -2,7 +2,6 @@ import { loadConfig } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
-  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -73,7 +72,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       message: note ?? null,
-      continuation: result.status === "ok" ? buildRestartSuccessContinuation({ sessionKey }) : null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
         mode: result.mode,

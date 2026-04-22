@@ -186,9 +186,7 @@ describe("config shared auth disconnects", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
   });
 
-  it("adds a default continuation to session-scoped restart sentinels", async () => {
-    const { DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE } =
-      await import("../../infra/restart-sentinel.js");
+  it("does not add an agent continuation from generic control-plane sessionKey params", async () => {
     const prevConfig: OpenClawConfig = {
       gateway: {
         reload: {
@@ -213,11 +211,9 @@ describe("config shared auth disconnects", () => {
     expect(restartSentinelMocks.writeRestartSentinel).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        continuation: {
-          kind: "agentTurn",
-          message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-        },
       }),
     );
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.continuation).toBeUndefined();
   });
 });

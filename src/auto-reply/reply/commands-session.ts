@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
@@ -41,10 +42,10 @@ const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
 
-async function writeRestartCommandSentinel(params: HandleCommandsParams) {
+async function writeRestartCommandSentinel(params: HandleCommandsParams): Promise<string | null> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
-    return;
+    return null;
   }
   const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
   const payload: RestartSentinelPayload = {
@@ -62,7 +63,14 @@ async function writeRestartCommandSentinel(params: HandleCommandsParams) {
       reason: "/restart",
     },
   };
-  await writeRestartSentinel(payload).catch(() => {});
+  return await writeRestartSentinel(payload);
+}
+
+async function removeRestartCommandSentinel(filePath: string | null) {
+  if (!filePath) {
+    return;
+  }
+  await fs.unlink(filePath).catch(() => {});
 }
 
 function resolveSessionCommandUsage() {
@@ -662,6 +670,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     );
     return { shouldContinue: false };
   }
+  const nonOwner = rejectNonOwnerCommand(params, "/restart");
+  if (nonOwner) {
+    return nonOwner;
+  }
   if (!isRestartEnabled(params.cfg)) {
     return {
       shouldContinue: false,
@@ -671,8 +683,19 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+  let sentinelPath: string | null = null;
+  try {
+    sentinelPath = await writeRestartCommandSentinel(params);
+  } catch (err) {
+    logVerbose(`failed to write /restart sentinel: ${String(err)}`);
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
+      },
+    };
+  }
   if (hasSigusr1Listener) {
-    await writeRestartCommandSentinel(params);
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,
@@ -681,9 +704,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  await writeRestartCommandSentinel(params);
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
+    await removeRestartCommandSentinel(sentinelPath);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,

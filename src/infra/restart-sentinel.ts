@@ -83,20 +83,17 @@ export async function writeRestartSentinel(
 ) {
   const filePath = resolveRestartSentinelPath(env);
   const data: RestartSentinel = { version: 1, payload };
-  await writeJsonAtomic(filePath, data, { trailingNewline: true });
+  await writeJsonAtomic(filePath, data, { trailingNewline: true, ensureDirMode: 0o700 });
   return filePath;
 }
 
 export function buildRestartSuccessContinuation(params: {
   sessionKey?: string;
-  continuationKind?: string | null;
   continuationMessage?: string | null;
 }): RestartSentinelContinuation | null {
   const message = params.continuationMessage?.trim();
   if (message) {
-    return params.continuationKind === "systemEvent"
-      ? { kind: "systemEvent", text: message }
-      : { kind: "agentTurn", message };
+    return { kind: "agentTurn", message };
   }
   return params.sessionKey?.trim()
     ? { kind: "agentTurn", message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE }

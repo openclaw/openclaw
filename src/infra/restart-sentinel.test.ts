@@ -198,12 +198,11 @@ describe("restart success continuation", () => {
     expect(
       buildRestartSuccessContinuation({
         sessionKey: "agent:main:main",
-        continuationKind: "systemEvent",
         continuationMessage: "wake after restart",
       }),
     ).toEqual({
-      kind: "systemEvent",
-      text: "wake after restart",
+      kind: "agentTurn",
+      message: "wake after restart",
     });
   });
 

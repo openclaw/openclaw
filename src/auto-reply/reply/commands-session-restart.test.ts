@@ -3,6 +3,7 @@ import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const mocks = vi.hoisted(() => ({
+  unlink: vi.fn(async (_path: string) => undefined),
   isRestartEnabled: vi.fn(() => true),
   extractDeliveryInfo: vi.fn(() => ({
     deliveryContext: {
@@ -16,6 +17,13 @@ const mocks = vi.hoisted(() => ({
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/sentinel.json"),
   scheduleGatewaySigusr1Restart: vi.fn(() => ({ scheduled: true })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
+}));
+
+vi.mock("node:fs/promises", () => ({
+  default: {
+    unlink: mocks.unlink,
+  },
+  unlink: mocks.unlink,
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -98,6 +106,7 @@ describe("handleRestartCommand", () => {
   beforeEach(() => {
     mocks.isRestartEnabled.mockReset();
     mocks.isRestartEnabled.mockReturnValue(true);
+    mocks.unlink.mockClear();
     mocks.extractDeliveryInfo.mockClear();
     mocks.formatDoctorNonInteractiveHint.mockClear();
     mocks.writeRestartSentinel.mockClear();
@@ -132,5 +141,43 @@ describe("handleRestartCommand", () => {
       }),
     );
     expect(mocks.triggerOpenClawRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects authorized non-owner restart commands", async () => {
+    const result = await handleRestartCommand(
+      restartCommandParams({
+        command: {
+          ...restartCommandParams().command,
+          senderIsOwner: false,
+          isAuthorizedSender: true,
+        },
+      }),
+      true,
+    );
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
+    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+  });
+
+  it("does not restart when the sentinel cannot be written", async () => {
+    mocks.writeRestartSentinel.mockRejectedValueOnce(new Error("disk full"));
+
+    const result = await handleRestartCommand(restartCommandParams(), true);
+
+    expect(result?.reply?.text).toContain("could not persist");
+    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+  });
+
+  it("removes the success sentinel when fallback restart fails", async () => {
+    mocks.triggerOpenClawRestart.mockReturnValueOnce({
+      ok: false,
+      method: "launchctl",
+    });
+
+    const result = await handleRestartCommand(restartCommandParams(), true);
+
+    expect(result?.reply?.text).toContain("Restart failed");
+    expect(mocks.unlink).toHaveBeenCalledWith("/tmp/sentinel.json");
   });
 });

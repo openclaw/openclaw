@@ -69,28 +69,16 @@ describe("gateway tool restart continuation", () => {
     scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true, delayMs: 250 });
   });
 
-  it("uses a flat enum for continuationKind in the tool schema", async () => {
+  it("does not expose system-event continuations to the agent tool", async () => {
     const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool();
-    const continuationKind = (
-      tool.parameters as {
-        properties?: {
-          continuationKind?: {
-            type?: string;
-            enum?: string[];
-            anyOf?: unknown[];
-          };
-        };
-      }
-    ).properties?.continuationKind;
 
-    expect(continuationKind).toEqual(
-      expect.objectContaining({
-        type: "string",
-        enum: ["systemEvent", "agentTurn"],
-      }),
-    );
-    expect(continuationKind).not.toHaveProperty("anyOf");
+    const parameters = tool.parameters as {
+      properties?: {
+        continuationKind?: unknown;
+      };
+    };
+    expect(parameters.properties?.continuationKind).toBeUndefined();
   });
 
   it("instructs agents to use continuationMessage when a restart still needs a reply", async () => {
@@ -140,6 +128,29 @@ describe("gateway tool restart continuation", () => {
       reason: "continue after reboot",
     });
     expect(result?.details).toEqual({ scheduled: true, delayMs: 250 });
+  });
+
+  it("coerces legacy continuationKind inputs to an agentTurn", async () => {
+    const { createGatewayTool } = await import("./gateway-tool.js");
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-1", {
+      action: "restart",
+      continuationKind: "systemEvent",
+      continuationMessage: "Reply after restart",
+    });
+
+    expect(writeRestartSentinelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuation: {
+          kind: "agentTurn",
+          message: "Reply after restart",
+        },
+      }),
+    );
   });
 
   it("defaults session-scoped restarts to a success continuation", async () => {

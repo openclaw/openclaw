@@ -606,10 +606,6 @@ then `config.patch`.
     - `note` (optional) — note for the restart sentinel
     - `restartDelayMs` (optional) — delay before restart (default 2000)
 
-    When `sessionKey` is present and no explicit continuation is provided, the
-    Gateway asks that session's agent to acknowledge the successful restart
-    after boot.
-
     Restart requests are coalesced while one is already pending/in-flight, and a 30-second cooldown applies between restart cycles.
 
     ```bash
