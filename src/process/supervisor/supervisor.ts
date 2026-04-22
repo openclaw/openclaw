@@ -169,7 +169,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (settled) {
           return;
         }
-        adapter.kill("SIGKILL");
+        adapter.kill("SIGTERM");
       };
 
       if (overallTimeoutMs) {
