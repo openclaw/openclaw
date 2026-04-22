@@ -1,4 +1,7 @@
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  peekSystemEventEntries,
+  resolveHeartbeatSummaryForAgent,
+} from "openclaw/plugin-sdk/infra-runtime";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
   DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
@@ -11,6 +14,7 @@ import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { DEFAULT_AGENT_ID } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
@@ -48,7 +52,7 @@ type ManagedCronJobCreate = {
   description: string;
   enabled: boolean;
   schedule: CronSchedule;
-  sessionTarget: "main";
+  sessionTarget: typeof DEFAULT_AGENT_ID;
   wakeMode: "now";
   payload: CronPayload;
 };
@@ -58,7 +62,7 @@ type ManagedCronJobPatch = {
   description?: string;
   enabled?: boolean;
   schedule?: CronSchedule;
-  sessionTarget?: "main";
+  sessionTarget?: typeof DEFAULT_AGENT_ID;
   wakeMode?: "now";
   payload?: CronPayload;
 };
@@ -155,7 +159,7 @@ function buildManagedDreamingCronJob(
       expr: config.cron,
       ...(config.timezone ? { tz: config.timezone } : {}),
     },
-    sessionTarget: "main",
+    sessionTarget: DEFAULT_AGENT_ID,
     wakeMode: "now",
     payload: {
       kind: "systemEvent",
@@ -393,6 +397,21 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };
+}
+
+export function resolveDreamingBlockedReason(cfg: OpenClawConfig): string | null {
+  const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  if (!dreaming.enabled) {
+    return null;
+  }
+
+  const heartbeat = resolveHeartbeatSummaryForAgent(cfg, DEFAULT_AGENT_ID);
+  if (heartbeat.enabled && heartbeat.everyMs != null) {
+    return null;
+  }
+
+  return `dreaming is enabled but will not run because heartbeat is disabled for "${DEFAULT_AGENT_ID}". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting`;
 }
 
 export async function reconcileShortTermDreamingCronJob(params: {

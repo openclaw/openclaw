@@ -233,7 +233,7 @@ When enabled, the Gateway **Dreams** tab shows:
 
 ### Dreaming never runs (status shows blocked)
 
-`openclaw memory status` shows `Dreaming status: blocked` when dreaming is enabled but the heartbeat that drives the cron is not firing for the default agent. Dreaming requires a heartbeat, so if the heartbeat is not scheduled for `main`, the managed cron never gets a chance to run.
+The managed dreaming cron targets `main` regardless of which agent is your configured default. If heartbeat is not firing for `main`, the cron enqueues a system event that nobody consumes and dreaming silently does not run. Both `openclaw memory status` and `/dreaming status` will report `blocked` in that case.
 
 Two common causes:
 

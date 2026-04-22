@@ -2,7 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveHeartbeatSummaryForAgent } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -45,7 +44,10 @@ import {
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import {
+  resolveDreamingBlockedReason,
+  resolveShortTermPromotionDreamingConfig,
+} from "./dreaming.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
@@ -218,22 +220,6 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
   }
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
   return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
-}
-
-function resolveDreamingBlockedReason(cfg: OpenClawConfig): string | null {
-  const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  if (!dreaming.enabled) {
-    return null;
-  }
-
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  const heartbeat = resolveHeartbeatSummaryForAgent(cfg, defaultAgentId);
-  if (heartbeat.enabled && heartbeat.everyMs != null) {
-    return null;
-  }
-
-  return `managed dreaming cron targets "${defaultAgentId}" but heartbeat is not firing there. See https://docs.openclaw.ai/concepts/dreaming#troubleshooting`;
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {

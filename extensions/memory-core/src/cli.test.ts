@@ -426,7 +426,7 @@ describe("memory cli", () => {
 
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Dreaming status: blocked - managed dreaming cron targets "main" but heartbeat is not firing there. See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
       ),
     );
     expect(close).toHaveBeenCalled();
@@ -466,7 +466,56 @@ describe("memory cli", () => {
 
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Dreaming status: blocked - managed dreaming cron targets "main" but heartbeat is not firing there. See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+      ),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("reports dreaming blocked for main even when a non-main agent is the default", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "30m",
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            default: true,
+            heartbeat: {
+              every: "30m",
+            },
+          },
+          { id: "main" },
+        ],
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--agent", "ops"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
       ),
     );
     expect(close).toHaveBeenCalled();
