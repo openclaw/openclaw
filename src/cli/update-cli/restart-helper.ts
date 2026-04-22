@@ -50,6 +50,62 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
+function resolvePreferredVersionEnv(env: NodeJS.ProcessEnv): string | null {
+  const candidates = [
+    env.OPENCLAW_BUNDLED_VERSION,
+    env.OPENCLAW_VERSION,
+    env.OPENCLAW_SERVICE_VERSION,
+    env.npm_package_version,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeOptionalString(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function serializeShellExport(name: string, value: string): string {
+  return `export ${name}='${shellEscape(value)}'`;
+}
+
+function serializeWindowsSet(name: string, value: string): string {
+  return `set "${name}=${value}"`;
+}
+
+function buildVersionEnvPrelude(params: {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  installRoot?: string | null;
+}): string[] {
+  const resolvedVersion = resolvePreferredVersionEnv(params.env);
+  if (!resolvedVersion) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  if (params.platform === "win32") {
+    lines.push(serializeWindowsSet("OPENCLAW_VERSION", resolvedVersion));
+    lines.push(serializeWindowsSet("OPENCLAW_BUNDLED_VERSION", resolvedVersion));
+    if (params.installRoot) {
+      lines.push(`set "npm_package_version=${resolvedVersion}"`);
+      lines.push(`set "npm_config_local_prefix=${params.installRoot}"`);
+      lines.push(`set "INIT_CWD=${params.installRoot}"`);
+    }
+    return lines;
+  }
+
+  lines.push(serializeShellExport("OPENCLAW_VERSION", resolvedVersion));
+  lines.push(serializeShellExport("OPENCLAW_BUNDLED_VERSION", resolvedVersion));
+  if (params.installRoot) {
+    lines.push(serializeShellExport("npm_package_version", resolvedVersion));
+    lines.push(serializeShellExport("npm_config_local_prefix", params.installRoot));
+    lines.push(serializeShellExport("INIT_CWD", params.installRoot));
+  }
+  return lines;
+}
+
 /**
  * Prepares a standalone script to restart the gateway service.
  * This script is written to a temporary directory and does not depend on
@@ -59,6 +115,7 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
 export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
   gatewayPort: number = DEFAULT_GATEWAY_PORT,
+  installRoot?: string | null,
 ): Promise<string | null> {
   const tmpDir = os.tmpdir();
   const timestamp = Date.now();
@@ -66,6 +123,8 @@ export async function prepareRestartScript(
 
   let scriptContent = "";
   let filename = "";
+  const versionPrelude = buildVersionEnvPrelude({ env, platform, installRoot });
+  const preludeBlock = versionPrelude.length > 0 ? `${versionPrelude.join("\n")}\n` : "";
 
   try {
     if (platform === "linux") {
@@ -74,7 +133,7 @@ export async function prepareRestartScript(
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
-# Wait briefly to ensure file locks are released after update.
+${preludeBlock}# Wait briefly to ensure file locks are released after update.
 sleep 1
 systemctl --user restart '${escaped}'
 # Self-cleanup
@@ -93,7 +152,7 @@ rm -f "$0"
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
-# Wait briefly to ensure file locks are released after update.
+${preludeBlock}# Wait briefly to ensure file locks are released after update.
 sleep 1
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
@@ -116,7 +175,7 @@ rm -f "$0"
       filename = `openclaw-restart-${timestamp}.bat`;
       scriptContent = `@echo off
 REM Standalone restart script — survives parent process termination.
-REM Wait briefly to ensure file locks are released after update.
+${preludeBlock}REM Wait briefly to ensure file locks are released after update.
 timeout /t 2 /nobreak >nul
 schtasks /End /TN "${taskName}"
 REM Poll for gateway port release before rerun; force-kill listener if stuck.

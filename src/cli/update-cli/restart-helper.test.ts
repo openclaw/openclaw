@@ -84,6 +84,38 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("pins updated version env into Unix restart scripts so restarted gateway does not report a stale version", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const { scriptPath, content } = await prepareAndReadScript(
+        {
+          OPENCLAW_PROFILE: "default",
+          OPENCLAW_SERVICE_VERSION: "2026.4.14",
+        },
+        18789,
+      );
+      expect(content).toContain("export OPENCLAW_VERSION='2026.4.14'");
+      expect(content).toContain("export OPENCLAW_BUNDLED_VERSION='2026.4.14'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("includes install-root package version hints when provided", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const scriptPath = await prepareRestartScript(
+        {
+          OPENCLAW_PROFILE: "default",
+          OPENCLAW_SERVICE_VERSION: "2026.4.14",
+        },
+        18789,
+        "/tmp/openclaw-version-fix",
+      );
+      expect(scriptPath).toBeTruthy();
+      const content = await fs.readFile(scriptPath!, "utf-8");
+      expect(content).toContain("export npm_package_version='2026.4.14'");
+      expect(content).toContain("export npm_config_local_prefix='/tmp/openclaw-version-fix'");
+      expect(content).toContain("export INIT_CWD='/tmp/openclaw-version-fix'");
+      await cleanupScript(scriptPath!);
+    });
+
     it("uses OPENCLAW_SYSTEMD_UNIT override for systemd scripts", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       const { scriptPath, content } = await prepareAndReadScript({
@@ -136,6 +168,18 @@ describe("restart-helper", () => {
       expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
+      await cleanupScript(scriptPath);
+    });
+
+    it("pins updated version env into Windows restart scripts", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_SERVICE_VERSION: "2026.4.14",
+      });
+      expect(content).toContain('set "OPENCLAW_VERSION=2026.4.14"');
+      expect(content).toContain('set "OPENCLAW_BUNDLED_VERSION=2026.4.14"');
       await cleanupScript(scriptPath);
     });
 
