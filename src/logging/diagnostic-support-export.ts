@@ -584,6 +584,26 @@ function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext)
   };
 }
 
+function failedLogTail(error: unknown, redaction: SupportRedactionContext): SanitizedLogTail {
+  const redactedError = redactErrorForSupport(error, redaction);
+  return {
+    status: "failed",
+    file: "unavailable",
+    cursor: 0,
+    size: 0,
+    lineCount: 0,
+    truncated: false,
+    reset: false,
+    error: redactedError,
+    lines: [
+      {
+        omitted: "log-tail-read-failed",
+        error: redactedError,
+      },
+    ],
+  };
+}
+
 async function collectSupportLogTail(params: {
   readLogTail: typeof readConfiguredLogTail;
   limit: number;
@@ -597,23 +617,7 @@ async function collectSupportLogTail(params: {
     });
     return sanitizeLogTail(tail, params.redaction);
   } catch (error) {
-    const redactedError = redactErrorForSupport(error, params.redaction);
-    return {
-      status: "failed",
-      file: "unavailable",
-      cursor: 0,
-      size: 0,
-      lineCount: 0,
-      truncated: false,
-      reset: false,
-      error: redactedError,
-      lines: [
-        {
-          omitted: "log-tail-read-failed",
-          error: redactedError,
-        },
-      ],
-    };
+    return failedLogTail(error, params.redaction);
   }
 }
 
@@ -661,6 +665,10 @@ function renderSummary(params: {
   const configLine = params.config.exists
     ? `config shape included (${params.config.parseOk ? "parsed" : "parse failed"})`
     : "config file not found";
+  const logTailLine =
+    params.logTail.status === "failed"
+      ? `sanitized log tail unavailable (${params.logTail.error})`
+      : `sanitized log tail (${params.logTail.lineCount} line(s), inspected ${params.logTail.size} byte(s), raw messages omitted)`;
   const supportSnapshotLine = (label: string, snapshot: SupportSnapshotStatus) => {
     if (snapshot.status === "included") {
       return `${label} snapshot included (${snapshot.path})`;
@@ -683,9 +691,7 @@ function renderSummary(params: {
     "## Contents",
     "",
     `- ${stabilityLine}`,
-    params.logTail.status === "failed"
-      ? `- sanitized log tail unavailable (${params.logTail.error})`
-      : `- sanitized log tail (${params.logTail.lineCount} line(s), inspected ${params.logTail.size} byte(s), raw messages omitted)`,
+    `- ${logTailLine}`,
     `- ${configLine}`,
     `- ${supportSnapshotLine("gateway status", params.status)}`,
     `- ${supportSnapshotLine("gateway health", params.health)}`,

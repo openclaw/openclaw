@@ -189,10 +189,11 @@ function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionCo
       return "<redacted>";
     }
     if (SENSITIVE_COMMAND_ARG_RE.test(arg)) {
-      if (!arg.includes("=")) {
+      const hasInlineValue = arg.includes("=");
+      if (!hasInlineValue) {
         redactNext = true;
       }
-      return arg.includes("=") ? arg.replace(/=.*/u, "=<redacted>") : arg;
+      return hasInlineValue ? arg.replace(/=.*/u, "=<redacted>") : arg;
     }
     return redactSupportString(arg, redaction);
   });
