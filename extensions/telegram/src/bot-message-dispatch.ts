@@ -1146,6 +1146,11 @@ export const dispatchTelegramMessage = async ({
     });
   }
 
+  // Diagnostic logging for issue #69809 - to determine which flag causes error emoji
+  logVerbose(
+    `telegram: reaction finalize: queuedFinal=${queuedFinal} sentFallback=${sentFallback} dispatchError=${dispatchError != null} deliverySummary=${JSON.stringify(deliverySummary)} hasFinalResponse=${queuedFinal || sentFallback || deliverySummary.delivered}`,
+  );
+
   const hasFinalResponse = queuedFinal || sentFallback || deliverySummary.delivered;
 
   if (statusReactionController && !hasFinalResponse) {
