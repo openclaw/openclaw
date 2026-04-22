@@ -37,8 +37,27 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+function hasToolCallContentBlocks(message: AgentMessage | undefined): boolean {
+  const content = (message as { content?: unknown } | undefined)?.content;
+  return (
+    Array.isArray(content) &&
+    content.some(
+      (block) =>
+        !!block &&
+        typeof block === "object" &&
+        ["toolCall", "toolUse", "functionCall"].includes(
+          (block as { type?: unknown }).type as string,
+        ),
+    )
+  );
+}
+
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
-  return resolveAssistantMessagePhase(message) === "commentary";
+  return (
+    resolveAssistantMessagePhase(message) === "commentary" ||
+    message?.stopReason === "toolUse" ||
+    hasToolCallContentBlocks(message)
+  );
 }
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {

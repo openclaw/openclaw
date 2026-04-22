@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
-import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -16,7 +15,6 @@ import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
-import { loadSessionEntryByKey } from "../subagent-announce-delivery.js";
 import {
   describeSessionsSendTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -31,8 +29,7 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
-import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -235,7 +232,6 @@ export function createSessionsSendTool(opts?: {
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
       const timeoutMs = timeoutSeconds * 1000;
-      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -287,53 +283,7 @@ export function createSessionsSendTool(opts?: {
           sourceTool: "sessions_send",
         },
       };
-      const requesterSessionKey = opts?.agentSessionKey;
-      const requesterChannel = opts?.agentChannel;
-      const maxPingPongTurns = resolvePingPongTurns(cfg);
-
-      // Skip the A2A ping-pong + announce flow when the current caller is the
-      // parent of a parent-owned background ACP subagent it spawned itself.
-      // Such sessions already report their results back to the parent through
-      // the `[Internal task completion event]` announcement path, and treating
-      // them as a peer agent causes the parent to be woken with the child's
-      // reply, generate a user-facing response, and have that response
-      // forwarded back to the child as a new message — producing a
-      // ping-pong loop between parent and ACP child (bounded by
-      // maxPingPongTurns, but user-visible as a runaway conversation).
-      //
-      // The skip is gated on requester ownership, not just target type: an
-      // unrelated sender that can see the same target (e.g. under
-      // `tools.sessions.visibility=all`) must still go through the normal A2A
-      // path so it actually receives a follow-up delivery.
-      const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
-      const skipA2AFlow = isRequesterParentOfBackgroundAcpSession(
-        targetSessionEntry,
-        effectiveRequesterKey,
-      );
-      // When the A2A flow is skipped, no follow-up announcement will fire and
-      // the reply (when present) is returned inline via the `reply` field.
-      // Reflect that in the metadata so the parent LLM does not wait for a
-      // second result that will never arrive.
-      const delivery = skipA2AFlow
-        ? ({ status: "skipped", mode: "announce" } as const)
-        : ({ status: "pending", mode: "announce" } as const);
-
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
-        if (skipA2AFlow) {
-          return;
-        }
-        void runSessionsSendA2AFlow({
-          targetSessionKey: resolvedKey,
-          displayKey,
-          message,
-          announceTimeoutMs,
-          maxPingPongTurns,
-          requesterSessionKey,
-          requesterChannel,
-          roundOneReply,
-          waitRunId,
-        });
-      };
+      const delivery = { status: "skipped", mode: "none" } as const;
 
       if (timeoutSeconds === 0) {
         const start = await startAgentRun({
@@ -346,7 +296,6 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
-        startA2AFlow(undefined, runId);
         return jsonResult({
           runId,
           status: "accepted",
@@ -380,6 +329,7 @@ export function createSessionsSendTool(opts?: {
           status: "timeout",
           error: result.error,
           sessionKey: displayKey,
+          delivery,
         });
       }
       if (result.status === "error") {
@@ -388,10 +338,10 @@ export function createSessionsSendTool(opts?: {
           status: "error",
           error: result.error ?? "agent error",
           sessionKey: displayKey,
+          delivery,
         });
       }
       const reply = result.replyText;
-      startA2AFlow(reply ?? undefined);
 
       return jsonResult({
         runId,
