@@ -156,7 +156,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
   });
 
-  it("splits auto-reply into independent core, top-level, and reply subtree shards", () => {
+  it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {
     const shards = createNodeTestShards();
     const autoReplyShards = shards
       .filter((shard) => shard.shardName.startsWith("auto-reply"))
@@ -169,40 +169,25 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(autoReplyShards).toEqual([
       {
-        checkName: "checks-node-auto-reply-core",
-        configs: ["test/vitest/vitest.auto-reply-core.config.ts"],
+        checkName: "checks-node-auto-reply-core-top-level",
+        configs: [
+          "test/vitest/vitest.auto-reply-core.config.ts",
+          "test/vitest/vitest.auto-reply-top-level.config.ts",
+        ],
         requiresDist: false,
-        shardName: "auto-reply-core",
+        shardName: "auto-reply-core-top-level",
       },
       {
-        checkName: "checks-node-auto-reply-top-level",
-        configs: ["test/vitest/vitest.auto-reply-top-level.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-top-level",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-agent-runner-a",
+        checkName: "checks-node-auto-reply-reply-agent-dispatch",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-agent-runner-a",
+        shardName: "auto-reply-reply-agent-dispatch",
       },
       {
-        checkName: "checks-node-auto-reply-reply-commands-a",
+        checkName: "checks-node-auto-reply-reply-commands-state-routing",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-commands-a",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch-a",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-a",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-state-routing-a",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-state-routing-a",
+        shardName: "auto-reply-reply-commands-state-routing",
       },
     ]);
   });

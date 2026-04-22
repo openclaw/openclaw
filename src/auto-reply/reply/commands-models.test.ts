@@ -227,7 +227,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Add: /models add");
   });
 
-  it("adds an add-model action to the telegram provider picker", async () => {
+  it("shows the add-model action in the telegram provider picker by default", async () => {
     const params = buildParams("/models");
     params.ctx.Surface = "telegram";
     params.command.channel = "telegram";
@@ -240,6 +240,31 @@ describe("handleModelsCommand", () => {
       telegram: {
         buttons: [
           [{ text: "Add model", callback_data: "/models add" }],
+          [{ text: "anthropic", callback_data: "models:anthropic" }],
+          [{ text: "google", callback_data: "models:google" }],
+          [{ text: "openai", callback_data: "models:openai" }],
+        ],
+      },
+    });
+  });
+
+  it("keeps the telegram provider picker browse-only when modelsWrite is disabled", async () => {
+    const params = buildParams("/models", {
+      commands: {
+        text: true,
+        modelsWrite: false,
+      },
+    });
+    params.ctx.Surface = "telegram";
+    params.command.channel = "telegram";
+    params.command.surface = "telegram";
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toBe("Select a provider:");
+    expect(result?.reply?.channelData).toEqual({
+      telegram: {
+        buttons: [
           [{ text: "anthropic", callback_data: "models:anthropic" }],
           [{ text: "google", callback_data: "models:google" }],
           [{ text: "openai", callback_data: "models:openai" }],
@@ -354,5 +379,23 @@ describe("handleModelsCommand", () => {
       reply: { text: "denied" },
     });
     expect(modelsAddMocks.addModelToConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects /models add when modelsWrite is disabled", async () => {
+    const result = await handleModelsCommand(
+      buildParams("/models add ollama glm-5.1:cloud", {
+        commands: { text: true, modelsWrite: false },
+      }),
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /models add is disabled. Set commands.modelsWrite=true to enable model registration.",
+      },
+    });
+    expect(modelsAddMocks.addModelToConfig).not.toHaveBeenCalled();
+    expect(configWriteTargetMocks.resolveConfigWriteTargetFromPath).not.toHaveBeenCalled();
   });
 });

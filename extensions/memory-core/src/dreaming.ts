@@ -638,6 +638,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeConfigKey: string | null = null;
   let lastRuntimeCronRef: CronServiceLike | null = null;
 
+  const resolveCurrentConfig = (): OpenClawConfig =>
+    api.runtime.config?.loadConfig?.() ?? api.config;
+
   const runtimeConfigKey = (config: ShortTermPromotionDreamingConfig): string =>
     [
       config.enabled ? "enabled" : "disabled",
@@ -660,7 +663,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     startupCron?: (() => CronServiceLike | null) | null;
   }): Promise<ShortTermPromotionDreamingConfig> => {
     const startupCfg =
-      params.reason === "startup" ? (params.startupConfig ?? api.config) : api.config;
+      params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
     const config = resolveShortTermPromotionDreamingConfig({
       pluginConfig:
         resolveMemoryCorePluginConfig(startupCfg) ??
