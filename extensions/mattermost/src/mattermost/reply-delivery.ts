@@ -26,7 +26,7 @@ type SendMattermostMessage = (
 
 const REASONING_PREFIX = "reasoning:";
 
-function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
+export function shouldSuppressMattermostReasoningReply(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
     return true;
   }
@@ -49,7 +49,7 @@ export async function deliverMattermostReplyPayload(params: {
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
 }): Promise<void> {
-  if (shouldSuppressReasoningReply(params.payload)) {
+  if (shouldSuppressMattermostReasoningReply(params.payload)) {
     return;
   }
   const reply = resolveSendableOutboundReplyParts(params.payload, {

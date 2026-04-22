@@ -252,6 +252,29 @@ describe("shouldClearMattermostDraftPreview", () => {
 });
 
 describe("deliverMattermostReplyWithDraftPreview", () => {
+  it("suppresses reasoning-prefixed finals before preview finalization", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "  \n Reasoning:\n_hidden_" } as never,
+      info: { kind: "final" },
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverFinal,
+    });
+
+    expect(deliverFinal).not.toHaveBeenCalled();
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
   it("deletes the preview after a successful normal final send", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});

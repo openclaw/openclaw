@@ -55,7 +55,10 @@ import {
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  deliverMattermostReplyPayload,
+  shouldSuppressMattermostReasoningReply,
+} from "./reply-delivery.js";
 import type {
   ChannelAccountSnapshot,
   ChatType,
@@ -289,7 +292,7 @@ type MattermostDraftPreviewDeliverParams = {
 export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
 ): Promise<void> {
-  if (params.payload.isReasoning) {
+  if (shouldSuppressMattermostReasoningReply(params.payload)) {
     return;
   }
 
