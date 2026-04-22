@@ -336,4 +336,34 @@ describe("resolveBundledPluginsDir", () => {
   ] as const)("$name", ({ createScenario }) => {
     expectInstalledBundledDirScenarioCase(createScenario);
   });
+
+  it("prefers the current worktree source checkout during vitest even when argv[1] resolves into another checkout's node_modules", () => {
+    const borrowedNodeModulesRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-borrowed-source-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasDistRuntimeExtensions: true,
+      hasDistExtensions: true,
+      hasGitCheckout: true,
+    });
+    const currentWorktreeRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-current-worktree-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasDistRuntimeExtensions: true,
+      hasDistExtensions: true,
+      hasGitCheckout: true,
+    });
+    seedBundledPluginTree(borrowedNodeModulesRoot, path.join("dist", "extensions"), "borrowed");
+    seedBundledPluginTree(currentWorktreeRoot, path.join("extensions"), "current");
+    seedBundledPluginTree(currentWorktreeRoot, path.join("dist", "extensions"), "current");
+    seedBundledPluginTree(currentWorktreeRoot, path.join("dist-runtime", "extensions"), "current");
+
+    expectResolvedBundledDir({
+      cwd: currentWorktreeRoot,
+      expectedDir: path.join(currentWorktreeRoot, "extensions"),
+      argv1: path.join(borrowedNodeModulesRoot, "node_modules", ".bin", "vitest"),
+      vitest: "true",
+    });
+  });
 });
