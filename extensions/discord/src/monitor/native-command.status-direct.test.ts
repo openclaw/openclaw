@@ -1,14 +1,12 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createMockCommandInteraction,
-  type MockCommandInteraction,
-} from "./native-command.test-helpers.js";
+import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
+  loadWebMedia: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
 }));
 
@@ -28,28 +26,12 @@ vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
     runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
 }));
 
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
+  loadWebMedia: (...args: unknown[]) => runtimeModuleMocks.loadWebMedia(...args),
+}));
+
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let discordNativeCommandTesting: typeof import("./native-command.js").__testing;
-
-function createInteraction(params?: {
-  channelType?: ChannelType;
-  channelId?: string;
-  threadParentId?: string | null;
-  guildId?: string | null;
-  guildName?: string;
-}): MockCommandInteraction {
-  return createMockCommandInteraction({
-    userId: "owner",
-    username: "tester",
-    globalName: "Tester",
-    channelType: params?.channelType ?? ChannelType.DM,
-    channelId: params?.channelId ?? "dm-1",
-    threadParentId: params?.threadParentId,
-    guildId: params?.guildId ?? null,
-    guildName: params?.guildName,
-    interactionId: "interaction-1",
-  });
-}
 
 function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
   return {
@@ -157,6 +139,10 @@ describe("discord native /status", () => {
     runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
       text: "status reply",
     });
+    runtimeModuleMocks.loadWebMedia.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      fileName: "status.png",
+    });
     discordNativeCommandTesting.setDispatchReplyWithDispatcher(
       runtimeModuleMocks.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithDispatcher,
     );
@@ -175,8 +161,60 @@ describe("discord native /status", () => {
     expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "status reply",
+        ephemeral: true,
       }),
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("keeps every direct status chunk ephemeral", async () => {
+    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
+      text: `fallback models\nruntime info\n${"x".repeat(2200)}`,
+    });
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg);
+    const interaction = createInteraction();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
+    for (const [payload] of interaction.followUp.mock.calls) {
+      expect(payload).toEqual(
+        expect.objectContaining({
+          ephemeral: true,
+        }),
+      );
+    }
+  });
+
+  it("keeps direct status media follow-up chunks ephemeral", async () => {
+    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
+      text: `status image\n${"x".repeat(2200)}`,
+      mediaUrls: ["https://example.com/status.png"],
+    });
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg);
+    const interaction = createInteraction();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.loadWebMedia).toHaveBeenCalledWith("https://example.com/status.png", {
+      localRoots: expect.any(Array),
+    });
+    expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
+    expect(interaction.followUp.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        ephemeral: true,
+        files: expect.arrayContaining([expect.objectContaining({ name: "status.png" })]),
+      }),
+    );
+    for (const [payload] of interaction.followUp.mock.calls) {
+      expect(payload).toEqual(
+        expect.objectContaining({
+          ephemeral: true,
+        }),
+      );
+    }
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 

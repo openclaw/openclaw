@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRootAt } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginNpmIntegrityDriftParams } from "./install.js";
 
 const APP_ROOT = "/app";
 
@@ -303,6 +304,60 @@ describe("updateNpmInstalledPlugins", () => {
       expectNpmUpdateCall(expectedCall);
     },
   );
+
+  it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockImplementation(
+      async (params: {
+        spec: string;
+        onIntegrityDrift?: (drift: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+      }) => {
+        const proceed = await params.onIntegrityDrift?.({
+          spec: params.spec,
+          expectedIntegrity: "sha512-old",
+          actualIntegrity: "sha512-new",
+          resolution: {
+            integrity: "sha512-new",
+            resolvedSpec: "@opik/opik-openclaw@0.2.5",
+            version: "0.2.5",
+          },
+        });
+        if (proceed === false) {
+          return {
+            ok: false,
+            error: "aborted: npm package integrity drift detected for @opik/opik-openclaw@0.2.5",
+          };
+        }
+        return createSuccessfulNpmUpdateResult();
+      },
+    );
+
+    const config = createNpmInstallConfig({
+      pluginId: "opik-openclaw",
+      spec: "@opik/opik-openclaw@0.2.5",
+      integrity: "sha512-old",
+      installPath: "/tmp/opik-openclaw",
+    });
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["opik-openclaw"],
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      'Integrity drift for "opik-openclaw" (@opik/opik-openclaw@0.2.5): expected sha512-old, got sha512-new',
+    );
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "opik-openclaw",
+        status: "error",
+        message:
+          "Failed to update opik-openclaw: aborted: npm package integrity drift detected for @opik/opik-openclaw@0.2.5",
+      },
+    ]);
+  });
 
   it.each([
     {

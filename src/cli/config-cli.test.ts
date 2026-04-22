@@ -273,6 +273,41 @@ describe("config cli", () => {
       });
     });
 
+    it("dry-runs nested plugin install updates without dropping sibling fields", async () => {
+      const resolved = {
+        plugins: {
+          installs: {
+            "openclaw-web-search": {
+              source: "npm",
+              spec: "@ollama/openclaw-web-search",
+              installPath: "/tmp/openclaw-web-search",
+              version: "0.2.2",
+              resolvedName: "@ollama/openclaw-web-search",
+              resolvedVersion: "0.2.2",
+              resolvedSpec: "@ollama/openclaw-web-search@0.2.2",
+              integrity: "sha512-test",
+              resolvedAt: "2026-04-22T10:33:58.083Z",
+              installedAt: "2026-04-22T10:33:58.240Z",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        'plugins.installs["openclaw-web-search"].spec',
+        '"@ollama/openclaw-web-search@0.2.2"',
+        "--strict-json",
+        "--dry-run",
+      ]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Dry run successful"));
+    });
+
     it("writes agents.defaults.llm.idleTimeoutSeconds without disturbing sibling defaults", async () => {
       const resolved: OpenClawConfig = {
         agents: {

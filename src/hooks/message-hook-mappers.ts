@@ -287,6 +287,7 @@ export function toPluginMessageReceivedEvent(
     from: canonical.from,
     content: canonical.content,
     timestamp: canonical.timestamp,
+    threadId: canonical.threadId,
     metadata: {
       to: canonical.to,
       provider: canonical.provider,
