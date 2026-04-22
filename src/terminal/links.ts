@@ -3,10 +3,13 @@ import { formatTerminalLink } from "../utils.js";
 export const DOCS_ROOT = "https://docs.openclaw.ai";
 
 export function formatDocsLink(
-  path: string,
+  path: string | undefined,
   label?: string,
   opts?: { fallback?: string; force?: boolean },
 ): string {
+  if (path == null) {
+    return opts?.fallback ?? "";
+  }
   const trimmed = path.trim();
   const url = trimmed.startsWith("http")
     ? trimmed
