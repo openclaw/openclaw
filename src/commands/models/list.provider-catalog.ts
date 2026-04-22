@@ -50,10 +50,14 @@ export async function loadProviderCatalogModelsForList(params: {
         env,
       })
     : undefined;
+  if (providerFilter && !onlyPluginIds) {
+    return [];
+  }
   const providers = await resolvePluginDiscoveryProviders({
     config: params.cfg,
     env,
     ...(onlyPluginIds ? { onlyPluginIds } : {}),
+    includeUntrustedWorkspacePlugins: false,
   });
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const rows: Model<Api>[] = [];

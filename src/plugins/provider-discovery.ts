@@ -24,6 +24,7 @@ export async function resolvePluginDiscoveryProviders(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  includeUntrustedWorkspacePlugins?: boolean;
 }): Promise<ProviderPlugin[]> {
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)

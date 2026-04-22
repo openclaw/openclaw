@@ -86,8 +86,8 @@ const STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG: readonly StaticVercelGatewayModel[
     name: "Kimi K2.6",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 262_000,
-    maxTokens: 262_000,
+    contextWindow: 262_144,
+    maxTokens: 262_144,
     cost: {
       input: 0.95,
       output: 4,

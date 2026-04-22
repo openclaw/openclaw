@@ -42,6 +42,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderPlugin[] {
   const pluginIds = resolveDiscoveredProviderPluginIds(params);
   const pluginIdSet = new Set(pluginIds);
@@ -75,6 +76,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderPlugin[] {
   const entryProviders = resolveProviderDiscoveryEntryPlugins(params);
   if (entryProviders.length > 0) {
