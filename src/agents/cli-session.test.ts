@@ -20,6 +20,7 @@ describe("cli-session helpers", () => {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
       authEpoch: "auth-epoch",
+      authEpochVersion: 2,
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
@@ -31,6 +32,7 @@ describe("cli-session helpers", () => {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
       authEpoch: "auth-epoch",
+      authEpochVersion: 2,
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
@@ -84,6 +86,7 @@ describe("cli-session helpers", () => {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
       authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-a",
     };
@@ -93,6 +96,7 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:personal",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
@@ -102,6 +106,7 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-b",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
@@ -111,6 +116,7 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-b",
         mcpConfigHash: "mcp-a",
       }),
@@ -120,17 +126,18 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-b",
       }),
     ).toEqual({ invalidatedReason: "mcp" });
   });
 
-  it("does not treat model changes as a session mismatch", () => {
+  it("accepts unversioned auth epochs for binding upgrades", () => {
     const binding = {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
-      authEpoch: "auth-epoch-a",
+      authEpoch: "previous-auth-epoch",
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-a",
     };
@@ -140,6 +147,29 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+  });
+
+  it("does not treat model changes as a session mismatch", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
@@ -151,6 +181,7 @@ describe("cli-session helpers", () => {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
       authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-config-a",
       mcpResumeHash: "mcp-resume-a",
@@ -161,6 +192,7 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-config-b",
         mcpResumeHash: "mcp-resume-a",
@@ -171,6 +203,7 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-config-a",
         mcpResumeHash: "mcp-resume-b",
@@ -183,6 +216,7 @@ describe("cli-session helpers", () => {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
       authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-config-a",
     };
@@ -192,6 +226,7 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-config-a",
         mcpResumeHash: "mcp-resume-a",
@@ -202,6 +237,7 @@ describe("cli-session helpers", () => {
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-config-b",
         mcpResumeHash: "mcp-resume-a",
