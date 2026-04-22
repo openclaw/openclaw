@@ -82,7 +82,11 @@ export function hasExplicitChannelConfig(params: {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return false;
   }
-  return (entry as { enabled?: unknown }).enabled === true || hasMeaningfulChannelConfig(entry);
+  const enabled = (entry as { enabled?: unknown }).enabled;
+  if (enabled === false) {
+    return false;
+  }
+  return enabled === true || hasMeaningfulChannelConfig(entry);
 }
 
 export function listExplicitConfiguredChannelIdsForConfig(config: OpenClawConfig): string[] {
@@ -99,12 +103,12 @@ export function listExplicitConfiguredChannelIdsForConfig(config: OpenClawConfig
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boolean {
+function recordDeclaresChannel(record: PluginManifestRecord, channelId: string): boolean {
   const normalizedChannelId = normalizeOptionalLowercaseString(channelId) ?? "";
   if (!normalizedChannelId) {
     return false;
   }
-  return [...record.channels, ...(record.activation?.onChannels ?? [])].some(
+  return record.channels.some(
     (ownedChannelId) =>
       (normalizeOptionalLowercaseString(ownedChannelId) ?? "") === normalizedChannelId,
   );
@@ -167,6 +171,7 @@ function normalizeActivationBlockedReason(reason?: string): ConfiguredChannelBlo
 function resolveBasePolicyBlockedReason(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  allowRestrictiveAllowlistBypass?: boolean;
 }): ConfiguredChannelBlockedReason | null {
   if (!params.normalizedConfig.enabled) {
     return "plugins-disabled";
@@ -178,6 +183,7 @@ function resolveBasePolicyBlockedReason(params: {
     return "plugin-disabled";
   }
   if (
+    params.allowRestrictiveAllowlistBypass !== true &&
     params.normalizedConfig.allow.length > 0 &&
     !params.normalizedConfig.allow.includes(params.plugin.id)
   ) {
@@ -222,9 +228,16 @@ function evaluateEffectiveChannelPlugin(params: {
   config: OpenClawConfig;
   activationSource: ReturnType<typeof createPluginActivationSource>;
 }): { effective: boolean; pluginId: string; blockedReason?: ConfiguredChannelBlockedReason } {
+  const explicitBundledChannelConfig =
+    isBundledManifestOwner(params.plugin) &&
+    hasExplicitChannelConfig({
+      config: params.activationSource.rootConfig ?? params.config,
+      channelId: params.channelId,
+    });
   const baseBlockedReason = resolveBasePolicyBlockedReason({
     plugin: params.plugin,
     normalizedConfig: params.normalizedConfig,
+    allowRestrictiveAllowlistBypass: explicitBundledChannelConfig,
   });
   if (baseBlockedReason) {
     return {
@@ -262,12 +275,7 @@ function evaluateEffectiveChannelPlugin(params: {
         };
   }
 
-  if (
-    hasExplicitChannelConfig({
-      config: params.activationSource.rootConfig ?? params.config,
-      channelId: params.channelId,
-    })
-  ) {
+  if (explicitBundledChannelConfig) {
     return { effective: true, pluginId: params.plugin.id };
   }
 
@@ -354,7 +362,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   const normalizedConfig = activationSource.plugins;
   const entries: ConfiguredChannelPresencePolicyEntry[] = [];
   for (const channelId of normalizeChannelIds(entrySources.keys())) {
-    const owningRecords = records.filter((record) => recordOwnsChannel(record, channelId));
+    const owningRecords = records.filter((record) => recordDeclaresChannel(record, channelId));
     const evaluations = owningRecords.map((plugin) =>
       evaluateEffectiveChannelPlugin({
         plugin,
@@ -423,7 +431,8 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
               (value as { enabled?: unknown }).enabled === false
             );
           })
-          .map(([channelId]) => channelId)
+          .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+          .filter((channelId): channelId is string => Boolean(channelId))
       : [],
   );
   return normalizeChannelIds([
@@ -509,12 +518,15 @@ export function resolveConfiguredChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const configuredChannelIds = listConfiguredChannelIdsForReadOnlyScope({
-    config: params.config,
-    activationSourceConfig: params.activationSourceConfig,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const configuredChannelIds = normalizeChannelIds([
+    ...listConfiguredChannelIdsForReadOnlyScope({
+      config: params.config,
+      activationSourceConfig: params.activationSourceConfig,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }),
+    ...listExplicitConfiguredChannelIdsForConfig(params.activationSourceConfig ?? params.config),
+  ]);
   if (configuredChannelIds.length === 0) {
     return [];
   }

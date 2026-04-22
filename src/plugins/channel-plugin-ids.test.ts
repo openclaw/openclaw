@@ -822,6 +822,73 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["demo-channel"]);
   });
 
+  it("does not treat disabled stale channel config as explicit read-only intent", () => {
+    const config = {
+      channels: {
+        "demo-channel": {
+          enabled: false,
+          token: "stale-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listExplicitConfiguredChannelIdsForConfig(config)).toEqual([]);
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("lets explicit bundled channel config bypass restrictive allowlists", () => {
+    const config = {
+      channels: {
+        "demo-channel": {
+          token: "configured",
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([
+      {
+        channelId: "demo-channel",
+        sources: ["explicit-config"],
+        effective: true,
+        pluginIds: ["demo-channel"],
+        blockedReasons: [],
+      },
+    ]);
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+      }),
+    ).toEqual(["demo-channel"]);
+  });
+
   it("keeps explicitly configured bundled channels discovered from potential ids", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
@@ -905,6 +972,37 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["demo-channel"]);
   });
 
+  it("does not let disabled mixed-case channel config announce ambient matches", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          channels: {
+            "Demo-Channel": {
+              enabled: false,
+              token: "stale-token",
+            },
+          },
+          plugins: {
+            entries: {
+              "demo-channel": {
+                enabled: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_TOKEN: "ambient",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([]);
+  });
+
   it("uses effective read-only channel policy for announce channels", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel", "demo-other-channel"]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
@@ -930,6 +1028,40 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toEqual(["demo-other-channel"]);
+  });
+
+  it("does not treat activation-only declarations as channel ownership", () => {
+    listPotentialConfiguredChannelIds.mockReturnValue(["activation-only-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "activation-only-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          plugins: {
+            entries: {
+              "activation-only-channel-plugin": {
+                enabled: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          ACTIVATION_ONLY_CHANNEL_TOKEN: "ambient",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([
+      {
+        channelId: "activation-only-channel",
+        sources: ["env"],
+        effective: false,
+        pluginIds: [],
+        blockedReasons: ["no-channel-owner"],
+      },
+    ]);
   });
 
   it("uses manifest env vars as read-only configured channel triggers", () => {
