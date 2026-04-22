@@ -52,6 +52,8 @@ function toAgentToolResult(params: {
   }
   if (params.result.isError === true) {
     details.status = "error";
+  } else if (params.result.isError === false) {
+    details.status = "ok";
   }
   return {
     content: normalizedContent,

@@ -66,6 +66,7 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
+      status: "ok",
     });
   });
 
@@ -128,6 +129,7 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details).toEqual({
       mcpServer: "configuredProbe",
       mcpTool: "bundle_probe",
+      status: "ok",
     });
   });
 

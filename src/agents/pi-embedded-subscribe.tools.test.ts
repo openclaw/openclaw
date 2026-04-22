@@ -63,6 +63,15 @@ describe("isToolResultError", () => {
     ).toBe(false);
   });
 
+  it("trusts explicit ok status even when content starts with Error:", () => {
+    expect(
+      isToolResultError({
+        content: [{ type: "text", text: "Error: 3 syntax errors found" }],
+        details: { mcpServer: "test-server", status: "ok" },
+      }),
+    ).toBe(false);
+  });
+
   it("returns false for normal MCP content", () => {
     expect(
       isToolResultError({
