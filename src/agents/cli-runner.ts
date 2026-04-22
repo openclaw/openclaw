@@ -72,6 +72,7 @@ export async function runPreparedCliAgent(
                     ? { authProfileId: context.effectiveAuthProfileId }
                     : {}),
                   ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
+                  authEpochVersion: context.authEpochVersion,
                   ...(context.extraSystemPromptHash
                     ? { extraSystemPromptHash: context.extraSystemPromptHash }
                     : {}),
