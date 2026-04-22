@@ -39,17 +39,26 @@ export function buildCronEventPrompt(
 }
 
 export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
+  // The agent is the one that kicked off the async command, not the user.
+  // Earlier wording ("An async command you ran earlier") trained the agent
+  // to parrot that phrasing into the user-facing reply, which made
+  // assistant-started background work read as user-initiated in the
+  // Control UI transcript. (#70373) Frame this explicitly as the
+  // assistant's own background work.
   const deliverToUser = opts?.deliverToUser ?? true;
   if (!deliverToUser) {
     return (
-      "An async command you ran earlier has completed. The result is shown in the system messages above. " +
+      "A background command you (the assistant) started earlier has completed. " +
+      "The result is shown in the system messages above. " +
       "Handle the result internally. Do not relay it to the user unless explicitly requested."
     );
   }
   return (
-    "An async command you ran earlier has completed. The result is shown in the system messages above. " +
-    "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
-    "If it failed, explain what went wrong."
+    "A background command you (the assistant) started earlier has completed. " +
+    "The result is shown in the system messages above. " +
+    "Please relay the command output to the user in a helpful way, framing it as " +
+    "your own follow-up — not as something the user ran. If the command succeeded, " +
+    "share the relevant output. If it failed, explain what went wrong."
   );
 }
 

@@ -66,6 +66,20 @@ describe("heartbeat event prompts", () => {
       expect(prompt).not.toContain(part);
     }
   });
+
+  it("frames exec events as assistant-started, not user-initiated (#70373)", () => {
+    // Regression: the previous wording ("An async command you ran earlier")
+    // trained the agent to parrot that phrasing back to the user, so
+    // assistant-started background work read as user-initiated in the
+    // Control UI transcript. The new wording must (a) mention the
+    // assistant as the originator, (b) NOT contain the old misleading
+    // phrase, for both delivery modes.
+    for (const deliverToUser of [true, false]) {
+      const prompt = buildExecEventPrompt({ deliverToUser });
+      expect(prompt).toContain("you (the assistant)");
+      expect(prompt).not.toContain("async command you ran earlier");
+    }
+  });
 });
 
 describe("heartbeat event classification", () => {
