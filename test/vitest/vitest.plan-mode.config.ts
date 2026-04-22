@@ -11,7 +11,11 @@ const PLAN_MODE_TEST_FILES = [
   "src/cron/isolated-agent/run.plan-mode.test.ts",
   "ui/src/ui/chat/slash-command-executor.node.test.ts",
   "ui/src/ui/chat/plan-resume.node.test.ts",
-  "ui/src/ui/views/chat.test.ts",
+  // chat.test.ts was deleted upstream and split into run-controls.test.ts +
+  // tool-expansion-state.test.ts + grouped-render.test.ts (commit 92191d37e6).
+  // The plan-mode coverage previously in chat.test.ts is exercised by the
+  // adjacent plan-* tests below + the mode-switcher/plan-cards tests in
+  // ui/src/ui/chat/.
   "ui/src/ui/views/plan-approval-inline.test.ts",
 ] as const;
 

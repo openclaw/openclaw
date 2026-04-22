@@ -29,6 +29,7 @@ import {
   getImageMetadata,
   isGifMedia,
   kindFromMime,
+  loadConfig,
   loadWebMedia,
   type MediaKind,
   normalizePollInput,
@@ -1651,7 +1652,10 @@ export async function sendDocumentTelegram(
     );
   }
 
-  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const { cfg, account, api } = resolveTelegramApiContext({
+    ...opts,
+    cfg: opts.cfg ?? loadConfig(),
+  });
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,

@@ -219,6 +219,7 @@ export function resolveOpenAISystemPromptContribution(params: {
   ) {
     return undefined;
   }
+  return {
     stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
     sectionOverrides: {
       execution_bias: OPENAI_GPT5_EXECUTION_BIAS,

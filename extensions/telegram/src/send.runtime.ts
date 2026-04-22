@@ -1,4 +1,8 @@
-export { requireRuntimeConfig, resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+export {
+  loadConfig,
+  requireRuntimeConfig,
+  resolveMarkdownTableMode,
+} from "openclaw/plugin-sdk/config-runtime";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 export type { PollInput, MediaKind } from "openclaw/plugin-sdk/media-runtime";
 export {
