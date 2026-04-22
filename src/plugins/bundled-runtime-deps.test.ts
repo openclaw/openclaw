@@ -111,20 +111,16 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
-  it("falls back to npm.cmd through shell on Windows", () => {
-    const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: {},
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      existsSync: () => false,
-      npmArgs: ["install"],
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: "npm.cmd",
-      args: ["install"],
-      shell: true,
-    });
+  it("refuses Windows shell fallback when no safe npm executable is available", () => {
+    expect(() =>
+      resolveBundledRuntimeDepsNpmRunner({
+        env: {},
+        execPath: "C:\\Program Files\\nodejs\\node.exe",
+        existsSync: () => false,
+        npmArgs: ["install"],
+        platform: "win32",
+      }),
+    ).toThrow("Unable to resolve a safe npm executable on Windows");
   });
 
   it("prefixes PATH with the active Node directory on POSIX", () => {
@@ -151,7 +147,9 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
 describe("installBundledRuntimeDeps", () => {
   it("uses the npm cmd shim on Windows", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+    );
     spawnSyncMock.mockReturnValue({
       pid: 123,
       output: [],
@@ -164,15 +162,18 @@ describe("installBundledRuntimeDeps", () => {
     installBundledRuntimeDeps({
       installRoot: "C:\\openclaw",
       missingSpecs: ["acpx@0.5.3"],
-      env: { npm_config_prefix: "C:\\prefix", PATH: "C:\\node" },
+      env: {
+        npm_config_prefix: "C:\\prefix",
+        PATH: "C:\\node",
+        npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      },
     });
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
-      "npm.cmd",
-      ["install", "--ignore-scripts", "acpx@0.5.3"],
+      expect.any(String),
+      ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "--ignore-scripts", "acpx@0.5.3"],
       expect.objectContaining({
         cwd: "C:\\openclaw",
-        shell: true,
         env: expect.objectContaining({
           npm_config_legacy_peer_deps: "true",
           npm_config_package_lock: "false",
@@ -189,6 +190,12 @@ describe("installBundledRuntimeDeps", () => {
         }),
       }),
     );
+  });
+
+  it("rejects invalid install specs before spawning npm", () => {
+    expect(() =>
+      createBundledRuntimeDepsInstallArgs(["tokenjuice@https://evil.example/t.tgz"]),
+    ).toThrow("Unsupported bundled runtime dependency spec for tokenjuice");
   });
 
   it("includes spawn errors in install failures", () => {
@@ -501,8 +508,9 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
-  it("reuses package-root runtime deps for source-checkout bundled plugins", () => {
+  it("does not trust package-root runtime deps for source-checkout bundled plugins", () => {
     const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
     fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
@@ -522,17 +530,30 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(packageRoot, "node_modules", "tokenjuice", "package.json"),
       JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
     );
+    const calls: BundledRuntimeDepsInstallParams[] = [];
 
     const result = ensureBundledPluginRuntimeDeps({
-      env: {},
-      installDeps: () => {
-        throw new Error("package-root runtime deps should not reinstall for source checkout");
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+      installDeps: (params) => {
+        calls.push(params);
       },
       pluginId: "tokenjuice",
       pluginRoot,
     });
 
-    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(result).toEqual({
+      installedSpecs: ["tokenjuice@0.6.1"],
+      retainSpecs: ["tokenjuice@0.6.1"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
+          env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+        }),
+        missingSpecs: ["tokenjuice@0.6.1"],
+        installSpecs: ["tokenjuice@0.6.1"],
+      },
+    ]);
   });
 
   it("does not reuse mismatched package-root runtime deps for source-checkout bundled plugins", () => {
@@ -618,7 +639,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
   });
 
-  it("skips install when runtime deps resolve from the package root", () => {
+  it("does not trust runtime deps that only resolve from the package root", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "openai");
     fs.mkdirSync(path.join(packageRoot, "node_modules", "@mariozechner", "pi-ai"), {
@@ -637,20 +658,31 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(packageRoot, "node_modules", "@mariozechner", "pi-ai", "package.json"),
       JSON.stringify({ name: "@mariozechner/pi-ai", version: "0.68.1" }),
     );
+    const calls: BundledRuntimeDepsInstallParams[] = [];
 
     const result = ensureBundledPluginRuntimeDeps({
       env: {},
-      installDeps: () => {
-        throw new Error("package-root runtime deps should not reinstall");
+      installDeps: (params) => {
+        calls.push(params);
       },
       pluginId: "openai",
       pluginRoot,
     });
 
-    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(result).toEqual({
+      installedSpecs: ["@mariozechner/pi-ai@0.68.1"],
+      retainSpecs: ["@mariozechner/pi-ai@0.68.1"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        missingSpecs: ["@mariozechner/pi-ai@0.68.1"],
+        installSpecs: ["@mariozechner/pi-ai@0.68.1"],
+      },
+    ]);
   });
 
-  it("installs only deps missing from plugin and package-root resolution", () => {
+  it("installs deps that are only present in the package root", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "codex");
     fs.mkdirSync(path.join(packageRoot, "node_modules", "ws"), { recursive: true });
@@ -680,13 +712,13 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     });
 
     expect(result).toEqual({
-      installedSpecs: ["zod@^4.3.6"],
+      installedSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
       retainSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
     });
     expect(calls).toEqual([
       {
         installRoot: pluginRoot,
-        missingSpecs: ["zod@^4.3.6"],
+        missingSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
         installSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
       },
     ]);
@@ -734,6 +766,56 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         installSpecs: ["zod@^4.3.6"],
       },
     ]);
+  });
+
+  it("rejects unsupported remote runtime dependency specs", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "tokenjuice");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          tokenjuice: "https://evil.example/tokenjuice.tgz",
+        },
+      }),
+    );
+
+    expect(() =>
+      ensureBundledPluginRuntimeDeps({
+        env: {},
+        installDeps: () => {
+          throw new Error("should not attempt install");
+        },
+        pluginId: "tokenjuice",
+        pluginRoot,
+      }),
+    ).toThrow("Unsupported bundled runtime dependency spec for tokenjuice");
+  });
+
+  it("rejects invalid runtime dependency names before resolving sentinels", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "tokenjuice");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "../escape": "0.6.1",
+        },
+      }),
+    );
+
+    expect(() =>
+      ensureBundledPluginRuntimeDeps({
+        env: {},
+        installDeps: () => {
+          throw new Error("should not attempt install");
+        },
+        pluginId: "tokenjuice",
+        pluginRoot,
+      }),
+    ).toThrow("Invalid bundled runtime dependency name");
   });
 
   it("rehydrates source-checkout dist deps from cache after rebuilds", () => {
