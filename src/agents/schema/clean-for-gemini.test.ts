@@ -207,11 +207,10 @@ describe("cleanSchemaForGemini", () => {
         timeoutMs: { type: "number" },
       },
     };
-    const thenKeyword = ["th", "en"].join("");
     schema.if = {
       properties: { mode: { const: "manual" } },
     };
-    schema[thenKeyword] = { required: ["timeoutMs"] };
+    Reflect.set(schema, "then", { required: ["timeoutMs"] });
     schema.else = {
       required: ["mode"],
     };
