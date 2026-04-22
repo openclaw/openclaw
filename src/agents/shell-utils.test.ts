@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import { resetPowerShellPathCache } from "../infra/executable-path.js";
 import {
   detectRuntimeShell,
   getShellConfig,
@@ -188,6 +189,7 @@ describe("resolvePowerShellPath", () => {
   const tempDirs: string[] = [];
 
   beforeEach(() => {
+    resetPowerShellPathCache();
     envSnapshot = captureEnv([
       "ProgramFiles",
       "PROGRAMFILES",
@@ -200,6 +202,7 @@ describe("resolvePowerShellPath", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    resetPowerShellPathCache();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }

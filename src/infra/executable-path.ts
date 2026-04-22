@@ -142,7 +142,23 @@ export function resolveShellFromPath(name: string): string | undefined {
   return undefined;
 }
 
+let cachedPsPath: string | undefined;
+
 export function resolvePowerShellPath(): string {
+  if (cachedPsPath !== undefined) {
+    return cachedPsPath;
+  }
+  const resolved = resolvePowerShellPathUncached();
+  cachedPsPath = resolved;
+  return resolved;
+}
+
+/** Reset the cached PowerShell path (for tests that override env/filesystem). */
+export function resetPowerShellPathCache(): void {
+  cachedPsPath = undefined;
+}
+
+function resolvePowerShellPathUncached(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
   const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
   const pwsh7 = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
