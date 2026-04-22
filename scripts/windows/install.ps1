@@ -197,6 +197,22 @@ Set-ItemProperty -Path $RunPath -Name "OpenClaw" -Value "`"$ExePath`""
 
 # 7. Firewall Rules
 Write-Step "Configuring Hardened Windows Firewall for OpenClaw Gateway..."
+$defaultPort = 18789
+$configPath = Join-Path $HOME ".openclaw\config.json"
+$port = $defaultPort
+
+if (Test-Path $configPath) {
+    try {
+        $config = Get-Content $configPath -Raw | ConvertFrom-Json
+        if ($config.gateway -and $config.gateway.port) {
+            $port = [int]$config.gateway.port
+            Write-Host "Detected configured gateway port: $port" -ForegroundColor Gray
+        }
+    } catch {
+        # Fallback to default if JSON is malformed or port is missing
+    }
+}
+
 $SidecarPath = Get-ChildItem -Path "$InstallPath\binaries" -Filter "openclaw-*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 $FirewallProgram = if ($SidecarPath) { $SidecarPath.FullName } else { $ExePath }
 
@@ -204,7 +220,7 @@ $FirewallProgram = if ($SidecarPath) { $SidecarPath.FullName } else { $ExePath }
 $inboundArgs = @{
     DisplayName = "OpenClaw Gateway"
     Direction   = "Inbound"
-    LocalPort   = 18789
+    LocalPort   = $port
     Protocol    = "TCP"
     Action      = "Allow"
     ErrorAction = "SilentlyContinue"
@@ -216,7 +232,7 @@ New-NetFirewallRule @inboundArgs | Out-Null
 $outboundArgs = @{
     DisplayName = "OpenClaw Gateway"
     Direction   = "Outbound"
-    LocalPort   = 18789
+    LocalPort   = $port
     Protocol    = "TCP"
     Action      = "Allow"
     ErrorAction = "SilentlyContinue"

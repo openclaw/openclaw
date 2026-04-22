@@ -23,7 +23,11 @@ async function handleUpdate() {
       appendLog("Already on the latest version.");
     }
   } catch (error) {
-    appendLog("Update Error: " + error, "error");
+    if (error.toString().includes('Updater not active')) {
+      appendLog("Update checks are currenty disabled for this build (signing key required).", "info");
+    } else {
+      appendLog("Update Error: " + error, "error");
+    }
   }
 }
 

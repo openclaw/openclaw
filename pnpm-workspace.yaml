@@ -7,7 +7,7 @@ packages:
 
 minimumReleaseAge: 2880
 
-minimumReleaseAgeExclude:
+minimumReleaseAgeExcludes:
   - "acpx"
   - "axios"
   - "basic-ftp"
