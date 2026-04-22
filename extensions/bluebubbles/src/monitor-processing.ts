@@ -1820,7 +1820,7 @@ async function processMessageAfterDedupe(
         },
       });
     }
-    if (shouldStopTyping && chatGuidForActions) {
+    if (shouldStopTyping && chatGuidForActions && privateApiEnabled) {
       // Stop typing after streaming completes to avoid a stuck indicator.
       sendBlueBubblesTyping(chatGuidForActions, false, {
         cfg: config,
