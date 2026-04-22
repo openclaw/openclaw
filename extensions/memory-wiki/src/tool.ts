@@ -13,6 +13,19 @@ import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
+// Permissive schema for config-error stub tools so argument validation in the
+// catalog layer does not swallow the real error before `execute` can surface
+// it. Any input is accepted; `execute` rejects with the underlying config
+// error so callers see an actionable message.
+const WikiConfigErrorSchema = Type.Object({}, { additionalProperties: true });
+
+const WIKI_TOOL_LABELS: Record<string, string> = {
+  wiki_status: "Wiki Status",
+  wiki_search: "Wiki Search",
+  wiki_lint: "Wiki Lint",
+  wiki_apply: "Wiki Apply",
+  wiki_get: "Wiki Get",
+};
 const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
 );
@@ -85,6 +98,25 @@ type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
 };
+
+// Returned by `registerTool` factories when `resolveMemoryWikiConfigForCtx`
+// throws during tool resolution (e.g. templated `vault.path` + partial ctx in
+// `src/mcp/plugin-tools-serve.ts`, which calls `resolvePluginTools` with only
+// `{ config }`). Without a stub the factory throw is caught in
+// `resolvePluginTools` and the tool silently disappears from the catalog;
+// this surface keeps the tool visible and surfaces the config error at
+// invocation time instead.
+export function createWikiConfigErrorTool(name: string, error: Error): AnyAgentTool {
+  return {
+    name,
+    label: WIKI_TOOL_LABELS[name] ?? name,
+    description: `memory-wiki ${name} is unavailable due to a configuration error: ${error.message}. Resolve the vault.path template or invoke from a context that populates the required tokens.`,
+    parameters: WikiConfigErrorSchema,
+    execute: async () => {
+      throw error;
+    },
+  };
+}
 
 export function createWikiStatusTool(
   config: ResolvedMemoryWikiConfig,

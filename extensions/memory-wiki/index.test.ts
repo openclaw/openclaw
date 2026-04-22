@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "./api.js";
 import plugin from "./index.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
@@ -88,6 +89,39 @@ describe("memory-wiki plugin", () => {
     expect(registerTool).toHaveBeenCalledTimes(5);
     expect(registerGatewayMethod).toHaveBeenCalled();
     expect(registerCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps wiki_* tools visible in the catalog when vault.path is templated and factory context is partial, failing loud at execute time", async () => {
+    // Regression: `src/plugins/tools.ts` (`resolvePluginTools`) wraps each
+    // factory call in try/catch and silently skips the tool on throw. Before
+    // the guard, `resolveMemoryWikiConfigForCtx` throwing on unresolved
+    // placeholders (e.g. `plugin-tools-serve.ts` passing `{ config }` only)
+    // made every `wiki_*` tool disappear from the MCP catalog with no
+    // actionable signal to the caller. The factory must return a stub tool
+    // that surfaces the original error at invocation time instead.
+    const { api, registerTool } = createPluginApi({
+      pluginConfig: { vault: { path: "{workspaceDir}/wiki" } },
+    });
+
+    await plugin.register(api);
+
+    expect(registerTool).toHaveBeenCalledTimes(5);
+
+    const partialCtx = { config: api.config } as OpenClawPluginToolContext;
+
+    for (const call of registerTool.mock.calls) {
+      const factory = call[0] as (ctx: OpenClawPluginToolContext) => AnyAgentTool;
+      const tool = factory(partialCtx);
+      expect(tool).toBeTruthy();
+      // Stub preserves the original tool name so callers (MCP clients,
+      // gateway catalog, agents) still see the tool exists.
+      expect(tool.name).toMatch(/^wiki_/);
+      // Invoking surfaces the placeholder-expansion error from
+      // `expandVaultPathTemplate` rather than swallowing it.
+      await expect(
+        (tool as { execute: (id: string, args: unknown) => Promise<unknown> }).execute("call", {}),
+      ).rejects.toThrow(/unresolved placeholder\(s\) \{workspaceDir\}/);
+    }
   });
 
   it("also skips memory supplements when vault.path contains only unknown placeholders", async () => {

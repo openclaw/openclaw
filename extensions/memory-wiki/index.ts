@@ -1,4 +1,4 @@
-import { definePluginEntry } from "./api.js";
+import { type AnyAgentTool, definePluginEntry, type OpenClawPluginToolContext } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
 import {
   hasAnyVaultPathPlaceholder,
@@ -11,11 +11,38 @@ import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
 import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
 import {
   createWikiApplyTool,
+  createWikiConfigErrorTool,
   createWikiGetTool,
   createWikiLintTool,
   createWikiSearchTool,
   createWikiStatusTool,
 } from "./src/tool.js";
+
+// Wrap a `registerTool` factory so expansion failures in
+// `resolveMemoryWikiConfigForCtx` do not bubble out as factory-time throws.
+// `src/plugins/tools.ts` catches factory exceptions, logs, and silently drops
+// the tool from the catalog — that is the desired shape for plugins that
+// genuinely cannot produce a tool in the current context, but for
+// configuration errors (like a templated `vault.path` resolved without the
+// required tokens) it hides the problem from both agents and operators. By
+// returning a stub tool whose `execute` rejects with the original error we
+// keep `wiki_*` visible in the catalog (so MCP/gateway clients see it exists)
+// while still failing loud — at invocation time — with an actionable message.
+function guardedWikiToolFactory(
+  toolName: string,
+  build: (ctx: OpenClawPluginToolContext) => AnyAgentTool,
+): (ctx: OpenClawPluginToolContext) => AnyAgentTool {
+  return (ctx) => {
+    try {
+      return build(ctx);
+    } catch (err) {
+      return createWikiConfigErrorTool(
+        toolName,
+        err instanceof Error ? err : new Error(String(err)),
+      );
+    }
+  };
+}
 
 export default definePluginEntry({
   id: "memory-wiki",
@@ -52,31 +79,39 @@ export default definePluginEntry({
     }
     registerMemoryWikiGatewayMethods({ api, config, appConfig: api.config });
     api.registerTool(
-      (ctx) => createWikiStatusTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      guardedWikiToolFactory("wiki_status", (ctx) =>
+        createWikiStatusTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      ),
       { name: "wiki_status" },
     );
     api.registerTool(
-      (ctx) => createWikiLintTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      guardedWikiToolFactory("wiki_lint", (ctx) =>
+        createWikiLintTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      ),
       { name: "wiki_lint" },
     );
     api.registerTool(
-      (ctx) => createWikiApplyTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      guardedWikiToolFactory("wiki_apply", (ctx) =>
+        createWikiApplyTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),
+      ),
       { name: "wiki_apply" },
     );
     api.registerTool(
-      (ctx) =>
+      guardedWikiToolFactory("wiki_search", (ctx) =>
         createWikiSearchTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config, {
           agentId: ctx.agentId,
           agentSessionKey: ctx.sessionKey,
         }),
+      ),
       { name: "wiki_search" },
     );
     api.registerTool(
-      (ctx) =>
+      guardedWikiToolFactory("wiki_get", (ctx) =>
         createWikiGetTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config, {
           agentId: ctx.agentId,
           agentSessionKey: ctx.sessionKey,
         }),
+      ),
       { name: "wiki_get" },
     );
     api.registerCli(
