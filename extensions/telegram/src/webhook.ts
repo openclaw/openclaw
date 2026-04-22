@@ -28,7 +28,7 @@ import { createTelegramBot } from "./bot.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
-const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
+const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 5_000;
 const InputFileCtor: typeof grammy.InputFile =
   typeof grammy.InputFile === "function"
     ? grammy.InputFile

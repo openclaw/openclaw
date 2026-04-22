@@ -455,7 +455,7 @@ describe("startTelegramWebhook", () => {
           {
             secretToken: TELEGRAM_SECRET,
             onTimeout: "return",
-            timeoutMilliseconds: 10_000,
+            timeoutMilliseconds: 5_000,
           },
         );
         expect(runtimeLog).toHaveBeenCalledWith(
