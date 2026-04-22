@@ -18,6 +18,11 @@ type AimockRequestSnapshot = {
   plannedToolName?: string;
 };
 
+type MockMessage = {
+  role?: string;
+  content?: unknown;
+};
+
 function writeJson(res: ServerResponse, status: number, body: unknown) {
   const text = JSON.stringify(body);
   res.writeHead(status, {
@@ -60,7 +65,7 @@ function requestMessages(body: ChatCompletionRequest | null | undefined) {
 function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
   const messages = requestMessages(body);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+    const message = messages[index] as MockMessage | undefined;
     if (message?.role === "user") {
       return stringifyContent(message.content);
     }
@@ -70,7 +75,7 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
   return requestMessages(body)
-    .map((message: unknown) => stringifyContent((message as { content: unknown }).content))
+    .map((message: unknown) => stringifyContent((message as MockMessage).content))
     .filter(Boolean)
     .join("\n");
 }
@@ -78,7 +83,7 @@ function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
 function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
   const messages = requestMessages(body);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+    const message = messages[index] as MockMessage | undefined;
     if (message?.role === "tool") {
       return stringifyContent(message.content);
     }
@@ -132,7 +137,8 @@ function extractPlannedToolName(entry: JournalEntry) {
 
 function toRequestSnapshot(entry: JournalEntry): AimockRequestSnapshot {
   const body = entry.body ?? null;
-  const model = typeof body?.model === "string" ? body.model : "";
+  const bodyRecord = (body ?? {}) as { model?: unknown };
+  const model = typeof bodyRecord.model === "string" ? bodyRecord.model : "";
   return {
     raw: JSON.stringify(body ?? {}),
     body: (body ?? {}) as Record<string, unknown>,
