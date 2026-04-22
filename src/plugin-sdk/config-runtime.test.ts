@@ -15,7 +15,7 @@ describe("resolvePluginConfigObject", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(resolvePluginConfigObject(config, "demo-plugin")).toEqual({
       enabled: false,
@@ -37,7 +37,7 @@ describe("resolvePluginConfigObject", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(resolvePluginConfigObject(config, "missing-plugin")).toBeUndefined();
     expect(resolvePluginConfigObject(config, "demo-plugin")).toBeUndefined();

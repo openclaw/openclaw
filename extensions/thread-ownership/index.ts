@@ -80,9 +80,10 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const resolveCurrentState = () => {
       const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
-      const pluginCfg =
-        resolvePluginConfigObject(currentConfig, "thread-ownership") ||
-        ((api.pluginConfig ?? {}) as ThreadOwnershipConfig);
+      const pluginCfg: ThreadOwnershipConfig =
+        (resolvePluginConfigObject(currentConfig, "thread-ownership") as ThreadOwnershipConfig | undefined) ??
+        (api.pluginConfig as ThreadOwnershipConfig | undefined) ??
+        {};
       return {
         currentConfig,
         forwarderUrl: (
