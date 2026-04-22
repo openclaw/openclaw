@@ -1093,6 +1093,7 @@ type TelegramDeleteOpts = {
   cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
+  notify?: boolean;
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
@@ -1147,7 +1148,10 @@ export async function pinMessageTelegram(
     verbose: opts.verbose,
   });
   await requestWithDiag(
-    () => api.pinChatMessage(chatId, messageId, { disable_notification: true }),
+    () =>
+      api.pinChatMessage(chatId, messageId, {
+        disable_notification: opts.notify !== true,
+      }),
     "pinChatMessage",
   );
   logVerbose(`[telegram] Pinned message ${messageId} in chat ${chatId}`);
