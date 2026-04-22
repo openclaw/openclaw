@@ -17,7 +17,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
-import type { DiscordComponentMessageSpec } from "./components.js";
+import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 
@@ -26,9 +26,13 @@ export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 type DiscordSendRuntime = typeof import("./send.js");
 type DiscordSendFn = DiscordSendRuntime["sendMessageDiscord"];
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
+type DiscordSharedInteractiveModule = typeof import("./shared-interactive.js");
+type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
 
 let discordSendRuntimePromise: Promise<DiscordSendRuntime> | undefined;
 let discordComponentSendPromise: Promise<DiscordComponentSendFn> | undefined;
+let discordSharedInteractivePromise: Promise<DiscordSharedInteractiveModule> | undefined;
+let discordThreadBindingsPromise: Promise<DiscordThreadBindingsModule> | undefined;
 
 async function loadDiscordSendRuntime(): Promise<DiscordSendRuntime> {
   discordSendRuntimePromise ??= import("./send.js");
@@ -44,6 +48,16 @@ async function sendDiscordComponentMessageLazy(
   return await (
     await discordComponentSendPromise
   )(...args);
+}
+
+function loadDiscordSharedInteractive(): Promise<DiscordSharedInteractiveModule> {
+  discordSharedInteractivePromise ??= import("./shared-interactive.js");
+  return discordSharedInteractivePromise;
+}
+
+function loadDiscordThreadBindings(): Promise<DiscordThreadBindingsModule> {
+  discordThreadBindingsPromise ??= import("./monitor/thread-bindings.js");
+  return discordThreadBindingsPromise;
 }
 
 function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
@@ -99,7 +113,7 @@ function resolveDiscordWebhookIdentity(params: {
 }
 
 async function maybeSendDiscordWebhookText(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   text: string;
   threadId?: string | number | null;
   accountId?: string | null;
@@ -113,7 +127,7 @@ async function maybeSendDiscordWebhookText(params: {
   if (!threadId) {
     return null;
   }
-  const { getThreadBindingManager } = await import("./monitor/thread-bindings.js");
+  const { getThreadBindingManager } = await loadDiscordThreadBindings();
   const manager = getThreadBindingManager(params.accountId ?? undefined);
   if (!manager) {
     return null;
@@ -146,6 +160,31 @@ export const discordOutbound: ChannelOutboundAdapter = {
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+  },
+  renderPresentation: async ({ payload, presentation }) => {
+    const componentSpec = (await loadDiscordSharedInteractive()).buildDiscordPresentationComponents(
+      presentation,
+    );
+    if (!componentSpec) {
+      return null;
+    }
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        discord: {
+          ...(payload.channelData?.discord as Record<string, unknown> | undefined),
+          presentationComponents: componentSpec,
+        },
+      },
+    };
+  },
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) => {
     const payload = normalizeDiscordApprovalPayload({
@@ -153,12 +192,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
       text: ctx.payload.text ?? "",
     });
     const discordData = payload.channelData?.discord as
-      | { components?: DiscordComponentMessageSpec }
+      | { components?: unknown; presentationComponents?: DiscordComponentMessageSpec }
       | undefined;
     const rawComponentSpec =
-      discordData?.components ??
+      discordData?.presentationComponents ??
+      readDiscordComponentSpec(discordData?.components) ??
       (payload.interactive
-        ? (await import("./shared-interactive.js")).buildDiscordInteractiveComponents(
+        ? (await loadDiscordSharedInteractive()).buildDiscordInteractiveComponents(
             payload.interactive,
           )
         : undefined);

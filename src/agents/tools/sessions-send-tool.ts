@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
+import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -10,11 +11,12 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
+import { loadSessionEntryByKey } from "../subagent-announce-delivery.js";
 import {
   describeSessionsSendTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -276,7 +278,7 @@ export function createSessionsSendTool(opts?: {
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
-        lane: AGENT_LANE_NESTED,
+        lane: resolveNestedAgentLaneForSession(resolvedKey),
         extraSystemPrompt: agentMessageContext,
         inputProvenance: {
           kind: "inter_session",
@@ -288,8 +290,38 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
+
+      // Skip the A2A ping-pong + announce flow when the current caller is the
+      // parent of a parent-owned background ACP subagent it spawned itself.
+      // Such sessions already report their results back to the parent through
+      // the `[Internal task completion event]` announcement path, and treating
+      // them as a peer agent causes the parent to be woken with the child's
+      // reply, generate a user-facing response, and have that response
+      // forwarded back to the child as a new message — producing a
+      // ping-pong loop between parent and ACP child (bounded by
+      // maxPingPongTurns, but user-visible as a runaway conversation).
+      //
+      // The skip is gated on requester ownership, not just target type: an
+      // unrelated sender that can see the same target (e.g. under
+      // `tools.sessions.visibility=all`) must still go through the normal A2A
+      // path so it actually receives a follow-up delivery.
+      const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
+      const skipA2AFlow = isRequesterParentOfBackgroundAcpSession(
+        targetSessionEntry,
+        effectiveRequesterKey,
+      );
+      // When the A2A flow is skipped, no follow-up announcement will fire and
+      // the reply (when present) is returned inline via the `reply` field.
+      // Reflect that in the metadata so the parent LLM does not wait for a
+      // second result that will never arrive.
+      const delivery = skipA2AFlow
+        ? ({ status: "skipped", mode: "announce" } as const)
+        : ({ status: "pending", mode: "announce" } as const);
+
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+        if (skipA2AFlow) {
+          return;
+        }
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,

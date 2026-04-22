@@ -192,7 +192,7 @@ describe("PlaywrightDiffScreenshotter", () => {
 });
 
 describe("diffs plugin registration", () => {
-  it("applies plugin-config defaults through registered tool and viewer handler", async () => {
+  it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
     type RegisteredTool = {
       execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
     };
@@ -207,6 +207,23 @@ describe("diffs plugin registration", () => {
       | undefined;
     let registeredHttpRouteHandler: HttpRouteHandler | undefined;
     const on = vi.fn();
+    let configFile: OpenClawConfig = {
+      gateway: {
+        port: 18789,
+        bind: "loopback",
+      },
+      plugins: {
+        entries: {
+          diffs: {
+            config: {
+              security: {
+                allowRemoteViewer: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
 
     const api = createTestPluginApi({
       id: "diffs",
@@ -233,7 +250,11 @@ describe("diffs plugin registration", () => {
           allowRemoteViewer: true,
         },
       },
-      runtime: {} as never,
+      runtime: {
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
         registeredToolFactory = typeof tool === "function" ? tool : () => tool;
       },
@@ -293,6 +314,21 @@ describe("diffs plugin registration", () => {
       },
     );
 
+    configFile = {
+      ...configFile,
+      plugins: {
+        entries: {
+          diffs: {
+            config: {
+              security: {
+                allowRemoteViewer: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
     const proxiedRes = createMockServerResponse();
     const proxiedHandled = await registeredHttpRouteHandler?.(
       localReq({
@@ -306,7 +342,7 @@ describe("diffs plugin registration", () => {
     );
 
     expect(proxiedHandled).toBe(true);
-    expect(proxiedRes.statusCode).toBe(200);
+    expect(proxiedRes.statusCode).toBe(404);
   });
 });
 
