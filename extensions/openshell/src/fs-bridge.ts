@@ -410,18 +410,16 @@ async function openPinnedReadableFile(params: {
     // `/dev/fd/N` is a character device so readlink returns EINVAL; on Windows
     // there is no `/proc` equivalent. With no kernel-backed path readback we
     // must prove the pinned fd is in-root without trusting a separate
-    // `realpath` lookup of the caller-provided path (that pair races). Walk
+    // `realpath` + `lstat` pair that would race between the two awaits. Walk
     // every ancestor between `literalRoot` and `literalPath` — the actual
-    // on-disk chain — and reject if any ancestor is a symlink; then realpath
-    // the path and cross-check the canonical resolved path and file identity
-    // against the pinned fd.
+    // on-disk chain — and reject if any ancestor is a symlink, then use a
+    // single `stat` call to confirm that the path still resolves to the
+    // same file the fd has pinned. `fs.promises.stat` resolves the path and
+    // returns the final file's identity in one syscall, so there is no
+    // between-await window for an attacker to race.
     await assertAncestorChainHasNoSymlinks(literalRoot, literalPath, params.containerPath);
-    const currentResolvedPath = await fsPromises.realpath(literalPath);
-    if (!isPathInside(canonicalRoot, currentResolvedPath)) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
-    }
-    const currentLstat = await fsPromises.lstat(currentResolvedPath);
-    if (!sameFileIdentity(currentLstat, openedStat)) {
+    const currentResolvedStat = await fsPromises.stat(literalPath);
+    if (!sameFileIdentity(currentResolvedStat, openedStat)) {
       throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
     }
     return handle;
@@ -487,14 +485,11 @@ function normalizeOpenedReadablePath(openedPath: string): string {
 // shared `src/infra/file-identity.ts` contract. Kept local because extension
 // production code is not allowed to reach into core `src/**` by relative
 // import, and this helper is not yet part of the `openclaw/plugin-sdk/*`
-// public surface.
-function isZeroStatField(value: number | bigint): boolean {
-  return value === 0 || value === 0n;
-}
-
+// public surface. Stats here come from `FileHandle.stat()` / `fs.promises.stat()`
+// with no `{ bigint: true }` option, so all fields are numbers.
 function sameFileIdentity(
-  left: { dev: number | bigint; ino: number | bigint },
-  right: { dev: number | bigint; ino: number | bigint },
+  left: { dev: number; ino: number },
+  right: { dev: number; ino: number },
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   if (left.ino !== right.ino) {
@@ -507,5 +502,5 @@ function sameFileIdentity(
   // a real volume serial. Treat either side `dev=0` as "unknown device"
   // rather than a mismatch so legitimate Windows fallback reads are not
   // rejected.
-  return platform === "win32" && (isZeroStatField(left.dev) || isZeroStatField(right.dev));
+  return platform === "win32" && (left.dev === 0 || right.dev === 0);
 }

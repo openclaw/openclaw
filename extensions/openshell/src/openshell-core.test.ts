@@ -419,9 +419,9 @@ describe("openshell fs bridges", () => {
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
     const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
-    const originalLstat = fs.lstat.bind(fs);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await originalLstat(...args);
+    const originalStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const stat = await originalStat(...args);
       if (args[0] === targetPath) {
         return cloneStatWithDev(stat, 0);
       }
@@ -433,9 +433,9 @@ describe("openshell fs bridges", () => {
         "Sandbox boundary checks failed",
       );
       expect(readlinkSpy).toHaveBeenCalled();
-      expect(lstatSpy).toHaveBeenCalledWith(targetPath);
+      expect(statSpy).toHaveBeenCalledWith(targetPath);
     } finally {
-      lstatSpy.mockRestore();
+      statSpy.mockRestore();
       readlinkSpy.mockRestore();
     }
     },
