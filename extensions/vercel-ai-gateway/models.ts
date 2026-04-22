@@ -81,6 +81,19 @@ const STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG: readonly StaticVercelGatewayModel[
       cacheRead: 0,
     },
   },
+  {
+    id: "moonshotai/kimi-k2.6",
+    name: "Kimi K2.6",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 262_000,
+    maxTokens: 262_000,
+    cost: {
+      input: 0.95,
+      output: 4,
+      cacheRead: 0.16,
+    },
+  },
 ] as const;
 
 function toPerMillionCost(value: number | string | undefined): number {
