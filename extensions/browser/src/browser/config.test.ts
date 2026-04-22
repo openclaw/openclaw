@@ -395,6 +395,22 @@ describe("browser config", () => {
     );
   });
 
+  it("expands tilde-prefixed executablePath so spawn() does not ENOENT on home-dir browsers", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~/.local/chromium/chrome-linux/chrome",
+    });
+
+    expect(resolved.executablePath).toBe(
+      resolveUserPath("~/.local/chromium/chrome-linux/chrome"),
+    );
+    expect(resolved.executablePath?.startsWith("~")).toBe(false);
+  });
+
+  it("leaves an empty executablePath undefined", () => {
+    const resolved = resolveBrowserConfig({ executablePath: "" });
+    expect(resolved.executablePath).toBeUndefined();
+  });
+
   it("sets usesChromeMcp only for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {

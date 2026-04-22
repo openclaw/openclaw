@@ -244,7 +244,13 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
-  const executablePath = normalizeOptionalString(cfg?.executablePath);
+  const normalizedExecutablePath = normalizeOptionalString(cfg?.executablePath);
+  // child_process.spawn does not expand `~` on any platform, so expand it here
+  // before the path is handed off to existence checks and the eventual spawn.
+  // Otherwise ENOENT is reported for valid Chromium installs under $HOME.
+  const executablePath = normalizedExecutablePath
+    ? resolveUserPath(normalizedExecutablePath)
+    : undefined;
   const defaultProfileFromConfig = normalizeOptionalString(cfg?.defaultProfile);
 
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
