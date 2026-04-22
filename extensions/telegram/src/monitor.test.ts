@@ -844,6 +844,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(2);
     expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport1);
     expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport2);
+    expect(telegramTransport1.close).toHaveBeenCalledTimes(1);
+    expect(telegramTransport2.close).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to configured webhookSecret when not passed explicitly", async () => {

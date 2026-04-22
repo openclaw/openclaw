@@ -946,10 +946,11 @@ describe("TelegramPollingSession", () => {
     await session.runUntilAbort();
 
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+    expectTelegramBotTransportSequence(transport1, transport2);
     // The stale transport is closed by the dirty-rebuild; the new transport
     // is closed when dispose() fires on session exit.
-    expect(transport1.close).toHaveBeenCalled();
-    expect(transport2.close).toHaveBeenCalled();
+    expect(transport1.close).toHaveBeenCalledTimes(1);
+    expect(transport2.close).toHaveBeenCalledTimes(1);
   });
 
   it("closes the transport once when runUntilAbort exits normally", async () => {
