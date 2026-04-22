@@ -458,6 +458,63 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(userOnlyPresentTranscript);
   });
 
+  it("sessions cleanup fix-missing repairs stale sessionFile metadata when the canonical transcript exists", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const staleTranscript = path.join(testDir, "stale-live-transcript.jsonl");
+    const canonicalTranscript = path.join(testDir, "live-transcript.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          live: {
+            sessionId: "live-transcript",
+            sessionFile: staleTranscript,
+            updatedAt: now,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      canonicalTranscript,
+      '{"type":"message","message":{"role":"user","content":"keep me"}}\n',
+      "utf-8",
+    );
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    expect(dryRun.previewResults[0]?.summary.beforeCount).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.afterCount).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.missing).toBe(0);
+    expect(dryRun.previewResults[0]?.summary.wouldMutate).toBe(true);
+    expect(dryRun.previewResults[0]?.missingKeys.has("live")).toBe(false);
+    expect(loadSessionStore(storePath, { skipCache: true }).live?.sessionFile).toBe(
+      staleTranscript,
+    );
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(1);
+    expect(applied.appliedSummaries[0]?.missing).toBe(0);
+    expect(applied.appliedSummaries[0]?.wouldMutate).toBe(true);
+    expect(loadSessionStore(storePath, { skipCache: true }).live?.sessionFile).toBe(
+      canonicalTranscript,
+    );
+    await expectPathExists(canonicalTranscript);
+    await expectPathMissing(staleTranscript);
+  });
+
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 

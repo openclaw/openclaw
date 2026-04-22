@@ -22,6 +22,7 @@ import {
   applySessionEntryLifecycleMutation,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
+  type SessionEntryLifecycleUpsert,
 } from "./session-accessor.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
@@ -261,11 +262,13 @@ function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   onPruned?: (key: string, entry: SessionEntry) => void;
-}): number {
+  onRepaired?: (key: string, entry: SessionEntry) => void;
+}): { pruned: number; repaired: number } {
   const sessionPathOpts = resolveSessionFilePathOptions({
     storePath: params.storePath,
   });
-  let removed = 0;
+  let pruned = 0;
+  let repaired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
     if (!entry?.sessionId) {
       if (parseAgentSessionKey(key)) {
@@ -273,7 +276,7 @@ function pruneMissingTranscriptEntries(params: {
         continue;
       }
       delete params.store[key];
-      removed += 1;
+      pruned += 1;
       params.onPruned?.(key, entry);
       continue;
     }
@@ -283,17 +286,42 @@ function pruneMissingTranscriptEntries(params: {
     } catch {
       // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
     }
-    if (
-      !transcriptPath ||
-      !fs.existsSync(transcriptPath) ||
-      transcriptHasNoMessageRecords(transcriptPath)
-    ) {
+    const transcriptExists = transcriptPath ? fs.existsSync(transcriptPath) : false;
+    if (transcriptExists && !transcriptHasNoMessageRecords(transcriptPath)) {
+      continue;
+    }
+    const persistedSessionFile =
+      typeof entry.sessionFile === "string" ? entry.sessionFile.trim() : "";
+    if (transcriptPath && !transcriptExists && persistedSessionFile) {
+      let canonicalTranscriptPath: string | undefined;
+      try {
+        canonicalTranscriptPath = resolveSessionFilePath(
+          entry.sessionId,
+          undefined,
+          sessionPathOpts,
+        );
+      } catch {
+        // Invalid legacy session ids still belong to the missing-transcript prune path.
+      }
+      if (
+        canonicalTranscriptPath &&
+        canonicalTranscriptPath !== transcriptPath &&
+        fs.existsSync(canonicalTranscriptPath) &&
+        !transcriptHasNoMessageRecords(canonicalTranscriptPath)
+      ) {
+        entry.sessionFile = canonicalTranscriptPath;
+        repaired += 1;
+        params.onRepaired?.(key, entry);
+        continue;
+      }
+    }
+    if (!transcriptPath || !transcriptExists || transcriptHasNoMessageRecords(transcriptPath)) {
       delete params.store[key];
-      removed += 1;
+      pruned += 1;
       params.onPruned?.(key, entry);
     }
   }
-  return removed;
+  return { pruned, repaired };
 }
 
 function addEntryArtifactPathsToSet(params: {
@@ -334,7 +362,7 @@ async function previewStoreCleanup(params: {
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
-  const missing =
+  const missingTranscriptCleanup =
     params.fixMissing === true
       ? pruneMissingTranscriptEntries({
           store: previewStore,
@@ -343,7 +371,7 @@ async function previewStoreCleanup(params: {
             missingKeys.add(key);
           },
         })
-      : 0;
+      : { pruned: 0, repaired: 0 };
   const dmScopeRetired =
     params.fixDmScope === true
       ? retireMainScopeDirectSessionEntries({
@@ -420,7 +448,8 @@ async function previewStoreCleanup(params: {
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
-    missing > 0 ||
+    missingTranscriptCleanup.pruned > 0 ||
+    missingTranscriptCleanup.repaired > 0 ||
     dmScopeRetired > 0 ||
     pruned > 0 ||
     capped > 0 ||
@@ -435,7 +464,7 @@ async function previewStoreCleanup(params: {
     dryRun: params.dryRun,
     beforeCount,
     afterCount: afterPreviewCount,
-    missing,
+    missing: missingTranscriptCleanup.pruned,
     dmScopeRetired,
     pruned,
     capped,
@@ -492,6 +521,8 @@ export async function runSessionsCleanup(params: {
     for (const target of targets) {
       const applyStore = loadSessionStore(target.storePath, { skipCache: true });
       const missingRemovals: SessionEntryLifecycleRemoval[] = [];
+      const sessionFileRepairUpserts: SessionEntryLifecycleUpsert[] = [];
+      let appliedSessionFileRepairs = 0;
       const dmScopeRetiredRemovals: SessionEntryLifecycleRemoval[] = [];
       if (opts.fixMissing) {
         pruneMissingTranscriptEntries({
@@ -501,6 +532,28 @@ export async function runSessionsCleanup(params: {
             missingRemovals.push({
               sessionKey,
               expectedEntry: cloneSessionStoreRecord({ entry }).entry,
+            });
+          },
+          onRepaired: (sessionKey) => {
+            sessionFileRepairUpserts.push({
+              sessionKey,
+              buildEntry: ({ currentEntry }) => {
+                if (!currentEntry) {
+                  return null;
+                }
+                const repairStore = {
+                  [sessionKey]: cloneSessionStoreRecord({ entry: currentEntry }).entry,
+                };
+                const repairResult = pruneMissingTranscriptEntries({
+                  store: repairStore,
+                  storePath: target.storePath,
+                });
+                if (repairResult.repaired === 0) {
+                  return null;
+                }
+                appliedSessionFileRepairs += 1;
+                return repairStore[sessionKey] ?? null;
+              },
             });
           },
         });
@@ -527,6 +580,7 @@ export async function runSessionsCleanup(params: {
       const lifecycleResult = await applySessionEntryLifecycleMutation({
         storePath: target.storePath,
         removals,
+        upserts: sessionFileRepairUpserts,
         activeSessionKey: opts.activeKey,
         maintenanceOverride: {
           mode,
@@ -605,6 +659,7 @@ export async function runSessionsCleanup(params: {
               diskBudget: appliedReport.diskBudget,
               wouldMutate:
                 missingApplied > 0 ||
+                appliedSessionFileRepairs > 0 ||
                 dmScopeRetiredApplied > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
