@@ -506,6 +506,11 @@ export async function isSessionSummaryDailyMemoryPath(params: {
       return false;
     }
     if (candidateRead.kind === "missing") {
+      await recordSessionSummaryDailyMemoryDependency({
+        kind: "file",
+        absolutePath: candidate.absolutePath,
+        recordDependency: params.recordDependency,
+      });
       missingCandidateRelativePaths.add(candidate.relativePath);
       continue;
     }

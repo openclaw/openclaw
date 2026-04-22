@@ -1,3 +1,5 @@
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+
 export const SESSION_SUMMARY_DAILY_MEMORY_SENTINEL = "<!-- openclaw:session-memory-summary -->";
 
 const LEGACY_SESSION_SUMMARY_HEADER_RE =
@@ -7,10 +9,15 @@ const LEGACY_SESSION_SUMMARY_REQUIRED_MARKERS = [
   "- **Session ID**:",
   "- **Source**:",
 ] as const;
-const LEGACY_SESSION_SUMMARY_GENERATED_SESSION_KEY_RE = /^- \*\*Session Key\*\*: .+:.+$/m;
 const LEGACY_SESSION_SUMMARY_NON_NOTES_SOURCE_RE = /^- \*\*Source\*\*: (?!notes\b)\S+/im;
 const LEGACY_SESSION_SUMMARY_CONVERSATION_BLOCK_RE = /(?:^|\n)## Conversation Summary(?:\n|$)/;
 const LEGACY_SESSION_SUMMARY_TRANSCRIPT_LINE_RE = /^(?:assistant|user|system):\s+\S/m;
+const LEGACY_SESSION_SUMMARY_SESSION_KEY_RE = /^- \*\*Session Key\*\*: (.+)$/m;
+
+function hasGeneratedLegacySessionSummarySessionKey(raw: string): boolean {
+  const sessionKey = raw.match(LEGACY_SESSION_SUMMARY_SESSION_KEY_RE)?.[1]?.trim();
+  return Boolean(sessionKey && parseAgentSessionKey(sessionKey));
+}
 
 function isLegacySessionSummaryDailyMemory(raw: string): boolean {
   if (!LEGACY_SESSION_SUMMARY_HEADER_RE.test(raw)) {
@@ -28,7 +35,7 @@ function isLegacySessionSummaryDailyMemory(raw: string): boolean {
     return true;
   }
   return (
-    LEGACY_SESSION_SUMMARY_GENERATED_SESSION_KEY_RE.test(raw) &&
+    hasGeneratedLegacySessionSummarySessionKey(raw) &&
     LEGACY_SESSION_SUMMARY_NON_NOTES_SOURCE_RE.test(raw)
   );
 }

@@ -72,6 +72,24 @@ describe("daily-content", () => {
     ).toBe(true);
   });
 
+  it("does not treat durable imported session logs as bookkeeping without transcript evidence", () => {
+    expect(
+      isSessionSummaryDailyMemory(
+        [
+          "# Session: 2026-04-19 10:00:00 UTC",
+          "",
+          "- **Session Key**: customer-retro",
+          "- **Session ID**: retro-2026-04-19",
+          "- **Source**: cli-import",
+          "",
+          "## Action Items",
+          "",
+          "- Follow up with procurement on Friday.",
+        ].join("\n"),
+      ),
+    ).toBe(false);
+  });
+
   it("does not treat dated hand-written session notes as legacy bookkeeping without stronger generated-session evidence", () => {
     expect(
       isSessionSummaryDailyMemory(
@@ -226,6 +244,49 @@ describe("daily-content", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
+
+    await expect(areSessionSummaryDailyMemoryDependenciesCurrent(dependencies)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("records missing remembered-summary probes so recreated notes invalidate cached bookkeeping", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-missing-deps-"));
+    tmpDirs.push(root);
+    const memoryDir = path.join(root, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    const notePath = path.join(memoryDir, "2026-04-19-reset-summary.md");
+    await rememberRecentDailyMemoryFile({
+      memoryDir,
+      fileName: "2026-04-19-reset-summary.md",
+      sessionSummary: true,
+    });
+
+    const dependencies: SessionSummaryDailyMemoryDependency[] = [];
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "memory/2026-04-19-reset-summary.md",
+        cache: new Map(),
+        snippet: "assistant: bookkeeping only",
+        startLine: 9,
+        recordDependency: (dependency) => {
+          dependencies.push(dependency);
+        },
+      }),
+    ).resolves.toBe(true);
+    expect(dependencies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "file",
+          absolutePath: notePath,
+          token: "missing:ENOENT",
+        }),
+      ]),
+    );
+    await expect(areSessionSummaryDailyMemoryDependenciesCurrent(dependencies)).resolves.toBe(true);
+
+    await fs.writeFile(notePath, "Durable planning note.\n", "utf-8");
 
     await expect(areSessionSummaryDailyMemoryDependenciesCurrent(dependencies)).resolves.toBe(
       false,

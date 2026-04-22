@@ -967,6 +967,7 @@ describe("memory-core dreaming phases", () => {
     ]);
     expect(first.batches[3]?.results).toHaveLength(2);
     expect(Object.keys(first.nextState.files)).not.toContain("memory/2026-04-02.md");
+    expect(first.nextState.pendingPaths).toEqual(["memory/2026-04-02.md"]);
 
     const second = await __testing.collectDailyIngestionBatches({
       workspaceDir,
@@ -979,6 +980,7 @@ describe("memory-core dreaming phases", () => {
     expect(second.batches).toHaveLength(1);
     expect(second.batches[0]?.results[0]?.path).toBe("memory/2026-04-02.md");
     expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-02.md");
+    expect(second.nextState.pendingPaths).toBeUndefined();
   });
 
   it("skips rereading unchanged daily notes that already match the checkpoint", async () => {

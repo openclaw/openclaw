@@ -436,6 +436,13 @@ function isCrossPlatformAbsoluteMemoryPath(normalizedPath: string): boolean {
   );
 }
 
+function normalizeMemoryWorkspaceComparablePath(normalizedPath: string): string {
+  if (!path.win32.isAbsolute(normalizedPath)) {
+    return normalizedPath;
+  }
+  return normalizedPath.replace(/^([a-z]):/i, (_, drive: string) => `${drive.toLowerCase()}:`);
+}
+
 function normalizeIsoDay(isoLike: string): string | null {
   if (typeof isoLike !== "string") {
     return null;
@@ -489,13 +496,19 @@ function resolveWorkspaceRelativeLegacyMergePath(
     return null;
   }
   const normalizedWorkspaceDir = normalizeMemoryPath(path.resolve(workspaceDir));
+  const comparablePath = normalizeMemoryWorkspaceComparablePath(normalizedPath);
+  const comparableWorkspaceDir = normalizeMemoryWorkspaceComparablePath(normalizedWorkspaceDir);
   if (
-    normalizedPath !== normalizedWorkspaceDir &&
-    !normalizedPath.startsWith(`${normalizedWorkspaceDir}/`)
+    comparablePath !== comparableWorkspaceDir &&
+    !comparablePath.startsWith(`${comparableWorkspaceDir}/`)
   ) {
     return null;
   }
-  const relativePath = normalizeMemoryPath(path.relative(normalizedWorkspaceDir, normalizedPath));
+  const relativePath = normalizeMemoryPath(
+    path.win32.isAbsolute(normalizedPath)
+      ? path.win32.relative(normalizedWorkspaceDir, normalizedPath)
+      : path.relative(normalizedWorkspaceDir, normalizedPath),
+  );
   if (
     !relativePath ||
     relativePath.startsWith("..") ||

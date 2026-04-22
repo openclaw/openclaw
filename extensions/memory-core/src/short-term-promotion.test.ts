@@ -1480,6 +1480,49 @@ describe("short-term promotion", () => {
     expect(matchedKey).toBe("local");
   });
 
+  it("merges same-workspace Windows variants despite drive-letter case differences", () => {
+    const claimHash = __testing.buildClaimHash("same snippet");
+    const resolveSpy = vi
+      .spyOn(path, "resolve")
+      .mockImplementation(((...segments: string[]) =>
+        path.win32.resolve(...segments)) as typeof path.resolve);
+
+    try {
+      const matchedKey = __testing.findExistingDailyVariantEntryKey({
+        entries: {
+          same: {
+            key: "same",
+            path: "c:/repo/memory/2026-04-03.md",
+            startLine: 3,
+            endLine: 3,
+            source: "memory",
+            snippet: "same snippet",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 0.9,
+            maxScore: 0.9,
+            firstRecalledAt: "2026-04-03T10:00:00.000Z",
+            lastRecalledAt: "2026-04-03T10:00:00.000Z",
+            queryHashes: ["a"],
+            recallDays: ["2026-04-03"],
+            conceptTags: [],
+            claimHash,
+          },
+        },
+        workspaceDir: "C:/repo",
+        claimHash,
+        candidatePath: "memory/2026-04-03-reset-summary.md",
+        candidateStartLine: 4,
+        candidateEndLine: 4,
+      });
+
+      expect(matchedKey).toBe("same");
+    } finally {
+      resolveSpy.mockRestore();
+    }
+  });
+
   it("does not probe local source aliases for migrated Windows absolute paths", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await fs.writeFile(
