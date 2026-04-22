@@ -144,4 +144,39 @@ describe("bundled root-aware caches", () => {
       bootstrapRegistry.getBootstrapChannelSecrets("beta")?.secretTargetRegistryEntries?.[0]?.id,
     ).toBe("setup-beta-B");
   });
+
+  it("marks bundled plugin ids missing when plugin loading throws", async () => {
+    const root = makeBundledRoot("openclaw-bootstrap-throw-");
+
+    vi.doMock("./bundled-ids.js", () => ({
+      listBundledChannelPluginIdsForRoot: (cacheKey: string) =>
+        cacheKey === root.pluginsDir ? ["alpha"] : [],
+    }));
+
+    const getBundledChannelPluginMock = vi.fn(() => {
+      throw new Error("Cannot find module 'nostr-tools'");
+    });
+    const getBundledChannelSetupPluginMock = vi.fn(() => {
+      throw new Error("Cannot find module '@larksuiteoapi/node-sdk'");
+    });
+
+    vi.doMock("./bundled.js", () => ({
+      getBundledChannelPlugin: getBundledChannelPluginMock,
+      getBundledChannelSetupPlugin: getBundledChannelSetupPluginMock,
+      getBundledChannelSecrets: () => undefined,
+      getBundledChannelSetupSecrets: () => undefined,
+    }));
+
+    const bootstrapRegistry = await importFreshModule<typeof import("./bootstrap-registry.js")>(
+      import.meta.url,
+      "./bootstrap-registry.js?scope=bootstrap-load-guard",
+    );
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = root.pluginsDir;
+    expect(bootstrapRegistry.listBootstrapChannelPluginIds()).toEqual(["alpha"]);
+    expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toBeUndefined();
+    expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toBeUndefined();
+    expect(getBundledChannelPluginMock).toHaveBeenCalledTimes(1);
+    expect(getBundledChannelSetupPluginMock).not.toHaveBeenCalled();
+  });
 });

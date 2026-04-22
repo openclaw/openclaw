@@ -127,8 +127,15 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
   if (registry.missingIds.has(resolvedId)) {
     return undefined;
   }
-  const runtimePlugin = getBundledChannelPlugin(resolvedId);
-  const setupPlugin = getBundledChannelSetupPlugin(resolvedId);
+  let runtimePlugin: ChannelPlugin | undefined;
+  let setupPlugin: ChannelPlugin | undefined;
+  try {
+    runtimePlugin = getBundledChannelPlugin(resolvedId);
+    setupPlugin = getBundledChannelSetupPlugin(resolvedId);
+  } catch {
+    registry.missingIds.add(resolvedId);
+    return undefined;
+  }
   const merged =
     runtimePlugin && setupPlugin
       ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
