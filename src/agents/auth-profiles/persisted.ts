@@ -1,7 +1,9 @@
 import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
+import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { hasUsableOAuthCredential, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import { resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import {
   coerceAuthProfileState,
@@ -12,6 +14,7 @@ import type {
   AuthProfileCredential,
   AuthProfileSecretsStore,
   AuthProfileStore,
+  OAuthCredential,
   OAuthCredentials,
 } from "./types.js";
 
@@ -159,6 +162,187 @@ function mergeRecord<T>(
   return { ...base, ...override };
 }
 
+function dedupeMergedProfileOrder(profileIds: string[]): string[] {
+  return Array.from(new Set(profileIds));
+}
+
+function normalizeOAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeOAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeOAuthIdentityToken(value)?.toLowerCase();
+}
+
+function hasOAuthIdentity(credential: OAuthCredential): boolean {
+  return Boolean(
+    normalizeOAuthIdentityToken(credential.accountId) ?? normalizeOAuthEmailToken(credential.email),
+  );
+}
+
+function hasComparableOAuthIdentityConflict(
+  existing: OAuthCredential,
+  candidate: OAuthCredential,
+): boolean {
+  const existingAccountId = normalizeOAuthIdentityToken(existing.accountId);
+  const candidateAccountId = normalizeOAuthIdentityToken(candidate.accountId);
+  if (
+    existingAccountId !== undefined &&
+    candidateAccountId !== undefined &&
+    existingAccountId !== candidateAccountId
+  ) {
+    return true;
+  }
+
+  const existingEmail = normalizeOAuthEmailToken(existing.email);
+  const candidateEmail = normalizeOAuthEmailToken(candidate.email);
+  return (
+    existingEmail !== undefined && candidateEmail !== undefined && existingEmail !== candidateEmail
+  );
+}
+
+function isLegacyDefaultOAuthProfile(profileId: string, credential: OAuthCredential): boolean {
+  return profileId === `${normalizeProviderId(credential.provider)}:default`;
+}
+
+function isNewerUsableOAuthCredential(
+  existing: OAuthCredential,
+  candidate: OAuthCredential,
+): boolean {
+  if (!hasUsableOAuthCredential(candidate)) {
+    return false;
+  }
+  if (!hasUsableOAuthCredential(existing)) {
+    return true;
+  }
+  return (
+    Number.isFinite(candidate.expires) &&
+    (!Number.isFinite(existing.expires) || candidate.expires > existing.expires)
+  );
+}
+
+function findMainStoreOAuthReplacement(params: {
+  base: AuthProfileStore;
+  legacyProfileId: string;
+  legacyCredential: OAuthCredential;
+}): string | undefined {
+  const providerKey = normalizeProviderId(params.legacyCredential.provider);
+  const candidates = Object.entries(params.base.profiles)
+    .flatMap(([profileId, credential]): Array<[string, OAuthCredential]> => {
+      if (
+        profileId === params.legacyProfileId ||
+        credential.type !== "oauth" ||
+        normalizeProviderId(credential.provider) !== providerKey
+      ) {
+        return [];
+      }
+      return [[profileId, credential]];
+    })
+    .filter(([, credential]) => isNewerUsableOAuthCredential(params.legacyCredential, credential))
+    .toSorted(([leftId, leftCredential], [rightId, rightCredential]) => {
+      const leftExpires = Number.isFinite(leftCredential.expires) ? leftCredential.expires : 0;
+      const rightExpires = Number.isFinite(rightCredential.expires) ? rightCredential.expires : 0;
+      if (rightExpires !== leftExpires) {
+        return rightExpires - leftExpires;
+      }
+      return leftId.localeCompare(rightId);
+    });
+
+  const exactIdentityCandidates = candidates.filter(([, credential]) =>
+    isSafeToAdoptMainStoreOAuthIdentity(params.legacyCredential, credential),
+  );
+  if (exactIdentityCandidates.length > 0) {
+    if (!hasOAuthIdentity(params.legacyCredential) && exactIdentityCandidates.length > 1) {
+      return undefined;
+    }
+    return exactIdentityCandidates[0]?.[0];
+  }
+
+  if (hasUsableOAuthCredential(params.legacyCredential)) {
+    return undefined;
+  }
+  const fallbackCandidates = candidates.filter(
+    ([, credential]) => !hasComparableOAuthIdentityConflict(params.legacyCredential, credential),
+  );
+  if (fallbackCandidates.length !== 1) {
+    return undefined;
+  }
+  return fallbackCandidates[0]?.[0];
+}
+
+function replaceMergedProfileReferences(
+  store: AuthProfileStore,
+  replacements: Map<string, string>,
+): AuthProfileStore {
+  if (replacements.size === 0) {
+    return store;
+  }
+
+  const profiles = { ...store.profiles };
+  for (const legacyProfileId of replacements.keys()) {
+    delete profiles[legacyProfileId];
+  }
+
+  const order = store.order
+    ? Object.fromEntries(
+        Object.entries(store.order).map(([provider, profileIds]) => [
+          provider,
+          dedupeMergedProfileOrder(
+            profileIds.map((profileId) => replacements.get(profileId) ?? profileId),
+          ),
+        ]),
+      )
+    : undefined;
+
+  const lastGood = store.lastGood
+    ? Object.fromEntries(
+        Object.entries(store.lastGood).map(([provider, profileId]) => [
+          provider,
+          replacements.get(profileId) ?? profileId,
+        ]),
+      )
+    : undefined;
+
+  const usageStats = store.usageStats
+    ? Object.fromEntries(
+        Object.entries(store.usageStats).filter(([profileId]) => !replacements.has(profileId)),
+      )
+    : undefined;
+
+  return {
+    ...store,
+    profiles,
+    ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
+    ...(lastGood && Object.keys(lastGood).length > 0 ? { lastGood } : { lastGood: undefined }),
+    ...(usageStats && Object.keys(usageStats).length > 0
+      ? { usageStats }
+      : { usageStats: undefined }),
+  };
+}
+
+function reconcileMainStoreOAuthProfileDrift(params: {
+  base: AuthProfileStore;
+  override: AuthProfileStore;
+  merged: AuthProfileStore;
+}): AuthProfileStore {
+  const replacements = new Map<string, string>();
+  for (const [profileId, credential] of Object.entries(params.override.profiles)) {
+    if (credential.type !== "oauth" || !isLegacyDefaultOAuthProfile(profileId, credential)) {
+      continue;
+    }
+    const replacementProfileId = findMainStoreOAuthReplacement({
+      base: params.base,
+      legacyProfileId: profileId,
+      legacyCredential: credential,
+    });
+    if (replacementProfileId) {
+      replacements.set(profileId, replacementProfileId);
+    }
+  }
+  return replaceMergedProfileReferences(params.merged, replacements);
+}
+
 export function mergeAuthProfileStores(
   base: AuthProfileStore,
   override: AuthProfileStore,
@@ -171,13 +355,14 @@ export function mergeAuthProfileStores(
   ) {
     return base;
   }
-  return {
+  const merged = {
     version: Math.max(base.version, override.version ?? base.version),
     profiles: { ...base.profiles, ...override.profiles },
     order: mergeRecord(base.order, override.order),
     lastGood: mergeRecord(base.lastGood, override.lastGood),
     usageStats: mergeRecord(base.usageStats, override.usageStats),
   };
+  return reconcileMainStoreOAuthProfileDrift({ base, override, merged });
 }
 
 export function buildPersistedAuthProfileSecretsStore(
