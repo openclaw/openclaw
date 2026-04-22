@@ -235,7 +235,16 @@ export async function resolveTelegramInboundBody(params: {
     if (hasAudio) {
       bodyText = preflightTranscript || "<media:audio>";
     } else {
-      bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+      // Determine correct placeholder based on actual content type, not assumption
+      const firstType = allMedia[0]?.contentType ?? "";
+      if (firstType.startsWith("video/")) {
+        bodyText = `<media:video>${allMedia.length > 1 ? ` (${allMedia.length} items)` : ""}`;
+      } else if (firstType.startsWith("image/")) {
+        bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+      } else {
+        // audio/ handled above; treat everything else (document, application/*, etc.) as document
+        bodyText = `<media:document>${allMedia.length > 1 ? ` (${allMedia.length} files)` : ""}`;
+      }
     }
   }
 
