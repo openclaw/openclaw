@@ -49,6 +49,7 @@ export type {
   ReplyDispatcher,
 } from "../auto-reply/reply/reply-dispatcher.types.js";
 export type {
+  ReplyDispatchBeforeDeliver,
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
 } from "../auto-reply/reply/reply-dispatcher.js";

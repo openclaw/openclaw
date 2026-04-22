@@ -32,7 +32,7 @@ type ReplyDispatchDeliverer = (
  * Optional hook called just before `deliver()`.  Returning a modified payload
  * replaces the original; returning `null` cancels delivery for this payload.
  */
-type ReplyDispatchBeforeDeliver = (
+export type ReplyDispatchBeforeDeliver = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
 ) => Promise<ReplyPayload | null> | ReplyPayload | null;
