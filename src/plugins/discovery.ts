@@ -870,7 +870,26 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) {
+    // Handle symlinks: readdirSync with withFileTypes returns Dirent entries that
+    // describe the link itself, so entry.isDirectory() returns false for a symlink
+    // even when it points at a directory. Resolve the target and honor it so that
+    // extensions installed via symlink (e.g. `npm link` style workflows) are not
+    // silently skipped. See issue #69960.
+    let isDir = entry.isDirectory();
+    if (!isDir && entry.isSymbolicLink()) {
+      try {
+        const target = fs.statSync(fullPath);
+        isDir = target.isDirectory();
+      } catch (err) {
+        params.diagnostics.push({
+          level: "warn",
+          message: `plugin discovery: skipping broken symlink ${fullPath} (${String(err)})`,
+          source: fullPath,
+        });
+        continue;
+      }
+    }
+    if (!isDir) {
       continue;
     }
     if (params.skipDirectories?.has(entry.name)) {

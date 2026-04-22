@@ -1,6 +1,9 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
 import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
@@ -331,6 +334,12 @@ export async function runPluginInstallCommand(params: {
   }
   const installMode = resolveInstallMode(opts.force);
   const safetyOverrides = resolveInstallSafetyOverrides(opts);
+  // Resolve the profile-aware extensions dir at the CLI layer so downstream
+  // installers write into the state dir selected by --profile / OPENCLAW_STATE_DIR.
+  // Without this, install.ts falls back to a module-level CONFIG_DIR captured at
+  // import time, which predates applyCliProfileEnv and always points at the
+  // default ~/.openclaw/extensions/. See issue #69960.
+  const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
@@ -372,6 +381,7 @@ export async function runPluginInstallCommand(params: {
         ...safetyOverrides,
         mode: installMode,
         path: resolved,
+        extensionsDir,
         dryRun: true,
         logger: createPluginInstallLogger(),
       });
@@ -423,6 +433,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       path: resolved,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -572,6 +583,7 @@ export async function runPluginInstallCommand(params: {
     ...safetyOverrides,
     mode: installMode,
     spec: raw,
+    extensionsDir,
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {

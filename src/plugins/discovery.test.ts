@@ -1177,4 +1177,68 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateOrder(first.candidates, ["alpha", "beta"]);
     expectCandidateOrder(second.candidates, ["beta", "alpha"]);
   });
+
+  describe("symlink handling (issue #69960)", () => {
+    it("follows a symlinked plugin directory to its target package", async () => {
+      const stateDir = makeTempDir();
+      const extensionsDir = path.join(stateDir, "extensions");
+      mkdirSafe(extensionsDir);
+
+      // Real package living outside the extensions dir.
+      const realPackageDir = path.join(makeTempDir(), "symlinked-plugin");
+      createPackagePluginWithEntry({
+        packageDir: realPackageDir,
+        packageName: "@openclaw/symlinked-plugin",
+        pluginId: "symlinked-plugin",
+      });
+
+      // Install via symlink (npm link style).
+      const linkPath = path.join(extensionsDir, "symlinked-plugin");
+      fs.symlinkSync(realPackageDir, linkPath, "dir");
+
+      const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
+      expectCandidatePresence({ candidates, diagnostics }, { present: ["symlinked-plugin"] });
+    });
+
+    it("warns and skips a broken symlink without throwing", async () => {
+      const stateDir = makeTempDir();
+      const extensionsDir = path.join(stateDir, "extensions");
+      mkdirSafe(extensionsDir);
+
+      const brokenTarget = path.join(stateDir, "does-not-exist");
+      const brokenLink = path.join(extensionsDir, "broken");
+      fs.symlinkSync(brokenTarget, brokenLink, "dir");
+
+      const result = await discoverWithStateDir(stateDir, {});
+      expect(result.candidates).toEqual([]);
+      expect(
+        result.diagnostics.some((d) => d.level === "warn" && d.message.includes("broken symlink")),
+      ).toBe(true);
+    });
+
+    it("still discovers plain subdirectory plugin packages (no regression)", async () => {
+      const stateDir = makeTempDir();
+      const extensionsDir = path.join(stateDir, "extensions");
+      mkdirSafe(extensionsDir);
+
+      createPackagePluginWithEntry({
+        packageDir: path.join(extensionsDir, "plain-plugin"),
+        packageName: "@openclaw/plain-plugin",
+        pluginId: "plain-plugin",
+      });
+
+      const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
+      expectCandidatePresence({ candidates, diagnostics }, { present: ["plain-plugin"] });
+    });
+
+    it("still skips regular non-extension files (no regression)", async () => {
+      const stateDir = makeTempDir();
+      const extensionsDir = path.join(stateDir, "extensions");
+      mkdirSafe(extensionsDir);
+      fs.writeFileSync(path.join(extensionsDir, "README.md"), "not a plugin", "utf-8");
+
+      const { candidates } = await discoverWithStateDir(stateDir, {});
+      expect(candidates).toEqual([]);
+    });
+  });
 });
