@@ -172,6 +172,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       access: "selected-profile-access-token",
       refresh: "selected-profile-refresh-token",
       accountId: "acct-123",
+      idToken: "selected-profile-id-token",
     });
 
     const result = await bridgeCodexAppServerStartOptions({
@@ -192,7 +193,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     expect(authFile).toEqual({
       auth_mode: "chatgpt",
       tokens: {
-        id_token: "source-id-token",
+        id_token: "selected-profile-id-token",
         access_token: "selected-profile-access-token",
         refresh_token: "selected-profile-refresh-token",
         account_id: "acct-123",

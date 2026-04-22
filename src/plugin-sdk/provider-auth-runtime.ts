@@ -234,9 +234,9 @@ export function buildCodexAuthBridgeFile(
   const lastRefresh =
     normalizeCodexAuthLastRefresh(material.lastRefresh) ?? new Date().toISOString();
   const openaiApiKey = readCodexAuthString(material.openaiApiKey);
-  const idToken = readCodexAuthString(material.idToken) ?? readCodexAuthString(credential.idToken);
+  const idToken = readCodexAuthString(credential.idToken) ?? readCodexAuthString(material.idToken);
   const accountId =
-    readCodexAuthString(material.accountId) ?? readCodexAuthString(credential.accountId);
+    readCodexAuthString(credential.accountId) ?? readCodexAuthString(material.accountId);
   return `${JSON.stringify(
     {
       auth_mode: "chatgpt",
