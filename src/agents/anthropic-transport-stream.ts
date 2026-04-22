@@ -99,12 +99,11 @@ type MutableAssistantOutput = {
 };
 
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    modelId.includes("opus-4-6") ||
-    modelId.includes("opus-4.6") ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+  return /(?:opus|sonnet)-?4[-.][67]/i.test(modelId);
+}
+
+function supportsMaxThinkingEffort(modelId: string): boolean {
+  return /opus-?4[-.][67]/i.test(modelId);
 }
 
 function mapThinkingLevelToEffort(
@@ -118,7 +117,7 @@ function mapThinkingLevelToEffort(
     case "medium":
       return "medium";
     case "xhigh":
-      return modelId.includes("opus-4-6") || modelId.includes("opus-4.6") ? "max" : "high";
+      return supportsMaxThinkingEffort(modelId) ? "max" : "high";
     default:
       return "high";
   }
