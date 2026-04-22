@@ -65,7 +65,11 @@ import {
   resolveDiscordOwnerAccess,
   resolveGroupDmAllow,
 } from "./allow-list.js";
-import { resolveDiscordChannelNameSafe, resolveDiscordChannelTopicSafe } from "./channel-access.js";
+import {
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentIdSafe,
+  resolveDiscordChannelTopicSafe,
+} from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -466,7 +470,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
       threadChannel: {
         id: rawChannelId,
         name: channelName,
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
+        parentId: resolveDiscordChannelParentIdSafe(channel),
         parent: undefined,
       },
       channelInfo,
@@ -859,7 +863,7 @@ async function dispatchDiscordCommandInteraction(params: {
       threadChannel: {
         id: rawChannelId,
         name: channelName,
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
+        parentId: resolveDiscordChannelParentIdSafe(channel),
         parent: undefined,
       },
       channelInfo,
@@ -1071,8 +1075,7 @@ async function dispatchDiscordCommandInteraction(params: {
       interaction.channel?.type === ChannelType.PrivateThread ||
       interaction.channel?.type === ChannelType.AnnouncementThread;
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
-    const threadParentId =
-      !isDirectMessage && isThreadChannel ? (interaction.channel.parentId ?? undefined) : undefined;
+    const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
     const { effectiveRoute } = await getNativeRouteState();
     const pluginReply = await executePluginCommandImpl({
       command: pluginMatch.command,
@@ -1092,7 +1095,7 @@ async function dispatchDiscordCommandInteraction(params: {
       to: `slash:${user.id}`,
       accountId,
       messageThreadId,
-      threadParentId,
+      threadParentId: pluginThreadParentId,
     });
     if (!hasRenderableReplyPayload(pluginReply)) {
       await respond("Done.");

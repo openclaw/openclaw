@@ -34,7 +34,10 @@ import {
   normalizeOptionalString,
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
+import {
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentIdSafe,
+} from "./channel-access.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
@@ -258,7 +261,7 @@ async function resolveDiscordModelPickerRouteState(params: {
       threadChannel: {
         id: rawChannelId,
         name: resolveDiscordChannelNameSafe(channel),
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
+        parentId: resolveDiscordChannelParentIdSafe(channel),
         parent: undefined,
       },
       channelInfo,
