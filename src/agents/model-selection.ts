@@ -173,8 +173,12 @@ export function normalizeStoredOverrideModel(params: {
   providerOverride?: string | null;
   modelOverride?: string | null;
 }): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = params.providerOverride?.trim();
-  const modelOverride = params.modelOverride?.trim();
+  // Defensive: ensure values are strings before calling string methods.
+  // Similar to issue #5062 fix where model.name could be undefined.
+  const rawProviderOverride = params.providerOverride;
+  const rawModelOverride = params.modelOverride;
+  const providerOverride = typeof rawProviderOverride === "string" ? rawProviderOverride.trim() : undefined;
+  const modelOverride = typeof rawModelOverride === "string" ? rawModelOverride.trim() : undefined;
   if (!providerOverride || !modelOverride) {
     return {
       providerOverride,
