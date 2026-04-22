@@ -1466,6 +1466,7 @@ export async function runEmbeddedAttempt(
       }
 
       let skipPromptSubmission = false;
+      let needsTrailingTurnPrune = false;
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -1536,44 +1537,24 @@ export async function runEmbeddedAttempt(
           // A) Normal follow-up — the user just typed a new message.
           //    `session.prompt()` will append it as a user turn *after* this
           //    sanitisation phase, so the trailing assistant is the previous
-          //    reply and should be kept (removing it would lose conversational
-          //    context and may collapse consecutive user turns).
+          //    reply and should be kept.
           //
           // B) No fresh input — a heartbeat, cron, or retry where the caller
           //    provides no new prompt and no images. `session.prompt()` will
           //    NOT append a user turn, so the request would reach Anthropic
-          //    ending on an assistant turn and be rejected with HTTP 400
-          //    ("This model does not support assistant message prefill").
-          //    Gateway-injected error surfaces ("API provider returned a
-          //    billing error…", "LLM request rejected…") survive the empty/
-          //    thinking-only strip in `dropTrailingEmptyAssistantTurns` because
-          //    they carry real content, poisoning every subsequent attempt.
+          //    ending on an assistant turn and be rejected with HTTP 400.
           //
-          // Only strip trailing non-user turns in case (B) — when there is no
-          // fresh user prompt or image about to be appended.
-          const promptHasContent =
-            typeof params.prompt === "string" && params.prompt.trim().length > 0;
-          const hasImages = Array.isArray(params.images) && params.images.length > 0;
-
-          if (!promptHasContent && !hasImages) {
-            const trailingRole = String((limited[limited.length - 1] as { role?: unknown })?.role);
-            log.warn(
-              `anthropic transcript guard: messages do not end with a user turn and no fresh user input is available (len=${limited.length}, trailingRole=${trailingRole}). Dropping trailing non-user turns to keep the request sendable.`,
-            );
-            limited = dropAllTrailingNonUserTurns(limited);
-            if (limited.length === 0) {
-              log.warn(
-                `anthropic transcript guard: transcript emptied after dropping trailing non-user turns; skipping provider call. runId=${params.runId} sessionId=${params.sessionId}`,
-              );
-              skipPromptSubmission = true;
-            }
-          } else {
-            // Case (A): fresh input will be appended — leave the history
-            // intact. Log at debug level for diagnostics only.
-            log.debug(
-              `anthropic transcript guard: trailing non-user turn detected but fresh user input is available; leaving history intact (len=${limited.length}).`,
-            );
-          }
+          // The raw `params.prompt` is not sufficient to tell these apart:
+          // bootstrap warnings, routing prefixes, and `before_prompt_build`
+          // hooks can still inject content that becomes a user turn even when
+          // `params.prompt` is empty. Defer the aggressive prune until after
+          // `effectivePrompt` is finalised so the decision sees the real
+          // outbound prompt, not just the caller input.
+          needsTrailingTurnPrune = true;
+          const trailingRole = String((limited[limited.length - 1] as { role?: unknown })?.role);
+          log.warn(
+            `anthropic transcript guard: messages do not end with a user turn (len=${limited.length}, trailingRole=${trailingRole}); deferring prune decision until effective prompt is finalized.`,
+          );
         }
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0 || skipPromptSubmission) {
@@ -1939,6 +1920,41 @@ export async function runEmbeddedAttempt(
             systemPromptText = prependedOrAppendedSystemPrompt;
             log.debug(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
+            );
+          }
+        }
+
+        // Deferred Anthropic-tail prune: the pre-flight guard flagged a
+        // trailing non-user turn but could not safely decide whether to strip
+        // it using `params.prompt` alone. Now that `effectivePrompt` has been
+        // finalised (bootstrap warning, routing prefix, and
+        // `before_prompt_build` hook context all applied), re-evaluate. Strip
+        // the tail only when no user turn will be appended downstream — i.e.
+        // the outbound prompt is empty/whitespace and no images are queued.
+        if (needsTrailingTurnPrune) {
+          const promptHasContent =
+            typeof effectivePrompt === "string" && effectivePrompt.trim().length > 0;
+          const hasImages = Array.isArray(params.images) && params.images.length > 0;
+          if (!promptHasContent && !hasImages) {
+            const stateMessages = activeSession.agent.state.messages;
+            const trailingRole =
+              stateMessages.length > 0
+                ? String((stateMessages[stateMessages.length - 1] as { role?: unknown })?.role)
+                : "none";
+            log.warn(
+              `anthropic transcript guard: effective prompt empty and no images after hooks (len=${stateMessages.length}, trailingRole=${trailingRole}); dropping trailing non-user turns to keep the request sendable.`,
+            );
+            const prunedMessages = dropAllTrailingNonUserTurns(stateMessages);
+            activeSession.agent.state.messages = prunedMessages;
+            if (prunedMessages.length === 0) {
+              log.warn(
+                `anthropic transcript guard: transcript emptied after dropping trailing non-user turns; skipping provider call. runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              skipPromptSubmission = true;
+            }
+          } else {
+            log.debug(
+              `anthropic transcript guard: trailing non-user turn detected but fresh user input is available after hooks; leaving history intact.`,
             );
           }
         }
