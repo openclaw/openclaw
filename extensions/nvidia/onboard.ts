@@ -24,7 +24,3 @@ const nvidiaPresetAppliers = createDefaultModelsPresetAppliers({
 export function applyNvidiaConfig(cfg: OpenClawConfig): OpenClawConfig {
   return nvidiaPresetAppliers.applyConfig(cfg);
 }
-
-export function applyNvidiaConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return nvidiaPresetAppliers.applyConfig(cfg);
-}
