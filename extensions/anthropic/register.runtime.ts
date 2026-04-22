@@ -559,15 +559,16 @@ export function buildAnthropicProvider(): ProviderPlugin {
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => {
       const model = resolveAnthropicForwardCompatModel(ctx);
+      if (!model) {
+        return undefined;
+      }
       return (
-        (model
-          ? (applyAnthropicOpus47ContextWindow({
-              config: ctx.config,
-              provider: ctx.provider,
-              modelId: ctx.modelId,
-              model,
-            }) ?? model)
-          : undefined) ?? undefined
+        applyAnthropicOpus47ContextWindow({
+          config: ctx.config,
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          model,
+        }) ?? model
       );
     },
     normalizeResolvedModel: (ctx) => applyAnthropicOpus47ContextWindow(ctx),

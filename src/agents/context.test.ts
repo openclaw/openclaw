@@ -80,6 +80,16 @@ describe("applyDiscoveredContextWindows", () => {
 
     expect(cache.get("github-copilot/claude-opus-4.7")).toBe(128_000);
   });
+
+  it("does not upgrade provider-qualified anthropic opus 4.7 discovery ids without verified ownership", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [{ id: "anthropic/claude-opus-4.7-20260219", contextWindow: 200_000 }],
+    });
+
+    expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(200_000);
+  });
 });
 
 describe("applyConfiguredContextWindows", () => {
@@ -298,6 +308,16 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(128_000);
+  });
+
+  it("does not force 1M context for model-only anthropic opus 4.7 ids", () => {
+    const result = resolveContextTokensForModel({
+      model: "anthropic/claude-opus-4.7-20260219",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
   });
 
   it("prefers per-model contextTokens config over contextWindow", () => {
