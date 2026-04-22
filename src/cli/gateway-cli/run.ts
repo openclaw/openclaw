@@ -686,7 +686,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       }
     }
   } catch (err) {
-    maybeWriteGatewayStartupFailureBundle(err);
     if (isGatewayLockError(err)) {
       const errMessage = formatErrorMessage(err);
       defaultRuntime.error(
@@ -706,6 +705,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       defaultRuntime.exit(isHealthyGatewayLockError(err) ? 0 : 1);
       return;
     }
+    maybeWriteGatewayStartupFailureBundle(err);
     defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
     defaultRuntime.exit(1);
   }
