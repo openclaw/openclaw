@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureAuthProfileStoreForLocalUpdate } from "../agents/auth-profiles/store.js";
@@ -198,6 +199,27 @@ export function isCodexBridgeableOAuthCredential(value: unknown): value is OAuth
   );
 }
 
+type CodexAuthBridgeRecord = {
+  auth_mode?: unknown;
+  tokens?: {
+    id_token?: unknown;
+    access_token?: unknown;
+    refresh_token?: unknown;
+    account_id?: unknown;
+  };
+  last_refresh?: unknown;
+  OPENAI_API_KEY?: unknown;
+};
+
+type CodexAuthBridgeMaterial = {
+  access: string;
+  refresh: string;
+  accountId?: string;
+  idToken?: string;
+  lastRefresh?: string | number;
+  openaiApiKey?: string;
+};
+
 export function resolveCodexAuthBridgeHome(params: {
   agentDir: string;
   bridgeDir: string;
@@ -207,16 +229,29 @@ export function resolveCodexAuthBridgeHome(params: {
   return path.join(params.agentDir, params.bridgeDir, "codex", digest);
 }
 
-export function buildCodexAuthBridgeFile(credential: OAuthCredential): string {
+export function buildCodexAuthBridgeFile(
+  credential: OAuthCredential,
+  material: Partial<CodexAuthBridgeMaterial> = {},
+): string {
+  const lastRefresh =
+    normalizeCodexAuthLastRefresh(material.lastRefresh) ?? new Date().toISOString();
   return `${JSON.stringify(
     {
       auth_mode: "chatgpt",
+      ...(readCodexAuthString(material.openaiApiKey)
+        ? { OPENAI_API_KEY: material.openaiApiKey }
+        : {}),
       tokens: {
-        ...(credential.idToken ? { id_token: credential.idToken } : {}),
-        access_token: credential.access,
-        refresh_token: credential.refresh,
-        ...(credential.accountId ? { account_id: credential.accountId } : {}),
+        ...((material.idToken ?? credential.idToken)
+          ? { id_token: material.idToken ?? credential.idToken }
+          : {}),
+        access_token: material.access ?? credential.access,
+        refresh_token: material.refresh ?? credential.refresh,
+        ...((material.accountId ?? credential.accountId)
+          ? { account_id: material.accountId ?? credential.accountId }
+          : {}),
       },
+      last_refresh: lastRefresh,
     },
     null,
     2,
@@ -227,6 +262,8 @@ export async function prepareCodexAuthBridge(params: {
   agentDir: string;
   bridgeDir: string;
   profileId: string;
+  sourceCodexHome?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<PreparedCodexAuthBridge | undefined> {
   const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   const credential = store.profiles[params.profileId];
@@ -235,16 +272,128 @@ export async function prepareCodexAuthBridge(params: {
   }
 
   const codexHome = resolveCodexAuthBridgeHome(params);
+  const material = resolveCodexAuthBridgeMaterial({
+    credential,
+    sourceCodexHome: params.sourceCodexHome,
+    env: params.env,
+  });
   await writePrivateSecretFileAtomic({
     rootDir: params.agentDir,
     filePath: path.join(codexHome, "auth.json"),
-    content: buildCodexAuthBridgeFile(credential),
+    content: buildCodexAuthBridgeFile(credential, material),
   });
 
   return {
     codexHome,
     clearEnv: [...CODEX_AUTH_ENV_CLEAR_KEYS],
   };
+}
+
+function resolveCodexAuthBridgeMaterial(params: {
+  credential: OAuthCredential;
+  sourceCodexHome?: string;
+  env?: NodeJS.ProcessEnv;
+}): Partial<CodexAuthBridgeMaterial> {
+  const source = readCodexAuthBridgeSourceFile({
+    codexHome: params.sourceCodexHome,
+    env: params.env,
+  });
+  if (!source || source.auth_mode !== "chatgpt") {
+    return {};
+  }
+
+  const tokens = source.tokens;
+  if (!tokens || typeof tokens !== "object") {
+    return {};
+  }
+  const access = readCodexAuthString(tokens.access_token);
+  const refresh = readCodexAuthString(tokens.refresh_token);
+  if (!access || !refresh) {
+    return {};
+  }
+
+  const accountId = readCodexAuthString(tokens.account_id);
+  if (!codexAuthSourceMatchesCredential(params.credential, { access, refresh, accountId })) {
+    return {};
+  }
+
+  return {
+    access,
+    refresh,
+    ...(accountId ? { accountId } : {}),
+    ...(readCodexAuthString(tokens.id_token)
+      ? { idToken: readCodexAuthString(tokens.id_token) }
+      : {}),
+    ...(normalizeCodexAuthLastRefresh(source.last_refresh)
+      ? { lastRefresh: normalizeCodexAuthLastRefresh(source.last_refresh) }
+      : {}),
+    ...(readCodexAuthString(source.OPENAI_API_KEY)
+      ? { openaiApiKey: readCodexAuthString(source.OPENAI_API_KEY) }
+      : {}),
+  };
+}
+
+function codexAuthSourceMatchesCredential(
+  credential: OAuthCredential,
+  source: { access: string; refresh: string; accountId?: string },
+): boolean {
+  if (credential.access === source.access && credential.refresh === source.refresh) {
+    return true;
+  }
+  const credentialAccountId = credential.accountId?.trim();
+  const sourceAccountId = source.accountId?.trim();
+  return Boolean(credentialAccountId && sourceAccountId && credentialAccountId === sourceAccountId);
+}
+
+function readCodexAuthBridgeSourceFile(params: {
+  codexHome?: string;
+  env?: NodeJS.ProcessEnv;
+}): CodexAuthBridgeRecord | undefined {
+  const codexHome = resolveSourceCodexHome(params);
+  if (!codexHome) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as CodexAuthBridgeRecord)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSourceCodexHome(params: {
+  codexHome?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const configured = params.codexHome?.trim() || params.env?.CODEX_HOME?.trim();
+  if (configured) {
+    return resolveTildePath(configured);
+  }
+  const home = os.homedir();
+  return home ? path.join(home, ".codex") : undefined;
+}
+
+function resolveTildePath(value: string): string {
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return path.resolve(value);
+}
+
+function readCodexAuthString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeCodexAuthLastRefresh(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return readCodexAuthString(value);
 }
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
