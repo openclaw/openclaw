@@ -7,6 +7,9 @@ import {
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
+const PERMISSION_DESCRIPTION_MAX_LENGTH = 700;
+const PERMISSION_SAMPLE_LIMIT = 2;
+const PERMISSION_VALUE_MAX_LENGTH = 48;
 
 export type AppServerApprovalOutcome =
   | "approved-once"
@@ -208,9 +211,9 @@ function buildApprovalContext(params: {
       ? "Codex app-server command approval"
       : params.method === "item/permissions/requestApproval"
         ? "Codex app-server permission approval"
-      : kind === "plugin"
-        ? "Codex app-server file approval"
-        : "Codex app-server approval";
+        : kind === "plugin"
+          ? "Codex app-server file approval"
+          : "Codex app-server approval";
   const subject =
     permissionLines[0] ??
     (command
@@ -218,13 +221,12 @@ function buildApprovalContext(params: {
       : reason
         ? `Reason: ${truncate(reason, 180)}`
         : `Request method: ${params.method}`);
-  const description = joinDescriptionLinesWithinLimit(
-    [
-      subject,
-      ...permissionLines.slice(1),
-    ].filter((line): line is string => Boolean(line)),
-    256,
-  );
+  const description =
+    permissionLines.length > 0
+      ? joinDescriptionLinesWithinLimit(permissionLines, PERMISSION_DESCRIPTION_MAX_LENGTH)
+      : [subject, params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`]
+          .filter(Boolean)
+          .join("\n");
   return {
     kind,
     title,
@@ -326,6 +328,7 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
   const permissions = requestedPermissions(requestParams);
   const lines: string[] = [];
   const kinds: string[] = [];
+  const risks = new Set<string>();
   if (isJsonObject(permissions.network)) {
     kinds.push("network");
   }
@@ -336,40 +339,45 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
     lines.push(`Permissions: ${kinds.join(", ")}`);
   }
   if (isJsonObject(permissions.network)) {
-    lines.push(
-      summarizePermissionRecord("Network permission requested", permissions.network, [
-        {
-          key: "allowHosts",
-          label: "allowHosts",
-          sanitize: sanitizePermissionHostValue,
-          risksFor: permissionHostRisks,
-        },
-      ]),
-    );
+    const networkSummary = summarizePermissionRecord(permissions.network, risks, [
+      {
+        key: "allowHosts",
+        label: "allowHosts",
+        sanitize: sanitizePermissionHostValue,
+        risksFor: permissionHostRisks,
+      },
+    ]);
+    if (networkSummary) {
+      lines.push(`Network ${networkSummary}`);
+    }
   }
   if (isJsonObject(permissions.fileSystem)) {
-    lines.push(
-      summarizePermissionRecord("File system permission requested", permissions.fileSystem, [
-        {
-          key: "roots",
-          label: "roots",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "readPaths",
-          label: "readPaths",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "writePaths",
-          label: "writePaths",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-      ]),
-    );
+    const fileSystemSummary = summarizePermissionRecord(permissions.fileSystem, risks, [
+      {
+        key: "roots",
+        label: "roots",
+        sanitize: sanitizePermissionPathValue,
+        risksFor: permissionPathRisks,
+      },
+      {
+        key: "readPaths",
+        label: "readPaths",
+        sanitize: sanitizePermissionPathValue,
+        risksFor: permissionPathRisks,
+      },
+      {
+        key: "writePaths",
+        label: "writePaths",
+        sanitize: sanitizePermissionPathValue,
+        risksFor: permissionPathRisks,
+      },
+    ]);
+    if (fileSystemSummary) {
+      lines.push(`File system ${fileSystemSummary}`);
+    }
+  }
+  if (risks.size > 0) {
+    lines.push(`High-risk targets: ${[...risks].join(", ")}`);
   }
   return lines;
 }
@@ -382,26 +390,18 @@ type PermissionArrayDescriptor = {
 };
 
 function summarizePermissionRecord(
-  label: string,
   permission: JsonObject,
+  risks: Set<string>,
   descriptors: readonly PermissionArrayDescriptor[],
-): string {
+): string | undefined {
   const details: string[] = [];
-  const risks = new Set<string>();
   for (const descriptor of descriptors) {
     const summary = summarizePermissionArray(permission, descriptor, risks);
     if (summary) {
       details.push(summary);
     }
   }
-  const suffix: string[] = [];
-  if (details.length > 0) {
-    suffix.push(details.join("; "));
-  }
-  if (risks.size > 0) {
-    suffix.push(`high-risk: ${[...risks].join(", ")}`);
-  }
-  return suffix.length > 0 ? `${label} (${suffix.join("; ")})` : label;
+  return details.length > 0 ? details.join("; ") : undefined;
 }
 
 function summarizePermissionArray(
@@ -418,7 +418,10 @@ function summarizePermissionArray(
       risks.add(risk);
     }
   }
-  const sampleValues = values.slice(0, 2).map(descriptor.sanitize).filter(Boolean);
+  const sampleValues = values
+    .slice(0, PERMISSION_SAMPLE_LIMIT)
+    .map(descriptor.sanitize)
+    .filter(Boolean);
   if (sampleValues.length === 0) {
     return `${descriptor.label}: ${values.length}`;
   }
@@ -435,16 +438,31 @@ function readStringArray(record: JsonObject, key: string): string[] {
 }
 
 function sanitizePermissionHostValue(value: string): string {
-  return truncate(value.replace(/\s+/g, " ").trim().toLowerCase(), 48);
+  const compact = sanitizePermissionScalar(value).toLowerCase();
+  const withoutScheme = compact.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
+  const authority = withoutScheme.split(/[/?#]/, 1)[0] ?? withoutScheme;
+  const withoutUserInfo = authority.includes("@")
+    ? authority.slice(authority.lastIndexOf("@") + 1)
+    : authority;
+  return truncate(withoutUserInfo, PERMISSION_VALUE_MAX_LENGTH);
 }
 
 function sanitizePermissionPathValue(value: string): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
+  const normalized = sanitizePermissionScalar(value);
   const homeCompacted = normalized
     .replace(/^\/home\/[^/]+(?=\/|$)/, "~")
     .replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
     .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/, "~");
-  return truncate(homeCompacted, 48);
+  return truncate(homeCompacted, PERMISSION_VALUE_MAX_LENGTH);
+}
+
+function sanitizePermissionScalar(value: string): string {
+  let sanitized = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    sanitized += code < 32 || code === 127 ? " " : value[index];
+  }
+  return sanitized.replace(/\s+/g, " ").trim();
 }
 
 function permissionHostRisks(value: string): string[] {

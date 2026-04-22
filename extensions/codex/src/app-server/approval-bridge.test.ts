@@ -168,27 +168,13 @@ describe("Codex app-server approval bridge", () => {
       }),
       { expectFinal: false },
     );
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        description: expect.stringContaining(
-          "Network permission requested (allowHosts: example.com, *.internal; high-risk: wildcard hosts, private-network wildcards)",
-        ),
-      }),
-      { expectFinal: false },
-    );
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        description: expect.stringContaining(
-          "File system permission requested (roots: /; writePaths: ~; high-risk: filesystem root, home directory)",
-        ),
-      }),
-      { expectFinal: false },
-    );
     const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("Network allowHosts: example.com, *.internal");
+    expect(description).toContain("File system roots: /; writePaths: ~");
+    expect(description).toContain(
+      "High-risk targets: wildcard hosts, private-network wildcards, filesystem root, home directory",
+    );
     expect(requestPayload).toEqual(
       expect.objectContaining({
         description: expect.not.stringContaining("agent:main:session-1"),
@@ -196,7 +182,7 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
-  it("keeps permission detail bounded and truncated within the approval description cap", async () => {
+  it("keeps permission detail bounded with truncated and redacted target samples", async () => {
     const params = createParams();
     mockCallGatewayTool.mockResolvedValueOnce({
       id: "plugin:approval-4",
@@ -212,6 +198,7 @@ describe("Codex app-server approval bridge", () => {
         permissions: {
           network: {
             allowHosts: [
+              "https://secret-token@example.com/private",
               "*.internal",
               "very-long-service-name.example.corp",
               "third.example.com",
@@ -219,7 +206,8 @@ describe("Codex app-server approval bridge", () => {
           },
           fileSystem: {
             roots: ["/", "/workspace/project", "/Users/simone/Documents"],
-            writePaths: ["/tmp/output", "/var/log/app"],
+            readPaths: ["/Users/simone/.ssh/id_rsa", "/etc/hosts", "/var/log/system.log"],
+            writePaths: ["/tmp/output", "/var/log/app", "/home/simone/private"],
           },
         },
       },
@@ -235,11 +223,15 @@ describe("Codex app-server approval bridge", () => {
       }),
     );
     const description = (requestPayload as { description: string }).description;
-    expect(description.length).toBeLessThanOrEqual(256);
+    expect(description.length).toBeLessThanOrEqual(700);
+    expect(description).toContain("example.com");
+    expect(description).not.toContain("secret-token");
+    expect(description).not.toContain("simone");
     expect(description).toContain("*.internal");
     expect(description).toContain("/workspace/project");
-    expect(description).toContain("(+1 more)");
-    expect(description).toContain("high-risk:");
+    expect(description).toContain("readPaths: ~/.ssh/id_rsa, /etc/hosts (+1 more)");
+    expect(description).toContain("writePaths: /tmp/output, /var/log/app (+1 more)");
+    expect(description).toContain("High-risk targets:");
   });
 
   it("maps app-server approval response families separately", () => {

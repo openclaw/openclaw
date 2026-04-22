@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex harness: show bounded, sanitized permission target samples in app-server approval prompts, so native permission requests keep their specific hosts, roots, and paths visible without leaking home usernames or URL credentials. (#70340) Thanks @Lucenx9.
 - Docs/Codex harness: narrow native compaction docs to the current start/completion signals, without promising a readable summary or kept-entry audit list yet. (#69612) Thanks @91wan.
 - Providers/Amazon Bedrock: use known context-window metadata for discovered models while keeping the unknown-model fallback conservative, so compaction and overflow handling improve for newer Bedrock models without overstating unlisted model limits. Thanks @wirjo.
 - Providers/Amazon Bedrock Mantle: refresh IAM-backed bearer tokens at runtime instead of baking discovery-time tokens into provider config, so long-lived Mantle sessions keep working after the initial token ages out. Thanks @wirjo.
