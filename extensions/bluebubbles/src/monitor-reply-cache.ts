@@ -81,13 +81,99 @@ export function rememberBlueBubblesReplyCache(
   return fullEntry;
 }
 
+export type BlueBubblesChatContext = {
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+};
+
+/**
+ * Cross-chat guard: compare a cached entry's chat fields with a caller-provided
+ * context. Returns true when the two clearly reference different chats.
+ *
+ * Comparison rules mirror resolveReplyContextFromCache so outbound short-ID
+ * resolution and inbound reply-context lookup agree on scope:
+ *
+ *   - If both sides carry a chatGuid and they differ, that is the strongest
+ *     signal of a cross-chat reuse.
+ *   - Otherwise, if the caller has no chatGuid but both sides carry a
+ *     chatIdentifier and they differ, that is also a mismatch. This covers
+ *     handle-only callers (tapback into a DM where the caller only resolved
+ *     a handle) against cached entries that still carry chatGuid from the
+ *     inbound webhook.
+ *   - Otherwise, if the caller has neither chatGuid nor chatIdentifier but
+ *     both sides carry a chatId and they differ, that is also a mismatch.
+ *
+ * Absent identifiers on either side are treated as "no information" rather
+ * than a mismatch, so ambiguous calls fall through as-is.
+ */
+function isCrossChatMismatch(
+  cached: BlueBubblesReplyCacheEntry,
+  ctx: BlueBubblesChatContext,
+): boolean {
+  const cachedChatGuid = normalizeOptionalString(cached.chatGuid);
+  const ctxChatGuid = normalizeOptionalString(ctx.chatGuid);
+  if (cachedChatGuid && ctxChatGuid && cachedChatGuid !== ctxChatGuid) {
+    return true;
+  }
+  const cachedChatIdentifier = normalizeOptionalString(cached.chatIdentifier);
+  const ctxChatIdentifier = normalizeOptionalString(ctx.chatIdentifier);
+  if (
+    !ctxChatGuid &&
+    cachedChatIdentifier &&
+    ctxChatIdentifier &&
+    cachedChatIdentifier !== ctxChatIdentifier
+  ) {
+    return true;
+  }
+  const cachedChatId = typeof cached.chatId === "number" ? cached.chatId : undefined;
+  const ctxChatId = typeof ctx.chatId === "number" ? ctx.chatId : undefined;
+  if (
+    !ctxChatGuid &&
+    !ctxChatIdentifier &&
+    cachedChatId !== undefined &&
+    ctxChatId !== undefined &&
+    cachedChatId !== ctxChatId
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function describeChatForError(values: {
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+}): string {
+  const parts: string[] = [];
+  const guid = normalizeOptionalString(values.chatGuid);
+  if (guid) {
+    parts.push(`chatGuid=${guid}`);
+  }
+  const identifier = normalizeOptionalString(values.chatIdentifier);
+  if (identifier) {
+    parts.push(`chatIdentifier=${identifier}`);
+  }
+  if (typeof values.chatId === "number") {
+    parts.push(`chatId=${values.chatId}`);
+  }
+  return parts.length === 0 ? "<unknown chat>" : parts.join(", ");
+}
+
 /**
  * Resolves a short message ID (e.g., "1", "2") to a full BlueBubbles GUID.
  * Returns the input unchanged if it's already a GUID or not found in the mapping.
+ *
+ * When `chatContext` is provided, the resolved UUID's cached chat must match
+ * the caller's chat or the call throws. This prevents a short ID that points
+ * at a message in chat A from being silently reused in chat B — the common
+ * symptom being tapbacks and quoted replies landing in the wrong conversation
+ * (e.g. a group reaction showing up in a DM) because short IDs are allocated
+ * from a single global counter across every account and chat.
  */
 export function resolveBlueBubblesMessageId(
   shortOrUuid: string,
-  opts?: { requireKnownShortId?: boolean },
+  opts?: { requireKnownShortId?: boolean; chatContext?: BlueBubblesChatContext },
 ): string {
   const trimmed = shortOrUuid.trim();
   if (!trimmed) {
@@ -98,6 +184,17 @@ export function resolveBlueBubblesMessageId(
   if (/^\d+$/.test(trimmed)) {
     const uuid = blueBubblesShortIdToUuid.get(trimmed);
     if (uuid) {
+      if (opts?.chatContext) {
+        const cached = blueBubblesReplyCacheByMessageId.get(uuid);
+        if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
+          throw new Error(
+            `BlueBubbles short message id "${trimmed}" belongs to a different chat ` +
+              `(${describeChatForError(cached)}) than the current call target ` +
+              `(${describeChatForError(opts.chatContext)}). Retry with the full message GUID ` +
+              `to avoid cross-chat reactions/replies landing in the wrong conversation.`,
+          );
+        }
+      }
       return uuid;
     }
     if (opts?.requireKnownShortId) {
