@@ -5,6 +5,7 @@ import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { sleep } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
@@ -29,6 +30,7 @@ import {
   resolveAuthProfileOrder,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
+import { isTransientLlmCallError } from "../model-fallback.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -649,12 +651,20 @@ export async function runEmbeddedPiAgent(
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+      // Delays applied between same-provider retries after a transient in-flight
+      // network drop (ECONNRESET / socket hang up / undici socket errors). The
+      // streaming LLM adapter surfaces these as result-level error state rather
+      // than a thrown error, so the outer model-fallback retry cannot see them;
+      // we retry here before falling through to failover / fatal handling.
+      const TRANSIENT_NETWORK_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 5_000];
+      const MAX_TRANSIENT_NETWORK_RETRIES = TRANSIENT_NETWORK_RETRY_DELAYS_MS.length;
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let transientNetworkRetries = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
@@ -810,6 +820,39 @@ export async function runEmbeddedPiAgent(
             lastAssistant?.stopReason === "error"
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+
+          // Transient in-flight network drops (ECONNRESET, socket hang up,
+          // undici socket errors) surface here as either `promptError` on the
+          // request side or an assistant message with `stopReason: "error"`
+          // on the stream side. The model-fallback wrapper cannot retry these
+          // because runEmbeddedAttempt does not throw — it returns result-level
+          // error state. Retry the same provider/model up to
+          // MAX_TRANSIENT_NETWORK_RETRIES times with 1s / 3s / 5s backoff
+          // before falling through to the existing failover paths.
+          if (!aborted && !timedOutDuringCompaction) {
+            const transientSource =
+              promptError && isTransientLlmCallError(promptError)
+                ? "promptError"
+                : assistantErrorText && isTransientLlmCallError(new Error(assistantErrorText))
+                  ? "assistantError"
+                  : null;
+            if (transientSource && transientNetworkRetries < MAX_TRANSIENT_NETWORK_RETRIES) {
+              const delayMs = TRANSIENT_NETWORK_RETRY_DELAYS_MS[transientNetworkRetries] ?? 0;
+              transientNetworkRetries += 1;
+              log.warn(
+                `transient LLM network error from ${provider}/${modelId} ` +
+                  `(source=${transientSource}); retry ${transientNetworkRetries}/` +
+                  `${MAX_TRANSIENT_NETWORK_RETRIES} in ${delayMs}ms`,
+              );
+              if (delayMs > 0) {
+                await sleep(delayMs);
+              }
+              // If the caller aborted while we slept, the next runEmbeddedAttempt
+              // will return aborted=true quickly and the existing aborted path
+              // handles cleanup — no need for a special exit here.
+              continue;
+            }
+          }
 
           const contextOverflowError = !aborted
             ? (() => {

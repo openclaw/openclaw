@@ -229,8 +229,12 @@ function hasNarrowTransientCode(err: unknown): boolean {
  * drops (ECONNRESET, socket hang up, undici socket errors) qualify — every
  * other failure mode (structured API errors, provider-unreachable codes,
  * request-level timeouts) goes straight to the fallback chain.
+ *
+ * Exported so downstream runners (pi-embedded-runner, cron isolated agent)
+ * can apply the same classification when a streaming LLM adapter surfaces
+ * transient errors as result-level state instead of throwing.
  */
-function isTransientLlmCallError(err: unknown): boolean {
+export function isTransientLlmCallError(err: unknown): boolean {
   if (hasNarrowTransientCode(err)) {
     return true;
   }
