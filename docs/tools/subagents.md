@@ -62,7 +62,7 @@ transcript path on disk when you need the raw full transcript.
 - `--model` and `--thinking` override defaults for that specific run.
 - Use `info`/`log` to inspect details and output after completion.
 - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
-- For ACP harness sessions (Codex, Claude Code, Gemini CLI), use `sessions_spawn` with `runtime: "acp"` and see [ACP Agents](/tools/acp-agents).
+- For ACP harness sessions (Codex, Claude Code, Gemini CLI), use `sessions_spawn` with `runtime: "acp"` and see [ACP Agents](/tools/acp-agents), especially the [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops.
 
 Primary goals:
 
