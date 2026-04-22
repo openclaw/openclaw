@@ -718,10 +718,21 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     const cron = resolveCronServiceFromStartupSource(startupCronSource);
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
-      api.logger.warn(
-        "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
-      );
-      unavailableCronWarningEmitted = true;
+      // The gateway emits `gateway:startup` via a deferred setTimeout, and
+      // `deps.cron` may not be attached to the event context yet when memory-core's
+      // startup hook fires (see issue #69939). Avoid logging a confusing warning on
+      // the startup path — the runtime reconciliation path (heartbeat-driven) will
+      // still warn if the cron service remains unavailable after boot.
+      if (params.reason === "startup") {
+        api.logger.debug?.(
+          "memory-core: cron service not yet available at gateway:startup; deferring to runtime reconciliation.",
+        );
+      } else {
+        api.logger.warn(
+          "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
+        );
+        unavailableCronWarningEmitted = true;
+      }
     }
     if (cron) {
       unavailableCronWarningEmitted = false;

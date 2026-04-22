@@ -390,7 +390,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
-- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
+- Example models: `vercel-ai-gateway/anthropic/claude-opus-4.6`,
+  `vercel-ai-gateway/moonshotai/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
 
 ### Kilo Gateway
@@ -411,7 +412,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 ### Other bundled provider plugins
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
-- Example model: `openrouter/auto`
+- Example models: `openrouter/auto`, `openrouter/moonshotai/kimi-k2.6`
 - OpenClaw applies OpenRouter's documented app-attribution headers only when
   the request actually targets `openrouter.ai`
 - OpenRouter-specific Anthropic `cache_control` markers are likewise gated to
