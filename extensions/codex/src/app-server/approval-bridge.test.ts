@@ -128,7 +128,6 @@ describe("Codex app-server approval bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(params.onAgentEvent).not.toHaveBeenCalled();
   });
-
   it("labels permission approvals explicitly with sanitized permission detail", async () => {
     const params = createParams();
     mockCallGatewayTool.mockResolvedValueOnce({
