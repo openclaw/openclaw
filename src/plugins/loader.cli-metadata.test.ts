@@ -678,4 +678,33 @@ module.exports = {
     expect(memory?.status).toBe("disabled");
     expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
   });
+
+  it("does not throw on invalid plugin config — degrades gracefully with error status", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "bad-config",
+      filename: "bad-config.cjs",
+      body: `module.exports = { id: "bad-config", register() {} };`,
+    });
+
+    // Schema requires token: string, but we pass config: "nope" (invalid)
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["bad-config"],
+          entries: {
+            "bad-config": {
+              config: "nope" as unknown as Record<string, unknown>,
+            },
+          },
+        },
+      },
+    });
+
+    // Should not throw — error is recorded gracefully
+    const badConfig = registry.plugins.find((entry) => entry.id === "bad-config");
+    expect(badConfig?.status).toBe("error");
+    expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
+  });
 });

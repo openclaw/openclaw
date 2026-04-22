@@ -16,7 +16,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
 
   return loadOpenClawPlugins(
     buildPluginRuntimeLoadOptions(context, {
-      throwOnLoadError: true,
+      throwOnLoadError: false,
       cache: false,
       activate: false,
       mode: "validate",

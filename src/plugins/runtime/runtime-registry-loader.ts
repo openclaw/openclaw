@@ -139,7 +139,7 @@ export function ensurePluginRegistryLoaded(options?: {
         activationSourceConfig: scopedActivationSourceConfig,
       },
       {
-        throwOnLoadError: true,
+        throwOnLoadError: false,
         ...(hasExplicitPluginIdScope(requestedPluginIds) ||
         shouldForwardChannelScope({ scope, scopedLoad }) ||
         hasNonEmptyPluginIdScope(expectedChannelPluginIds)
