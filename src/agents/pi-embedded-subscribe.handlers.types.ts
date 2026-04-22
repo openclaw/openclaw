@@ -81,6 +81,7 @@ export type EmbeddedPiSubscribeState = {
   pendingMessagingMediaUrls: Map<string, string[]>;
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
+  pendingStreamingMediaUrls: string[];
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
@@ -164,6 +165,7 @@ export type ToolHandlerState = Pick<
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingStreamingMediaUrls"
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"
   | "replayState"

@@ -21,7 +21,10 @@ import {
 } from "./pi-embedded-runner/replay-state.js";
 import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import { consumePendingToolMediaIntoReply } from "./pi-embedded-subscribe.handlers.messages.js";
+import {
+  consumePendingStreamingMediaIntoReply,
+  consumePendingToolMediaIntoReply,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
@@ -123,6 +126,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
+    pendingStreamingMediaUrls: [],
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };
@@ -183,7 +187,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number },
   ) => {
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload), options);
+    emitBlockReplySafely(
+      consumePendingStreamingMediaIntoReply(
+        state,
+        consumePendingToolMediaIntoReply(state, payload),
+      ),
+      options,
+    );
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -206,6 +216,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
+    state.pendingStreamingMediaUrls = [];
     state.assistantMessageIndex += 1;
     state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;
@@ -709,6 +720,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.pendingStreamingMediaUrls = [];
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);

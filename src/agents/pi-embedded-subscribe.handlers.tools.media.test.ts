@@ -32,6 +32,7 @@ function createMockContext(overrides?: {
       pendingMessagingMediaUrls: new Map(),
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingStreamingMediaUrls: [],
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],

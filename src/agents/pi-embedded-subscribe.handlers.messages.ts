@@ -222,6 +222,44 @@ export function consumePendingToolMediaReply(
   return payload;
 }
 
+export function recordPendingStreamingMediaUrls(
+  state: Pick<EmbeddedPiSubscribeState, "pendingStreamingMediaUrls">,
+  mediaUrls: readonly string[] | undefined,
+): void {
+  if (!mediaUrls || mediaUrls.length === 0) {
+    return;
+  }
+  const seen = new Set(state.pendingStreamingMediaUrls);
+  for (const url of mediaUrls) {
+    if (!url || seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    state.pendingStreamingMediaUrls.push(url);
+  }
+}
+
+export function consumePendingStreamingMediaIntoReply(
+  state: Pick<EmbeddedPiSubscribeState, "pendingStreamingMediaUrls">,
+  payload: BlockReplyPayload,
+): BlockReplyPayload {
+  if (payload.isReasoning) {
+    return payload;
+  }
+  if (state.pendingStreamingMediaUrls.length === 0) {
+    return payload;
+  }
+  const mergedMediaUrls = Array.from(
+    new Set([...(payload.mediaUrls ?? []), ...state.pendingStreamingMediaUrls]),
+  );
+  const mergedPayload: BlockReplyPayload = {
+    ...payload,
+    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+  };
+  state.pendingStreamingMediaUrls = [];
+  return mergedPayload;
+}
+
 export function hasAssistantVisibleReply(params: {
   text?: string;
   mediaUrls?: string[];
@@ -413,6 +451,7 @@ export function handleMessageUpdate(
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
     const cleanedText = parsedFull.text;
+    recordPendingStreamingMediaUrls(ctx.state, parsedFull.mediaUrls);
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedDelta ?? {});
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";

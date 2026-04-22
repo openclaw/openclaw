@@ -29,6 +29,7 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingStreamingMediaUrls: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,

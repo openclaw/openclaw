@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildAssistantStreamData,
+  consumePendingStreamingMediaIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
+  recordPendingStreamingMediaUrls,
   resolveSilentReplyFallbackText,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -298,6 +300,74 @@ describe("consumePendingToolMediaReply", () => {
     });
     expect(state.pendingToolMediaUrls).toEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
+  });
+});
+
+describe("streaming MEDIA directive accumulator (regression: issue #69949)", () => {
+  it("Test A: single MEDIA directive in a streaming block emits mediaUrls on the final reply", () => {
+    const state = { pendingStreamingMediaUrls: [] as string[] };
+    recordPendingStreamingMediaUrls(state, ["/path/x.pdf"]);
+    expect(consumePendingStreamingMediaIntoReply(state, { text: "here you go" })).toEqual({
+      text: "here you go",
+      mediaUrls: ["/path/x.pdf"],
+    });
+    expect(state.pendingStreamingMediaUrls).toEqual([]);
+  });
+
+  it("Test B: text-only streaming reply keeps mediaUrls undefined (no false positive)", () => {
+    const state = { pendingStreamingMediaUrls: [] as string[] };
+    recordPendingStreamingMediaUrls(state, undefined);
+    recordPendingStreamingMediaUrls(state, []);
+    const result = consumePendingStreamingMediaIntoReply(state, { text: "plain" });
+    expect(result).toEqual({ text: "plain" });
+    expect(result.mediaUrls).toBeUndefined();
+  });
+
+  it("Test C: multiple MEDIA directives across chunks merge + dedupe into the final reply", () => {
+    const state = { pendingStreamingMediaUrls: [] as string[] };
+    recordPendingStreamingMediaUrls(state, ["/path/a.pdf"]);
+    recordPendingStreamingMediaUrls(state, ["/path/a.pdf", "/path/b.pdf"]);
+    recordPendingStreamingMediaUrls(state, ["/path/c.pdf"]);
+    expect(consumePendingStreamingMediaIntoReply(state, { text: "all three" })).toEqual({
+      text: "all three",
+      mediaUrls: ["/path/a.pdf", "/path/b.pdf", "/path/c.pdf"],
+    });
+    expect(state.pendingStreamingMediaUrls).toEqual([]);
+  });
+
+  it("Test D: MEDIA captured during streaming survives a preceding reasoning-block emit", () => {
+    const state = { pendingStreamingMediaUrls: [] as string[] };
+    recordPendingStreamingMediaUrls(state, ["/path/report.pdf"]);
+
+    // Reasoning blocks must NOT consume or drop the pending media.
+    const reasoningOut = consumePendingStreamingMediaIntoReply(state, {
+      text: "thinking…",
+      isReasoning: true,
+    });
+    expect(reasoningOut).toEqual({ text: "thinking…", isReasoning: true });
+    expect(reasoningOut.mediaUrls).toBeUndefined();
+    expect(state.pendingStreamingMediaUrls).toEqual(["/path/report.pdf"]);
+
+    // The next non-reasoning block still carries the attachment.
+    expect(consumePendingStreamingMediaIntoReply(state, { text: "final answer" })).toEqual({
+      text: "final answer",
+      mediaUrls: ["/path/report.pdf"],
+    });
+    expect(state.pendingStreamingMediaUrls).toEqual([]);
+  });
+
+  it("merges into existing payload.mediaUrls without dropping them or duplicating", () => {
+    const state = { pendingStreamingMediaUrls: ["/path/new.pdf", "/path/shared.pdf"] };
+    expect(
+      consumePendingStreamingMediaIntoReply(state, {
+        text: "hi",
+        mediaUrls: ["/path/existing.pdf", "/path/shared.pdf"],
+      }),
+    ).toEqual({
+      text: "hi",
+      mediaUrls: ["/path/existing.pdf", "/path/shared.pdf", "/path/new.pdf"],
+    });
+    expect(state.pendingStreamingMediaUrls).toEqual([]);
   });
 });
 
