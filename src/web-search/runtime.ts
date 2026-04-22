@@ -38,7 +38,7 @@ export type {
 } from "./runtime-types.js";
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
-  return resolveWebProviderConfig<"search", NonNullable<WebSearchConfig>>(cfg, "search");
+  return resolveWebProviderConfig(cfg, "search") as NonNullable<WebSearchConfig> | undefined;
 }
 
 export function resolveWebSearchEnabled(params: {
@@ -71,9 +71,8 @@ function hasEntryCredential(
     provider,
     config,
     toolConfig: search as Record<string, unknown> | undefined,
-    resolveRawValue: ({ provider: currentProvider, config: currentConfig, toolConfig }) =>
-      currentProvider.getConfiguredCredentialValue?.(currentConfig) ??
-      (currentProvider.id === "brave" ? currentProvider.getCredentialValue(toolConfig) : undefined),
+    resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialValue?.(currentConfig),
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(currentProvider.envVars),

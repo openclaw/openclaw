@@ -96,6 +96,21 @@ When validation fails:
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (or `--yes`) to apply repairs
 
+The Gateway also keeps a trusted last-known-good copy after a successful startup. If
+`openclaw.json` is later changed outside OpenClaw and no longer validates, startup
+and hot reload preserve the broken file as a timestamped `.clobbered.*` snapshot,
+restore the last-known-good copy, and log a loud warning with the recovery reason.
+If a status/log line is accidentally prepended before an otherwise valid JSON
+config, gateway startup and `openclaw doctor --fix` can strip the prefix,
+preserve the polluted file as `.clobbered.*`, and continue with the recovered
+JSON.
+The next main-agent turn also receives a system-event warning telling it that the
+config was restored and must not be blindly rewritten. Last-known-good promotion
+is updated after validated startup and after accepted hot reloads, including
+OpenClaw-owned config writes whose persisted file hash still matches the accepted
+write. Promotion is skipped when the candidate contains redacted secret
+placeholders such as `***` or shortened token values.
+
 ## Common tasks
 
 <AccordionGroup>
@@ -287,7 +302,7 @@ When validation fails:
   </Accordion>
 
   <Accordion title="Enable sandboxing">
-    Run agent sessions in isolated Docker containers:
+    Run agent sessions in isolated sandbox runtimes:
 
     ```json5
     {
@@ -494,6 +509,19 @@ When validation fails:
 
 The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically — no manual restart needed for most settings.
 
+Direct file edits are treated as untrusted until they validate. The watcher waits
+for editor temp-write/rename churn to settle, reads the final file, and rejects
+invalid external edits by restoring the last-known-good config. OpenClaw-owned
+config writes use the same schema gate before writing; destructive clobbers such
+as dropping `gateway.mode` or shrinking the file by more than half are rejected
+and saved as `.rejected.*` for inspection.
+
+If you see `Config auto-restored from last-known-good` or
+`config reload restored last-known-good config` in logs, inspect the matching
+`.clobbered.*` file next to `openclaw.json`, fix the rejected payload, then run
+`openclaw config validate`. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config)
+for the recovery checklist.
+
 ### Reload modes
 
 | Mode                   | Behavior                                                                                |
@@ -515,16 +543,16 @@ The Gateway watches `~/.openclaw/openclaw.json` and applies changes automaticall
 
 Most fields hot-apply without downtime. In `hybrid` mode, restart-required changes are handled automatically.
 
-| Category            | Fields                                                               | Restart needed? |
-| ------------------- | -------------------------------------------------------------------- | --------------- |
-| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and extension channels | No              |
-| Agent & models      | `agent`, `agents`, `models`, `routing`                               | No              |
-| Automation          | `hooks`, `cron`, `agent.heartbeat`                                   | No              |
-| Sessions & messages | `session`, `messages`                                                | No              |
-| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                        | No              |
-| UI & misc           | `ui`, `logging`, `identity`, `bindings`                              | No              |
-| Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)                 | **Yes**         |
-| Infrastructure      | `discovery`, `canvasHost`, `plugins`                                 | **Yes**         |
+| Category            | Fields                                                            | Restart needed? |
+| ------------------- | ----------------------------------------------------------------- | --------------- |
+| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and plugin channels | No              |
+| Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
+| Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
+| Sessions & messages | `session`, `messages`                                             | No              |
+| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                     | No              |
+| UI & misc           | `ui`, `logging`, `identity`, `bindings`                           | No              |
+| Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)              | **Yes**         |
+| Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
 
 <Note>
 `gateway.reload` and `gateway.remote` are exceptions — changing them does **not** trigger a restart.

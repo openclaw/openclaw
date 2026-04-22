@@ -53,6 +53,23 @@ function expectRuntimePluginWrapperContains(params: {
   expect(fs.readFileSync(runtimePath, "utf8")).toContain(params.expectedImport);
 }
 
+function expectRuntimePluginWrapperForwardsDefault(params: {
+  repoRoot: string;
+  pluginId: string;
+  expectedImport: string;
+}) {
+  const runtimePath = path.join(
+    params.repoRoot,
+    "dist-runtime",
+    "extensions",
+    params.pluginId,
+    "index.js",
+  );
+  expect(fs.readFileSync(runtimePath, "utf8")).toContain(
+    `import defaultModule from "${params.expectedImport}";`,
+  );
+}
+
 function expectRuntimeArtifactText(params: {
   repoRoot: string;
   pluginId: string;
@@ -85,6 +102,10 @@ describe("stageBundledPluginRuntime", () => {
       recursive: true,
     });
     setupRepoFiles(repoRoot, {
+      "dist/plugin-sdk/index.js": "export const sdk = true;\n",
+      "dist/plugin-sdk/channel-entry-contract.js":
+        "export { contract } from '../channel-entry-contract-abc.js';\n",
+      "dist/channel-entry-contract-abc.js": "export const contract = true;\n",
       [bundledDistPluginFile("diffs", "index.js")]: "export default {}\n",
       [bundledDistPluginFile("diffs", "node_modules/@pierre/diffs/index.js")]:
         "export default {}\n",
@@ -94,6 +115,11 @@ describe("stageBundledPluginRuntime", () => {
 
     const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", "diffs");
     expectRuntimePluginWrapperContains({
+      repoRoot,
+      pluginId: "diffs",
+      expectedImport: distRuntimeImportPath("diffs"),
+    });
+    expectRuntimePluginWrapperForwardsDefault({
       repoRoot,
       pluginId: "diffs",
       expectedImport: distRuntimeImportPath("diffs"),
@@ -109,7 +135,7 @@ describe("stageBundledPluginRuntime", () => {
           path.join(repoRoot, "dist", "extensions", "node_modules", "openclaw", "plugin-sdk"),
         )
         .isSymbolicLink(),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       fs.readFileSync(
         path.join(repoRoot, "dist", "extensions", "node_modules", "openclaw", "package.json"),
@@ -123,11 +149,45 @@ describe("stageBundledPluginRuntime", () => {
       ),
     ).toContain('"./plugin-sdk/*": "./plugin-sdk/*.js"');
     expect(
-      fs.realpathSync(
-        path.join(repoRoot, "dist", "extensions", "node_modules", "openclaw", "plugin-sdk"),
+      fs.readFileSync(
+        path.join(
+          repoRoot,
+          "dist",
+          "extensions",
+          "node_modules",
+          "openclaw",
+          "plugin-sdk",
+          "channel-entry-contract.js",
+        ),
+        "utf8",
       ),
-    ).toBe(fs.realpathSync(path.join(repoRoot, "dist", "plugin-sdk")));
+    ).toContain("../../../../plugin-sdk/channel-entry-contract.js");
     expect(fs.existsSync(path.join(runtimePluginDir, "node_modules", "openclaw"))).toBe(false);
+  });
+
+  it("keeps extension-local plugin-sdk wrappers resolving canonical dist chunks", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sdk-wrapper-");
+    createDistPluginDir(repoRoot, "diffs");
+    setupRepoFiles(repoRoot, {
+      "dist/plugin-sdk/channel-entry-contract.js":
+        "export { contract } from '../channel-entry-contract-abc.js';\n",
+      "dist/channel-entry-contract-abc.js": "export const contract = true;\n",
+      [bundledDistPluginFile("diffs", "index.js")]: "export default {}\n",
+    });
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const wrapperPath = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "node_modules",
+      "openclaw",
+      "plugin-sdk",
+      "channel-entry-contract.js",
+    );
+    const wrapperModule = await import(`${pathToFileURL(wrapperPath).href}?t=${Date.now()}`);
+    expect(wrapperModule.contract).toBe(true);
   });
 
   it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {

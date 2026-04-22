@@ -2,6 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
   clearPendingQueueItemsForRun,
@@ -117,6 +118,25 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
 };
+
+function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
+  if (!entry) {
+    return;
+  }
+  host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+  host.execApprovalError = null;
+  const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+  window.setTimeout(() => {
+    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
+  }, delay);
+}
+
+function removeResolvedApprovalRequest(host: GatewayHost, payload: unknown) {
+  const resolved = parseExecApprovalResolved(payload);
+  if (resolved) {
+    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+  }
+}
 
 function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
@@ -307,7 +327,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (code !== 1012) {
         if (error?.message) {
           host.lastError =
-            host.lastErrorCode && isGenericBrowserFetchFailure(error.message)
+            host.lastErrorCode &&
+            (host.lastErrorCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
+              isGenericBrowserFetchFailure(error.message))
               ? formatConnectError({
                   message: error.message,
                   details: error.details,
@@ -539,44 +561,22 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "exec.approval.requested") {
-    const entry = parseExecApprovalRequested(evt.payload);
-    if (entry) {
-      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
-      host.execApprovalError = null;
-      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-      window.setTimeout(() => {
-        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-      }, delay);
-    }
+    enqueueApprovalRequest(host, parseExecApprovalRequested(evt.payload));
     return;
   }
 
   if (evt.event === "exec.approval.resolved") {
-    const resolved = parseExecApprovalResolved(evt.payload);
-    if (resolved) {
-      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
-    }
+    removeResolvedApprovalRequest(host, evt.payload);
     return;
   }
 
   if (evt.event === "plugin.approval.requested") {
-    const entry = parsePluginApprovalRequested(evt.payload);
-    if (entry) {
-      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
-      host.execApprovalError = null;
-      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-      window.setTimeout(() => {
-        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-      }, delay);
-    }
+    enqueueApprovalRequest(host, parsePluginApprovalRequested(evt.payload));
     return;
   }
 
   if (evt.event === "plugin.approval.resolved") {
-    const resolved = parseExecApprovalResolved(evt.payload);
-    if (resolved) {
-      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
-    }
+    removeResolvedApprovalRequest(host, evt.payload);
     return;
   }
 

@@ -8,6 +8,15 @@ import {
 const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
 installRemoteProfileTestLifecycle(deps);
 
+function page(targetId: string, url = `https://${targetId.toLowerCase()}.example`) {
+  return {
+    targetId,
+    title: targetId === "T1" ? "Tab 1" : targetId,
+    url,
+    type: "page" as const,
+  };
+}
+
 describe("browser remote profile tab ops via Playwright", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -91,10 +100,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
-    const responses = [
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("T1", "https://example.com")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
@@ -106,16 +112,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
-    const responses = [
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("A"), page("B")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
@@ -149,7 +146,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T1");
   });
 
-  it("blocks remote Playwright tab operations when strict SSRF policy rejects the cdpUrl", async () => {
+  it("blocks remote Playwright tab operations when strict SSRF hostname allowlist rejects the cdpUrl", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
     ]);
@@ -163,7 +160,10 @@ describe("browser remote profile tab ops via Playwright", () => {
     } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
 
     const state = deps.makeState("remote");
-    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    state.resolved.ssrfPolicy = {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["browserless.example.com"],
+    };
     state.resolved.profiles.remote = {
       ...state.resolved.profiles.remote,
       cdpUrl: "http://10.0.0.42:9222",
