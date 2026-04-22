@@ -1675,11 +1675,11 @@ export type OpenClawPluginGatewayMethod = {
  * Context passed to plugin command handlers.
  */
 export type PluginCommandContext = {
-  /** The sender's identifier (e.g., Telegram user ID) */
+  /** The sender's identifier (for example a channel-scoped user ID) */
   senderId?: string;
-  /** The channel/surface (e.g., "telegram", "discord") */
+  /** The channel/surface (for example "chat" or "team-chat") */
   channel: string;
-  /** Provider channel id (e.g., "telegram") */
+  /** Provider channel id */
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
@@ -1735,7 +1735,7 @@ export type OpenClawPluginCommandDefinition = {
   /**
    * Optional native-command aliases for slash/menu surfaces.
    * `default` applies to all native providers unless a provider-specific
-   * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
+   * override exists (for example `{ default: "talkvoice", teamChat: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
   /**

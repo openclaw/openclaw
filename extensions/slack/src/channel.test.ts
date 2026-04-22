@@ -216,6 +216,11 @@ describe("slackPlugin actions", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "user:U12345678",
       expect.stringContaining("approved"),
+      expect.objectContaining({
+        accountId: "work",
+        cfg,
+        token: "xoxb-work",
+      }),
     );
   });
 
