@@ -130,9 +130,11 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
     }
   }
   if (host.tab === "debug" && (changed.has("eventLog") || changed.has("tab"))) {
-    scheduleDebugEventLogScroll(
-      host as unknown as Parameters<typeof scheduleDebugEventLogScroll>[0],
-      changed.has("tab") || host.debugEventLogAtBottom,
-    );
+    if (changed.has("tab") || host.debugEventLogAtBottom) {
+      scheduleDebugEventLogScroll(
+        host as unknown as Parameters<typeof scheduleDebugEventLogScroll>[0],
+        changed.has("tab"),
+      );
+    }
   }
 }
