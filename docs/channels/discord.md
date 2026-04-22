@@ -61,7 +61,7 @@ You will need to create a new application with a bot, add the bot to your server
     - `bot`
     - `applications.commands`
 
-    A **Bot Permissions** section will appear below. Enable:
+    A **Bot Permissions** section will appear below. Enable at least:
 
     **General Permissions**
       - View Channels
@@ -72,6 +72,7 @@ You will need to create a new application with a bot, add the bot to your server
       - Attach Files
       - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Copy the generated URL at the bottom, paste it into your browser, select your server, and click **Continue** to connect. You should now see your bot in the Discord server.
 
   </Step>
@@ -531,6 +532,7 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
       - Attach Files
       - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Avoid `Administrator` unless explicitly needed.
 
   </Accordion>
