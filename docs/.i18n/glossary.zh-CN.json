@@ -196,6 +196,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Config",
+    "target": "配置"
+  },
+  {
     "source": "Memory Wiki",
     "target": "Memory Wiki"
   },
@@ -374,5 +378,17 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "/gateway/configuration#strict-validation",
+    "target": "/gateway/configuration#strict-validation"
+  },
+  {
+    "source": "/gateway/configuration#config-hot-reload",
+    "target": "/gateway/configuration#config-hot-reload"
+  },
+  {
+    "source": "/cli/config",
+    "target": "/cli/config"
   }
 ]

@@ -2767,6 +2767,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           cacheWrite: {
                             type: "number",
                           },
+                          tieredPricing: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                input: {
+                                  type: "number",
+                                },
+                                output: {
+                                  type: "number",
+                                },
+                                cacheRead: {
+                                  type: "number",
+                                },
+                                cacheWrite: {
+                                  type: "number",
+                                },
+                                range: {
+                                  anyOf: [
+                                    {
+                                      type: "array",
+                                      items: [
+                                        {
+                                          type: "number",
+                                        },
+                                        {
+                                          type: "number",
+                                        },
+                                      ],
+                                    },
+                                    {
+                                      type: "array",
+                                      items: [
+                                        {
+                                          type: "number",
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                              },
+                              required: ["input", "output", "cacheRead", "cacheWrite", "range"],
+                              additionalProperties: false,
+                            },
+                          },
                         },
                         additionalProperties: false,
                       },
@@ -2978,7 +3023,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     enum: ["pi", "none"],
                     title: "Default Embedded Harness Fallback",
                     description:
-                      "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+                      "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
                   },
                 },
                 additionalProperties: false,
@@ -3209,6 +3254,63 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Skills",
                 description:
                   "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+              },
+              silentReply: {
+                type: "object",
+                properties: {
+                  direct: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                  group: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                  internal: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              silentReplyRewrite: {
+                type: "object",
+                properties: {
+                  direct: {
+                    type: "boolean",
+                  },
+                  group: {
+                    type: "boolean",
+                  },
+                  internal: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               repoRoot: {
                 type: "string",
@@ -3503,6 +3605,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     jsonlDialect: {
                       type: "string",
                       const: "claude-stream-json",
+                    },
+                    liveSession: {
+                      type: "string",
+                      const: "claude-stdio",
                     },
                     input: {
                       anyOf: [
@@ -4586,11 +4692,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
                   },
+                  truncateAfterCompaction: {
+                    type: "boolean",
+                    title: "Truncate After Compaction",
+                    description:
+                      "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+                  },
                   notifyUser: {
                     type: "boolean",
                     title: "Compaction Notify User",
                     description:
-                      "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+                      "When enabled, sends brief compaction notices to the user when compaction starts and when it completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'). Disabled by default to keep compaction silent and non-intrusive.",
                   },
                 },
                 additionalProperties: false,
@@ -4715,6 +4827,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                     const: "adaptive",
+                  },
+                  {
+                    type: "string",
+                    const: "max",
                   },
                 ],
               },
@@ -5660,7 +5776,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   additionalProperties: false,
                   title: "Agent Embedded Harness",
                   description:
-                    "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+                    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
                 },
                 model: {
                   anyOf: [
@@ -5686,7 +5802,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 thinkingDefault: {
                   type: "string",
-                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
@@ -21205,7 +21321,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Gateway Channel Stale Event Threshold (min)",
             description:
-              "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+              "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
           },
           channelMaxRestartsPerHour: {
             type: "integer",
@@ -22791,6 +22907,75 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
       },
+      surfaces: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+        },
+        additionalProperties: {
+          type: "object",
+          properties: {
+            silentReply: {
+              type: "object",
+              properties: {
+                direct: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+                group: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+                internal: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+              },
+              additionalProperties: false,
+            },
+            silentReplyRewrite: {
+              type: "object",
+              properties: {
+                direct: {
+                  type: "boolean",
+                },
+                group: {
+                  type: "boolean",
+                },
+                internal: {
+                  type: "boolean",
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
     },
     required: ["commands"],
     additionalProperties: false,
@@ -23313,7 +23498,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.embeddedHarness.fallback": {
       label: "Default Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+      help: "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
       tags: ["reliability"],
     },
     "agents.list": {
@@ -23358,7 +23543,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list.*.embeddedHarness": {
       label: "Agent Embedded Harness",
-      help: "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+      help: "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.runtime": {
@@ -23458,7 +23643,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.channelStaleEventThresholdMinutes": {
       label: "Gateway Channel Stale Event Threshold (min)",
-      help: "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+      help: "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
       tags: ["network"],
     },
     "gateway.channelMaxRestartsPerHour": {
@@ -25788,7 +25973,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.compaction.notifyUser": {
       label: "Compaction Notify User",
-      help: "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+      help: "When enabled, sends brief compaction notices to the user when compaction starts and when it completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'). Disabled by default to keep compaction silent and non-intrusive.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.memoryFlush": {
@@ -27543,6 +27728,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.19-beta.2",
+  version: "2026.4.22",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

@@ -8,10 +8,11 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -19,7 +20,10 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { emitSubagentEndedHookOnce, runOutcomesEqual } from "./subagent-registry-completion.js";
+import {
+  emitSubagentEndedHookOnce,
+  shouldUpdateRunOutcome,
+} from "./subagent-registry-completion.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -131,13 +135,17 @@ export function createSubagentRunManager(params: {
         mutated = true;
       }
       const waitError = typeof wait.error === "string" ? wait.error : undefined;
-      const outcome: SubagentRunOutcome =
+      const baseOutcome: SubagentRunOutcome =
         wait.status === "error"
           ? { status: "error", error: waitError }
           : wait.status === "timeout"
             ? { status: "timeout" }
             : { status: "ok" };
-      if (!runOutcomesEqual(entry.outcome, outcome)) {
+      const outcome = withSubagentOutcomeTiming(baseOutcome, {
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+      });
+      if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
         entry.outcome = outcome;
         mutated = true;
       }
@@ -429,7 +437,13 @@ export function createSubagentRunManager(params: {
         continue;
       }
       entry.endedAt = now;
-      entry.outcome = { status: "error", error: reason };
+      entry.outcome = withSubagentOutcomeTiming(
+        { status: "error", error: reason },
+        {
+          startedAt: entry.startedAt,
+          endedAt: now,
+        },
+      );
       entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
       entry.cleanupHandled = true;
       entry.cleanupCompletedAt = now;

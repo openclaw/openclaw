@@ -287,6 +287,13 @@ vi.mock("../../pi-project-settings.js", () => ({
 
 vi.mock("../../pi-settings.js", () => ({
   applyPiAutoCompactionGuard: () => {},
+  applyPiCompactionSettingsFromConfig: () => ({
+    didOverride: false,
+    compaction: {
+      reserveTokens: 0,
+      keepRecentTokens: 40_000,
+    },
+  }),
 }));
 
 vi.mock("../extensions.js", () => ({

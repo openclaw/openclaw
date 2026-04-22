@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { getAgentRunContext, trackOpenSubagentForParent } from "../../infra/agent-events.js";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE } from "../plan-mode/index.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -53,6 +53,16 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function addRoleToFailureResult<T extends { status: string }>(
+  result: T,
+  role: string | undefined,
+): T | (T & { role: string }) {
+  if (!role || (result.status !== "error" && result.status !== "forbidden")) {
+    return result;
+  }
+  return { ...result, role };
 }
 
 function resolveTrackedSpawnMode(params: {
@@ -212,10 +222,13 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
+      const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+
       if (streamTo && runtime !== "acp") {
         return jsonResult({
           status: "error",
           error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
+          ...roleContext,
         });
       }
 
@@ -223,6 +236,7 @@ export function createSessionsSpawnTool(
         return jsonResult({
           status: "error",
           error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
+          ...roleContext,
         });
       }
 
@@ -256,6 +270,7 @@ export function createSessionsSpawnTool(
             status: "error",
             error:
               "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+            ...roleContext,
           });
         }
         const result = await spawnAcpDirect(
@@ -365,10 +380,11 @@ export function createSessionsSpawnTool(
               error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
               childSessionKey,
               runId: childRunId,
+              ...roleContext,
             });
           }
         }
-        return jsonResult(result);
+        return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
       // PR-8 follow-up: mirror the in-plan-mode cleanup override applied
@@ -430,7 +446,7 @@ export function createSessionsSpawnTool(
         trackOpenSubagentForParent(opts.runId, result.runId);
       }
 
-      return jsonResult(result);
+      return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },
   };
 }

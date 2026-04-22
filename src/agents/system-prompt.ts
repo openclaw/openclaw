@@ -369,10 +369,13 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   }
   return [
     "## Execution Bias",
-    "If the user asks you to do the work, start doing it in the same turn.",
-    "Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.",
-    "Commentary-only turns are incomplete when tools are available and the next action is clear.",
-    "If the work will take multiple steps or a while to finish, send one short progress update before or while acting.",
+    "- Actionable request: act in this turn.",
+    "- Non-final turn: use tools to advance, or ask for the one missing decision that blocks safe progress.",
+    "- Continue until done or genuinely blocked; do not finish with a plan/promise when tools can move it forward.",
+    "- Weak/empty tool result: vary query, path, command, or source before concluding.",
+    "- Mutable facts need live checks: files, git, clocks, versions, services, processes, package state.",
+    "- Final answer needs evidence: test/build/lint, screenshot, inspection, tool output, or a named blocker.",
+    "- Longer work: brief progress update, then keep going; use background work or sub-agents when they fit.",
     "",
   ];
 }
@@ -407,11 +410,20 @@ function buildMessagingSection(params: {
   if (params.isMinimal) {
     return [];
   }
+  const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
+  const hasSubagents = params.availableTools.has("subagents");
+  const subagentOrchestrationGuidance = hasSessionsSpawn
+    ? hasSubagents
+      ? "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children."
+      : "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work."
+    : hasSubagents
+      ? "- Sub-agent orchestration → use `subagents(action=list|steer|kill)` to manage already-spawned children."
+      : "";
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
+    subagentOrchestrationGuidance,
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
@@ -419,7 +431,7 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-          "- For `action=send`, include `to` and `message`.",
+          "- For `action=send`, include `target` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled

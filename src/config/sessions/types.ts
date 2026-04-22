@@ -72,8 +72,10 @@ export type CliSessionBinding = {
   sessionId: string;
   authProfileId?: string;
   authEpoch?: string;
+  authEpochVersion?: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
 };
 
 /**
@@ -589,38 +591,32 @@ function isSessionPluginTraceLine(line: string): boolean {
   return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
 }
 
-export function resolveSessionPluginStatusLines(
+function resolveSessionPluginLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+  includeLine: (line: string) => boolean,
 ): string[] {
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
           ? pluginEntry.lines.filter(
               (line): line is string =>
-                typeof line === "string" &&
-                line.trim().length > 0 &&
-                !isSessionPluginTraceLine(line),
+                typeof line === "string" && line.trim().length > 0 && includeLine(line),
             )
           : [],
       )
     : [];
 }
 
+export function resolveSessionPluginStatusLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return resolveSessionPluginLines(entry, (line) => !isSessionPluginTraceLine(line));
+}
+
 export function resolveSessionPluginTraceLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
 ): string[] {
-  return Array.isArray(entry?.pluginDebugEntries)
-    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
-        Array.isArray(pluginEntry?.lines)
-          ? pluginEntry.lines.filter(
-              (line): line is string =>
-                typeof line === "string" &&
-                line.trim().length > 0 &&
-                isSessionPluginTraceLine(line),
-            )
-          : [],
-      )
-    : [];
+  return resolveSessionPluginLines(entry, isSessionPluginTraceLine);
 }
 
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
