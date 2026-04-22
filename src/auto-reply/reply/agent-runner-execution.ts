@@ -34,7 +34,11 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+  type AgentApprovalEventData,
+} from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -85,6 +89,10 @@ const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
 const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
+
+function readApprovalScope(value: unknown): AgentApprovalEventData["scope"] {
+  return value === "turn" || value === "session" ? value : undefined;
+}
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -1123,6 +1131,7 @@ export async function runAgentTurnWithFallback(params: {
                       host: readStringValue(evt.data.host),
                       reason: readStringValue(evt.data.reason),
                       message: readStringValue(evt.data.message),
+                      scope: readApprovalScope(evt.data.scope),
                     });
                   }
                   if (evt.stream === "command_output") {

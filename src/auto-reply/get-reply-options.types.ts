@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
@@ -109,6 +110,7 @@ export type GetReplyOptions = {
     host?: string;
     reason?: string;
     message?: string;
+    scope?: AgentApprovalEventData["scope"];
   }) => Promise<void> | void;
   /** Called when command output streams or completes. */
   onCommandOutput?: (payload: {

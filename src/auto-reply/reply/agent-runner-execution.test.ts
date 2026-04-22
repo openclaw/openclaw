@@ -684,6 +684,7 @@ describe("runAgentTurnWithFallback", () => {
           status: "pending",
           title: "Command approval requested",
           approvalId: "approval-1",
+          scope: "session",
         },
       });
       await params.onAgentEvent?.({
@@ -763,6 +764,7 @@ describe("runAgentTurnWithFallback", () => {
       host: undefined,
       reason: undefined,
       message: undefined,
+      scope: "session",
     });
     expect(onCommandOutput).toHaveBeenCalledWith({
       itemId: "command:exec-1",
