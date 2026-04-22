@@ -71,7 +71,45 @@ describe("Codex app-server approval bridge", () => {
     expect(params.onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "approval",
-        data: expect.objectContaining({ status: "approved", approvalId: "plugin:approval-1" }),
+        data: expect.objectContaining({
+          status: "approved",
+          approvalId: "plugin:approval-1",
+          scope: "turn",
+          message: "Codex app-server approval granted for this turn.",
+        }),
+      }),
+    );
+  });
+
+  it("marks session-scoped approvals explicitly in the approval event", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-1", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-1", decision: "allow-always" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-1",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(params.onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({
+          status: "approved",
+          approvalId: "plugin:approval-1",
+          scope: "session",
+          message: "Codex app-server approval granted for the session.",
+        }),
       }),
     );
   });

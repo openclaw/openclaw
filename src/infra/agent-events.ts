@@ -61,6 +61,7 @@ export type AgentApprovalEventData = {
   kind: AgentApprovalEventKind;
   status: AgentApprovalEventStatus;
   title: string;
+  scope?: "turn" | "session";
   itemId?: string;
   toolCallId?: string;
   approvalId?: string;

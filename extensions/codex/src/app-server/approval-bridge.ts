@@ -118,6 +118,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
               ? "failed"
               : "approved",
       title: context.title,
+      ...(approvalOutcomeScope(outcome) ? { scope: approvalOutcomeScope(outcome) } : {}),
       approvalId,
       approvalSlug: approvalId,
       ...context.eventDetails,
@@ -335,7 +336,7 @@ function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {
     return "Codex app-server approval granted for the session.";
   }
   if (outcome === "approved-once") {
-    return "Codex app-server approval granted once.";
+    return "Codex app-server approval granted for this turn.";
   }
   if (outcome === "cancelled") {
     return "Codex app-server approval cancelled.";
@@ -344,6 +345,18 @@ function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {
     return "Codex app-server approval unavailable.";
   }
   return "Codex app-server approval denied.";
+}
+
+function approvalOutcomeScope(
+  outcome: AppServerApprovalOutcome,
+): AgentApprovalEventData["scope"] | undefined {
+  if (outcome === "approved-session") {
+    return "session";
+  }
+  if (outcome === "approved-once") {
+    return "turn";
+  }
+  return undefined;
 }
 
 function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
