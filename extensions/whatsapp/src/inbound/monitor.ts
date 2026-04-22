@@ -65,7 +65,7 @@ export type MonitorWebInboxOptions = {
   authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
   mediaMaxMb?: number;
-  /** Keep the global presence unavailable so self-chat sessions do not mute phone pushes. */
+  /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   /** Announce online presence on connect (default: false). When false, the gateway stays "unavailable" so the phone continues receiving push notifications. */
   announcePresence?: boolean;
