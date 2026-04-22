@@ -16,6 +16,28 @@ const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
 const log = createSubsystemLogger("models/list-provider-catalog");
 
+export async function resolveProviderCatalogPluginIdsForFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+}): Promise<string[] | undefined> {
+  const providerFilter = normalizeProviderId(params.providerFilter);
+  if (!providerFilter) {
+    return undefined;
+  }
+  const manifestPluginIds = resolveOwningPluginIdsForProvider({
+    provider: providerFilter,
+    config: params.cfg,
+    env: params.env,
+  });
+  if (manifestPluginIds) {
+    return manifestPluginIds;
+  }
+  const { resolveProviderContractPluginIdsForProviderAlias } =
+    await import("../../plugins/contracts/registry.js");
+  return resolveProviderContractPluginIdsForProviderAlias(providerFilter);
+}
+
 function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -47,10 +69,10 @@ export async function loadProviderCatalogModelsForList(params: {
   const env = params.env ?? process.env;
   const providerFilter = params.providerFilter ? normalizeProviderId(params.providerFilter) : "";
   const onlyPluginIds = providerFilter
-    ? resolveOwningPluginIdsForProvider({
-        provider: providerFilter,
-        config: params.cfg,
+    ? await resolveProviderCatalogPluginIdsForFilter({
+        cfg: params.cfg,
         env,
+        providerFilter,
       })
     : undefined;
   if (providerFilter && !onlyPluginIds) {

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadProviderCatalogModelsForList } from "./list.provider-catalog.js";
+import {
+  loadProviderCatalogModelsForList,
+  resolveProviderCatalogPluginIdsForFilter,
+} from "./list.provider-catalog.js";
 
 const baseParams = {
   cfg: {
@@ -46,5 +49,25 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(rows.map((row) => `${row.provider}/${row.id}`)).toEqual(
       expect.arrayContaining(["moonshot/kimi-k2.6"]),
     );
+  });
+
+  it("recognizes bundled provider hook aliases before the unknown-provider short-circuit", async () => {
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "azure-openai-responses",
+      }),
+    ).resolves.toEqual(["openai"]);
+  });
+
+  it("keeps unknown provider filters eligible for early empty results", async () => {
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "unknown-provider-for-catalog-test",
+      }),
+    ).resolves.toBeUndefined();
   });
 });
