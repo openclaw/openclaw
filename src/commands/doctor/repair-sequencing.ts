@@ -62,7 +62,6 @@ export async function runDoctorRepairSequence(params: {
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,
-    env,
     ...createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env }),
   });
   if (emptyAllowlistWarnings.length > 0) {

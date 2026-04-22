@@ -4,19 +4,8 @@ import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
 import { asObjectRecord } from "./object.js";
 
-export type EmptyAllowlistAccountScanParams = {
-  account: DoctorAccountRecord;
-  channelName: string;
-  cfg: OpenClawConfig;
-  dmPolicy?: string;
-  effectiveAllowFrom?: DoctorAllowFromList;
-  parent?: DoctorAccountRecord;
-  prefix: string;
-};
-
 type ScanEmptyAllowlistPolicyWarningsParams = {
   doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
   extraWarningsForAccount?: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
   shouldSkipDefaultEmptyGroupAllowlistWarning?: (
     params: ChannelDoctorEmptyAllowlistAccountContext,

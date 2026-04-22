@@ -41,9 +41,7 @@ const channelDoctorBooleanKeys = new Set<keyof ChannelDoctorAdapter>([
   "warnOnEmptyGroupSenderAllowlist",
 ]);
 
-const channelDoctorStringEnumValues: Partial<
-  Record<keyof ChannelDoctorAdapter, ReadonlySet<string>>
-> = {
+const channelDoctorEnumValues: Partial<Record<keyof ChannelDoctorAdapter, ReadonlySet<string>>> = {
   dmAllowFromMode: new Set(["topOnly", "topOrNested", "nestedOnly"]),
   groupModel: new Set(["sender", "route", "hybrid"]),
 };
@@ -106,36 +104,44 @@ function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
 function mergeDoctorAdapters(
   adapters: Array<ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorAdapter | undefined {
-  const merged: Record<string, unknown> = {};
+  const merged: Partial<Record<keyof ChannelDoctorAdapter, unknown>> = {};
   for (const adapter of adapters) {
     if (!adapter) {
       continue;
     }
-    for (const [key, value] of Object.entries(adapter)) {
-      if (merged[key] === undefined && isValidChannelDoctorAdapterValue(key, value)) {
-        merged[key] = value;
+    for (const [key, value] of Object.entries(adapter) as Array<
+      [keyof ChannelDoctorAdapter, unknown]
+    >) {
+      if (merged[key] !== undefined) {
+        continue;
       }
+      if (!isValidChannelDoctorAdapterValue(key, value)) {
+        continue;
+      }
+      merged[key] = value;
     }
   }
   return Object.keys(merged).length > 0 ? (merged as ChannelDoctorAdapter) : undefined;
 }
 
-function isValidChannelDoctorAdapterValue(key: string, value: unknown): boolean {
+function isValidChannelDoctorAdapterValue(
+  key: keyof ChannelDoctorAdapter,
+  value: unknown,
+): boolean {
   if (value == null) {
     return false;
   }
-  const typedKey = key as keyof ChannelDoctorAdapter;
-  if (channelDoctorFunctionKeys.has(typedKey)) {
+  if (channelDoctorFunctionKeys.has(key)) {
     return typeof value === "function";
   }
-  if (channelDoctorBooleanKeys.has(typedKey)) {
+  if (channelDoctorBooleanKeys.has(key)) {
     return typeof value === "boolean";
   }
-  const enumValues = channelDoctorStringEnumValues[typedKey];
+  const enumValues = channelDoctorEnumValues[key];
   if (enumValues) {
     return typeof value === "string" && enumValues.has(value);
   }
-  if (typedKey === "legacyConfigRules") {
+  if (key === "legacyConfigRules") {
     return Array.isArray(value);
   }
   return false;
@@ -148,13 +154,14 @@ function listChannelDoctorEntries(
   if (channelIds.length === 0) {
     return [];
   }
-  const byId = new Map<string, ChannelDoctorEntry>();
   const selectedIds = new Set(channelIds);
-  const readOnlyPlugins = safeListReadOnlyChannelPlugins(context).filter((plugin) =>
-    selectedIds.has(plugin.id),
+  const readOnlyPluginsById = new Map(
+    safeListReadOnlyChannelPlugins(context)
+      .filter((plugin) => selectedIds.has(plugin.id))
+      .map((plugin) => [plugin.id, plugin]),
   );
-  const readOnlyPluginsById = new Map(readOnlyPlugins.map((plugin) => [plugin.id, plugin]));
 
+  const entries: ChannelDoctorEntry[] = [];
   for (const id of selectedIds) {
     const doctor = mergeDoctorAdapters([
       readOnlyPluginsById.get(id)?.doctor,
@@ -165,12 +172,9 @@ function listChannelDoctorEntries(
     if (!doctor) {
       continue;
     }
-    const existing = byId.get(id);
-    if (!existing) {
-      byId.set(id, { doctor });
-    }
+    entries.push({ doctor });
   }
-  return [...byId.values()];
+  return entries;
 }
 
 function toPluginEmptyAllowlistContext({
