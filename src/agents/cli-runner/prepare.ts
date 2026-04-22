@@ -109,8 +109,10 @@ export async function prepareCliRunContext(
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
   // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
-  const extraSystemPromptHash = hashCliSessionText(params.extraSystemPromptStatic?.trim() || undefined) ?? hashCliSessionText(extraSystemPrompt);
-
+  const extraSystemPromptHash =
+    params.extraSystemPromptStatic !== undefined
+      ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
+      : hashCliSessionText(extraSystemPrompt);
 
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
