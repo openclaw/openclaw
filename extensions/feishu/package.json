@@ -12,6 +12,9 @@
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
+  "bundledDependencies": [
+    "@larksuiteoapi/node-sdk"
+  ],
   "peerDependencies": {
     "openclaw": ">=2026.4.20"
   },
