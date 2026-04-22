@@ -43,6 +43,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
+  requireCompleteDiscoveryEntryCoverage?: boolean;
 }): ProviderPlugin[] {
   const pluginIds = resolveDiscoveredProviderPluginIds(params);
   const pluginIdSet = new Set(pluginIds);
@@ -52,7 +53,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   if (records.length === 0) {
     return [];
   }
-  if (records.length < pluginIdSet.size) {
+  if (params.requireCompleteDiscoveryEntryCoverage && records.length < pluginIdSet.size) {
     return [];
   }
   const loadSource = createPluginSourceLoader();
@@ -80,6 +81,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
+  requireCompleteDiscoveryEntryCoverage?: boolean;
 }): ProviderPlugin[] {
   const entryProviders = resolveProviderDiscoveryEntryPlugins(params);
   if (entryProviders.length > 0) {

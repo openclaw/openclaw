@@ -104,6 +104,7 @@ export async function loadProviderCatalogModelsForList(params: {
       env,
       onlyPluginIds: scopedPluginIds,
       includeUntrustedWorkspacePlugins: false,
+      requireCompleteDiscoveryEntryCoverage: true,
     })
   ).filter(
     (provider) =>

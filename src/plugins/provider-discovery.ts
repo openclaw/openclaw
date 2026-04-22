@@ -34,6 +34,7 @@ export async function resolvePluginDiscoveryProviders(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
+  requireCompleteDiscoveryEntryCoverage?: boolean;
 }): Promise<ProviderPlugin[]> {
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
