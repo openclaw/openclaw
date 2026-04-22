@@ -67,6 +67,22 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
+  it("skips plugin discovery for explicitly disabled channels", () => {
+    const result = collectChannelDoctorCompatibilityMutations({
+      channels: {
+        mattermost: {
+          enabled: false,
+        },
+      },
+    } as never);
+
+    expect(result).toEqual([]);
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
+    expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
+    expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalled();
+  });
+
   it("uses read-only doctor adapters for configured channel ids", () => {
     const normalizeCompatibilityConfig = vi.fn(({ cfg }: { cfg: unknown }) => ({
       config: cfg,

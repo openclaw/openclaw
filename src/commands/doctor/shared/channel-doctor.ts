@@ -61,8 +61,20 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   if (!channels) {
     return [];
   }
+  const channelEntries = channels as Record<string, unknown>;
   return Object.keys(channels)
-    .filter((channelId) => channelId !== "defaults")
+    .filter((channelId) => {
+      if (channelId === "defaults") {
+        return false;
+      }
+      const entry = channelEntries[channelId];
+      return (
+        !entry ||
+        typeof entry !== "object" ||
+        Array.isArray(entry) ||
+        (entry as { enabled?: unknown }).enabled !== false
+      );
+    })
     .toSorted();
 }
 
