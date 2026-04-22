@@ -3121,9 +3121,9 @@ td.data-table-key-col {
 }
 
 .agent-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  border-radius: 20%;
   background: var(--secondary);
   display: grid;
   place-items: center;
