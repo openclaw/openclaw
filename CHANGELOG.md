@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/restart: write restart sentinel files atomically so interrupted writes cannot leave a truncated sentinel behind. (#70225) Thanks @obviyus.
 - Pairing: remove stale pending requests for a device when that paired device is deleted, so an old repair approval cannot recreate the removed device from leftover state.
 - Security/dotenv: block workspace `.env` overrides for Matrix, Mattermost, IRC, and Synology endpoint settings so cloned workspaces cannot redirect bundled connector traffic through local endpoint config. (#70240) Thanks @drobison00.
+- Telegram: require the same `/models` authorization for group model-picker callbacks, so unauthorized participants can no longer browse or change the session model through inline buttons. (#70235) Thanks @drobison00.
 
 ## 2026.4.21
 
