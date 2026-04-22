@@ -1,0 +1,11 @@
+{
+  "agents": {
+    "streaming-multimodal-phaseB": {
+      "apDir": "phaseB-dir",
+      "registeredAt": "2026-04-20T23:05:20.207190+00:00",
+      "status": "running"
+    }
+  },
+  "locks": {},
+  "lastUpdated": "2026-04-21T23:11:08.496167+00:00"
+}
