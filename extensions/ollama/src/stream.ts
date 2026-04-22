@@ -346,11 +346,7 @@ function parseOllamaToolCallArguments(
   if (typeof argumentsValue !== "string") {
     return argumentsValue;
   }
-  const parsed = JSON.parse(argumentsValue) as unknown;
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
-  }
-  throw new Error("Ollama tool call arguments must deserialize to an object");
+  return parseJsonObjectPreservingUnsafeIntegers(argumentsValue) ?? {};
 }
 
 interface OllamaChatResponse {
