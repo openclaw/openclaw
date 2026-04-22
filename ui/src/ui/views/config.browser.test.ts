@@ -132,7 +132,8 @@ describe("config view", () => {
       raw: "{\n}\n",
       originalRaw: "{\n}\n",
     });
-    let { clearButton, saveButton, applyButton } = findActionButtons(container);
+    let clearButton: HTMLButtonElement | undefined;
+    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
     expect(clearButton).not.toBeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
