@@ -417,7 +417,12 @@ async function openPinnedReadableFile(params: {
     // same file the fd has pinned. `fs.promises.stat` resolves the path and
     // returns the final file's identity in one syscall, so there is no
     // between-await window for an attacker to race.
-    await assertAncestorChainHasNoSymlinks(literalRoot, literalPath, params.containerPath);
+    await assertAncestorChainHasNoSymlinks(literalRoot, literalPath, params.containerPath, {
+      // On platforms where `O_NOFOLLOW` is unavailable (Windows), the open
+      // call would have transparently followed a final-component symlink, so
+      // the ancestor walk has to lstat the leaf as well.
+      includeLeaf: typeof fs.constants.O_NOFOLLOW !== "number",
+    });
     const currentResolvedStat = await fsPromises.stat(literalPath);
     if (!sameFileIdentity(currentResolvedStat, openedStat)) {
       throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
@@ -440,27 +445,35 @@ async function openPinnedReadableFile(params: {
 }
 
 // Walks each directory between canonicalRoot (exclusive) and
-// targetAbsolutePath (exclusive), `lstat`'ing each segment. Rejects if any
-// intermediate segment is a symlink or a non-directory. The final component
-// is not walked because `O_NOFOLLOW` already protects it on the open call.
+// targetAbsolutePath, `lstat`'ing each segment. Rejects if any intermediate
+// segment is a symlink or a non-directory. By default the final component is
+// not walked because `O_NOFOLLOW` already protects it on the open call. Pass
+// `includeLeaf: true` on platforms where `O_NOFOLLOW` is unavailable
+// (Windows) so a symlinked leaf cannot be followed silently by `open`.
 async function assertAncestorChainHasNoSymlinks(
   canonicalRoot: string,
   targetAbsolutePath: string,
   containerPath: string,
+  options: { includeLeaf?: boolean } = {},
 ): Promise<void> {
   const relative = path.relative(canonicalRoot, targetAbsolutePath);
   if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
     return;
   }
   const segments = relative.split(path.sep).filter((segment) => segment.length > 0);
+  const lastIndex = options.includeLeaf ? segments.length : segments.length - 1;
   let cursor = canonicalRoot;
-  for (let i = 0; i < segments.length - 1; i += 1) {
+  for (let i = 0; i < lastIndex; i += 1) {
     cursor = path.join(cursor, segments[i]);
     const stat = await fsPromises.lstat(cursor).catch(() => null);
     if (!stat) {
       throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
     }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    const isLeaf = i === segments.length - 1;
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
+    }
+    if (!isLeaf && !stat.isDirectory()) {
       throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
     }
   }

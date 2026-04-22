@@ -488,6 +488,58 @@ describe("openshell fs bridges", () => {
     }
   });
 
+  it("rejects fallback reads of a symlinked leaf when O_NOFOLLOW is unavailable", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
+    // The workspace contains a symlink as the FINAL path component pointing
+    // out-of-root. On Windows `O_NOFOLLOW` is `undefined`, so `open` would
+    // silently traverse the symlink to the outside file; the ancestor walk
+    // must lstat the leaf in that case to fail closed.
+    await fs.symlink(
+      path.join(outsideDir, "secret.txt"),
+      path.join(workspaceDir, "subdir", "secret.txt"),
+    );
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    // Force the fallback path so the leaf-lstat guard is exercised.
+    const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
+    // Simulate a host that lacks `O_NOFOLLOW` (e.g. Windows) by making
+    // `fs.constants.O_NOFOLLOW` look undefined to the bridge.
+    const originalNoFollow = (nodeFs.constants as Record<string, number | undefined>).O_NOFOLLOW;
+    Object.defineProperty(nodeFs.constants, "O_NOFOLLOW", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    try {
+      await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+        "Sandbox boundary checks failed",
+      );
+      expect(readlinkSpy).toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(nodeFs.constants, "O_NOFOLLOW", {
+        configurable: true,
+        writable: true,
+        value: originalNoFollow,
+      });
+      readlinkSpy.mockRestore();
+    }
+  });
+
   it("rejects hardlinked files inside the sandbox root", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const outsideDir = await makeTempDir("openclaw-openshell-outside-");
