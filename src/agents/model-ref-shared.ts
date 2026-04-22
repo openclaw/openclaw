@@ -1,6 +1,7 @@
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
+import { isProviderSelfPrefixed } from "./provider-self-prefix.js";
 
 export type StaticModelRef = {
   provider: string;
@@ -16,11 +17,12 @@ export function modelKey(provider: string, model: string): string {
   if (!modelId) {
     return providerId;
   }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
+  const providerLower = normalizeLowercaseStringOrEmpty(providerId);
+  const modelLower = normalizeLowercaseStringOrEmpty(modelId);
+  if (isProviderSelfPrefixed(providerLower) && modelLower.startsWith(`${providerLower}/`)) {
+    return modelId;
+  }
+  return `${providerId}/${modelId}`;
 }
 
 export function normalizeStaticProviderModelId(
