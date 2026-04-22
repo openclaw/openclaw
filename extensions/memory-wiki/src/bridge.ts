@@ -14,6 +14,7 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
 } from "./markdown.js";
+import { ensureMemoryWikiPublicArtifactsRuntime } from "./runtime-bootstrap.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
@@ -221,6 +222,7 @@ export async function syncMemoryWikiBridgeSources(params: {
     };
   }
 
+  await ensureMemoryWikiPublicArtifactsRuntime(params.appConfig);
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];

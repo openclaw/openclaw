@@ -6,13 +6,14 @@ import {
   appendMemoryHostEvent,
   resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../../src/plugins/memory-state.js";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
+import * as runtimeBootstrap from "./runtime-bootstrap.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -161,6 +162,33 @@ describe("syncMemoryWikiBridgeSources", () => {
       workspaces: 0,
       pagePaths: [],
     });
+  });
+
+  it("bootstraps the memory runtime before listing bridge artifacts", async () => {
+    const workspaceDir = await createBridgeWorkspace("bootstrap-workspace");
+    const { config } = await createVault({
+      rootDir: nextCaseRoot("bootstrap-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+    const bootstrapSpy = vi
+      .spyOn(runtimeBootstrap, "ensureMemoryWikiPublicArtifactsRuntime")
+      .mockResolvedValue();
+
+    await syncMemoryWikiBridgeSources({ config, appConfig });
+
+    expect(bootstrapSpy).toHaveBeenCalledWith(appConfig);
   });
 
   it("returns a no-op result when bridge mode is enabled without exported memory artifacts", async () => {

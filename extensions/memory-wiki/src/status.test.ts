@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import * as runtimeBootstrap from "./runtime-bootstrap.js";
 import {
   buildMemoryWikiDoctorReport,
   renderMemoryWikiDoctor,
@@ -82,6 +83,36 @@ describe("resolveMemoryWikiStatus", () => {
     });
 
     expect(status.warnings.map((warning) => warning.code)).toContain("unsafe-local-disabled");
+  });
+
+  it("bootstraps the memory runtime before reading bridge artifact status", async () => {
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+        },
+      },
+      { homedir: "/Users/tester" },
+    );
+    const appConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+      },
+    } as OpenClawConfig;
+    const bootstrapSpy = vi
+      .spyOn(runtimeBootstrap, "ensureMemoryWikiPublicArtifactsRuntime")
+      .mockResolvedValue();
+
+    await resolveMemoryWikiStatus(config, {
+      appConfig,
+      listPublicArtifacts: async () => [],
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(bootstrapSpy).toHaveBeenCalledWith(appConfig);
   });
 
   it("warns when bridge mode has no exported memory artifacts", async () => {

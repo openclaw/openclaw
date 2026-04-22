@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { inferWikiPageKind, toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
+import { ensureMemoryWikiPublicArtifactsRuntime } from "./runtime-bootstrap.js";
 
 export type MemoryWikiStatusWarning = {
   code:
@@ -217,14 +218,15 @@ export async function resolveMemoryWikiStatus(
 ): Promise<MemoryWikiStatus> {
   const exists = deps?.pathExists ?? pathExists;
   const vaultExists = await exists(config.vault.path);
-  const bridgePublicArtifactCount =
-    deps?.appConfig && config.vaultMode === "bridge" && config.bridge.enabled
-      ? (
-          await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
-            cfg: deps.appConfig,
-          })
-        ).length
-      : null;
+  let bridgePublicArtifactCount: number | null = null;
+  if (deps?.appConfig && config.vaultMode === "bridge" && config.bridge.enabled) {
+    await ensureMemoryWikiPublicArtifactsRuntime(deps.appConfig);
+    bridgePublicArtifactCount = (
+      await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
+        cfg: deps.appConfig,
+      })
+    ).length;
+  }
   const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
   const counts = vaultExists
     ? await collectVaultCounts(config.vault.path)
