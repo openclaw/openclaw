@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type {
   AgentApprovalEventData,
@@ -11,6 +12,8 @@ import {
   emitAgentEvent,
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
+  getAgentRunContext,
+  type AgentApprovalPlanStep,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -37,6 +40,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { newPlanApprovalId } from "./plan-mode/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -44,11 +48,19 @@ type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
 type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
+type SessionStoreRuntimeModule = typeof import("../config/sessions/store.runtime.js");
+type ConfigModule = typeof import("../config/config.js");
+type SessionPathsModule = typeof import("../config/sessions/paths.js");
+type RoutingModule = typeof import("../routing/session-key.js");
 
 let execApprovalReplyModulePromise: Promise<ExecApprovalReplyModule> | undefined;
 let hookRunnerGlobalModulePromise: Promise<HookRunnerGlobalModule> | undefined;
 let mediaParseModulePromise: Promise<MediaParseModule> | undefined;
 let beforeToolCallModulePromise: Promise<BeforeToolCallModule> | undefined;
+let sessionStoreRuntimePromise: Promise<SessionStoreRuntimeModule> | undefined;
+let configModulePromise: Promise<ConfigModule> | undefined;
+let sessionPathsPromise: Promise<SessionPathsModule> | undefined;
+let routingPromise: Promise<RoutingModule> | undefined;
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
   execApprovalReplyModulePromise ??= import("../infra/exec-approval-reply.js");
@@ -68,6 +80,425 @@ function loadMediaParse(): Promise<MediaParseModule> {
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
   beforeToolCallModulePromise ??= import("./pi-tools.before-tool-call.js");
   return beforeToolCallModulePromise;
+}
+
+function loadSessionStoreRuntime(): Promise<SessionStoreRuntimeModule> {
+  sessionStoreRuntimePromise ??= import("../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
+
+function loadConfigModule(): Promise<ConfigModule> {
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
+}
+
+function loadSessionPaths(): Promise<SessionPathsModule> {
+  sessionPathsPromise ??= import("../config/sessions/paths.js");
+  return sessionPathsPromise;
+}
+
+function loadRouting(): Promise<RoutingModule> {
+  routingPromise ??= import("../routing/session-key.js");
+  return routingPromise;
+}
+
+/**
+ * Persist plan-mode approval-pending state on the session entry so the
+ * `sessions.patch { planApproval }` flow can match the approvalId minted
+ * by the runtime when `exit_plan_mode` fires.
+ *
+ * Without this, the resolvePlanApproval guard rejects every approval
+ * click as "stale approvalId" because the on-disk state has
+ * `approvalId: undefined` while the UI sends the freshly-minted token.
+ */
+async function persistPlanApprovalRequest(
+  sessionKey: string,
+  approvalId: string,
+  log: { warn?: (msg: string) => void } | undefined,
+): Promise<void> {
+  try {
+    const [
+      { updateSessionStoreEntry },
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+    ] = await Promise.all([
+      loadSessionStoreRuntime(),
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+    ]);
+    const cfg = loadConfig();
+    const parsed = parseAgentSessionKey(sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    const now = Date.now();
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        const current = entry.planMode;
+        // No active plan-mode session — agent called exit_plan_mode
+        // outside of plan mode (shouldn't happen in normal flow). Leave
+        // the entry untouched so we don't accidentally arm the gate.
+        if (!current || current.mode !== "plan") {
+          return null;
+        }
+        return {
+          planMode: {
+            ...current,
+            approval: "pending",
+            approvalId,
+            updatedAt: now,
+          },
+        };
+      },
+    });
+  } catch (err) {
+    log?.warn?.(`failed to persist plan-mode approvalId: ${String(err)}`);
+  }
+}
+
+/**
+ * Persist plan-mode entry on the session entry when the agent calls
+ * `enter_plan_mode`. Without this the tool is a pure no-op — the agent
+ * thinks it entered plan mode, the runtime never armed the gate, and
+ * the agent's next turn sits idle because nothing changed.
+ *
+ * Gated on the same `agents.defaults.planMode.enabled` opt-in as the
+ * user-driven path so the agent can't escape the operator's feature
+ * flag.
+ */
+/**
+ * Result of persisting a plan-mode-enter intercept.
+ * - `freshEntry: true` means the session transitioned from
+ *   normal/none → plan (caller should schedule new nudge crons).
+ * - `freshEntry: false` means the session was ALREADY in plan mode
+ *   and we just refreshed `updatedAt` — caller MUST NOT schedule
+ *   additional nudges, otherwise `nudgeJobIds` would grow unbounded
+ *   on repeated `enter_plan_mode` calls (PR-9 adversarial review #1).
+ * - `ok: false` means the persist failed (gated off, IO error, etc.).
+ */
+type PersistPlanModeEnterResult = { ok: boolean; freshEntry: boolean };
+
+async function persistPlanModeEnter(
+  sessionKey: string,
+  log: { warn?: (msg: string) => void } | undefined,
+): Promise<PersistPlanModeEnterResult> {
+  try {
+    const [
+      { updateSessionStoreEntry },
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+    ] = await Promise.all([
+      loadSessionStoreRuntime(),
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+    ]);
+    const cfg = loadConfig();
+    if (cfg.agents?.defaults?.planMode?.enabled !== true) {
+      // Feature gated off — refuse the transition. Agent will see the
+      // tool succeed but no state change; the workspaceNotes / tool
+      // description should explain plan mode is disabled.
+      return { ok: false, freshEntry: false };
+    }
+    const parsed = parseAgentSessionKey(sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    const now = Date.now();
+    let wasFreshEntry = false;
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        const current = entry.planMode;
+        if (current?.mode === "plan") {
+          // Already in plan mode — refresh updatedAt only. NUDGES MUST
+          // NOT be re-scheduled here (caller checks `freshEntry`),
+          // otherwise repeated `enter_plan_mode` calls would append
+          // unbounded entries to `nudgeJobIds`.
+          wasFreshEntry = false;
+          return {
+            planMode: {
+              ...current,
+              updatedAt: now,
+            },
+          };
+        }
+        // Fresh entry: clear any stale rejection history, reset to a
+        // clean pending-nothing state. Mirrors the sessions.patch
+        // { planMode: "plan" } user-driven path.
+        //
+        // PR-10 auto-mode: preserve `autoApprove` across plan cycles.
+        // The sessions-patch approve branch keeps the flag on `mode →
+        // normal` transitions; without re-applying it here, the flag
+        // would be lost on the very next enter_plan_mode call (since
+        // entry.planMode.mode is "normal" at that point so we hit this
+        // fresh-entry branch). Reading from `current` covers both
+        // pre-armed (normal/none w/ autoApprove) and fresh (no entry).
+        //
+        // PR #68939 follow-up (gate-state-unavailable fix): MUST
+        // initialize `cycleId` and `blockingSubagentRunIds` here too,
+        // matching the user-side `sessions-patch.ts` { planMode: "plan" }
+        // toggle path. Without these, the agent-driven enter_plan_mode
+        // creates a half-formed planMode object — the persister later
+        // spreads it with approvalRunId/title/approvalId, but cycleId
+        // and blockingSubagentRunIds stay missing. Then the approval
+        // gate's `isModernPlanCycleState && !parentCtx && !hasPersisted`
+        // fail-closed branch fires (because pendingInteraction is
+        // present from the persister but blockingSubagentRunIds is
+        // null, so `hasPersistedGateState` is false), and every approval
+        // attempt is rejected with PLAN_APPROVAL_GATE_STATE_UNAVAILABLE.
+        // This affects EVERY agent-driven plan cycle (the common case
+        // for auto-approve), not just edge cases.
+        wasFreshEntry = true;
+        const carryAutoApprove = current?.autoApprove === true;
+        return {
+          planMode: {
+            mode: "plan",
+            approval: "none",
+            cycleId: randomUUID(),
+            enteredAt: now,
+            updatedAt: now,
+            rejectionCount: 0,
+            blockingSubagentRunIds: [],
+            ...(carryAutoApprove ? { autoApprove: true } : {}),
+          },
+        };
+      },
+    });
+    return { ok: true, freshEntry: wasFreshEntry };
+  } catch (err) {
+    log?.warn?.(`failed to persist plan-mode entry: ${String(err)}`);
+    return { ok: false, freshEntry: false };
+  }
+}
+
+/**
+ * PR-10 auto-mode: if the session has `planMode.autoApprove === true`,
+ * fire `sessions.patch { planApproval: { action: "approve", approvalId }}`
+ * immediately so the plan executes without waiting for the user.
+ *
+ * Failure mode (review H1): if `callGatewayTool` throws (gateway
+ * restart, network blip, schema rejection of the auto-approve patch),
+ * the approval card stays on-screen for manual click and we log a
+ * `error` (not `warn`) so the operator sees the silent fall-back.
+ * The user-visible degradation is "auto-mode briefly behaves like
+ * manual" — acceptable, but loud enough in the logs to debug.
+ *
+ * Reads the session entry directly so the toggle takes effect on the
+ * very next plan submission (no agent-side state mirroring needed).
+ *
+ * Race window (review H2): we read the store via `readSessionStoreReadOnly`
+ * (no lock). Between the read and the auto-approve patch, the user
+ * could click "Reject" — we'd then over-approve. The mitigation is
+ * that the approve and reject actions both go through `resolvePlanApproval`
+ * with the same approvalId, so whichever lands LAST wins. Auto-approve
+ * lands first in practice (it fires synchronously inside the tool-end
+ * handler) so a user reject lands on `mode: normal, approval: none`
+ * (terminal) and is cleanly rejected by the state-machine guard.
+ */
+async function autoApproveIfEnabled(params: {
+  sessionKey: string;
+  approvalId: string;
+  log?: {
+    warn?: (msg: string) => void;
+    info?: (msg: string) => void;
+    error?: (msg: string) => void;
+  };
+}): Promise<void> {
+  try {
+    const [
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+      { readSessionStoreReadOnly },
+    ] = await Promise.all([
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+      loadSessionStoreRead(),
+    ]);
+    const cfg = loadConfig();
+    const parsed = parseAgentSessionKey(params.sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    // PR #68939 follow-up (back-to-back race fix): the persister
+    // (plan-snapshot-persister.ts) writes `planMode.approval = "pending"`
+    // + `approvalId` from the SAME approval event we're handling. Both
+    // listeners fire in parallel, so reading the store immediately can
+    // beat the persister's write. Sessions.patch then rejects with
+    // INVALID_REQUEST "requires a pending approval (current state: none)"
+    // — the auto-approve falls back to a manual card the user can't
+    // safely click (the persister hasn't written the approvalId yet).
+    //
+    // Mitigation: poll the store until BOTH `approval === "pending"` AND
+    // `approvalId === params.approvalId` are visible (or timeout). Cap
+    // total wait at 2s — the persister write is local fs IO, normally
+    // <50ms. If the persister never lands the matching approvalId, treat
+    // as "auto-approve aborted" (safer than firing a stale patch).
+    const POLL_INTERVAL_MS = 50;
+    const MAX_WAIT_MS = 2000;
+    const pollStart = Date.now();
+    let entry: ReturnType<typeof readSessionStoreReadOnly>[string] | undefined;
+    while (Date.now() - pollStart < MAX_WAIT_MS) {
+      const store = readSessionStoreReadOnly(storePath);
+      entry = store[params.sessionKey];
+      if (!entry?.planMode?.autoApprove) {
+        return; // not auto-mode (or autoApprove flipped off mid-poll); let user resolve
+      }
+      if (
+        entry.planMode.approval === "pending" &&
+        entry.planMode.approvalId === params.approvalId
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+    if (!entry?.planMode?.autoApprove) {
+      return;
+    }
+    if (
+      entry.planMode.approval !== "pending" ||
+      entry.planMode.approvalId !== params.approvalId
+    ) {
+      params.log?.warn?.(
+        `auto-approve aborted: persisted approval state did not reach pending+approvalId=${params.approvalId} ` +
+          `within ${MAX_WAIT_MS}ms (current: approval=${entry.planMode.approval}, approvalId=${entry.planMode.approvalId ?? "(missing)"}). ` +
+          `Manual approval card stays armed.`,
+      );
+      return;
+    }
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    await callGatewayTool(
+      "sessions.patch",
+      {},
+      {
+        key: params.sessionKey,
+        planApproval: {
+          action: "approve",
+          approvalId: params.approvalId,
+        },
+      },
+    );
+    params.log?.info?.(
+      `auto-mode: plan auto-approved sessionKey=${params.sessionKey} approvalId=${params.approvalId}`,
+    );
+  } catch (err) {
+    // Use error-level logging instead of warn so operators notice the
+    // silent fall-back. The user sees the approval card stay open and
+    // can resolve it manually; auto-mode briefly degrades.
+    (params.log?.error ?? params.log?.warn)?.(
+      `auto-approve FAILED — approval card requires manual resolve. ` +
+        `sessionKey=${params.sessionKey} approvalId=${params.approvalId}: ${String(err)}`,
+    );
+  }
+}
+
+let sessionStoreReadModulePromise:
+  | Promise<typeof import("../config/sessions/store-read.js")>
+  | undefined;
+function loadSessionStoreRead(): Promise<typeof import("../config/sessions/store-read.js")> {
+  sessionStoreReadModulePromise ??= import("../config/sessions/store-read.js");
+  return sessionStoreReadModulePromise;
+}
+
+/**
+ * PR-9 Wave B3: schedule plan-nudge wake-up crons after enter_plan_mode
+ * succeeds, then persist the resulting job IDs onto
+ * `SessionEntry.planMode.nudgeJobIds` so cleanup can target them
+ * precisely when the plan resolves (sessions-patch.ts handles the
+ * cleanup transition).
+ *
+ * Fire-and-forget from the caller — schedule failures are tolerated
+ * (the plan still works without nudges; nudges are an augmentation).
+ * Bounded retry / observability would land in a follow-up.
+ */
+async function schedulePlanNudgesAndPersist(params: {
+  sessionKey: string;
+  log?: { warn?: (msg: string) => void; info?: (msg: string) => void };
+}): Promise<void> {
+  let createdJobIds: string[] = [];
+  try {
+    const { schedulePlanNudges } = await import("./plan-mode/plan-nudge-crons.js");
+    const [
+      { readSessionStoreReadOnly },
+      { updateSessionStoreEntry },
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+    ] = await Promise.all([
+      loadSessionStoreRead(),
+      loadSessionStoreRuntime(),
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+    ]);
+    const cfg = loadConfig();
+    const parsed = parseAgentSessionKey(params.sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    const currentEntry = readSessionStoreReadOnly(storePath)[params.sessionKey];
+    const planCycleId =
+      currentEntry?.planMode?.mode === "plan" ? currentEntry.planMode.cycleId : undefined;
+    const scheduled = await schedulePlanNudges({
+      sessionKey: params.sessionKey,
+      planCycleId,
+      log: params.log,
+    });
+    if (scheduled.length === 0) {
+      return;
+    }
+    const jobIds = scheduled.map((n) => n.jobId);
+    createdJobIds = jobIds;
+    let persisted = false;
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: params.sessionKey,
+      update: async (entry) => {
+        if (!entry.planMode || entry.planMode.mode !== "plan") {
+          // Plan mode resolved between schedule + persist — drop the
+          // ids on the floor; sessions-patch already cleaned them up
+          // (or there's nothing to clean up).
+          return null;
+        }
+        if (planCycleId && entry.planMode.cycleId !== planCycleId) {
+          return null;
+        }
+        persisted = true;
+        return {
+          planMode: {
+            ...entry.planMode,
+            nudgeJobIds: [...(entry.planMode.nudgeJobIds ?? []), ...jobIds],
+          },
+        };
+      },
+    });
+    if (!persisted) {
+      const { cleanupPlanNudges } = await import("./plan-mode/plan-nudge-crons.js");
+      await cleanupPlanNudges({ jobIds, log: params.log });
+    }
+  } catch (err) {
+    if (createdJobIds.length > 0) {
+      try {
+        const { cleanupPlanNudges } = await import("./plan-mode/plan-nudge-crons.js");
+        await cleanupPlanNudges({ jobIds: createdJobIds, log: params.log });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    params.log?.warn?.(`schedulePlanNudgesAndPersist failed: ${String(err)}`);
+  }
 }
 
 type ToolStartRecord = {
@@ -187,6 +618,127 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
     ? summary.deleted.filter((entry): entry is string => typeof entry === "string")
     : [];
   return { added, modified, deleted };
+}
+
+/**
+ * Reads the `exit_plan_mode` tool result into a typed plan-proposal
+ * shape suitable for the approval event payload (PR-8 follow-up).
+ * Returns null if the tool result doesn't carry a plan (e.g. tool
+ * raised before producing one).
+ */
+function readPlanProposalDetails(result: unknown): {
+  plan: AgentApprovalPlanStep[];
+  summary?: string;
+  title?: string;
+  analysis?: string;
+  assumptions?: string[];
+  risks?: Array<{ risk: string; mitigation: string }>;
+  verification?: string[];
+  references?: string[];
+} | null {
+  const details = readToolResultDetailsRecord(result);
+  if (!details || details.status !== "approval_requested") {
+    return null;
+  }
+  const rawPlan = details.plan;
+  if (!Array.isArray(rawPlan)) {
+    return null;
+  }
+  const plan: AgentApprovalPlanStep[] = [];
+  for (const entry of rawPlan) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const step = (entry as Record<string, unknown>).step;
+    const status = (entry as Record<string, unknown>).status;
+    const activeForm = (entry as Record<string, unknown>).activeForm;
+    // PR-10 review fix (Greptile P1 #3105250277): the archetype prompt
+    // tells agents to include `acceptanceCriteria: [...]` on high-risk
+    // steps so the closure-gate prevents premature `status: "completed"`,
+    // but the parse here was silently dropping the field. Extract it
+    // (and `verifiedCriteria`, the runtime-tracked counterpart) so the
+    // closure-gate machinery + UI checklist nesting both work end-to-end.
+    const rawAcceptance = (entry as Record<string, unknown>).acceptanceCriteria;
+    const rawVerified = (entry as Record<string, unknown>).verifiedCriteria;
+    const cleanCriteria = (raw: unknown): string[] | undefined => {
+      if (!Array.isArray(raw)) {
+        return undefined;
+      }
+      const cleaned = raw
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      return cleaned.length > 0 ? cleaned : undefined;
+    };
+    const acceptanceCriteria = cleanCriteria(rawAcceptance);
+    const verifiedCriteria = cleanCriteria(rawVerified);
+    if (typeof step !== "string" || typeof status !== "string") {
+      continue;
+    }
+    plan.push({
+      step,
+      status,
+      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+      ...(acceptanceCriteria ? { acceptanceCriteria } : {}),
+      ...(verifiedCriteria ? { verifiedCriteria } : {}),
+    });
+  }
+  if (plan.length === 0) {
+    return null;
+  }
+  const rawSummary = details.summary;
+  // PR-9 Tier 1: surface explicit `title` field if the agent supplied
+  // one via exit_plan_mode. Fallback to summary handled by the caller.
+  const rawTitle = details.title;
+  // PR-10 archetype fields. All optional; only forwarded when valid.
+  const rawAnalysis = details.analysis;
+  const rawAssumptions = details.assumptions;
+  const rawRisks = details.risks;
+  const rawVerification = details.verification;
+  const rawReferences = details.references;
+  const cleanStringArray = (raw: unknown): string[] | undefined => {
+    if (!Array.isArray(raw)) {
+      return undefined;
+    }
+    const cleaned = raw
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    return cleaned.length > 0 ? cleaned : undefined;
+  };
+  const assumptions = cleanStringArray(rawAssumptions);
+  const verification = cleanStringArray(rawVerification);
+  const references = cleanStringArray(rawReferences);
+  let risks: Array<{ risk: string; mitigation: string }> | undefined;
+  if (Array.isArray(rawRisks)) {
+    const cleanedRisks: Array<{ risk: string; mitigation: string }> = [];
+    for (const entry of rawRisks) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const e = entry as Record<string, unknown>;
+      const risk = typeof e.risk === "string" ? e.risk.trim() : "";
+      const mitigation = typeof e.mitigation === "string" ? e.mitigation.trim() : "";
+      if (risk.length > 0 && mitigation.length > 0) {
+        cleanedRisks.push({ risk, mitigation });
+      }
+    }
+    if (cleanedRisks.length > 0) {
+      risks = cleanedRisks;
+    }
+  }
+  return {
+    plan,
+    ...(typeof rawTitle === "string" && rawTitle.trim() ? { title: rawTitle.trim() } : {}),
+    ...(typeof rawSummary === "string" && rawSummary.trim() ? { summary: rawSummary } : {}),
+    ...(typeof rawAnalysis === "string" && rawAnalysis.trim()
+      ? { analysis: rawAnalysis.trim() }
+      : {}),
+    ...(assumptions ? { assumptions } : {}),
+    ...(risks ? { risks } : {}),
+    ...(verification ? { verification } : {}),
+    ...(references ? { references } : {}),
+  };
 }
 
 function buildPatchSummaryText(summary: ApplyPatchSummary): string {
@@ -1102,6 +1654,217 @@ export async function handleToolExecutionEnd(
         stream: "patch",
         data: patchData,
       });
+    }
+  }
+
+  // PR-8 follow-up: plan-mode tool dispatch.
+  //
+  // `exit_plan_mode` proposes a plan for user approval. The runtime
+  // emits a plugin-kind approval event with the plan payload + a fresh
+  // approvalId; UI surfaces (Control UI overlay, channel renderers) read
+  // this to render Approve/Reject/Edit buttons. The user-facing approval
+  // response flows back through `sessions.patch { planApproval }` which
+  // calls `resolvePlanApproval` to transition `SessionEntry.planMode`.
+  //
+  // `enter_plan_mode` is a transition signal — actual mode-state writes
+  // happen via the user-driven `sessions.patch { planMode: "plan" }`
+  // pathway. We don't auto-enter plan mode from a tool call alone (that
+  // would let the agent escape the user's opt-in gate).
+  // PR-8 follow-up: agent-driven plan-mode entry. Without persisting
+  // the session.planMode change here, enter_plan_mode is a no-op and
+  // the agent gets stuck thinking plan mode is on when it isn't.
+  // Symptom: agent says "opening a fresh plan cycle" then stops, no
+  // exit_plan_mode call follows because the agent's prompt logic
+  // believes the user must propose work first in plan mode.
+  if (toolName === "enter_plan_mode" && !isToolError && ctx.params.sessionKey) {
+    const enterResult = await persistPlanModeEnter(ctx.params.sessionKey, ctx.log);
+    if (enterResult.ok) {
+      // PR-8 follow-up: mirror the transition into AgentRunContext so
+      // sessions_spawn (and other runtime checks) can read `inPlanMode`
+      // without a session-store round-trip. Drives the cleanup:"keep"
+      // override for research children and the open-subagent tracking.
+      const runCtx = getAgentRunContext(ctx.params.runId);
+      if (runCtx) {
+        runCtx.inPlanMode = true;
+      }
+      // PR-9 Wave B3: schedule plan-nudge wake-up crons so the agent
+      // gets pulled back to the active plan even if it goes idle in
+      // chat. Stored job ids are persisted so cleanup at exit/complete
+      // is precise. Failures are tolerated (best-effort augmentation).
+      //
+      // Adversarial review #1: only schedule on FRESH entry. Repeated
+      // enter_plan_mode calls when already in plan mode just refresh
+      // updatedAt — scheduling more nudges in that case would append
+      // entries to `nudgeJobIds` indefinitely.
+      if (enterResult.freshEntry) {
+        void schedulePlanNudgesAndPersist({
+          sessionKey: ctx.params.sessionKey,
+          log: ctx.log,
+        });
+      }
+      const planEnterEvent: AgentApprovalEventData = {
+        phase: "requested",
+        kind: "plugin",
+        status: "pending",
+        title: "Plan mode entered",
+        itemId,
+        toolCallId,
+        plan: [],
+      };
+      // Emit a lightweight event so any UI surface that tracks
+      // mode-state transitions sees the change immediately. We
+      // intentionally use the approval channel so it shares the same
+      // delivery path; UI treats empty plan + status pending as the
+      // "mode-entered" signal.
+      void ctx.params.onAgentEvent?.({
+        stream: "approval",
+        data: planEnterEvent,
+      });
+    }
+  }
+
+  if (toolName === "exit_plan_mode" && !isToolError) {
+    const details = readPlanProposalDetails(result);
+    if (details && details.plan.length > 0) {
+      const approvalId = newPlanApprovalId();
+      // Persist the approvalId to SessionEntry.planMode BEFORE emitting
+      // the event so the eventual sessions.patch { planApproval } can
+      // match it via resolvePlanApproval's stale-id guard. Without this
+      // the user clicks Approve and gets "stale approvalId" because the
+      // on-disk approvalId is still undefined.
+      if (ctx.params.sessionKey) {
+        await persistPlanApprovalRequest(ctx.params.sessionKey, approvalId, ctx.log);
+      }
+      // PR-9 Tier 1: prefer explicit `title` for the approval-card
+      // header. Falls back to `summary` (with "Plan approval —" prefix)
+      // for backwards-compat with agents that only supplied `summary`.
+      const approvalTitle = details.title
+        ? details.title
+        : details.summary
+          ? `Plan approval — ${details.summary}`
+          : "Plan approval requested";
+      const approvalData: AgentApprovalEventData = {
+        phase: "requested",
+        kind: "plugin",
+        status: "pending",
+        title: approvalTitle,
+        itemId,
+        toolCallId,
+        approvalId,
+        plan: details.plan,
+        ...(details.summary ? { summary: details.summary } : {}),
+        // PR-10 archetype fields. Forwarded to UI/channel renderers
+        // so the approval card can show analysis/assumptions/risks/etc.
+        ...(details.analysis ? { analysis: details.analysis } : {}),
+        ...(details.assumptions ? { assumptions: details.assumptions } : {}),
+        ...(details.risks ? { risks: details.risks } : {}),
+        ...(details.verification ? { verification: details.verification } : {}),
+        ...(details.references ? { references: details.references } : {}),
+      };
+      emitAgentApprovalEvent({
+        runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        data: approvalData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "approval",
+        data: approvalData,
+      });
+      // PR-14: Telegram plan-mode visibility — generate the full
+      // archetype as a markdown file, persist to disk, send to the
+      // originating Telegram chat as a document attachment.
+      // Resolution still goes through PR-11's universal /plan slash
+      // commands; this bridge is read-only (visibility), no
+      // approval-id translator required.
+      //
+      // void-fired so it never blocks the approval emit or the
+      // autoApproveIfEnabled path that follows. Failures log at warn
+      // and never propagate.
+      if (ctx.params.sessionKey && ctx.params.agentId) {
+        void (async () => {
+          try {
+            const { dispatchPlanArchetypeAttachment } =
+              await import("./plan-mode/plan-archetype-bridge.js");
+            await dispatchPlanArchetypeAttachment({
+              sessionKey: ctx.params.sessionKey!,
+              agentId: ctx.params.agentId!,
+              details,
+              log: ctx.log,
+            });
+          } catch (err) {
+            ctx.log?.warn?.(`plan-bridge import/dispatch failed: ${String(err)}`);
+          }
+        })();
+      }
+      // PR-10 auto-mode: if the session has autoApprove=true, fire
+      // `sessions.patch { planApproval: { action: "approve" } }`
+      // immediately so the agent doesn't wait. The user-visible
+      // sequence is: plan submitted → instantly auto-approved →
+      // execution starts. If the user wants to interrupt, they can
+      // toggle auto-mode off (resets the flag) or `/stop` mid-run.
+      if (ctx.params.sessionKey) {
+        void autoApproveIfEnabled({
+          sessionKey: ctx.params.sessionKey,
+          approvalId,
+          log: ctx.log,
+        });
+      }
+    }
+  }
+
+  // PR-10: ask_user_question intercept — emit a "question" approval
+  // event through the same kind:"plugin" pipeline as exit_plan_mode.
+  // The plan-approval card UI detects the `question` field and renders
+  // one button per option instead of the standard Approve/Revise/Reject
+  // triad. The user's chosen answer routes back via sessions.patch
+  // { planApproval: { action: "answer", answer: <choice> } }.
+  if (toolName === "ask_user_question" && !isToolError) {
+    const details = readToolResultDetailsRecord(result);
+    if (details && details.status === "question_submitted") {
+      const questionText = typeof details.question === "string" ? details.question : "";
+      const optionsRaw = details.options;
+      const allowFreetext =
+        typeof details.allowFreetext === "boolean" ? details.allowFreetext : false;
+      const questionId = typeof details.questionId === "string" ? details.questionId : undefined;
+      const options = Array.isArray(optionsRaw)
+        ? optionsRaw.filter((o): o is string => typeof o === "string" && o.trim().length > 0)
+        : [];
+      if (questionText && options.length >= 2) {
+        // PR-10 deep-dive review: derive approvalId deterministically
+        // from the tool call so transcript replay / repair produces the
+        // same byte sequence (prompt-cache stability rule, same intent
+        // as the H5 questionId fix on the tool side). Was previously
+        // `question-<timestamp>-<random>` which invalidated the cache
+        // every replay and surfaced as duplicate "stale" cards.
+        const approvalId = `question-${toolCallId}`;
+        const questionApprovalData: AgentApprovalEventData = {
+          phase: "requested",
+          kind: "plugin",
+          status: "pending",
+          title: "Agent has a question",
+          itemId,
+          toolCallId,
+          approvalId,
+          // Empty plan keeps the plan branch quiet on the UI side; the
+          // question branch takes over.
+          plan: [],
+          question: {
+            prompt: questionText,
+            options,
+            allowFreetext,
+            ...(questionId ? { questionId } : {}),
+          },
+        };
+        emitAgentApprovalEvent({
+          runId: ctx.params.runId,
+          ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+          data: questionApprovalData,
+        });
+        void ctx.params.onAgentEvent?.({
+          stream: "approval",
+          data: questionApprovalData,
+        });
+      }
     }
   }
 

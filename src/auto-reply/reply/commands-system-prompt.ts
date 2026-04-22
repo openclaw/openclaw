@@ -156,6 +156,21 @@ export async function resolveCommandsSystemPromptBundle(
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,
+    // PR-8 follow-up Round 2: GPT-5 family boot reorder.
+    // Copilot review #68939: defensively strip any `<provider>/` prefix
+    // from params.model (e.g. `openai/gpt-5.4`) so the GPT-5 family
+    // check downstream matches even when an upstream producer forwards
+    // a provider-qualified string. The provider is passed separately
+    // on the line above, so the prefix here would be redundant.
+    modelProviderId: params.provider,
+    modelId: (() => {
+      const m = params.model;
+      if (!m) {
+        return m;
+      }
+      const slashIdx = m.lastIndexOf("/");
+      return slashIdx >= 0 ? m.slice(slashIdx + 1) : m;
+    })(),
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };

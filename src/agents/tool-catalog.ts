@@ -1,6 +1,9 @@
 import {
+  ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY,
   CRON_TOOL_DISPLAY_SUMMARY,
+  ENTER_PLAN_MODE_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
+  EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -257,6 +260,36 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "update_plan",
     label: "update_plan",
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  // PR-8: plan-mode tools — registered in the catalog so they participate
+  // in policy/profile filtering. Whether the runtime actually exposes them
+  // is gated separately by `isPlanModeToolsEnabledForOpenClawTools`.
+  {
+    id: "enter_plan_mode",
+    label: "enter_plan_mode",
+    description: ENTER_PLAN_MODE_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "exit_plan_mode",
+    label: "exit_plan_mode",
+    description: EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  // PR-10: ask_user_question — plan-mode-safe clarifying question tool.
+  // Same gating as the other plan-mode tools (only registered when
+  // agents.defaults.planMode.enabled is true).
+  {
+    id: "ask_user_question",
+    label: "ask_user_question",
+    description: ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

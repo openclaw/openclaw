@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { ErrorCodes } from "./protocol/index.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
@@ -454,5 +455,607 @@ describe("gateway sessions patch", () => {
     const entry = await applySubagentModelPatch(cfg);
     expect(entry.providerOverride).toBe("synthetic");
     expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
+  });
+});
+
+describe("PR-10 plan auto-mode patch routing", () => {
+  // All paths require the planMode feature gate to be on.
+  function planModeEnabledCfg(): OpenClawConfig {
+    return {
+      agents: { defaults: { planMode: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+  }
+
+  test("rejects planApproval action='auto' when feature gate is OFF", async () => {
+    const result = await runPatch({
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "auto", autoEnabled: true },
+      },
+      // EMPTY_CFG → planMode.enabled !== true.
+    });
+    expectPatchError(result, "plan mode is disabled");
+  });
+
+  test("rejects action='auto' patches missing autoEnabled (deep-dive validation)", async () => {
+    // Pre-fix: a patch with `action: "auto"` and no `autoEnabled` was
+    // silently coerced to `false` and disabled auto-approve. Post-fix:
+    // the handler returns an explicit validation error so the caller
+    // can correct the malformed patch instead of debugging a phantom
+    // toggle-off.
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "auto" } as unknown as never,
+      },
+    });
+    expectPatchError(result, "autoEnabled");
+  });
+
+  test("toggles autoApprove ON when no planMode entry exists yet (pre-arms)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: true },
+        },
+      }),
+    );
+    // Pre-arming: planMode entry materialized as mode:"normal" with the
+    // flag set, so the next enter_plan_mode preserves it.
+    expect(entry.planMode?.mode).toBe("normal");
+    expect(entry.planMode?.autoApprove).toBe(true);
+  });
+
+  test("toggles autoApprove ON when an active plan-mode session exists", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          updatedAt: 1,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: true },
+        },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("plan"); // unchanged
+    expect(entry.planMode?.autoApprove).toBe(true);
+  });
+
+  test("toggles autoApprove OFF without disturbing an active plan-mode session", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "abc",
+          rejectionCount: 0,
+          updatedAt: 1,
+          autoApprove: true,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: false },
+        },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("plan");
+    expect(entry.planMode?.approval).toBe("pending");
+    expect(entry.planMode?.approvalId).toBe("abc");
+    expect(entry.planMode?.autoApprove).toBe(false);
+  });
+
+  test("preserves autoApprove across approve transition (mode → normal)", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "abc",
+          rejectionCount: 0,
+          updatedAt: 1,
+          autoApprove: true,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "abc" },
+        },
+      }),
+    );
+    // Approve transitions mode → normal; the autoApprove flag must survive
+    // so the NEXT enter_plan_mode in the same session also auto-approves.
+    expect(entry.planMode?.mode).toBe("normal");
+    expect(entry.planMode?.autoApprove).toBe(true);
+  });
+
+  test("PR-12 Bug A1: nudgeJobIds dropped from carry-forward planMode entry on approve+autoApprove (was leaked before)", async () => {
+    // Prior bug: every approve/reject/edit cycle left scheduled
+    // nudge crons orphaned because the planApproval branch only
+    // deleted/rewrote `planMode` without calling cleanupPlanNudges
+    // first. Fix: capture the ids BEFORE the rewrite, and the carry-
+    // forward entry must NOT include them — they were just cancelled
+    // and the next enter_plan_mode schedules fresh ones.
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "leak-test",
+          rejectionCount: 0,
+          updatedAt: 1,
+          autoApprove: true,
+          nudgeJobIds: ["plan-nudge:10min:foo", "plan-nudge:30min:foo", "plan-nudge:60min:foo"],
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "leak-test" },
+        },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("normal");
+    expect(entry.planMode?.autoApprove).toBe(true);
+    expect(entry.planMode?.nudgeJobIds).toBeUndefined();
+  });
+
+  test("clears planMode entry on approve when autoApprove is unset", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "abc",
+          rejectionCount: 0,
+          updatedAt: 1,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "abc" },
+        },
+      }),
+    );
+    // No autoApprove flag → planMode is cleared entirely (matches the
+    // pre-PR-10 behavior).
+    expect(entry.planMode).toBeUndefined();
+  });
+
+  test("rejects answer action without an answer string", async () => {
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "answer", answer: "" } as unknown as never,
+      },
+    });
+    expectPatchError(result, "answer");
+  });
+
+  test("Bug B (C1 follow-up): approve/edit/reject on a session with no planMode returns PLAN_APPROVAL_EXPIRED", async () => {
+    // Covers the stale-card case where the session has already
+    // exited plan mode by any route (/plan off, another channel
+    // resolved it, approval timeout, or state lost to compaction).
+    // The UI branches on this code to auto-dismiss the card instead
+    // of leaving the user stuck with a "nothing happened" click.
+    const cases: Array<ApplySessionsPatchArgs["patch"]["planApproval"]> = [
+      { action: "approve", approvalId: "stale-id" },
+      { action: "edit", approvalId: "stale-id" },
+      { action: "reject", approvalId: "stale-id", feedback: "n/a" },
+    ];
+    for (const planApproval of cases) {
+      const result = await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval,
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected failure");
+      }
+      expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+      expect(result.error.message).toContain("active plan-mode session");
+    }
+  });
+
+  test("M3 fix: pre-arming `/plan auto on` then `/plan on` carries autoApprove forward", async () => {
+    // Step 1: user runs /plan auto on while not in plan mode. Server
+    // materializes a `mode: "normal"` placeholder with autoApprove=true.
+    const armed = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: true },
+        },
+      }),
+    );
+    expect(armed.planMode?.mode).toBe("normal");
+    expect(armed.planMode?.autoApprove).toBe(true);
+
+    // Step 2: user runs /plan on. Without the M3 fix this branch
+    // creates a fresh planMode entry that drops autoApprove. WITH the
+    // fix, the existing autoApprove flag is carried forward into the
+    // new plan-mode entry so the very first plan submission auto-
+    // approves as the user expects.
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: armed,
+    };
+    const planned = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: { key: MAIN_SESSION_KEY, planMode: "plan" },
+      }),
+    );
+    expect(planned.planMode?.mode).toBe("plan");
+    expect(planned.planMode?.approval).toBe("none");
+    expect(planned.planMode?.autoApprove).toBe(true);
+  });
+
+  test("M3: /plan on without prior pre-arm does NOT add autoApprove", async () => {
+    // Sanity check: the carry-forward only fires when the prior entry
+    // had autoApprove=true. A bare /plan on starts with autoApprove
+    // unset (never entered the truthy branch).
+    const planned = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: { key: MAIN_SESSION_KEY, planMode: "plan" },
+      }),
+    );
+    expect(planned.planMode?.mode).toBe("plan");
+    expect(planned.planMode?.autoApprove).toBeUndefined();
+  });
+
+  test("fresh /plan on clears stale approval grace and pending interaction", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store: {
+          [MAIN_SESSION_KEY]: {
+            sessionId: "sess-1",
+            updatedAt: 1,
+            recentlyApprovedAt: Date.now(),
+            recentlyApprovedCycleId: "old-cycle",
+            pendingInteraction: {
+              kind: "plan",
+              approvalId: "old-approval",
+              title: "Old plan",
+              createdAt: 1,
+              status: "pending",
+              cycleId: "old-cycle",
+            },
+          } as SessionEntry,
+        },
+        patch: { key: MAIN_SESSION_KEY, planMode: "plan" },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("plan");
+    expect(entry.planMode?.cycleId).toBeTruthy();
+    expect(entry.recentlyApprovedAt).toBeUndefined();
+    expect(entry.recentlyApprovedCycleId).toBeUndefined();
+    expect(entry.pendingInteraction).toBeUndefined();
+  });
+
+  test("accepts answer action with matching pendingInteraction ids", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          cycleId: "cycle-1",
+          updatedAt: 1,
+        },
+        pendingInteraction: {
+          kind: "question",
+          approvalId: "q-toolcall-123",
+          questionId: "q-123",
+          title: "Agent has a question",
+          prompt: "Pick one",
+          options: ["Option A", "Option B"],
+          allowFreetext: false,
+          createdAt: 1,
+          status: "pending",
+          cycleId: "cycle-1",
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: {
+            action: "answer",
+            answer: "Option A",
+            approvalId: "q-toolcall-123",
+            questionId: "q-123",
+          },
+        },
+      }),
+    );
+    // No planMode state change — the runtime injects [QUESTION_ANSWER]
+    // separately via pendingAgentInjections (asserted below).
+    expect(entry.planMode?.mode).toBe("plan");
+    expect(entry.planMode?.approval).toBe("none");
+    // Nuclear-fix-stack integration (cherry-pick of 11d72adf9b): the
+    // answer branch now enqueues into the typed
+    // `pendingAgentInjections` queue (with id-dedup via
+    // `appendToInjectionQueue`) instead of writing the legacy scalar
+    // `pendingAgentInjection`. Assert the queue entry has the right
+    // shape: kind=question_answer, approvalId matches, text carries
+    // the [QUESTION_ANSWER]: marker.
+    const queue = entry.pendingAgentInjections ?? [];
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({
+      kind: "question_answer",
+      approvalId: "q-toolcall-123",
+      id: "question-answer-q-toolcall-123",
+      text: "[QUESTION_ANSWER]: Option A",
+    });
+    expect(entry.pendingInteraction).toBeUndefined();
+    expect(entry.pendingQuestionApprovalId).toBeUndefined();
+    expect(entry.pendingQuestionOptions).toBeUndefined();
+    expect(entry.pendingQuestionAllowFreetext).toBeUndefined();
+  });
+
+  test("rejects answer action with questionId mismatch", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          cycleId: "cycle-1",
+          updatedAt: 1,
+        },
+        pendingInteraction: {
+          kind: "question",
+          approvalId: "q-toolcall-123",
+          questionId: "q-123",
+          title: "Agent has a question",
+          prompt: "Pick one",
+          options: ["Option A", "Option B"],
+          allowFreetext: false,
+          createdAt: 1,
+          status: "pending",
+          cycleId: "cycle-1",
+        },
+      } as unknown as SessionEntry,
+    };
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      store,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: {
+          action: "answer",
+          answer: "Option A",
+          approvalId: "q-toolcall-123",
+          questionId: "q-stale",
+        },
+      },
+    });
+    expectPatchError(result, "questionId mismatch");
+  });
+
+  test("rejects answer action with no pending question (Codex P1 review #68939)", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          updatedAt: 1,
+        },
+        // pendingQuestionApprovalId is intentionally absent.
+      } as unknown as SessionEntry,
+    };
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      store,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "answer", answer: "Option A", approvalId: "q-stale-456" },
+      },
+    });
+    expectPatchError(result, "no pending ask_user_question");
+  });
+
+  test("rejects answer action with approvalId mismatch (Codex P1 review #68939)", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          updatedAt: 1,
+        },
+        pendingQuestionApprovalId: "q-current-789",
+      } as unknown as SessionEntry,
+    };
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      store,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "answer", answer: "Option A", approvalId: "q-stale-456" },
+      },
+    });
+    expectPatchError(result, "approvalId mismatch");
+  });
+
+  // R5 (C1 follow-up): multi-channel approval dedup.
+  // The gateway applies a sessions.patch serially against the
+  // SessionEntry store, so "concurrent" webchat + Telegram writes
+  // degrade to back-to-back serial writes. The second write sees
+  // the post-first-write state and MUST reject with
+  // PLAN_APPROVAL_EXPIRED so operators don't end up with two
+  // synthetic [PLAN_DECISION] injections landing on the agent's
+  // next turn. This pins the serialization contract.
+  describe("R5: multi-channel approval dedup (C1 follow-up)", () => {
+    const APPROVAL_ID = "plan-approval-multi-channel";
+
+    function makePendingStore(): Record<string, SessionEntry> {
+      return {
+        [MAIN_SESSION_KEY]: {
+          planMode: {
+            mode: "plan",
+            approval: "pending",
+            approvalId: APPROVAL_ID,
+            rejectionCount: 0,
+            updatedAt: 1,
+          },
+        } as unknown as SessionEntry,
+      };
+    }
+
+    test("two approve writes from different channels: first wins, second returns PLAN_APPROVAL_EXPIRED", async () => {
+      const store = makePendingStore();
+      // Webchat approve lands first.
+      const webResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: APPROVAL_ID },
+        },
+      });
+      const webEntry = expectPatchOk(webResult);
+      // Approve transitions planMode → normal, clears the pending
+      // approvalId. Without autoApprove the entry is gone entirely.
+      expect(webEntry.planMode).toBeUndefined();
+
+      // Now simulate Telegram's /plan accept arriving a few ms
+      // later against the mutated store. No planMode state → must
+      // error with PLAN_APPROVAL_EXPIRED (Bug B code).
+      const telegramResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: APPROVAL_ID },
+        },
+      });
+      expect(telegramResult.ok).toBe(false);
+      if (telegramResult.ok) {
+        throw new Error("expected failure on second approve");
+      }
+      expect(telegramResult.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+    });
+
+    test("approve (web) then reject (telegram) on same approvalId: reject also rejected (not double-applied)", async () => {
+      const store = makePendingStore();
+      expectPatchOk(
+        await runPatch({
+          cfg: planModeEnabledCfg(),
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            planApproval: { action: "approve", approvalId: APPROVAL_ID },
+          },
+        }),
+      );
+      const secondResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "reject", approvalId: APPROVAL_ID, feedback: "no" },
+        },
+      });
+      expect(secondResult.ok).toBe(false);
+      if (secondResult.ok) {
+        throw new Error("expected failure on reject-after-approve");
+      }
+      expect(secondResult.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+    });
+
+    test("two writes with different approvalIds against same pending approval: first matches, second stale-id rejected", async () => {
+      // Ensures the stale-approvalId branch (resolvePlanApproval
+      // no-op) is still the right fail mode when the second write
+      // is issued against a pending state that has already moved
+      // to a NEW approvalId. Differentiates "session expired" from
+      // "your approvalId was left behind by a newer plan cycle".
+      const store: Record<string, SessionEntry> = {
+        [MAIN_SESSION_KEY]: {
+          planMode: {
+            mode: "plan",
+            approval: "pending",
+            approvalId: "current-approval-v2",
+            rejectionCount: 0,
+            updatedAt: 1,
+            autoApprove: true, // keep the session in plan mode for the 2nd write
+          },
+        } as unknown as SessionEntry,
+      };
+      // First write against the CURRENT approvalId — succeeds.
+      expectPatchOk(
+        await runPatch({
+          cfg: planModeEnabledCfg(),
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            planApproval: { action: "approve", approvalId: "current-approval-v2" },
+          },
+        }),
+      );
+      // Second write using a STALE approvalId from a prior cycle
+      // (symbolically from a slow Telegram delivery). planMode is
+      // now normal (autoApprove carried forward), so the second
+      // write hits "requires a pending approval".
+      const staleResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "older-stale-v1" },
+        },
+      });
+      expect(staleResult.ok).toBe(false);
+      if (staleResult.ok) {
+        throw new Error("expected failure on stale-approvalId");
+      }
+      // Pending-check fires because planMode still exists (auto carries
+      // forward) but approval is no longer "pending".
+      expect(staleResult.error.message).toContain("pending approval");
+    });
   });
 });

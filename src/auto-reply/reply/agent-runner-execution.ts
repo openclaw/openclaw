@@ -25,6 +25,15 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
+// PR-15: pendingAgentInjection consumer — read+clear the SessionEntry
+// field set by gateway-side `sessions.patch` handlers so the synthetic
+// `[QUESTION_ANSWER]:` / `[PLAN_DECISION]:` injection fires once into
+// the agent's next turn (single-source-of-truth pattern across all
+// channels — see `pending-injection.ts`).
+import {
+  composePromptWithPendingInjection,
+  consumePendingAgentInjection,
+} from "../../agents/pi-embedded-runner/pending-injection.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
@@ -69,6 +78,11 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import {
+  readLatestSessionEntryFresh,
+  resolveLatestAcceptEditsFromDisk,
+  resolveLatestPlanModeFromDisk,
+} from "./fresh-session-entry.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
@@ -656,11 +670,75 @@ export async function runAgentTurnWithFallback(params: {
       params.sessionCtx.Provider,
   );
   if (params.sessionKey) {
+    // PR-8 follow-up: mirror session's plan-mode flag and current
+    // approval state onto the run context so spawn-time decisions
+    // (cleanup override, subagent tracking) and incomplete-turn
+    // detectors (yield-after-approval) can read them without a
+    // session-store round-trip.
+    //
+    // Bug 3+4 v3 fix: TRUE fresh disk read at registration time so all
+    // 4 mirrors below (inPlanMode, planApproval, recentlyApprovedAt,
+    // pendingAgentInjection) reflect any mid-flight `sessions.patch`
+    // write (e.g. UI plan approval). The `params.getActiveSessionEntry()`
+    // callback is a closure over a captured ref that doesn't refresh
+    // mid-turn — see `fresh-session-entry.ts` for the full rationale.
+    const activeSessionEntry = readLatestSessionEntryFresh({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      fallbackEntry: params.getActiveSessionEntry(),
+    });
+    const planModeEntry = activeSessionEntry?.planMode;
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
+      inPlanMode: planModeEntry?.mode === "plan",
+      ...(planModeEntry?.approval ? { planApproval: planModeEntry.approval } : {}),
+      // PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+      // mirror `SessionEntry.recentlyApprovedAt` (ROOT level, survives
+      // planMode deletion on approve/edit transition) so the
+      // yield-after-approval detector can fire within the post-approval
+      // grace window even after sessions.patch has cleared planMode.
+      ...(activeSessionEntry?.recentlyApprovedAt !== undefined
+        ? { recentlyApprovedAt: activeSessionEntry.recentlyApprovedAt }
+        : {}),
+      // PR-15: mirror `SessionEntry.pendingAgentInjection` so the
+      // runtime can prepend it to the user message at turn-start AND
+      // clear it (via sessions.patch) so the injection only fires
+      // once. Written by gateway-side handlers in `sessions-patch.ts`
+      // for action="answer"/"approve"/"edit"/"reject" (single source
+      // of truth — replaces per-channel direct-injection patterns).
+      ...(activeSessionEntry?.pendingAgentInjection !== undefined
+        ? { pendingAgentInjection: activeSessionEntry.pendingAgentInjection }
+        : {}),
+      // Bug 3+4 v2 + iter-2 Bug A: TRUE fresh read from disk on every
+      // call, with the deletion-as-normal semantic so consumers don't
+      // false-positive on a stale "plan" cached snapshot when planMode
+      // is deleted post-approval. See `fresh-session-entry.ts` —
+      // `resolveLatestPlanModeFromDisk` for the full rationale.
+      //
+      // The previous implementation returned `undefined` when the
+      // entry's planMode object was deleted, which made consumers
+      // fall back to `ctx.planMode` (the stale snapshot from
+      // run-start) and treat the session as still in plan mode for
+      // the rest of the run — breaking the mutation gate AND the
+      // ack-only detector (Bug A iter-2 root cause).
+      getLatestPlanMode: () =>
+        resolveLatestPlanModeFromDisk({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        }),
+      // acceptEdits constraint-gate live read: true only when the
+      // user approved the plan with the "Accept, allow edits" button.
+      // When true, the acceptEdits gate runs on every tool call in
+      // normal mode and blocks the three hard constraints
+      // (destructive, self-restart, config-change).
+      getLatestAcceptEdits: () =>
+        resolveLatestAcceptEditsFromDisk({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        }),
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -765,6 +843,25 @@ export async function runAgentTurnWithFallback(params: {
     };
   };
 
+  // Codex P1 review #68939 (2026-04-20): consume the pending agent
+  // injection ONCE, BEFORE entering the outer attempt loop.
+  // Pre-fix, the consume call lived inside `while (true)`, so any
+  // retry path that `continue`d back (transient HTTP retry at
+  // line ~1504 / ~1640, empty-response retry paths, etc.) drained
+  // the queue on the first iteration and then re-invoked consume
+  // with an already-cleared queue, losing the original
+  // `[PLAN_DECISION]` / `[QUESTION_ANSWER]` context for every
+  // subsequent attempt. Hoisting OUTSIDE the loop makes the
+  // captured text survive across every retry, matching the queue's
+  // once-per-turn drain contract from the nuclear-fix-stack
+  // (commit 70a6e4b23a). The fallback-loop hoisting already in
+  // place for runWithModelFallback is preserved — this is a
+  // second, outer-scope hoist that covers the while(true) retry
+  // loop on top of it.
+  const hoistedPendingInjectionAcrossRetries = params.sessionKey
+    ? (await consumePendingAgentInjection(params.sessionKey)).text
+    : undefined;
+
   while (true) {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
@@ -843,6 +940,18 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
+      // Codex P1 review #68939: the injection was already consumed
+      // ONCE above `while (true)` so this iteration re-uses the same
+      // captured text. Keeps the fallback-loop hoist semantics
+      // (every fallback in `runWithModelFallback` sees the same
+      // composed prompt) while ALSO covering the outer
+      // transient-HTTP / empty-response retry paths that `continue`
+      // back to the top of this loop.
+      const hoistedPendingInjection = hoistedPendingInjectionAcrossRetries;
+      const hoistedComposedPrompt = composePromptWithPendingInjection(
+        hoistedPendingInjection,
+        params.commandBody,
+      );
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
@@ -895,7 +1004,16 @@ export async function runAgentTurnWithFallback(params: {
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
-                  prompt: params.commandBody,
+                  // Codex P1 review #68939 (round-2): pass the
+                  // composed prompt (with [PLAN_DECISION] /
+                  // [QUESTION_ANSWER] injection prepended) to the
+                  // CLI branch too. Pre-fix, only the embedded
+                  // runner branch consumed the hoisted injection;
+                  // CLI runs (Claude CLI / Codex CLI) used the bare
+                  // commandBody, dropping plan-mode approval/answer
+                  // context for any session that routed to a CLI
+                  // provider (or fell back to one).
+                  prompt: hoistedComposedPrompt,
                   provider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
@@ -1002,10 +1120,71 @@ export async function runAgentTurnWithFallback(params: {
           return (async () => {
             let attemptCompactionCount = 0;
             try {
+              // PR-11 review fix (Codex P1): forward the session's
+              // `planMode` flag into the runner so `checkMutationGate`
+              // activates. Without this, the agent could call
+              // mutating tools (apply_patch/exec/edit/write) before
+              // an `exit_plan_mode` approval — defeating the entire
+              // purpose of plan mode.
+              //
+              // Bug 3+4 v3 fix: fresh disk read for the INITIAL planMode
+              // flag. Mid-turn drift is covered by `getLatestPlanMode`
+              // below, but the first tool call's gate check fires
+              // before that callback, so the initial flag must be
+              // fresh too. See `fresh-session-entry.ts` for rationale.
+              const freshSessionEntry = readLatestSessionEntryFresh({
+                storePath: params.storePath,
+                sessionKey: params.sessionKey,
+                fallbackEntry: params.getActiveSessionEntry(),
+              });
+              const freshSessionPlanModeMode = freshSessionEntry?.planMode?.mode;
+              const sessionPlanModeMode: "plan" | "normal" | undefined =
+                freshSessionPlanModeMode === "plan" || freshSessionPlanModeMode === "normal"
+                  ? freshSessionPlanModeMode
+                  : undefined;
+              // PR-15: pending agent injection
+              // (`[QUESTION_ANSWER]: ...` / `[PLAN_DECISION]: ...`)
+              // is consumed once BEFORE the runWithModelFallback
+              // callback runs (see hoistedPendingInjection above)
+              // so all fallback retries see the same composed
+              // prompt. The single-source-of-truth pattern stands:
+              // every channel's `/plan answer` / `/plan accept`
+              // writes the same pendingAgentInjections queue via
+              // sessions.patch, and this consumer drains it into a
+              // synthetic prepended user message exactly once per
+              // turn. Webchat's legacy direct-injection path
+              // (`ui/src/ui/app.ts:1118`) continues to work for
+              // backwards-compat — when the gateway-side field is
+              // populated AND the direct injection also fires, the
+              // gateway path wins (it ran first).
+              const composedPrompt = hoistedComposedPrompt;
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
+                ...(sessionPlanModeMode === "plan" ? { planMode: "plan" as const } : {}),
+                // Bug 3+4 v2 + iter-2 Bug A: fresh disk read for
+                // mid-turn refreshes by the mutation gate + ack-only
+                // detector. Uses `resolveLatestPlanModeFromDisk`
+                // which returns "normal" when planMode is deleted on
+                // disk (post-approval) — see fresh-session-entry.ts
+                // for the deletion-as-normal contract that prevents
+                // stale-cache false positives.
+                getLatestPlanMode: () =>
+                  resolveLatestPlanModeFromDisk({
+                    storePath: params.storePath,
+                    sessionKey: params.sessionKey,
+                  }),
+                // acceptEdits constraint-gate live read: true only
+                // when the user approved the plan with the "Accept,
+                // allow edits" button. Paired with getLatestPlanMode
+                // so the gate can distinguish post-approval acceptEdits
+                // from general normal-mode execution.
+                getLatestAcceptEdits: () =>
+                  resolveLatestAcceptEditsFromDisk({
+                    storePath: params.storePath,
+                    sessionKey: params.sessionKey,
+                  }),
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
                   normalizeOptionalString(params.sessionCtx.GroupChannel) ??
@@ -1013,7 +1192,7 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
-                prompt: params.commandBody,
+                prompt: composedPrompt,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
