@@ -44,6 +44,25 @@
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "openai": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "gpt-5.4-mini",
+        "audio": "gpt-4o-transcribe"
+      },
+      "autoPriority": {
+        "image": 10,
+        "audio": 10
+      }
+    },
+    "openai-codex": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5.4"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -52,7 +71,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs. `friendly` and `on` enable the overlay; `off` disables it."
+        "description": "Controls the OpenAI-specific friendly interaction-style overlay for GPT-5 OpenAI and OpenAI Codex runs. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
       }
     }
   }
