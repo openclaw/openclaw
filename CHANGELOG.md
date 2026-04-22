@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - OpenAI/Responses: use OpenAI's native `web_search` tool automatically for direct OpenAI Responses models when web search is enabled and no managed search provider is pinned; explicit providers such as Brave keep the managed `web_search` tool.
+- ACPX: add an explicit `openClawToolsMcpBridge` option that injects a core OpenClaw MCP server for selected built-in tools, starting with `cron`.
 - Models/commands: add `/models add <provider> <modelId>` so you can register a model from chat and use it without restarting the gateway; keep `/models` as a simple provider browser while adding clearer add guidance and copy-friendly command examples. (#70211) Thanks @Takhoffman.
 - Pi/models: update the bundled pi packages to `0.68.1` and let the OpenCode Go catalog come from pi instead of plugin-maintained model aliases, adding the refreshed `opencode-go/kimi-k2.6`, Qwen, GLM, MiMo, and MiniMax entries.
 - CLI/doctor plugins: lazy-load doctor plugin paths and prefer installed plugin `dist/*` runtime entries over source-adjacent JavaScript fallbacks, reducing the measured `doctor --non-interactive` runtime by about 74% while keeping cold doctor startup on built plugin artifacts. (#69840) Thanks @gumadeiras.
@@ -20,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Config/models: merge provider-scoped model allowlist updates and protect model/provider map writes from accidental full replacement, adding `config set --merge` for additive updates and `--replace` for intentional clobbers. Fixes #65920, #68392, and #68653.
 - Agents/Pi auth: preserve AWS SDK-authenticated Bedrock runs for IMDS and task-role setups, clear stale refresh timers on sentinel fallback, and log unexpected runtime-auth prep failures instead of silently leaving the provider unauthenticated. Thanks @wirjo.
 - Config/gateway: recover configs accidentally prefixed with non-JSON output during gateway startup or `openclaw doctor --fix`, preserving the clobbered file as a backup while leaving normal config reads read-only.
 - Agents/GitHub Copilot: normalize connection-bound Responses item IDs in the Copilot provider wrapper so replayed histories no longer fail after the upstream connection changes. (#69362) Thanks @Menci.
@@ -33,6 +35,8 @@ Docs: https://docs.openclaw.ai
 - Discord: harden inbound thread metadata handling against partial Carbon channel getters, so non-command thread messages and queued jobs no longer crash when `name`, `parentId`, `parent`, or `ownerId` requires fetched raw data.
 - Discord: let `message` tool reactions resolve `user:<id>` DM targets and preserve `channels.discord.guilds.<guild>.channels.<channel>.requireMention: false` during reply-stage activation fallback. Fixes #70165 and #69441.
 - Plugins/startup: pre-normalize and cache Jiti alias maps before creating plugin loaders, so module-scoped loader filenames do not reintroduce per-plugin alias-normalization startup cost. Fixes #70186.
+- ACP/Codex: run the bundled Codex ACP harness with an isolated `CODEX_HOME` and avoid writing incomplete ChatGPT auth bridge files, so Codex ACP sessions no longer clobber the user's real Codex CLI auth. Fixes #70234. Thanks @Lonobers88.
+- Gateway/client: keep long-running RPCs such as ACP `agent.wait` calls in charge of their own timeout instead of closing the websocket on a missed app-level tick while work is still pending.
 - Telegram/webhooks: lower the grammY webhook callback timeout to 5s so Telegram gets an early 200 response instead of retrying long-running updates as read timeouts. (#70146) Thanks @friday-james.
 - Telegram/polling: rebuild the polling HTTP transport after `getUpdates` 409 conflicts, so retries use a fresh TCP connection instead of looping on a Telegram-terminated keep-alive socket. (#69873) Thanks @hclsys.
 - Media delivery: strip persisted base64 audio payloads from webchat history, resolve stored `media://inbound/*` attachments before local-root checks, suppress duplicate Telegram voice/audio sends when TTS emits the same media twice, and support custom image-model IDs that already include their provider prefix.
