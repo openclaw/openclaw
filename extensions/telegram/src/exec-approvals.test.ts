@@ -461,6 +461,40 @@ describe("telegram exec approvals", () => {
     });
   });
 
+  describe("approvals.exec.targets[].accountId fallback (issue #69916)", () => {
+    it("scopes delivery to the configured target account when no session binding exists", () => {
+      const cfg = {
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "telegram", to: "55", accountId: "sentry" }],
+          },
+        },
+        channels: {
+          telegram: {
+            accounts: {
+              default: { botToken: "t1", allowFrom: ["55"] },
+              nikola: { botToken: "t2", allowFrom: ["55"] },
+              sentry: { botToken: "t3", allowFrom: ["55"] },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const request: TelegramExecApprovalRequest = {
+        id: "req-fanout",
+        request: { command: "echo hi", sessionKey: "agent:main:main" },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      };
+
+      const handled = ["default", "nikola", "sentry"].filter((accountId) =>
+        shouldHandleTelegramExecApprovalRequest({ cfg, accountId, request }),
+      );
+      expect(handled).toEqual(["sentry"]);
+    });
+  });
+
   describe("isTelegramExecApprovalAuthorizedSender", () => {
     it("accepts explicit approvers", () => {
       const cfg = buildConfig({ enabled: true, approvers: ["123"] });

@@ -1,6 +1,10 @@
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type {
+  ExecApprovalForwardingConfig,
+  ExecApprovalForwardTarget,
+} from "../config/types.approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -95,12 +99,45 @@ export function resolveApprovalRequestChannelAccountId(params: {
     return null;
   }
   const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  let resolved: string | null;
   if (!turnSourceChannel || turnSourceChannel === expectedChannel) {
-    return resolveApprovalRequestAccountId(params);
+    resolved = resolveApprovalRequestAccountId(params);
+  } else {
+    const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
+    resolved =
+      sessionBinding?.channel === expectedChannel ? (sessionBinding.accountId ?? null) : null;
   }
+  // Fallback: honor an unambiguous `approvals.{exec,plugin}.targets[].accountId`
+  // for this channel when turn-source and session bindings do not pin an account.
+  // Prevents multi-account channels (e.g. multiple Telegram bots sharing an
+  // approver chat) from fanning approval prompts out across every bot.
+  return resolved ?? resolveConfiguredForwardTargetAccountId(params, expectedChannel);
+}
 
-  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
-  return sessionBinding?.channel === expectedChannel ? (sessionBinding.accountId ?? null) : null;
+function resolveConfiguredForwardTargetAccountId(
+  params: { cfg: OpenClawConfig; request: ApprovalRequestLike },
+  expectedChannel: string,
+): string | null {
+  const isPlugin = params.request.id?.startsWith("plugin:");
+  const section: ExecApprovalForwardingConfig | undefined = isPlugin
+    ? params.cfg.approvals?.plugin
+    : params.cfg.approvals?.exec;
+  const mode = section?.mode ?? "session";
+  if (mode !== "targets" && mode !== "both") {
+    return null;
+  }
+  const matching = new Set<string>();
+  for (const target of section?.targets ?? []) {
+    if (normalizeOptionalChannel(target.channel) !== expectedChannel) {
+      continue;
+    }
+    const accountId = normalizeOptionalAccountId(target.accountId);
+    if (!accountId) {
+      return null;
+    } // Unscoped target -> fall back to existing heuristics.
+    matching.add(accountId);
+  }
+  return matching.size === 1 ? (matching.values().next().value ?? null) : null;
 }
 
 export function doesApprovalRequestMatchChannelAccount(params: {
