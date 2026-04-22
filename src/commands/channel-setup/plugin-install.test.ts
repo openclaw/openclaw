@@ -8,13 +8,28 @@ import {
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const existsSync = vi.fn();
+  const realpathSync = vi.fn(actual.realpathSync);
+  const statSync = vi.fn(actual.statSync);
   return {
     ...actual,
     existsSync,
+    realpathSync,
+    statSync,
     default: {
       ...actual,
       existsSync,
+      realpathSync,
+      statSync,
     },
+  };
+});
+
+const execFileSync = vi.fn();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: (...args: unknown[]) => execFileSync(...args),
   };
 });
 
@@ -42,11 +57,6 @@ vi.mock("../../channels/plugins/catalog.js", () => {
 const loadPluginManifestRegistry = vi.fn();
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistry(...args),
-}));
-
-const resolveGitHeadPath = vi.fn();
-vi.mock("../../infra/git-root.js", () => ({
-  resolveGitHeadPath: (...args: unknown[]) => resolveGitHeadPath(...args),
 }));
 
 vi.mock("../../plugins/bundled-sources.js", () => ({
@@ -185,7 +195,9 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  resolveGitHeadPath.mockReturnValue(null);
+  execFileSync.mockImplementation(() => {
+    throw new Error("not a git worktree");
+  });
   applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
     config: params.config,
     changes: [],
@@ -199,7 +211,40 @@ beforeEach(() => {
 });
 
 function mockRepoLocalPathExists() {
-  resolveGitHeadPath.mockReturnValue(path.join(process.cwd(), ".git", "HEAD"));
+  execFileSync.mockImplementation((command: string, args: string[]) => {
+    expect(command).toBe("git");
+    expect(args[1]).toBe(process.cwd());
+    expect(args[2]).toBe("rev-parse");
+    const request = args.slice(3).join(" ");
+    if (request === "--is-inside-work-tree") {
+      return "true\n";
+    }
+    if (request === "--path-format=absolute --show-toplevel") {
+      return `${process.cwd()}\n`;
+    }
+    if (request === "--path-format=absolute --git-common-dir") {
+      return `${process.cwd()}\n`;
+    }
+    throw new Error(`unexpected git args: ${request}`);
+  });
+  vi.mocked(fs.realpathSync).mockImplementation(((value: fs.PathLike) => {
+    const raw = String(value);
+    if (raw.endsWith(`${path.sep}extensions${path.sep}bundled-chat`)) {
+      return path.resolve(process.cwd(), bundledPluginRoot("bundled-chat"));
+    }
+    return raw;
+  }) as typeof fs.realpathSync);
+  vi.mocked(fs.statSync).mockImplementation(((value: fs.PathLike) => {
+    const raw = String(value);
+    if (raw.endsWith(`${path.sep}extensions${path.sep}bundled-chat`)) {
+      return {
+        isDirectory: () => true,
+      } as ReturnType<typeof fs.statSync>;
+    }
+    return {
+      isDirectory: () => true,
+    } as ReturnType<typeof fs.statSync>;
+  }) as typeof fs.statSync);
   vi.mocked(fs.existsSync).mockImplementation((value) => {
     const raw = String(value);
     return (
