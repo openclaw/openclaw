@@ -10,7 +10,10 @@ import {
   hasTemplateVariables,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
-import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
+import {
+  createStreamingDirectiveAccumulator,
+  splitTrailingDirective,
+} from "./streaming-directives.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
@@ -989,6 +992,15 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("handles reply tags split before the second bracket", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    expect(accumulator.consume("[")).toBeNull();
+
+    const result = accumulator.consume("[reply_to_current]] Yo");
+    expect(result?.text).toBe("Yo");
+    expect(result?.replyToCurrent).toBe(true);
+  });
+
   it("propagates explicit reply ids across current and subsequent chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
@@ -1154,6 +1166,13 @@ describe("createStreamingDirectiveAccumulator", () => {
     const result = accumulator.consume("Here it is.\n\nMEDIA:/tmp/complete.png\n");
     expect(result?.text.includes("MEDIA")).toBe(false);
     expect(result?.mediaUrls).toEqual(["/tmp/complete.png"]);
+  });
+
+  it("does not strip a complete final MEDIA line when parsing final text", () => {
+    expect(splitTrailingDirective("Here.\nMEDIA:/tmp/final.png", { final: true })).toEqual({
+      text: "Here.\nMEDIA:/tmp/final.png",
+      tail: "",
+    });
   });
 });
 

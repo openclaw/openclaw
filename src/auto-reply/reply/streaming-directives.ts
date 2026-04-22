@@ -25,12 +25,19 @@ type ConsumeOptions = {
   silentToken?: string;
 };
 
+type SplitTrailingDirectiveOptions = {
+  final?: boolean;
+};
+
 // Holds back incomplete streaming-directive tails so parseChunk only ever sees
 // complete directives. Otherwise, upstream token boundaries can split markers
 // like `MEDIA:<path>` between chunks and cause the first half to be emitted as
 // plain text (e.g. the `MEDIA` token leaking into a channel reply while the
 // matching file path is silently dropped on the next chunk).
-const splitTrailingDirective = (text: string): { text: string; tail: string } => {
+export const splitTrailingDirective = (
+  text: string,
+  options: SplitTrailingDirectiveOptions = {},
+): { text: string; tail: string } => {
   let bufferStart = text.length;
 
   // 1. Unclosed `[[…` reply/audio directive tail.
@@ -39,6 +46,20 @@ const splitTrailingDirective = (text: string): { text: string; tail: string } =>
     if (openIndex < bufferStart) {
       bufferStart = openIndex;
     }
+  }
+  if (text.endsWith("[") && text.length - 1 < bufferStart) {
+    bufferStart = text.length - 1;
+  }
+
+  if (options.final) {
+    if (bufferStart >= text.length) {
+      return { text, tail: "" };
+    }
+
+    return {
+      text: text.slice(0, bufferStart),
+      tail: text.slice(bufferStart),
+    };
   }
 
   // 2. `MEDIA:` line without a trailing newline — the URL may still be
