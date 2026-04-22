@@ -53,6 +53,7 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { clearSessionQueues } from "./queue.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
@@ -871,6 +872,19 @@ export async function initSessionState(params: {
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
+    }
+  }
+
+  // Clear queued messages when a reset trigger (/new or /reset) is issued.
+  // This prevents stale messages from the previous session from being delivered
+  // to the new session, which can cause the agent to hallucinate or appear to
+  // have memory contamination. See #35092.
+  if (resetTriggered) {
+    const cleared = clearSessionQueues([sessionKey, sessionId]);
+    if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      log.verbose(
+        `reset: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+      );
     }
   }
 
