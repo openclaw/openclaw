@@ -10,7 +10,7 @@ function hasRenderableAssistantFinalMessage(message: unknown): boolean {
   }
   const entry = message as Record<string, unknown>;
   const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role && role !== "assistant") {
+  if (role !== "assistant") {
     return false;
   }
   if (!("content" in entry) && !("text" in entry)) {
