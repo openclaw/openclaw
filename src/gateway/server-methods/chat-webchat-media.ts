@@ -26,6 +26,8 @@ type WebchatAudioEmbeddingOptions = {
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 
+type WebchatAssistantMediaOptions = WebchatAudioEmbeddingOptions;
+
 /** Map `mediaUrl` strings to an absolute filesystem path for local embedding (plain paths or `file:` URLs). */
 function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   const trimmed = raw.trim();
@@ -92,6 +94,17 @@ function mimeTypeForPath(filePath: string): string {
   return MIME_BY_EXT[ext] ?? "audio/mpeg";
 }
 
+function isEmbeddableImageUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/^data:image\//i.test(trimmed)) {
+    return true;
+  }
+  return /^https?:\/\/.+\.(apng|avif|bmp|gif|jpe?g|png|svg|webp)(?:[?#].*)?$/i.test(trimmed);
+}
+
 /**
  * Build Control UI / transcript `content` blocks for local TTS (or other) audio files
  * referenced by slash-command / agent replies when the webchat path only had text aggregation.
@@ -121,6 +134,63 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
     }
   }
   return blocks;
+}
+
+export async function buildWebchatAssistantMessageFromReplyPayloads(
+  payloads: ReplyPayload[],
+  options?: WebchatAssistantMediaOptions,
+): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+  const content: Array<Record<string, unknown>> = [];
+  const transcriptTextParts: string[] = [];
+  const seenAudio = new Set<string>();
+  const seenImages = new Set<string>();
+  let hasAudio = false;
+  let hasImage = false;
+
+  for (const payload of payloads) {
+    const text = payload.text?.trim();
+    if (text) {
+      transcriptTextParts.push(text);
+      content.push({ type: "text", text });
+    }
+    const parts = resolveSendableOutboundReplyParts(payload);
+    for (const raw of parts.mediaUrls) {
+      const url = raw.trim();
+      if (!url) {
+        continue;
+      }
+      const resolvedAudioPath = await resolveLocalAudioFileForEmbedding(url, options);
+      if (resolvedAudioPath) {
+        if (seenAudio.has(resolvedAudioPath)) {
+          continue;
+        }
+        seenAudio.add(resolvedAudioPath);
+        const block = tryReadLocalAudioContentBlock(resolvedAudioPath);
+        if (block) {
+          content.push(block);
+          hasAudio = true;
+        }
+        continue;
+      }
+      if (!isEmbeddableImageUrl(url) || seenImages.has(url)) {
+        continue;
+      }
+      seenImages.add(url);
+      content.push({ type: "input_image", image_url: url });
+      hasImage = true;
+    }
+  }
+
+  if (!hasAudio && !hasImage) {
+    return null;
+  }
+  const transcriptText =
+    transcriptTextParts.join("\n\n").trim() ||
+    (hasAudio && hasImage ? "Media reply" : hasAudio ? "Audio reply" : "Image reply");
+  if (transcriptTextParts.length === 0) {
+    content.unshift({ type: "text", text: transcriptText });
+  }
+  return { content, transcriptText };
 }
 
 function tryReadLocalAudioContentBlock(filePath: string): Record<string, unknown> | null {

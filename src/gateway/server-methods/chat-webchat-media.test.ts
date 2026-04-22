@@ -4,7 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDefaultLocalRoots } from "../../media/local-media-access.js";
-import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
+import {
+  buildWebchatAssistantMessageFromReplyPayloads,
+  buildWebchatAudioContentBlocksFromReplyPayloads,
+} from "./chat-webchat-media.js";
 
 describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   let tmpDir: string | undefined;
@@ -166,5 +169,24 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
 
     statSpy.mockRestore();
     readSpy.mockRestore();
+  });
+});
+
+describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
+  it("converts image data URLs into webchat image blocks", async () => {
+    const message = await buildWebchatAssistantMessageFromReplyPayloads([
+      {
+        text: "Scan this QR code with the OpenClaw iOS app:",
+        mediaUrl: "data:image/png;base64,cG5n",
+      },
+    ]);
+
+    expect(message).toEqual({
+      transcriptText: "Scan this QR code with the OpenClaw iOS app:",
+      content: [
+        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
   });
 });

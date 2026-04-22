@@ -528,7 +528,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(assistantUpdate).toMatchObject({
         message: {
           role: "assistant",
-          idempotencyKey: "idem-agent-audio:assistant-audio",
+          idempotencyKey: "idem-agent-audio:assistant-media",
           content: [
             { type: "text", text: "Audio reply" },
             {
@@ -542,6 +542,31 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+  });
+
+  it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-image-");
+    mockState.finalPayload = {
+      text: "Scan this QR code with the OpenClaw iOS app:",
+      mediaUrl: "data:image/png;base64,cG5n",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-image",
+    });
+
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
+      ],
+    });
+    expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
   });
 
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
@@ -1877,7 +1902,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-media-only-final",
     });
 
-    expect(extractFirstTextBlock(payload)).toBe("MEDIA:https://example.com/final.png");
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Image reply" },
+        { type: "input_image", image_url: "https://example.com/final.png" },
+      ],
+    });
   });
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
@@ -1895,7 +1926,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-media-only-silent-final",
     });
 
-    expect(extractFirstTextBlock(payload)).toBe("MEDIA:https://example.com/final.png");
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Image reply" },
+        { type: "input_image", image_url: "https://example.com/final.png" },
+      ],
+    });
   });
 
   it("drops image attachments for text-only session models", async () => {

@@ -732,9 +732,8 @@ export default definePluginEntry({
                   autoNotifyArmed,
                   expiresAtMs: payload.expiresAtMs,
                 }),
-                "",
-                `![OpenClaw pairing QR](${qrDataUrl})`,
               ].join("\n"),
+              mediaUrl: qrDataUrl,
             };
           }
 
