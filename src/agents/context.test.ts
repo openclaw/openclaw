@@ -60,6 +60,16 @@ describe("applyDiscoveredContextWindows", () => {
 
     expect(cache.get("gpt-5.4")).toBe(272_000);
   });
+
+  it("upgrades claude opus 4.7 variants to 1M when discovery still reports 200k", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }],
+    });
+
+    expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
 });
 
 describe("applyConfiguredContextWindows", () => {
@@ -256,6 +266,17 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(200_000);
+  });
+
+  it("returns 1M context for claude opus 4.7 variants without context1m", () => {
+    const result = resolveContextTokensForModel({
+      provider: "claude-cli",
+      model: "claude-opus-4.7-20260219",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it("prefers per-model contextTokens config over contextWindow", () => {

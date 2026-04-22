@@ -25,6 +25,7 @@ type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined
 type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -41,12 +42,15 @@ export function applyDiscoveredContextWindows(params: {
     if (!model?.id) {
       continue;
     }
-    const contextTokens =
+    const discoveredContextTokens =
       typeof model.contextTokens === "number"
         ? Math.trunc(model.contextTokens)
         : typeof model.contextWindow === "number"
           ? Math.trunc(model.contextWindow)
           : undefined;
+    const contextTokens = isClaudeOpus47Model(model.id)
+      ? ANTHROPIC_CONTEXT_1M_TOKENS
+      : discoveredContextTokens;
     if (!contextTokens || contextTokens <= 0) {
       continue;
     }
@@ -374,11 +378,18 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   if (provider !== "anthropic") {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(model);
-  const modelId = normalized.includes("/")
-    ? (normalized.split("/").at(-1) ?? normalized)
-    : normalized;
+  const modelId = resolveModelFamilyId(model);
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+}
+
+function resolveModelFamilyId(modelId: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
+}
+
+function isClaudeOpus47Model(model: string): boolean {
+  const modelId = resolveModelFamilyId(model);
+  return CLAUDE_OPUS_47_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
 export function resolveContextTokensForModel(params: {
@@ -420,6 +431,10 @@ export function resolveContextTokensForModel(params: {
         return configuredWindow;
       }
     }
+  }
+
+  if (isClaudeOpus47Model(params.model ?? ref?.model ?? "")) {
+    return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 
   // When provider is explicitly given and the model ID is bare (no slash),
