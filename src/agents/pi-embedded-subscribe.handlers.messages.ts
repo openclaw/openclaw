@@ -695,6 +695,14 @@ export function handleMessageEnd(
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
       ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
       ctx.blockChunker.reset();
+      // Final-flush the streaming directive accumulator so any partial
+      // directive tail held back by splitTrailingDirective (for example a
+      // trailing `MEDIA:<path>` that arrived without a closing newline)
+      // gets emitted here. Without this, a reply ending in a directive
+      // line whose URL is complete but un-terminated would sit in
+      // pendingTail forever and the attachment would be silently dropped
+      // on the message_end / blockReplyChunking path.
+      emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Guard: for text_end channels, if text_end already delivered content
       // (lastBlockReplyText is set), skip this safety send. The text comparison
