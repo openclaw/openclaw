@@ -376,10 +376,22 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod("sessions.delete", {
-        key: params.sessionKey,
-        deleteTranscript: params.deleteTranscript ?? true,
-      });
+      // sessions.delete is gated under ADMIN_SCOPE in method-scopes.ts.
+      // Plugins that call deleteSession from a finally-block (e.g. the
+      // memory-core narrative cleanup) can outlive the original request
+      // scope — at which point createSyntheticOperatorClient defaults to
+      // ["operator.write"] and the delete is rejected with
+      // `missing scope: operator.admin`. Pass ADMIN_SCOPE explicitly so
+      // the synthetic fallback retains enough privilege to complete the
+      // cleanup instead of leaving orphaned narrative sessions. (#69886)
+      await dispatchGatewayMethod(
+        "sessions.delete",
+        {
+          key: params.sessionKey,
+          deleteTranscript: params.deleteTranscript ?? true,
+        },
+        { syntheticScopes: [ADMIN_SCOPE] },
+      );
     },
   };
 }

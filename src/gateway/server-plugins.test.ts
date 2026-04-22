@@ -772,14 +772,17 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
-  test("rejects fallback session deletion without minting admin scope", async () => {
+  test("allows fallback session deletion by minting admin scope on the synthetic client (#69886)", async () => {
+    // Regression for #69886: deleteSession runs in plugin `finally` blocks
+    // (e.g. memory-core narrative cleanup) that can outlive the cron's
+    // request scope. Without an explicit admin scope on the synthetic
+    // fallback, sessions.delete is rejected with `missing scope:
+    // operator.admin` and narrative sessions are orphaned every night.
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-delete-session"));
 
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-      // Re-run the gateway scope check here so the test proves fallback dispatch
-      // does not smuggle admin into the request client.
       const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
       const auth = methodScopesModule.authorizeOperatorScopesForMethod("sessions.delete", scopes);
       if (!auth.allowed) {
@@ -797,10 +800,12 @@ describe("loadGatewayPlugins", () => {
         sessionKey: "s-delete",
         deleteTranscript: true,
       }),
-    ).rejects.toThrow("missing scope: operator.admin");
+    ).resolves.toBeUndefined();
 
-    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
-    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+    // The synthetic client used for fallback dispatch must have admin
+    // scope (and only admin, not a broader bundle) so plugins cannot
+    // escalate beyond what the specific method requires.
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
   });
 
   test("allows session deletion when the request scope already has admin", async () => {
