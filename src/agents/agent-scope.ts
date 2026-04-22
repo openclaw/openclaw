@@ -83,6 +83,61 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+export type ResolvedAutoContinueConfig = {
+  enabled: boolean;
+  maxCycles: number;
+  stopOnMutation: boolean;
+};
+
+const DEFAULT_AUTO_CONTINUE: ResolvedAutoContinueConfig = {
+  enabled: false,
+  maxCycles: 3,
+  stopOnMutation: true,
+};
+
+export function resolveAgentAutoContinue(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): ResolvedAutoContinueConfig {
+  const defaultAc = cfg?.agents?.defaults?.embeddedPi?.autoContinue;
+  const agentAc =
+    agentId && cfg ? resolveAgentConfig(cfg, agentId)?.embeddedPi?.autoContinue : undefined;
+  // Codex P2 (PR #67538 r3095650458): merge per-field, not wholesale.
+  // Prior `agentAc ?? defaultAc` discarded the entire defaults object as
+  // soon as the per-agent block existed at all, so an agent setting only
+  // `enabled: true` would silently reset `maxCycles`/`stopOnMutation` away
+  // from the configured defaults. Cascade is per-field:
+  //   per-agent → agents.defaults → DEFAULT_AUTO_CONTINUE constant.
+  return {
+    enabled: agentAc?.enabled ?? defaultAc?.enabled ?? DEFAULT_AUTO_CONTINUE.enabled,
+    maxCycles: agentAc?.maxCycles ?? defaultAc?.maxCycles ?? DEFAULT_AUTO_CONTINUE.maxCycles,
+    stopOnMutation:
+      agentAc?.stopOnMutation ?? defaultAc?.stopOnMutation ?? DEFAULT_AUTO_CONTINUE.stopOnMutation,
+  };
+}
+
+/**
+ * PR-9 Tier 1: read the per-agent or per-defaults `embeddedPi.maxIterations`
+ * override, if any, used by `resolveMaxRunRetryIterations` to optionally
+ * replace the scaled-by-profile-count default. Returns `undefined` when no
+ * override is set so the historical scaled formula applies.
+ *
+ * Cascade: per-agent → agents.defaults → undefined (let scaled formula run).
+ */
+export function resolveAgentMaxIterations(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): number | undefined {
+  const defaultMax = cfg?.agents?.defaults?.embeddedPi?.maxIterations;
+  const agentMax =
+    agentId && cfg ? resolveAgentConfig(cfg, agentId)?.embeddedPi?.maxIterations : undefined;
+  const candidate = agentMax ?? defaultMax;
+  if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+    return Math.floor(candidate);
+  }
+  return undefined;
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,

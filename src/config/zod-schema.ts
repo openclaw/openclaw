@@ -929,6 +929,14 @@ export const OpenClawSchema = z
             maxSkillsInPrompt: z.number().int().min(0).optional(),
             maxSkillsPromptChars: z.number().int().min(0).optional(),
             maxSkillFileBytes: z.number().int().min(0).optional(),
+            // #67541: cap on plan-template steps a single skill may seed
+            // via the activation seed event. Templates exceeding this
+            // length are truncated and a `skill_plan_template_truncated`
+            // warning is logged via `logWarn` (not emitted as a
+            // structured event). Default 50 (see DEFAULT_MAX_PLAN_TEMPLATE_STEPS).
+            // PR-E review fix (Copilot #3096799692): doc said "emitted"
+            // — implementation only logs.
+            maxPlanTemplateSteps: z.number().int().min(1).optional(),
           })
           .strict()
           .optional(),

@@ -35,6 +35,18 @@ export type SkillsLimitsConfig = {
   maxSkillsPromptChars?: number;
   /** Max size (bytes) allowed for a SKILL.md file to be considered. */
   maxSkillFileBytes?: number;
+  /**
+   * Max number of plan-template steps a single skill may seed via the
+   * activation seed event at activation. Templates exceeding this
+   * length are truncated and a `skill_plan_template_truncated` warning
+   * is logged via `logWarn` (not emitted as a structured event).
+   * Default: 50.
+   *
+   * PR-E review fix (Copilot #3096799672 / #3096799692): doc previously
+   * said "warning event is emitted" — implementation only calls
+   * `logWarn`. Updated to "warning is logged" to match behavior.
+   */
+  maxPlanTemplateSteps?: number;
 };
 
 export type SkillsConfig = {

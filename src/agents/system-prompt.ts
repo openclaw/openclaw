@@ -15,6 +15,7 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
+import { sanitizeContextFileForInjection } from "./context-file-injection-scan.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
@@ -41,7 +42,7 @@ import type { PromptMode } from "./system-prompt.types.js";
  */
 type OwnerIdDisplay = "raw" | "hash";
 
-const CONTEXT_FILE_ORDER = new Map<string, number>([
+const DEFAULT_CONTEXT_FILE_ORDER = new Map<string, number>([
   ["agents.md", 10],
   ["soul.md", 20],
   ["identity.md", 30],
@@ -50,6 +51,56 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["bootstrap.md", 60],
   ["memory.md", 70],
 ]);
+
+/**
+ * PR-8 follow-up Round 2: for OpenAI GPT-5 family models, load
+ * SOUL.md and IDENTITY.md BEFORE AGENTS.md so the persona primes the
+ * model before process/operations rules compete for attention.
+ *
+ * Rationale (per adversarial review + GPT-5.4 live testing): identity
+ * is aspirational, execution/process is concrete; execution wins by
+ * default. Loading persona first establishes voice/tone before the
+ * AGENTS.md operational contract arrives.
+ *
+ * Scoped narrowly to GPT-5 family because:
+ *  (a) that's where the personality-drift regression was observed,
+ *  (b) Anthropic + Gemini models have different priors and the
+ *      change might not help / might hurt them,
+ *  (c) GPT-5 already has its own provider overlay, so additional
+ *      family-specific tuning has a natural home.
+ */
+const GPT5_CONTEXT_FILE_ORDER = new Map<string, number>([
+  ["soul.md", 10],
+  ["identity.md", 20],
+  ["agents.md", 30],
+  ["user.md", 40],
+  ["tools.md", 50],
+  ["bootstrap.md", 60],
+  ["memory.md", 70],
+]);
+
+const OPENAI_PROVIDER_IDS_FOR_CONTEXT_ORDER: ReadonlySet<string> = new Set([
+  "openai",
+  "openai-codex",
+]);
+
+function getContextFileOrder(modelProviderId?: string, modelId?: string): Map<string, number> {
+  // Copilot review #68939 (round-2): normalize provider to
+  // lowercase before set membership check. The set entries
+  // (`OPENAI_PROVIDER_IDS_FOR_CONTEXT_ORDER`) are lowercase, but
+  // upstream callers may pass `"OpenAI"` / `"OPENAI"` / `"OpenAI-
+  // Codex"`. Without normalization, the GPT-5 boot reorder
+  // silently doesn't apply for those casings.
+  const provider = modelProviderId?.trim().toLowerCase() ?? "";
+  if (!OPENAI_PROVIDER_IDS_FOR_CONTEXT_ORDER.has(provider)) {
+    return DEFAULT_CONTEXT_FILE_ORDER;
+  }
+  const lowerModel = (modelId ?? "").trim().toLowerCase();
+  if (!lowerModel.startsWith("gpt-5")) {
+    return DEFAULT_CONTEXT_FILE_ORDER;
+  }
+  return GPT5_CONTEXT_FILE_ORDER;
+}
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
@@ -74,14 +125,19 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
-function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
+function sortContextFilesForPrompt(
+  contextFiles: EmbeddedContextFile[],
+  modelProviderId?: string,
+  modelId?: string,
+): EmbeddedContextFile[] {
+  const order = getContextFileOrder(modelProviderId, modelId);
   return contextFiles.toSorted((a, b) => {
     const aPath = normalizeContextFilePath(a.path);
     const bPath = normalizeContextFilePath(b.path);
     const aBase = getContextFileBasename(a.path);
     const bBase = getContextFileBasename(b.path);
-    const aOrder = CONTEXT_FILE_ORDER.get(aBase) ?? Number.MAX_SAFE_INTEGER;
-    const bOrder = CONTEXT_FILE_ORDER.get(bBase) ?? Number.MAX_SAFE_INTEGER;
+    const aOrder = order.get(aBase) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = order.get(bBase) ?? Number.MAX_SAFE_INTEGER;
     if (aOrder !== bOrder) {
       return aOrder - bOrder;
     }
@@ -119,7 +175,18 @@ function buildProjectContextSection(params: {
     lines.push("");
   }
   for (const file of params.files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+    const sanitizedContent = sanitizeContextFileForInjection(
+      sanitizeContextFileContentForPrompt(file.content),
+      file.path,
+    );
+    // Sanitize file.path in the heading to prevent prompt-structure injection
+    // via crafted filenames with control/bidi/zero-width chars.
+    // PR-A review fix (Copilot #3094483599): a filename composed entirely
+    // of bidi/zero-width/control chars trims to empty string, which
+    // would render a blank `##` heading and effectively hide which file
+    // the subsequent content came from. Fall back to a clear marker.
+    const safePath = sanitizeForPromptLiteral(file.path).trim() || "[unknown context file]";
+    lines.push(`## ${safePath}`, "", sanitizedContent, "");
   }
   return lines;
 }
@@ -471,6 +538,15 @@ export function buildAgentSystemPrompt(params: {
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
+  /**
+   * PR-8 follow-up Round 2: provider/model identification used for
+   * model-family-specific prompt tuning. Currently drives the GPT-5
+   * context-file reorder (SOUL.md / IDENTITY.md before AGENTS.md).
+   * When undefined the default order is used, preserving historical
+   * behavior for all non-OpenAI flows.
+   */
+  modelProviderId?: string;
+  modelId?: string;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -742,6 +818,10 @@ export function buildAgentSystemPrompt(params: {
       }),
     }),
     ...buildOverridablePromptSection({
+      override: providerSectionOverrides.tool_enforcement,
+      fallback: [],
+    }),
+    ...buildOverridablePromptSection({
       override: providerStablePrefix,
       fallback: [],
     }),
@@ -908,7 +988,11 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
+  const orderedContextFiles = sortContextFilesForPrompt(
+    validContextFiles,
+    params.modelProviderId,
+    params.modelId,
+  );
   const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
   const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
   lines.push(

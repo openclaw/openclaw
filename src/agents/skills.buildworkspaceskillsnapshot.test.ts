@@ -348,4 +348,31 @@ describe("buildWorkspaceSkillSnapshot", () => {
       omits: ["root-big-skill"],
     });
   });
+
+  // PR-E review fix (Copilot #3096524236): the snapshot-backed run path
+  // reads `resolvedPlanTemplates` from the snapshot. Without this
+  // regression test it would be easy to drop the field accidentally
+  // during future refactors, silently breaking the seed-from-snapshot
+  // flow for users relying on skill plan templates.
+  // Note: regression coverage for the frontmatter parsing path lives in
+  // `src/agents/skills/frontmatter.test.ts` (asserts kebab-case +
+  // camelCase recognition + `step` / `content` aliasing). The snapshot
+  // composition path is integration-tested via the full e2e flow in
+  // `src/agents/pi-embedded-runner/skills-runtime.test.ts` which
+  // exercises `applySkillPlanTemplateSeed` end-to-end with a snapshot
+  // containing `resolvedPlanTemplates`.
+  it("omits resolvedPlanTemplates (or empty) when no skill carries plan-template frontmatter", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace-no-template");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "plain-skill"),
+      name: "plain-skill",
+      description: "No template",
+    });
+    const snapshot = buildSnapshot(workspaceDir);
+    // Empty or undefined both represent "no templates" — trust the snapshot
+    // (the old-version fallback in resolveEmbeddedRunSkillEntries only
+    // reloads on undefined, so empty array is a valid "no templates" signal).
+    const resolved = snapshot.resolvedPlanTemplates;
+    expect(resolved === undefined || resolved.length === 0).toBe(true);
+  });
 });

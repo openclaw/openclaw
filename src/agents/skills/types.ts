@@ -16,6 +16,16 @@ export type SkillInstallSpec = {
   targetDir?: string;
 };
 
+/**
+ * A plan template step that a skill can provide.
+ * When the skill is activated, these steps are auto-populated into
+ * `update_plan` as the initial plan (all status: "pending").
+ */
+export type SkillPlanTemplateStep = {
+  step: string;
+  activeForm?: string;
+};
+
 export type OpenClawSkillMetadata = {
   always?: boolean;
   skillKey?: string;
@@ -30,6 +40,14 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  /**
+   * Optional plan template. When present and the skill is activated,
+   * the runtime auto-calls `update_plan` with these steps (all pending)
+   * before the first agent turn, giving the agent a starting checklist.
+   *
+   * Parsed from YAML frontmatter `plan-template` field in SKILL.md.
+   */
+  planTemplate?: SkillPlanTemplateStep[];
 };
 
 export type SkillInvocationPolicy = {
@@ -96,5 +114,12 @@ export type SkillSnapshot = {
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
   resolvedSkills?: Skill[];
+  /**
+   * Per-skill plan templates carried forward from snapshot build so the
+   * skill-template seeder (#67541) doesn't have to re-load workspace skill
+   * entries when running off a pre-built snapshot. Only skills with a
+   * non-empty `planTemplate` appear here.
+   */
+  resolvedPlanTemplates?: Array<{ skillName: string; planTemplate: SkillPlanTemplateStep[] }>;
   version?: number;
 };

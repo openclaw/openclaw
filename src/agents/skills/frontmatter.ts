@@ -19,6 +19,7 @@ import type {
   SkillEntry,
   SkillInstallSpec,
   SkillInvocationPolicy,
+  SkillPlanTemplateStep,
 } from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
@@ -184,6 +185,54 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
+function parsePlanTemplate(raw: unknown): SkillPlanTemplateStep[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: SkillPlanTemplateStep[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    // Strict type guard: `step` must be a non-empty string after trim.
+    // Reject non-string steps (objects, arrays, numbers, booleans) instead
+    // of coercing them via String() — coercion produces useless output
+    // like "[object Object]" that the agent can't act on.
+    //
+    // PR-E review fix (Copilot #3096524315 / #3105043896): also accept
+    // `content` as an alias for `step`. The PR description's example used
+    // `content:` which would have silently parsed as empty otherwise.
+    // `step` wins on conflict — it matches the canonical field name in
+    // `SkillPlanTemplateStep` and downstream `update_plan` schema.
+    const stepRaw =
+      typeof record.step === "string"
+        ? record.step
+        : typeof record.content === "string"
+          ? record.content
+          : undefined;
+    if (stepRaw === undefined) {
+      continue;
+    }
+    const step = stepRaw.trim();
+    if (step.length === 0) {
+      continue;
+    }
+    // Trim-before-truthy on activeForm: an entry like
+    // `activeForm: "   "` should be treated as missing, not as a
+    // whitespace-only display string.
+    let activeForm: string | undefined;
+    if (typeof record.activeForm === "string") {
+      const trimmed = record.activeForm.trim();
+      if (trimmed.length > 0) {
+        activeForm = trimmed;
+      }
+    }
+    parsed.push(activeForm !== undefined ? { step, activeForm } : { step });
+  }
+  return parsed;
+}
+
 export function resolveOpenClawMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
@@ -194,6 +243,21 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  // Accept both kebab-case (`plan-template`) and camelCase (`planTemplate`)
+  // frontmatter keys. Codex P1 (PR #67541 r3096435164) — natural authors
+  // following the `primaryEnv`/`skillKey` camelCase convention would have
+  // their templates silently ignored otherwise. Kebab-case wins on conflict
+  // for backward compatibility with existing skills.
+  //
+  // PR-E review fix (Copilot #3105043876): if kebab-case key is PRESENT
+  // but parses to an empty array (invalid shape — string, object,
+  // entries with non-string `step`, etc.), fall back to camelCase
+  // instead of returning empty. The prior `??` only fell through on
+  // null/undefined, so a malformed kebab-case key would silently
+  // shadow a valid camelCase template.
+  const kebabParsed = parsePlanTemplate(metadataObj["plan-template"]);
+  const camelParsed = parsePlanTemplate(metadataObj.planTemplate);
+  const planTemplate = kebabParsed.length > 0 ? kebabParsed : camelParsed;
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
@@ -203,6 +267,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    planTemplate: planTemplate.length > 0 ? planTemplate : undefined,
   };
 }
 
