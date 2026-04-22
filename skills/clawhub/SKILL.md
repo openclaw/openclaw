@@ -1,6 +1,6 @@
 ---
 name: clawhub
-description: Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com. Use when you need to fetch new skills on the fly, sync installed skills to latest or a specific version, or publish new/updated skill folders with the npm-installed clawhub CLI.
+description: Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.ai. Use when you need to fetch new skills on the fly, sync installed skills to latest or a specific version, or publish new/updated skill folders with the npm-installed clawhub CLI.
 metadata:
   {
     "openclaw":
@@ -72,6 +72,6 @@ clawhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.2.0 --c
 
 Notes
 
-- Default registry: https://clawhub.com (override with CLAWHUB_REGISTRY or --registry)
+- Default registry: https://clawhub.ai (override with CLAWHUB_REGISTRY or --registry)
 - Default workdir: cwd (falls back to OpenClaw workspace); install dir: ./skills (override with --workdir / --dir / CLAWHUB_WORKDIR)
 - Update command hashes local files, resolves matching version, and upgrades to latest unless --version is set
