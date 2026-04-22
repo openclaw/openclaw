@@ -4,7 +4,6 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 
 type Sharp = typeof import("sharp");
-type SharpFactory = (buffer: Buffer) => ReturnType<Sharp>;
 
 export type ImageMetadata = {
   width: number;
@@ -32,18 +31,14 @@ function prefersSips(): boolean {
   );
 }
 
-let sharpFactoryPromise: Promise<SharpFactory> | null = null;
-
-async function loadSharp(): Promise<SharpFactory> {
-  sharpFactoryPromise ??= import("sharp").then((mod) => {
-    const sharp = (mod as unknown as { default?: Sharp }).default ?? (mod as unknown as Sharp);
-    return (buffer: Buffer) =>
-      sharp(buffer, {
-        failOnError: false,
-        limitInputPixels: MAX_IMAGE_INPUT_PIXELS,
-      });
-  });
-  return sharpFactoryPromise;
+async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
+  const mod = (await import("sharp")) as unknown as { default?: Sharp };
+  const sharp = mod.default ?? (mod as unknown as Sharp);
+  return (buffer) =>
+    sharp(buffer, {
+      failOnError: false,
+      limitInputPixels: MAX_IMAGE_INPUT_PIXELS,
+    });
 }
 
 function isPositiveImageDimension(value: number): boolean {
@@ -503,11 +498,17 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
 
 export async function resizeToJpeg(params: {
   buffer: Buffer;
-  maxSide: number;
+  maxSide?: number;
+  maxWidth?: number;
+  maxHeight?: number;
   quality: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
+
+  const maxWidth = params.maxWidth ?? params.maxSide;
+  const maxHeight = params.maxHeight ?? params.maxSide;
+  const maxSide = params.maxSide ?? Math.max(maxWidth ?? 0, maxHeight ?? 0);
 
   if (prefersSips()) {
     // Normalize EXIF orientation BEFORE resizing (sips resize doesn't auto-rotate)
@@ -518,7 +519,7 @@ export async function resizeToJpeg(params: {
       const meta = await getImageMetadata(normalized);
       if (meta) {
         const maxDim = Math.max(meta.width, meta.height);
-        if (maxDim > 0 && maxDim <= params.maxSide) {
+        if (maxDim > 0 && maxDim <= maxSide) {
           return await sipsResizeToJpeg({
             buffer: normalized,
             maxSide: maxDim,
@@ -529,7 +530,7 @@ export async function resizeToJpeg(params: {
     }
     return await sipsResizeToJpeg({
       buffer: normalized,
-      maxSide: params.maxSide,
+      maxSide,
       quality: params.quality,
     });
   }
@@ -539,8 +540,8 @@ export async function resizeToJpeg(params: {
   return await sharp(params.buffer)
     .rotate() // Auto-rotate based on EXIF before resizing
     .resize({
-      width: params.maxSide,
-      height: params.maxSide,
+      width: maxWidth,
+      height: maxHeight,
       fit: "inside",
       withoutEnlargement: params.withoutEnlargement !== false,
     })
@@ -583,21 +584,25 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
  */
 export async function resizeToPng(params: {
   buffer: Buffer;
-  maxSide: number;
+  maxSide?: number;
+  maxWidth?: number;
+  maxHeight?: number;
   compressionLevel?: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
 
   const sharp = await loadSharp();
+  const maxWidth = params.maxWidth ?? params.maxSide;
+  const maxHeight = params.maxHeight ?? params.maxSide;
   // Compression level 6 is a good balance (0=fastest, 9=smallest)
   const compressionLevel = params.compressionLevel ?? 6;
 
   return await sharp(params.buffer)
     .rotate() // Auto-rotate based on EXIF if present
     .resize({
-      width: params.maxSide,
-      height: params.maxSide,
+      width: maxWidth,
+      height: maxHeight,
       fit: "inside",
       withoutEnlargement: params.withoutEnlargement !== false,
     })

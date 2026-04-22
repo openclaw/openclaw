@@ -19,23 +19,6 @@ vi.mock("../views/agents-utils.ts", () => ({
   agentLogoUrl: () => "/openclaw-logo.svg",
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
-  resolveChatAvatarRenderUrl: (
-    candidate: string | null | undefined,
-    agent: { identity?: { avatar?: string; avatarUrl?: string } },
-  ) => {
-    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-      return candidate;
-    }
-    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-      if (
-        typeof value === "string" &&
-        (/^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")))
-      ) {
-        return value;
-      }
-    }
-    return null;
-  },
 }));
 
 vi.mock("./speech.ts", () => ({
@@ -239,84 +222,6 @@ describe("grouped chat rendering", () => {
     const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
     expect(avatar).not.toBeNull();
     expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
-  });
-
-  it("renders the configured local user name in user message footers", () => {
-    const container = document.createElement("div");
-
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userName: "Buns" },
-    );
-
-    const sender = container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
-    expect(sender?.textContent).toBe("Buns");
-  });
-
-  it("renders a local user image avatar when provided", () => {
-    const container = document.createElement("div");
-
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userName: "Buns", userAvatar: "data:image/png;base64,AAA" },
-    );
-
-    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("data:image/png;base64,AAA");
-    expect(avatar?.getAttribute("alt")).toBe("Buns");
-  });
-
-  it("renders a local user avatar route when provided", () => {
-    const container = document.createElement("div");
-
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userName: "Buns", userAvatar: "/avatar/user" },
-    );
-
-    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("/avatar/user");
-    expect(avatar?.getAttribute("alt")).toBe("Buns");
-  });
-
-  it("renders a local user text avatar when provided", () => {
-    const container = document.createElement("div");
-
-    renderGroupedMessage(
-      container,
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1000,
-      },
-      "user",
-      { userAvatar: "🦞" },
-    );
-
-    const avatar = container.querySelector<HTMLElement>(".chat-avatar.user");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.tagName).toBe("DIV");
-    expect(avatar?.textContent).toContain("🦞");
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
@@ -599,6 +504,31 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-message-image")).toBeNull();
   });
 
+  it("deduplicates repeated legacy MediaPath and MediaPaths image entries", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-legacy-media-paths-dedupe",
+        role: "assistant",
+        content: [{ type: "text", text: "duplicate legacy paths" }],
+        MediaPath: "/media/legacy-shared.png",
+        MediaPaths: ["/media/legacy-shared.png", "/media/legacy-other.png"],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    const images = Array.from(
+      container.querySelectorAll<HTMLImageElement>(".chat-message-images img"),
+    );
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "http://localhost:3000/media/legacy-shared.png",
+      "http://localhost:3000/media/legacy-other.png",
+    ]);
+  });
+
   it("renders legacy input_image image_url blocks", () => {
     const container = document.createElement("div");
 
@@ -665,14 +595,14 @@ describe("grouped chat rendering", () => {
       openSpy.mockClear();
       renderAssistantImage("javascript:alert(1)");
       image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image).not.toBeNull();
-      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(image).toBeNull();
+      expect(container.querySelector(".chat-message-image-unavailable")).not.toBeNull();
       expect(openSpy).not.toHaveBeenCalled();
 
       renderAssistantImage("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />");
       image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image).not.toBeNull();
-      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(image).toBeNull();
+      expect(container.querySelector(".chat-message-image-unavailable")).not.toBeNull();
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();

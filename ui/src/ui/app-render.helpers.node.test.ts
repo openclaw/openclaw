@@ -208,6 +208,16 @@ describe("resolveAssistantAttachmentAuthToken", () => {
     ).toBe("shared-password");
   });
 
+  it("falls back to the paired device token when shared auth is unavailable", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "" } as AppViewState["settings"],
+        password: "   ",
+        hello: { auth: { deviceToken: "paired-device-token" } } as AppViewState["hello"],
+      }),
+    ).toBe("paired-device-token");
+  });
+
   it("returns null when neither auth secret is available", () => {
     expect(
       resolveAssistantAttachmentAuthToken({

@@ -1,11 +1,12 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
-import { openExternalUrlSafe } from "../open-external-url.ts";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type {
@@ -14,11 +15,6 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
-import {
-  resolveLocalUserAvatarText,
-  resolveLocalUserAvatarUrl,
-  resolveLocalUserName,
-} from "../user-identity.ts";
 import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
@@ -54,69 +50,138 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
 
 type ImageBlock = {
   url: string;
+  openUrl?: string;
   alt?: string;
-};
-
-type ImageRenderOptions = {
-  localMediaPreviewRoots?: readonly string[];
-  basePath?: string;
-  authToken?: string | null;
+  width?: number;
+  height?: number;
 };
 
 type RenderableImageBlock = ImageBlock & {
-  displayUrl: string;
+  previewUrl: string;
 };
 
-function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
-  if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
-    images.push(block);
+const DEFAULT_INLINE_IMAGE_PREVIEW_MAX_WIDTH = 480;
+const DEFAULT_INLINE_IMAGE_PREVIEW_MAX_HEIGHT = 480;
+
+function normalizeMarkdownLinkTarget(target: string): string {
+  const trimmed = target.trim();
+  if (!trimmed) {
+    return "";
   }
+  if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
+    return trimmed.slice(1, -1).trim();
+  }
+  const whitespaceIndex = trimmed.search(/\s/);
+  return whitespaceIndex === -1 ? trimmed : trimmed.slice(0, whitespaceIndex).trim();
 }
 
-function buildBase64ImageUrl(params: { data: string; mediaType?: string }): string {
-  return params.data.startsWith("data:")
-    ? params.data
-    : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
-}
-
-function getFileExtension(url: string): string | undefined {
-  const source = (() => {
-    try {
-      const trimmed = url.trim();
-      if (/^https?:\/\//i.test(trimmed)) {
-        return new URL(trimmed).pathname;
-      }
-    } catch {
-      // Fall back to the raw path when URL parsing fails.
-    }
-    return url;
-  })();
-  const fileName = source.split(/[\\/]/).pop() ?? source;
-  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
-  return match?.[1]?.toLowerCase();
-}
-
-function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
+function isImageOnlyUrlToken(value: string, imageUrls: ReadonlySet<string>): boolean {
+  const normalized = value.trim().replace(/^<|>$/g, "");
+  if (!normalized) {
+    return false;
+  }
+  if (imageUrls.has(normalized)) {
+    return true;
+  }
+  if (/^data:image\//i.test(normalized)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(normalized, "https://openclaw.invalid");
+    const href = parsed.href;
+    if (imageUrls.has(href)) {
       return true;
     }
-    if (normalized !== "application/octet-stream") {
-      return false;
+    const pathname = parsed.pathname.toLowerCase();
+    if (/\.(avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(pathname)) {
+      return true;
+    }
+    if (/\/api\/chat\/media\/outgoing\/.+\/full$/.test(pathname)) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function hasMeaningfulMarkdownText(markdown: string, images: readonly ImageBlock[]): boolean {
+  const imageUrls = new Set<string>();
+  for (const image of images) {
+    imageUrls.add(image.url);
+    if (image.openUrl) {
+      imageUrls.add(image.openUrl);
     }
   }
-  const ext = getFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
+
+  let stripped = markdown;
+  stripped = stripped.replace(
+    /!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+["'][^"']*["'])?\)/g,
+    (match, rawTarget: string) =>
+      isImageOnlyUrlToken(normalizeMarkdownLinkTarget(rawTarget), imageUrls) ? " " : match,
   );
+  stripped = stripped.replace(/<img\b[^>]*\bsrc=(['"])(.*?)\1[^>]*>/gi, (match, _quote, src) =>
+    isImageOnlyUrlToken(src, imageUrls) ? " " : match,
+  );
+  stripped = stripped.replace(
+    /(^|\s)(<https?:[^>\s]+>|https?:\/\/\S+|data:image\/\S+)/gi,
+    (match, prefix: string, rawUrl: string) =>
+      isImageOnlyUrlToken(rawUrl, imageUrls) ? `${prefix} ` : match,
+  );
+
+  return stripped.trim().length > 0;
+}
+
+function normalizePositiveDimension(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.round(value));
+}
+
+function imageDisplayStyle(img: ImageBlock): string {
+  const width = normalizePositiveDimension(img.width);
+  const height = normalizePositiveDimension(img.height);
+  const styles = [
+    `--chat-message-image-default-width: ${DEFAULT_INLINE_IMAGE_PREVIEW_MAX_WIDTH}`,
+    `--chat-message-image-default-height: ${DEFAULT_INLINE_IMAGE_PREVIEW_MAX_HEIGHT}`,
+  ];
+  if (width && height) {
+    styles.push(`--chat-message-image-width: ${width}`);
+    styles.push(`--chat-message-image-height: ${height}`);
+  }
+  return `${styles.join("; ")};`;
+}
+
+function isImageLikeLegacyMediaPath(value: string, mediaType?: unknown): boolean {
+  if (typeof mediaType === "string" && mediaType.toLowerCase().startsWith("image/")) {
+    return true;
+  }
+  if (/^data:image\//i.test(value)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(value, "https://openclaw.invalid");
+    const pathname = parsed.pathname.toLowerCase();
+    return /\.(avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|webp)$/i.test(pathname);
+  } catch {
+    return false;
+  }
 }
 
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
   const images: ImageBlock[] = [];
+  const seen = new Set<string>();
+  const pushImage = (image: ImageBlock) => {
+    const key = `${image.url}\u0000${image.openUrl ?? ""}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    images.push(image);
+  };
 
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -129,64 +194,109 @@ function extractImages(message: unknown): ImageBlock[] {
         // Handle source object format (from sendChatMessage)
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
+          const data = source.data;
+          const mediaType = (source.media_type as string) || "image/png";
+          // If data is already a data URL, use it directly
+          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+          pushImage({ url });
         } else if (typeof b.url === "string") {
-          appendImageBlock(images, { url: b.url });
+          pushImage({
+            url: b.url,
+            openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
+            alt: typeof b.alt === "string" ? b.alt : undefined,
+            width: normalizePositiveDimension(b.width),
+            height: normalizePositiveDimension(b.height),
+          });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          appendImageBlock(images, { url: imageUrl.url });
+          pushImage({ url: imageUrl.url });
         }
       } else if (b.type === "input_image") {
         const imageUrl = b.image_url;
         if (typeof imageUrl === "string") {
-          appendImageBlock(images, { url: imageUrl });
+          pushImage({ url: imageUrl });
         } else if (imageUrl && typeof imageUrl === "object") {
           const url = (imageUrl as Record<string, unknown>).url;
           if (typeof url === "string") {
-            appendImageBlock(images, { url });
+            pushImage({ url });
           }
         }
         const source = b.source as Record<string, unknown> | undefined;
         if (typeof source?.url === "string") {
-          appendImageBlock(images, { url: source.url });
+          pushImage({ url: source.url });
         } else if (typeof source?.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
+          const data = source.data;
+          const mediaType = (source.media_type as string) || "image/png";
+          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+          pushImage({ url });
         }
       }
     }
   }
 
-  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
-    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
-    : typeof m.MediaPath === "string"
-      ? [m.MediaPath]
-      : [];
-  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
-    ? m.MediaTypes
-    : typeof m.MediaType === "string"
-      ? [m.MediaType]
-      : [];
-  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
-    if (!isImageTranscriptMediaPath(mediaPath, transcriptMediaTypes[index])) {
-      continue;
+  const mediaPath = m.MediaPath;
+  if (
+    typeof mediaPath === "string" &&
+    mediaPath.trim() &&
+    isImageLikeLegacyMediaPath(mediaPath, m.MediaType)
+  ) {
+    pushImage({ url: mediaPath });
+  }
+  const mediaPaths = m.MediaPaths;
+  const mediaTypes = Array.isArray(m.MediaTypes) ? m.MediaTypes : [];
+  if (Array.isArray(mediaPaths)) {
+    for (const [index, candidate] of mediaPaths.entries()) {
+      if (
+        typeof candidate === "string" &&
+        candidate.trim() &&
+        isImageLikeLegacyMediaPath(candidate, mediaTypes[index])
+      ) {
+        pushImage({ url: candidate });
+      }
     }
-    appendImageBlock(images, { url: mediaPath });
   }
 
   return images;
+}
+
+function preferTextBeforeImages(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+
+  let firstTextIndex = Number.POSITIVE_INFINITY;
+  let firstImageIndex = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const block = content[index];
+    if (typeof block !== "object" || block === null) {
+      continue;
+    }
+    const candidate = block as Record<string, unknown>;
+    if (
+      firstTextIndex === Number.POSITIVE_INFINITY &&
+      candidate.type === "text" &&
+      typeof candidate.text === "string" &&
+      candidate.text.trim()
+    ) {
+      firstTextIndex = index;
+    }
+    if (
+      firstImageIndex === Number.POSITIVE_INFINITY &&
+      (candidate.type === "image" || candidate.type === "image_url")
+    ) {
+      firstImageIndex = index;
+    }
+  }
+
+  return firstTextIndex < firstImageIndex;
 }
 
 export function renderReadingIndicatorGroup(
@@ -196,7 +306,7 @@ export function renderReadingIndicatorGroup(
 ) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderAvatar("assistant", assistant, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -224,7 +334,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderAvatar("assistant", assistant, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -233,7 +343,7 @@ export function renderStreamingGroup(
             timestamp: startedAt,
           },
           `stream:${startedAt}`,
-          { isStreaming: true, showReasoning: false },
+          { isStreaming: true, showReasoning: false, basePath },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">
@@ -259,28 +369,25 @@ export function renderMessageGroup(
     onRequestUpdate?: () => void;
     assistantName?: string;
     assistantAvatar?: string | null;
-    userName?: string | null;
-    userAvatar?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
     canvasHostUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    onMediaLoad?: () => void;
     contextWindow?: number | null;
     onDelete?: () => void;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
-  const resolvedUserName = resolveLocalUserName({
-    name: opts.userName ?? null,
-    avatar: opts.userAvatar ?? null,
-  });
   const userLabel = group.senderLabel?.trim();
   const who =
     normalizedRole === "user"
-      ? (userLabel ?? resolvedUserName)
+      ? (userLabel ?? "You")
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole === "tool"
@@ -310,10 +417,6 @@ export function renderMessageGroup(
           name: assistantName,
           avatar: opts.assistantAvatar ?? null,
         },
-        {
-          name: opts.userName ?? null,
-          avatar: opts.userAvatar ?? null,
-        },
         opts.basePath,
         opts.assistantAttachmentAuthToken,
       )}
@@ -337,6 +440,9 @@ export function renderMessageGroup(
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
+              authHeader: opts.authHeader,
+              requesterSessionKey: opts.requesterSessionKey,
+              onMediaLoad: opts.onMediaLoad,
             },
             opts.onOpenSidebar,
           ),
@@ -606,16 +712,12 @@ function renderTtsButton(group: MessageGroup) {
 function renderAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
-  user?: { name?: string | null; avatar?: string | null },
   basePath?: string,
   authToken?: string | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
-  const userName = resolveLocalUserName(user);
-  const userAvatarUrl = resolveLocalUserAvatarUrl(user);
-  const userAvatarText = resolveLocalUserAvatarText(user);
   const initial =
     normalized === "user"
       ? html`
@@ -662,16 +764,6 @@ function renderAvatar(
           ? "tool"
           : "other";
 
-  if (normalized === "user" && userAvatarUrl) {
-    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
-  }
-
-  if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
-      ${userAvatarText}
-    </div>`;
-  }
-
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
       if (authToken?.trim() && assistantAvatar.startsWith("/")) {
@@ -711,45 +803,619 @@ function isAvatarUrl(value: string): boolean {
   return isRenderableControlUiAvatarUrl(value);
 }
 
-function resolveRenderableMessageImages(
-  images: ImageBlock[],
-  opts?: ImageRenderOptions,
-): RenderableImageBlock[] {
-  return images.flatMap((img) => {
-    const isLocalImage = isLocalAssistantAttachmentSource(img.url);
-    const canProxyLocalImage =
-      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
-    if (isLocalImage && !canProxyLocalImage) {
-      return [];
-    }
-    const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
-      : img.url;
-    return [{ ...img, displayUrl }];
+const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
+const managedImageBlobUrlResolvedCache = new Map<string, string>();
+const managedImageBlobUrlMissCache = new Map<string, number>();
+const MANAGED_IMAGE_FETCH_RETRY_DELAYS_MS = [0, 75, 200, 500] as const;
+const MANAGED_IMAGE_FETCH_MISS_TTL_MS = 10_000;
+const IMAGE_ACTION_COPIED_FEEDBACK_MS = 1_500;
+const imageActionFeedbackTimers = new WeakMap<HTMLButtonElement, number>();
+const MANAGED_IMAGE_PREVIEW_SELECTOR = ".chat-message-image";
+
+function buildManagedImageFetchCacheKey(
+  url: string,
+  authHeader?: string,
+  requesterSessionKey?: string,
+) {
+  return JSON.stringify([url, authHeader ?? null, requesterSessionKey ?? null]);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveBaseHref(basePath?: string): string {
+  return basePath
+    ? new URL(basePath.endsWith("/") ? basePath : `${basePath}/`, window.location.href).toString()
+    : window.location.href;
+}
+
+function resolveImageDisplayUrl(
+  rawUrl: string | null | undefined,
+  opts: { basePath?: string; assistantAttachmentAuthToken?: string | null },
+): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  if (isLocalAssistantAttachmentSource(rawUrl)) {
+    return buildAssistantAttachmentUrl(rawUrl, opts.basePath, opts.assistantAttachmentAuthToken);
+  }
+  return resolveSafeExternalUrl(rawUrl, resolveBaseHref(opts.basePath), {
+    allowDataImage: true,
   });
 }
 
-function renderMessageImages(images: RenderableImageBlock[]) {
+function resolveManagedImageUrl(
+  rawUrl: string | null | undefined,
+  opts: { basePath?: string; authHeader?: string; allowDataImage?: boolean },
+): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  const mountedBaseHref = opts.basePath ? resolveBaseHref(opts.basePath) : null;
+  const baseHref = mountedBaseHref ?? window.location.href;
+  const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, {
+    allowDataImage: opts.allowDataImage ?? true,
+  });
+  if (!safeUrl || safeUrl.startsWith("data:") || safeUrl.startsWith("blob:")) {
+    return null;
+  }
+  try {
+    const parsed = new URL(safeUrl, window.location.href);
+    if (parsed.origin !== window.location.origin) {
+      return null;
+    }
+    const allowedPathPrefixes = ["/api/chat/media/outgoing/"];
+    if (mountedBaseHref) {
+      const mountedBasePath = new URL(mountedBaseHref).pathname.replace(/\/+$/, "");
+      if (mountedBasePath) {
+        allowedPathPrefixes.push(`${mountedBasePath}/api/chat/media/outgoing/`);
+      }
+    }
+    if (!allowedPathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchManagedImageBlob(
+  url: string,
+  authHeader?: string,
+  opts?: { bypassMissCache?: boolean; requesterSessionKey?: string },
+): Promise<Blob | null> {
+  const cacheKey = buildManagedImageFetchCacheKey(url, authHeader, opts?.requesterSessionKey);
+  const bypassMissCache = opts?.bypassMissCache === true;
+  if (!bypassMissCache) {
+    const missUntil = managedImageBlobUrlMissCache.get(cacheKey);
+    if (typeof missUntil === "number" && missUntil > Date.now()) {
+      return null;
+    }
+  }
+
+  for (let index = 0; index < MANAGED_IMAGE_FETCH_RETRY_DELAYS_MS.length; index += 1) {
+    const delayMs = MANAGED_IMAGE_FETCH_RETRY_DELAYS_MS[index];
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    try {
+      const headers: Record<string, string> = {};
+      if (authHeader) {
+        headers.Authorization = authHeader;
+      }
+      if (opts?.requesterSessionKey) {
+        headers["x-openclaw-requester-session-key"] = opts.requesterSessionKey;
+      }
+      const response = await fetch(url, {
+        credentials: "same-origin",
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      });
+      if (response.ok) {
+        managedImageBlobUrlMissCache.delete(cacheKey);
+        return await response.blob();
+      }
+      if (response.status !== 404) {
+        managedImageBlobUrlMissCache.set(cacheKey, Date.now() + MANAGED_IMAGE_FETCH_MISS_TTL_MS);
+        return null;
+      }
+    } catch {
+      managedImageBlobUrlMissCache.set(cacheKey, Date.now() + MANAGED_IMAGE_FETCH_MISS_TTL_MS);
+      return null;
+    }
+  }
+  managedImageBlobUrlMissCache.set(cacheKey, Date.now() + MANAGED_IMAGE_FETCH_MISS_TTL_MS);
+  return null;
+}
+
+async function fetchManagedImageBlobUrl(
+  url: string,
+  authHeader?: string,
+  opts?: { bypassMissCache?: boolean; requesterSessionKey?: string },
+): Promise<string | null> {
+  const cacheKey = buildManagedImageFetchCacheKey(url, authHeader, opts?.requesterSessionKey);
+  const resolved = managedImageBlobUrlResolvedCache.get(cacheKey);
+  if (typeof resolved === "string" && resolved.length > 0) {
+    return resolved;
+  }
+
+  const bypassMissCache = opts?.bypassMissCache === true;
+  if (!bypassMissCache) {
+    const missUntil = managedImageBlobUrlMissCache.get(cacheKey);
+    if (typeof missUntil === "number" && missUntil > Date.now()) {
+      return null;
+    }
+  }
+
+  let pending = managedImageBlobUrlCache.get(cacheKey);
+  if (!pending) {
+    pending = (async () => {
+      const blob = await fetchManagedImageBlob(url, authHeader, opts);
+      if (!blob) {
+        return null;
+      }
+      const blobUrl = URL.createObjectURL(blob);
+      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+      return blobUrl;
+    })();
+    managedImageBlobUrlCache.set(cacheKey, pending);
+    void pending.then(
+      () => {
+        managedImageBlobUrlCache.delete(cacheKey);
+      },
+      () => {
+        managedImageBlobUrlCache.delete(cacheKey);
+      },
+    );
+  }
+  return pending;
+}
+
+async function fetchImageBlob(
+  rawUrl: string,
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
+): Promise<Blob | null> {
+  const managedUrl = resolveManagedImageUrl(rawUrl, {
+    basePath: opts.basePath,
+    authHeader: opts.authHeader,
+    allowDataImage: true,
+  });
+  if (managedUrl) {
+    return fetchManagedImageBlob(managedUrl, opts.authHeader, {
+      bypassMissCache: true,
+      requesterSessionKey: opts.requesterSessionKey,
+    });
+  }
+
+  const safeUrl = resolveImageDisplayUrl(rawUrl, {
+    basePath: opts.basePath,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+  });
+  if (!safeUrl) {
+    return null;
+  }
+  try {
+    const response = await fetch(safeUrl);
+    if (!response.ok) {
+      return null;
+    }
+    return await response.blob();
+  } catch {
+    return null;
+  }
+}
+
+function showCopiedImageActionFeedback(button: HTMLButtonElement): void {
+  button.dataset.state = "copied";
+  const priorTimer = imageActionFeedbackTimers.get(button);
+  if (typeof priorTimer === "number") {
+    window.clearTimeout(priorTimer);
+  }
+  const timer = window.setTimeout(() => {
+    delete button.dataset.state;
+    imageActionFeedbackTimers.delete(button);
+  }, IMAGE_ACTION_COPIED_FEEDBACK_MS);
+  imageActionFeedbackTimers.set(button, timer);
+}
+
+async function cloneBlobForClipboard(blob: Blob, mimeType: string): Promise<Blob> {
+  try {
+    const bytes = await blob.arrayBuffer();
+    return new Blob([bytes], { type: mimeType });
+  } catch {
+    return blob;
+  }
+}
+
+async function rasterizeBlobToPng(blob: Blob): Promise<Blob | null> {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.addEventListener("load", () => resolve(img), { once: true });
+      img.addEventListener("error", () => reject(new Error("image load failed")), { once: true });
+      img.src = objectUrl;
+    });
+    const canvas = document.createElement("canvas");
+    const width = Math.max(1, image.naturalWidth || image.width || 1);
+    const height = Math.max(1, image.naturalHeight || image.height || 1);
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+    context.drawImage(image, 0, 0, width, height);
+    return await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((pngBlob) => resolve(pngBlob), "image/png");
+    });
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function prepareClipboardImageBlob(blob: Blob): Promise<Blob> {
+  if (blob.type === "image/png") {
+    return cloneBlobForClipboard(blob, "image/png");
+  }
+  if (blob.type?.startsWith("image/")) {
+    const pngBlob = await rasterizeBlobToPng(blob);
+    if (pngBlob) {
+      return cloneBlobForClipboard(pngBlob, "image/png");
+    }
+  }
+  throw new Error("unsupported clipboard image type");
+}
+
+async function copyImageUrl(
+  rawUrl: string,
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
+): Promise<boolean> {
+  if (typeof navigator === "undefined" || !navigator.clipboard) {
+    return false;
+  }
+
+  const ClipboardItemCtor = globalThis.ClipboardItem as
+    | (new (items: Record<string, Blob | Promise<Blob>>) => ClipboardItem)
+    | undefined;
+  if (typeof navigator.clipboard.write !== "function" || !ClipboardItemCtor) {
+    return false;
+  }
+
+  const clipboardBlobPromise = (async () => {
+    const blob = await fetchImageBlob(rawUrl, opts);
+    if (!blob) {
+      throw new Error("image fetch failed");
+    }
+    return prepareClipboardImageBlob(blob);
+  })();
+  try {
+    await navigator.clipboard.write([new ClipboardItemCtor({ "image/png": clipboardBlobPromise })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function cleanupUnusedManagedImagePreviewBlobUrls(
+  root: ParentNode,
+  options?: { revokeActive?: boolean },
+): void {
+  const activeBlobUrls = new Set(
+    Array.from(root.querySelectorAll<HTMLImageElement>(MANAGED_IMAGE_PREVIEW_SELECTOR))
+      .map((image) => image.currentSrc || image.src || "")
+      .filter((src) => typeof src === "string" && src.startsWith("blob:")),
+  );
+  for (const [cacheKey, blobUrl] of managedImageBlobUrlResolvedCache.entries()) {
+    if (options?.revokeActive || !activeBlobUrls.has(blobUrl)) {
+      URL.revokeObjectURL(blobUrl);
+      managedImageBlobUrlResolvedCache.delete(cacheKey);
+    }
+  }
+}
+
+async function fetchManagedPreviewBlobUrl(
+  rawUrl: string | null | undefined,
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    fallbackRawUrl?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
+): Promise<string | null> {
+  if (!rawUrl) {
+    return null;
+  }
+  const managedUrl = resolveManagedImageUrl(rawUrl, {
+    basePath: opts.basePath,
+    authHeader: opts.authHeader,
+    allowDataImage: true,
+  });
+  if (managedUrl) {
+    const primary = await fetchManagedImageBlobUrl(managedUrl, opts.authHeader, {
+      requesterSessionKey: opts.requesterSessionKey,
+    });
+    if (primary) {
+      return primary;
+    }
+    if (opts.fallbackRawUrl) {
+      const fallbackManagedUrl = resolveManagedImageUrl(opts.fallbackRawUrl, {
+        basePath: opts.basePath,
+        authHeader: opts.authHeader,
+        allowDataImage: true,
+      });
+      if (fallbackManagedUrl && fallbackManagedUrl !== managedUrl) {
+        const fallback = await fetchManagedImageBlobUrl(fallbackManagedUrl, opts.authHeader, {
+          requesterSessionKey: opts.requesterSessionKey,
+        });
+        if (fallback) {
+          return fallback;
+        }
+      }
+    }
+    return null;
+  }
+  return resolveImageDisplayUrl(rawUrl, {
+    basePath: opts.basePath,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+  });
+}
+
+function resolveManagedPreviewSource(
+  rawUrl: string | null | undefined,
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    fallbackRawUrl?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
+): string | Promise<string | null> | null {
+  if (!rawUrl) {
+    return null;
+  }
+  const managedUrl = resolveManagedImageUrl(rawUrl, {
+    basePath: opts.basePath,
+    authHeader: opts.authHeader,
+    allowDataImage: true,
+  });
+  if (!managedUrl) {
+    return resolveImageDisplayUrl(rawUrl, {
+      basePath: opts.basePath,
+      assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    });
+  }
+
+  const resolvedPrimary = managedImageBlobUrlResolvedCache.get(
+    buildManagedImageFetchCacheKey(managedUrl, opts.authHeader, opts.requesterSessionKey),
+  );
+  if (typeof resolvedPrimary === "string" && resolvedPrimary.length > 0) {
+    return resolvedPrimary;
+  }
+
+  if (opts.fallbackRawUrl) {
+    const fallbackManagedUrl = resolveManagedImageUrl(opts.fallbackRawUrl, {
+      basePath: opts.basePath,
+      authHeader: opts.authHeader,
+      allowDataImage: true,
+    });
+    if (fallbackManagedUrl && fallbackManagedUrl !== managedUrl) {
+      const resolvedFallback = managedImageBlobUrlResolvedCache.get(
+        buildManagedImageFetchCacheKey(
+          fallbackManagedUrl,
+          opts.authHeader,
+          opts.requesterSessionKey,
+        ),
+      );
+      if (typeof resolvedFallback === "string" && resolvedFallback.length > 0) {
+        return resolvedFallback;
+      }
+    }
+  }
+
+  return fetchManagedPreviewBlobUrl(rawUrl, opts);
+}
+
+async function openImageUrl(
+  rawUrl: string,
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
+  },
+): Promise<void> {
+  const managedUrl = resolveManagedImageUrl(rawUrl, {
+    basePath: opts.basePath,
+    authHeader: opts.authHeader,
+    allowDataImage: true,
+  });
+  if (managedUrl) {
+    const blobUrl = await fetchManagedImageBlobUrl(managedUrl, opts.authHeader, {
+      bypassMissCache: true,
+      requesterSessionKey: opts.requesterSessionKey,
+    });
+    if (blobUrl) {
+      const opened = openExternalUrlSafe(blobUrl);
+      if (!opened) {
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.click();
+      }
+      return;
+    }
+  }
+  const safeUrl = resolveImageDisplayUrl(rawUrl, {
+    basePath: opts.basePath,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+  });
+  if (!safeUrl) {
+    return;
+  }
+  openExternalUrlSafe(safeUrl, {
+    baseHref: resolveBaseHref(opts.basePath),
+    allowDataImage: true,
+  });
+}
+
+function resolveRenderableMessageImages(
+  images: ImageBlock[],
+  opts: {
+    basePath?: string;
+    localMediaPreviewRoots?: readonly string[];
+    assistantAttachmentAuthToken?: string | null;
+  },
+): RenderableImageBlock[] {
+  const renderable: RenderableImageBlock[] = [];
+  for (const image of images) {
+    if (isLocalAssistantAttachmentSource(image.url)) {
+      if (!isLocalAttachmentPreviewAllowed(image.url, opts.localMediaPreviewRoots ?? [])) {
+        continue;
+      }
+      renderable.push({
+        ...image,
+        previewUrl: image.url,
+      });
+      continue;
+    }
+    renderable.push({ ...image, previewUrl: image.url });
+  }
+  return renderable;
+}
+
+function renderMessageImages(
+  images: RenderableImageBlock[],
+  opts: {
+    basePath?: string;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    assistantAttachmentAuthToken?: string | null;
+    onMediaLoad?: () => void;
+  },
+) {
   if (images.length === 0) {
     return nothing;
   }
 
-  const openImage = (url: string) => {
-    openExternalUrlSafe(url, { allowDataImage: true });
+  const openImage = (img: ImageBlock) => {
+    void openImageUrl(img.openUrl ?? img.url, {
+      basePath: opts.basePath,
+      authHeader: opts.authHeader,
+      requesterSessionKey: opts.requesterSessionKey,
+      assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    });
+  };
+  const copyImage = (img: ImageBlock, button: HTMLButtonElement | null) => {
+    if (!button) {
+      return;
+    }
+    const copySource = img.openUrl ?? img.url;
+    void copyImageUrl(copySource, {
+      basePath: opts.basePath,
+      authHeader: opts.authHeader,
+      requesterSessionKey: opts.requesterSessionKey,
+      assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    })
+      .then((copied) => {
+        if (copied) {
+          showCopiedImageActionFeedback(button);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const renderImageFrameContent = (img: ImageBlock, resolvedPreviewSrc: string | null) => {
+    if (!resolvedPreviewSrc) {
+      return html`<div class="chat-message-image-unavailable" role="status">
+        Image unavailable
+      </div>`;
+    }
+    return html`
+      <img
+        src=${resolvedPreviewSrc}
+        alt=${img.alt?.trim() || "Attached image"}
+        class="chat-message-image"
+        loading="lazy"
+        decoding="async"
+        @load=${() => opts.onMediaLoad?.()}
+        @click=${() => openImage(img)}
+      />
+      <div class="chat-message-image-overlay">
+        <button
+          type="button"
+          class="chat-message-image-action chat-message-image-copy"
+          title="copy image"
+          aria-label="copy image"
+          @click=${(event: Event) =>
+            copyImage(img, event.currentTarget as HTMLButtonElement | null)}
+        >
+          <span class="chat-message-image-action__icon chat-message-image-action__icon--copy"
+            >${icons.copy}</span
+          >
+          <span class="chat-message-image-action__icon chat-message-image-action__icon--check"
+            >${icons.check}</span
+          >
+        </button>
+        <button
+          type="button"
+          class="chat-message-image-action chat-message-image-open"
+          title="open"
+          aria-label="open"
+          @click=${() => openImage(img)}
+        >
+          ${icons.externalLink}
+        </button>
+      </div>
+    `;
   };
 
   return html`
     <div class="chat-message-images">
-      ${images.map(
-        (img) => html`
-          <img
-            src=${img.displayUrl}
-            alt=${img.alt ?? "Attached image"}
-            class="chat-message-image"
-            @click=${() => openImage(img.displayUrl)}
-          />
-        `,
-      )}
+      ${images.map((img) => {
+        const previewSrc = resolveManagedPreviewSource(img.previewUrl, {
+          basePath: opts.basePath,
+          authHeader: opts.authHeader,
+          requesterSessionKey: opts.requesterSessionKey,
+          fallbackRawUrl: img.openUrl ?? img.url,
+          assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+        });
+        const displayStyle = imageDisplayStyle(img);
+        return html`
+          <div class="chat-message-image-card" style=${displayStyle}>
+            <div class="chat-message-image-frame">
+              ${typeof previewSrc === "string"
+                ? renderImageFrameContent(img, previewSrc)
+                : previewSrc
+                  ? until(
+                      previewSrc.then((resolvedPreviewSrc) =>
+                        renderImageFrameContent(img, resolvedPreviewSrc),
+                      ),
+                      nothing,
+                    )
+                  : renderImageFrameContent(img, null)}
+            </div>
+          </div>
+        `;
+      })}
     </div>
   `;
 }
@@ -897,6 +1563,9 @@ function resolveAssistantAttachmentAvailability(
 ): AssistantAttachmentAvailability {
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
+  }
+  if (localMediaPreviewRoots.length === 0) {
+    return { status: "checking" };
   }
   if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
@@ -1201,6 +1870,9 @@ function renderGroupedMessage(
     assistantAttachmentAuthToken?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    authHeader?: string;
+    requesterSessionKey?: string;
+    onMediaLoad?: () => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -1216,13 +1888,13 @@ function renderGroupedMessage(
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
-  const imageRenderOptions = {
-    localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
+  const images = extractImages(message);
+  const renderableImages = resolveRenderableMessageImages(images, {
     basePath: opts.basePath,
-    authToken: opts.assistantAttachmentAuthToken,
-  };
-  const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
-  const hasImages = images.length > 0;
+    localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+  });
+  const hasImages = renderableImages.length > 0;
 
   const normalizedMessage = normalizeMessage(message);
   const extractedText = normalizedMessage.content
@@ -1246,13 +1918,25 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
-  const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const textBeforeImages = hasImages && Boolean(markdown) && preferTextBeforeImages(message);
+  const hasActionableMarkdown = Boolean(
+    markdown?.trim() && (!hasImages || hasMeaningfulMarkdownText(markdown, renderableImages)),
+  );
+  const canCopyMarkdown = role === "assistant" && hasActionableMarkdown;
+  const canExpand = role === "assistant" && Boolean(onOpenSidebar && hasActionableMarkdown);
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
+  const hasActions = canCopyMarkdown || canExpand;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const bubbleClasses = [
+    "chat-bubble",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+    canCopyMarkdown ? "has-copy" : "",
+    hasActions ? "has-bubble-actions" : "",
+    hasImages ? "has-images" : "",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -1286,8 +1970,37 @@ function renderGroupedMessage(
         ? "Tool output"
         : "Tool call"
       : "Tool output";
-
-  const hasActions = canCopyMarkdown || canExpand;
+  const renderedTextualContent = html`
+    ${reasoningMarkdown
+      ? html`<div class="chat-thinking">
+          ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+        </div>`
+      : nothing}
+    ${jsonResult
+      ? html`<details class="chat-json-collapse" ?open=${Boolean(opts.autoExpandToolCalls)}>
+          <summary class="chat-json-summary">
+            <span class="chat-json-badge">JSON</span>
+            <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+          </summary>
+          <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+        </details>`
+      : markdown
+        ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+            ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+          </div>`
+        : nothing}
+  `;
+  const renderedImages = renderMessageImages(renderableImages, {
+    basePath: opts.basePath,
+    authHeader: opts.authHeader,
+    requesterSessionKey: opts.requesterSessionKey,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    onMediaLoad: opts.onMediaLoad,
+  });
+  const renderedOrderedContent = html`
+    ${textBeforeImages ? renderedTextualContent : renderedImages}
+    ${textBeforeImages ? renderedImages : renderedTextualContent}
+  `;
 
   return html`
     <div class="${bubbleClasses}">
@@ -1322,7 +2035,7 @@ function renderGroupedMessage(
               ${toolMessageExpanded
                 ? html`
                     <div class="chat-tool-msg-body">
-                      ${renderMessageImages(images)}
+                      ${renderedOrderedContent}
                       ${renderAssistantAttachments(
                         assistantAttachments,
                         opts.localMediaPreviewRoots ?? [],
@@ -1330,29 +2043,6 @@ function renderGroupedMessage(
                         opts.assistantAttachmentAuthToken,
                         opts.onRequestUpdate,
                       )}
-                      ${reasoningMarkdown
-                        ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                          </div>`
-                        : nothing}
-                      ${jsonResult
-                        ? html`<details
-                            class="chat-json-collapse"
-                            ?open=${Boolean(opts.autoExpandToolCalls)}
-                          >
-                            <summary class="chat-json-summary">
-                              <span class="chat-json-badge">JSON</span>
-                              <span class="chat-json-label"
-                                >${jsonSummaryLabel(jsonResult.parsed)}</span
-                              >
-                            </summary>
-                            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                          </details>`
-                        : markdown
-                          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                            </div>`
-                          : nothing}
                       ${hasToolCards
                         ? singleToolCard && !markdown && !hasImages
                           ? renderExpandedToolCardContent(
@@ -1378,7 +2068,7 @@ function renderGroupedMessage(
             </div>
           `
         : html`
-            ${renderMessageImages(images)}
+            ${renderedOrderedContent}
             ${renderAssistantAttachments(
               assistantAttachments,
               opts.localMediaPreviewRoots ?? [],
@@ -1386,11 +2076,6 @@ function renderGroupedMessage(
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,
             )}
-            ${reasoningMarkdown
-              ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                </div>`
-              : nothing}
             ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
               ? html`${assistantViewBlocks.map(
                   (block) => html`${renderToolPreview(block.preview, "chat_message", {
@@ -1402,19 +2087,6 @@ function renderGroupedMessage(
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
                 )}`
               : nothing}
-            ${jsonResult
-              ? html`<details class="chat-json-collapse">
-                  <summary class="chat-json-summary">
-                    <span class="chat-json-badge">JSON</span>
-                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                  </summary>
-                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                </details>`
-              : markdown
-                ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                  </div>`
-                : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
                   messageKey,

@@ -119,6 +119,7 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import { resolveGatewayHttpAuthHeader } from "./gateway-http-auth.ts";
 import { icons } from "./icons.ts";
 import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -1011,10 +1012,6 @@ export function renderApp(state: AppViewState) {
             setTheme: (theme, context) => state.setTheme(theme, context),
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
-            userName: state.userName ?? null,
-            userAvatar: state.userAvatar ?? null,
-            onUserNameChange: (name) => state.applyLocalUserIdentity?.({ name }),
-            onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             configObject: configObj,
             onApplyPreset: (presetId) => {
               void applyQuickSettingsPreset(state, presetId).then(() => requestHostUpdate?.());
@@ -2246,6 +2243,7 @@ export function renderApp(state: AppViewState) {
                 });
               },
               onChatScroll: (event) => state.handleChatScroll(event),
+              onMediaLoad: () => requestHostUpdate?.(),
               getDraft: () => state.chatMessage,
               onDraftChange: (next) => (state.chatMessage = next),
               onRequestUpdate: requestHostUpdate,
@@ -2299,13 +2297,17 @@ export function renderApp(state: AppViewState) {
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
-              userName: state.userName ?? null,
-              userAvatar: state.userAvatar ?? null,
               localMediaPreviewRoots: state.localMediaPreviewRoots,
               embedSandboxMode: state.embedSandboxMode,
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,
               assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
               basePath: state.basePath ?? "",
+              authHeader:
+                resolveGatewayHttpAuthHeader({
+                  password: state.password,
+                  settings: state.settings,
+                  hello: state.hello,
+                }) ?? undefined,
             })
           : nothing}
         ${renderConfigTabForActiveTab()}

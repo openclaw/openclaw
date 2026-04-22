@@ -11,6 +11,7 @@ import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
+  cleanupUnusedManagedImagePreviewBlobUrls,
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
@@ -40,7 +41,6 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
-import { resolveLocalUserName } from "../user-identity.ts";
 import { agentLogoUrl, resolveChatAvatarRenderUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
@@ -80,8 +80,6 @@ export type ChatProps = {
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
-  userName?: string | null;
-  userAvatar?: string | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -112,7 +110,9 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onMediaLoad?: () => void;
   basePath?: string;
+  authHeader?: string;
 };
 
 // Persistent instances keyed by session
@@ -550,10 +550,6 @@ function renderPinnedSection(
   pinned: PinnedMessages,
   requestUpdate: () => void,
 ): TemplateResult | typeof nothing {
-  const userRoleLabel = resolveLocalUserName({
-    name: props.userName ?? null,
-    avatar: props.userAvatar ?? null,
-  });
   const messages = Array.isArray(props.messages) ? props.messages : [];
   const entries: Array<{ index: number; text: string; role: string }> = [];
   for (const idx of pinned.indices) {
@@ -589,7 +585,7 @@ function renderPinnedSection(
                 ({ index, text, role }) => html`
                   <div class="agent-chat__pinned-item">
                     <span class="agent-chat__pinned-role"
-                      >${role === "user" ? userRoleLabel : "Assistant"}</span
+                      >${role === "user" ? "You" : "Assistant"}</span
                     >
                     <span class="agent-chat__pinned-text"
                       >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
@@ -739,6 +735,9 @@ function renderSlashMenu(
 }
 
 export function renderChat(props: ChatProps) {
+  if (typeof document !== "undefined") {
+    cleanupUnusedManagedImagePreviewBlobUrls(document);
+  }
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -909,14 +908,15 @@ export function renderChat(props: ChatProps) {
                 onRequestUpdate: requestUpdate,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
-                userName: props.userName ?? null,
-                userAvatar: props.userAvatar ?? null,
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                 assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
                 canvasHostUrl: props.canvasHostUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                authHeader: props.authHeader,
+                requesterSessionKey: activeSession?.key ?? undefined,
+                onMediaLoad: props.onMediaLoad,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
                 onDelete: () => {
