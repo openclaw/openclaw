@@ -24,11 +24,27 @@ import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { createRuntimeJobs } from "./runtime-jobs.js";
 import type {
+  DurableJobRuntimeTransitionResult,
+  DurableJobRuntimeUpdateResult,
+} from "./runtime-jobs.types.js";
+import type {
   BoundTaskFlowRuntime,
   ManagedTaskFlowMutationResult,
   ManagedTaskFlowRecord,
   PluginRuntimeTaskFlow,
 } from "./runtime-taskflow.types.js";
+
+function assertLinkedDurableJobSyncApplied(
+  result: DurableJobRuntimeUpdateResult | DurableJobRuntimeTransitionResult,
+  context: string,
+): void {
+  if (result.applied) {
+    return;
+  }
+  throw new Error(
+    `Linked durable job sync failed during ${context}: ${result.reason}${result.current ? ` (jobId=${result.current.jobId}, revision=${result.current.audit.revision})` : ""}`,
+  );
+}
 
 function assertSessionKey(sessionKey: string | undefined, errorMessage: string): string {
   const normalized = sessionKey?.trim();
@@ -139,36 +155,42 @@ function syncLinkedDurableJobWaiting(params: {
   const nextWakeAt = findNextWakeAtFromWaitJson(params.waitJson);
 
   if (job.status === "waiting") {
-    jobs.update({
-      jobId: job.jobId,
-      expectedRevision: job.audit.revision,
-      patch: {
-        currentStep: params.currentStep,
-        ...(nextWakeAt !== undefined ? { nextWakeAt } : {}),
-        ...(params.blockedSummary ? { summary: params.blockedSummary } : {}),
-      },
-      updatedAt: params.updatedAt,
-    });
+    assertLinkedDurableJobSyncApplied(
+      jobs.update({
+        jobId: job.jobId,
+        expectedRevision: job.audit.revision,
+        patch: {
+          currentStep: params.currentStep,
+          nextWakeAt: nextWakeAt ?? null,
+          ...(params.blockedSummary !== undefined ? { summary: params.blockedSummary } : {}),
+        },
+        updatedAt: params.updatedAt,
+      }),
+      "TaskFlow waiting update",
+    );
     return;
   }
 
-  jobs.transition({
-    jobId: job.jobId,
-    expectedRevision: job.audit.revision,
-    from: job.status,
-    to: "waiting",
-    reason: nextWakeAt !== undefined ? "Awaiting next wake" : "Waiting on linked TaskFlow",
-    at: params.updatedAt,
-    wake:
-      nextWakeAt !== undefined
-        ? { status: "scheduled", nextWakeAt }
-        : { status: "unchanged", detail: "TaskFlow waiting without explicit next wake." },
-    patch: {
-      currentStep: params.currentStep,
-      ...(nextWakeAt !== undefined ? { nextWakeAt } : {}),
-      ...(params.blockedSummary ? { summary: params.blockedSummary } : {}),
-    },
-  });
+  assertLinkedDurableJobSyncApplied(
+    jobs.transition({
+      jobId: job.jobId,
+      expectedRevision: job.audit.revision,
+      from: job.status,
+      to: "waiting",
+      reason: nextWakeAt !== undefined ? "Awaiting next wake" : "Waiting on linked TaskFlow",
+      at: params.updatedAt,
+      wake:
+        nextWakeAt !== undefined
+          ? { status: "scheduled", nextWakeAt }
+          : { status: "unchanged", detail: "TaskFlow waiting without explicit next wake." },
+      patch: {
+        currentStep: params.currentStep,
+        nextWakeAt: nextWakeAt ?? null,
+        ...(params.blockedSummary !== undefined ? { summary: params.blockedSummary } : {}),
+      },
+    }),
+    "TaskFlow waiting transition",
+  );
 }
 
 function syncLinkedDurableJobResume(params: {

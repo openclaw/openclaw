@@ -1,13 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById } from "../../tasks/task-registry.js";
-import { createRuntimeJobs } from "./runtime-jobs.js";
+import * as runtimeJobsModule from "./runtime-jobs.js";
 import {
   installRuntimeTaskDeliveryMock,
   resetRuntimeTaskTestState,
 } from "./runtime-task-test-harness.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 
+const { createRuntimeJobs } = runtimeJobsModule;
 afterEach(() => {
   resetRuntimeTaskTestState({ persist: false });
 });
@@ -205,6 +206,147 @@ describe("runtime TaskFlow", () => {
         },
       }),
     ]);
+  });
+
+  it("clears stale wake state and preserves nullish blocked summary while waiting", () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Clear waiting wake state",
+      goal: "Mirror waiting TaskFlow state without leaving a stale wake behind",
+      status: "waiting",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      currentStep: "await_review",
+      summary: "Previously blocked on review",
+      nextWakeAt: 500,
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Stay waiting on a non-wake condition",
+      currentStep: "await_review",
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+
+    const waiting = taskFlow.setWaiting({
+      flowId: createdFlow.flowId,
+      expectedRevision: createdFlow.revision,
+      currentStep: "await_review",
+      waitJson: {
+        kind: "blocked",
+        detail: "Still waiting on reviewer feedback",
+      },
+      blockedSummary: null,
+      updatedAt: 50,
+    });
+
+    expect(waiting).toMatchObject({
+      applied: true,
+      flow: expect.objectContaining({
+        status: "waiting",
+        currentStep: "await_review",
+      }),
+    });
+    expect(jobs.get(createdJob.jobId)).toMatchObject({
+      status: "waiting",
+      currentStep: "await_review",
+      nextWakeAt: undefined,
+      summary: undefined,
+      backing: expect.objectContaining({ taskFlowId: createdFlow.flowId }),
+    });
+    expect(jobs.history(createdJob.jobId)).toEqual([]);
+  });
+
+  it("surfaces linked durable-job sync failures during waiting transitions", () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Linked job sync error",
+      goal: "Surface sync failures instead of silently drifting",
+      status: "running",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      currentStep: "triage",
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Propagate linked durable-job sync failures",
+      currentStep: "triage",
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+
+    const currentJob = jobs.get(createdJob.jobId);
+    if (!currentJob) {
+      throw new Error("expected linked durable job to exist");
+    }
+
+    const transition = vi.fn(() => ({
+      applied: false as const,
+      reason: "revision_conflict" as const,
+      current: {
+        ...currentJob,
+        audit: {
+          ...currentJob.audit,
+          revision: 7,
+        },
+      },
+    }));
+    const update = vi.fn(() => ({ applied: true as const, job: {} as never }));
+    const bindSession = vi.fn(() => ({
+      ...jobs,
+      update,
+      transition,
+    }));
+    const jobsSpy = vi
+      .spyOn(runtimeJobsModule, "createRuntimeJobs")
+      .mockReturnValue({ bindSession, fromToolContext: bindSession });
+
+    try {
+      expect(() =>
+        taskFlow.setWaiting({
+          flowId: createdFlow.flowId,
+          expectedRevision: createdFlow.revision,
+          currentStep: "await_next_wake",
+          waitJson: { kind: "wake", nextWakeAt: 500 },
+          updatedAt: 50,
+        }),
+      ).toThrow(
+        "Linked durable job sync failed during TaskFlow waiting transition: revision_conflict",
+      );
+
+      expect(transition).toHaveBeenCalledOnce();
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      jobsSpy.mockRestore();
+    }
   });
 
   it("syncs an attached durable job back to running when a managed flow resumes", () => {

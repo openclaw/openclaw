@@ -77,6 +77,7 @@ export async function runInstalledJobsCliPersistenceSmoke(params) {
     home: process.env.HOME,
     userProfile: process.env.USERPROFILE,
     stateDir: process.env.OPENCLAW_STATE_DIR,
+    openclawHome: process.env.OPENCLAW_HOME,
   };
   process.env.HOME = homeDir;
   process.env.USERPROFILE = homeDir;
@@ -111,7 +112,11 @@ export async function runInstalledJobsCliPersistenceSmoke(params) {
       reason: "Seeded for packaged CLI persistence smoke",
       actor: "release-smoke",
       at: 121,
-      disposition: { kind: "notify_and_schedule", notify: true, nextWakeAt: 900 },
+      disposition: {
+        kind: "notify_and_schedule",
+        notification: { status: "sent" },
+        wake: { status: "scheduled", nextWakeAt: 900 },
+      },
       revision: job.audit.revision,
     });
 
@@ -145,7 +150,9 @@ export async function runInstalledJobsCliPersistenceSmoke(params) {
     assert.equal(transition?.actor, "release-smoke");
     assert.equal(transition?.revision, 0);
     assert.equal(transition?.disposition?.kind, "notify_and_schedule");
-    assert.equal(transition?.disposition?.nextWakeAt, 900);
+    assert.equal(transition?.disposition?.notification?.status, "sent");
+    assert.equal(transition?.disposition?.wake?.status, "scheduled");
+    assert.equal(transition?.disposition?.wake?.nextWakeAt, 900);
   } finally {
     if (snapshot.home === undefined) {
       delete process.env.HOME;
@@ -161,6 +168,11 @@ export async function runInstalledJobsCliPersistenceSmoke(params) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
       process.env.OPENCLAW_STATE_DIR = snapshot.stateDir;
+    }
+    if (snapshot.openclawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = snapshot.openclawHome;
     }
     try {
       rmSync(tempRoot, { recursive: true, force: true });

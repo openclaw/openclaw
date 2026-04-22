@@ -215,86 +215,95 @@ describe("runtime jobs", () => {
 
   it("restores owner-scoped list, get, and history after registry reload", async () => {
     await withTempDir({ prefix: "openclaw-runtime-jobs-" }, async (root) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
       process.env.OPENCLAW_STATE_DIR = root;
       resetRuntimeTaskTestState();
       installRuntimeTaskDeliveryMock();
 
-      const runtime = createRuntimeJobs();
-      const jobs = runtime.bindSession({
-        sessionKey: "agent:main:main",
-        requesterOrigin: {
-          channel: "slack",
-          to: "user:U123",
-        },
-      });
-      const otherJobs = runtime.bindSession({
-        sessionKey: "agent:main:other",
-      });
+      try {
+        const runtime = createRuntimeJobs();
+        const jobs = runtime.bindSession({
+          sessionKey: "agent:main:main",
+          requesterOrigin: {
+            channel: "slack",
+            to: "user:U123",
+          },
+        });
+        const otherJobs = runtime.bindSession({
+          sessionKey: "agent:main:other",
+        });
 
-      const created = jobs.create({
-        title: "Persisted runtime job",
-        goal: "Restore through owner-scoped runtime helpers",
-        status: "running",
-        stopCondition: { kind: "manual" },
-        notifyPolicy: { kind: "state_changes", onWaiting: true },
-        currentStep: "first_pass",
-        summary: "Before reload",
-      });
-      const transitioned = jobs.transition({
-        jobId: created.jobId,
-        expectedRevision: created.audit.revision,
-        from: "running",
-        to: "waiting",
-        reason: "Awaiting next wake",
-        actor: "assistant",
-        at: 220,
-        disposition: {
-          kind: "notify_and_schedule",
-          notification: { status: "sent" },
-          wake: { status: "scheduled", nextWakeAt: 500 },
-        },
-        patch: {
-          currentStep: "await_next_wake",
-          summary: "Waiting after persisted reload",
-          nextWakeAt: 500,
-        },
-      });
-      expect(transitioned).toMatchObject({ applied: true });
-
-      resetDurableJobRegistryForTests({ persist: false });
-
-      const reloadedRuntime = createRuntimeJobs();
-      const reloadedJobs = reloadedRuntime.bindSession({ sessionKey: "agent:main:main" });
-      const reloadedOtherJobs = reloadedRuntime.bindSession({ sessionKey: "agent:main:other" });
-
-      expect(reloadedJobs.list()).toEqual([
-        expect.objectContaining({
+        const created = jobs.create({
+          title: "Persisted runtime job",
+          goal: "Restore through owner-scoped runtime helpers",
+          status: "running",
+          stopCondition: { kind: "manual" },
+          notifyPolicy: { kind: "state_changes", onWaiting: true },
+          currentStep: "first_pass",
+          summary: "Before reload",
+        });
+        const transitioned = jobs.transition({
           jobId: created.jobId,
-          status: "waiting",
-          currentStep: "await_next_wake",
-          nextWakeAt: 500,
-          audit: expect.objectContaining({ revision: 1 }),
-        }),
-      ]);
-      expect(reloadedJobs.get(created.jobId)).toEqual(
-        expect.objectContaining({
-          jobId: created.jobId,
-          ownerSessionKey: "agent:main:main",
-          requesterOrigin: expect.objectContaining({ channel: "slack" }),
-        }),
-      );
-      expect(reloadedJobs.history(created.jobId)).toEqual([
-        expect.objectContaining({
+          expectedRevision: created.audit.revision,
           from: "running",
           to: "waiting",
           reason: "Awaiting next wake",
-          revision: 1,
-        }),
-      ]);
-      expect(reloadedOtherJobs.get(created.jobId)).toBeUndefined();
-      expect(reloadedOtherJobs.list()).toEqual([]);
-      expect(reloadedOtherJobs.history(created.jobId)).toEqual([]);
-      expect(otherJobs.list()).toEqual([]);
+          actor: "assistant",
+          at: 220,
+          disposition: {
+            kind: "notify_and_schedule",
+            notification: { status: "sent" },
+            wake: { status: "scheduled", nextWakeAt: 500 },
+          },
+          patch: {
+            currentStep: "await_next_wake",
+            summary: "Waiting after persisted reload",
+            nextWakeAt: 500,
+          },
+        });
+        expect(transitioned).toMatchObject({ applied: true });
+
+        resetDurableJobRegistryForTests({ persist: false });
+
+        const reloadedRuntime = createRuntimeJobs();
+        const reloadedJobs = reloadedRuntime.bindSession({ sessionKey: "agent:main:main" });
+        const reloadedOtherJobs = reloadedRuntime.bindSession({ sessionKey: "agent:main:other" });
+
+        expect(reloadedJobs.list()).toEqual([
+          expect.objectContaining({
+            jobId: created.jobId,
+            status: "waiting",
+            currentStep: "await_next_wake",
+            nextWakeAt: 500,
+            audit: expect.objectContaining({ revision: 1 }),
+          }),
+        ]);
+        expect(reloadedJobs.get(created.jobId)).toEqual(
+          expect.objectContaining({
+            jobId: created.jobId,
+            ownerSessionKey: "agent:main:main",
+            requesterOrigin: expect.objectContaining({ channel: "slack" }),
+          }),
+        );
+        expect(reloadedJobs.history(created.jobId)).toEqual([
+          expect.objectContaining({
+            from: "running",
+            to: "waiting",
+            reason: "Awaiting next wake",
+            revision: 1,
+          }),
+        ]);
+        expect(reloadedOtherJobs.get(created.jobId)).toBeUndefined();
+        expect(reloadedOtherJobs.list()).toEqual([]);
+        expect(reloadedOtherJobs.history(created.jobId)).toEqual([]);
+        expect(otherJobs.list()).toEqual([]);
+      } finally {
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
     });
   });
 

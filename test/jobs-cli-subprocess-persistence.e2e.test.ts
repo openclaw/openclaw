@@ -39,7 +39,9 @@ describe("jobs cli subprocess persistence", () => {
       delete env.VITEST;
 
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      const previousOpenClawHome = process.env.OPENCLAW_HOME;
       process.env.OPENCLAW_STATE_DIR = stateDir;
+      delete process.env.OPENCLAW_HOME;
       resetDurableJobRegistryForTests();
 
       try {
@@ -137,6 +139,11 @@ describe("jobs cli subprocess persistence", () => {
           delete process.env.OPENCLAW_STATE_DIR;
         } else {
           process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+        if (previousOpenClawHome === undefined) {
+          delete process.env.OPENCLAW_HOME;
+        } else {
+          process.env.OPENCLAW_HOME = previousOpenClawHome;
         }
       }
     });

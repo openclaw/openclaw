@@ -33,5 +33,5 @@ if command -v npx >/dev/null 2>&1; then
   exec npx "$tool" "$@"
 fi
 
-echo "Missing package manager: pnpm, corepack pnpm, bun, or npm required." >&2
+echo "Missing package manager: pnpm, corepack pnpm, bun, npm, or npx required." >&2
 exit 1

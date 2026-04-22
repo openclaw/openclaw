@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
@@ -9,6 +9,13 @@ const baseGitEnv = {
   GIT_TERMINAL_PROMPT: "0",
 };
 const baseRunEnv: NodeJS.ProcessEnv = { ...process.env, ...baseGitEnv };
+delete baseRunEnv.GIT_DIR;
+delete baseRunEnv.GIT_WORK_TREE;
+delete baseRunEnv.GIT_INDEX_FILE;
+delete baseRunEnv.GIT_PREFIX;
+delete baseRunEnv.GIT_COMMON_DIR;
+delete baseRunEnv.GIT_OBJECT_DIRECTORY;
+delete baseRunEnv.GIT_ALTERNATE_OBJECT_DIRECTORIES;
 const tempDirs: string[] = [];
 
 const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
@@ -24,6 +31,14 @@ function writeExecutable(dir: string, name: string, contents: string): void {
     encoding: "utf8",
     mode: 0o755,
   });
+}
+
+function pathWithoutPnpm(input: string): string {
+  const candidates = process.platform === "win32" ? ["pnpm.cmd", "pnpm.exe", "pnpm.bat"] : ["pnpm"];
+  return input
+    .split(path.delimiter)
+    .filter((entry) => entry && !candidates.some((name) => existsSync(path.join(entry, name))))
+    .join(path.delimiter);
 }
 
 function installPreCommitFixture(dir: string): string {
@@ -82,7 +97,9 @@ describe("git-hooks/pre-commit (integration)", () => {
 
     // Run the hook directly (same logic as when installed via core.hooksPath).
     run(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      PATH: [fakeBinDir, pathWithoutPnpm(process.env.PATH ?? "")]
+        .filter(Boolean)
+        .join(path.delimiter),
     });
 
     const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
@@ -106,7 +123,9 @@ describe("git-hooks/pre-commit (integration)", () => {
     run(dir, "git", ["add", "--", "tracked.txt"]);
 
     run(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      PATH: [fakeBinDir, pathWithoutPnpm(process.env.PATH ?? "")]
+        .filter(Boolean)
+        .join(path.delimiter),
     });
 
     expect(run(dir, "cat", ["pnpm-args.txt"])).toBe("check:changed --staged");
@@ -129,7 +148,9 @@ describe("git-hooks/pre-commit (integration)", () => {
     run(dir, "git", ["add", "--", "tracked.txt"]);
 
     run(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      PATH: [fakeBinDir, pathWithoutPnpm(process.env.PATH ?? "")]
+        .filter(Boolean)
+        .join(path.delimiter),
     });
 
     expect(run(dir, "cat", ["corepack-args.txt"])).toBe("pnpm check:changed --staged");

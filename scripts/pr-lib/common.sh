@@ -8,7 +8,11 @@ require_artifact() {
 
 run_pnpm_command() {
   local root
-  root="$(common_repo_root)"
+  root="$(common_repo_root)" || return 1
+  if [ -z "$root" ]; then
+    echo "common_repo_root returned an empty path" >&2
+    return 1
+  fi
   "$root/scripts/pre-commit/run-pnpm-command.sh" "$@"
 }
 
