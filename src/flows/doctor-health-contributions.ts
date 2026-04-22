@@ -222,6 +222,7 @@ async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): 
     runtime: ctx.runtime,
     prompter: ctx.prompter,
     config: ctx.cfg,
+    includeConfiguredChannels: true,
   });
 }
 
@@ -510,6 +511,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runGatewayConfigHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:bundled-plugin-runtime-deps",
+      label: "Bundled plugin runtime deps",
+      run: runBundledPluginRuntimeDepsHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
       run: runAuthProfileHealth,
@@ -533,11 +539,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
       run: runLegacyPluginManifestHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:bundled-plugin-runtime-deps",
-      label: "Bundled plugin runtime deps",
-      run: runBundledPluginRuntimeDepsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
