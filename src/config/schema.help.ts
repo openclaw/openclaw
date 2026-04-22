@@ -1159,6 +1159,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional image-generation model (provider/model) used by the shared image generation capability.",
   "agents.defaults.imageGenerationModel.fallbacks":
     "Ordered fallback image-generation models (provider/model).",
+  "agents.defaults.imageGenerationModel.timeoutMs":
+    "Optional per-request HTTP timeout (milliseconds) applied to image-generation provider calls. Overrides the provider's built-in default (currently 60000 ms for OpenAI and Google Gemini). Useful when reference-image edits or high-resolution outputs routinely exceed 60s.",
   "agents.defaults.videoGenerationModel.primary":
     "Optional video-generation model (provider/model) used by the shared video generation capability.",
   "agents.defaults.videoGenerationModel.fallbacks":

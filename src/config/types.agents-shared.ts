@@ -12,6 +12,13 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /**
+       * Optional per-request HTTP timeout in milliseconds. Currently honored by
+       * the shared image-generation runtime when set on
+       * `agents.defaults.imageGenerationModel`. Ignored by capabilities that
+       * do not yet plumb a timeout through to their provider transport.
+       */
+      timeoutMs?: number;
     };
 
 export type AgentEmbeddedHarnessConfig = {

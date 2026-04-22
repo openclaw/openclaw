@@ -288,6 +288,101 @@ describe("image-generation runtime", () => {
     });
   });
 
+  it("forwards imageGenerationModel.timeoutMs from config to the provider", async () => {
+    let seenTimeoutMs: number | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-image-1");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
+      async generateImage(req: { timeoutMs?: number }) {
+        seenTimeoutMs = req.timeoutMs;
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        };
+      },
+    });
+
+    await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 120_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(120_000);
+  });
+
+  it("lets a per-call timeoutMs override the configured imageGenerationModel.timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-image-1");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
+      async generateImage(req: { timeoutMs?: number }) {
+        seenTimeoutMs = req.timeoutMs;
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        };
+      },
+    });
+
+    await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 60_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      timeoutMs: 180_000,
+    });
+
+    expect(seenTimeoutMs).toBe(180_000);
+  });
+
+  it("omits timeoutMs from the provider request when neither config nor caller sets it", async () => {
+    let receivedRequest: { timeoutMs?: number } | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-image-1");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
+      async generateImage(req: { timeoutMs?: number }) {
+        receivedRequest = req;
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        };
+      },
+    });
+
+    await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openai/gpt-image-1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(receivedRequest).toBeDefined();
+    expect("timeoutMs" in (receivedRequest as object)).toBe(false);
+  });
+
   it("lists runtime image-generation providers through the provider registry", () => {
     const providers: ImageGenerationProvider[] = [
       {

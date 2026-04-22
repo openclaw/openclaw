@@ -1,5 +1,6 @@
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -31,12 +32,24 @@ export function listRuntimeImageGenerationProviders(params?: { config?: OpenClaw
   return listImageGenerationProviders(params?.config);
 }
 
+function resolveImageGenerationTimeoutMs(model?: AgentModelConfig): number | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  const value = model.timeoutMs;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
+  const modelConfig = params.cfg.agents?.defaults?.imageGenerationModel;
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
+    modelConfig,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,
@@ -45,6 +58,8 @@ export async function generateImage(
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
   }
+
+  const timeoutMs = params.timeoutMs ?? resolveImageGenerationTimeoutMs(modelConfig);
 
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
@@ -85,6 +100,7 @@ export async function generateImage(
         aspectRatio: sanitized.aspectRatio,
         resolution: sanitized.resolution,
         inputImages: params.inputImages,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");

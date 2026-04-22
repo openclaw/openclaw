@@ -21,6 +21,12 @@ export type GenerateImageParams = {
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
   inputImages?: ImageGenerationSourceImage[];
+  /**
+   * Optional per-request HTTP timeout in milliseconds. When omitted, the
+   * runtime falls back to `cfg.agents.defaults.imageGenerationModel.timeoutMs`
+   * (if set), and otherwise to the provider's internal default.
+   */
+  timeoutMs?: number;
 };
 
 export type GenerateImageRuntimeResult = {
