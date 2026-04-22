@@ -19,6 +19,23 @@ vi.mock("../views/agents-utils.ts", () => ({
   agentLogoUrl: () => "/openclaw-logo.svg",
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
+  resolveChatAvatarRenderUrl: (
+    candidate: string | null | undefined,
+    agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  ) => {
+    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
+      return candidate;
+    }
+    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
+      if (
+        typeof value === "string" &&
+        (/^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")))
+      ) {
+        return value;
+      }
+    }
+    return null;
+  },
 }));
 
 vi.mock("./speech.ts", () => ({
@@ -259,6 +276,26 @@ describe("grouped chat rendering", () => {
     const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
     expect(avatar).not.toBeNull();
     expect(avatar?.getAttribute("src")).toBe("data:image/png;base64,AAA");
+    expect(avatar?.getAttribute("alt")).toBe("Buns");
+  });
+
+  it("renders a local user avatar route when provided", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: "hello",
+        timestamp: 1000,
+      },
+      "user",
+      { userName: "Buns", userAvatar: "/avatar/user" },
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute("src")).toBe("/avatar/user");
     expect(avatar?.getAttribute("alt")).toBe("Buns");
   });
 

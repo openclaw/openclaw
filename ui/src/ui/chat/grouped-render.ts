@@ -14,6 +14,11 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
+import {
+  resolveLocalUserAvatarText,
+  resolveLocalUserAvatarUrl,
+  resolveLocalUserName,
+} from "../user-identity.ts";
 import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
@@ -268,10 +273,14 @@ export function renderMessageGroup(
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
+  const resolvedUserName = resolveLocalUserName({
+    name: opts.userName ?? null,
+    avatar: opts.userAvatar ?? null,
+  });
   const userLabel = group.senderLabel?.trim();
   const who =
     normalizedRole === "user"
-      ? (userLabel ?? opts.userName?.trim() ?? "You")
+      ? (userLabel ?? resolvedUserName)
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole === "tool"
@@ -604,8 +613,9 @@ function renderAvatar(
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
-  const userName = user?.name?.trim() || "You";
-  const userAvatar = user?.avatar?.trim() || "";
+  const userName = resolveLocalUserName(user);
+  const userAvatarUrl = resolveLocalUserAvatarUrl(user);
+  const userAvatarText = resolveLocalUserAvatarText(user);
   const initial =
     normalized === "user"
       ? html`
@@ -652,11 +662,14 @@ function renderAvatar(
           ? "tool"
           : "other";
 
-  if (userAvatar && normalized === "user") {
-    if (isAvatarUrl(userAvatar)) {
-      return html`<img class="chat-avatar ${className}" src="${userAvatar}" alt="${userName}" />`;
-    }
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">${userAvatar}</div>`;
+  if (normalized === "user" && userAvatarUrl) {
+    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
+  }
+
+  if (normalized === "user" && userAvatarText) {
+    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
+      ${userAvatarText}
+    </div>`;
   }
 
   if (assistantAvatar && normalized === "assistant") {

@@ -8,10 +8,15 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 import type { BorderRadiusStop } from "../storage.ts";
-import { normalizeOptionalString } from "../string-coerce.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
-import { isRenderableControlUiAvatarUrl } from "./agents-utils.ts";
+import {
+  hasLocalUserIdentity,
+  normalizeLocalUserIdentity,
+  resolveLocalUserAvatarText,
+  resolveLocalUserAvatarUrl,
+  resolveLocalUserName,
+} from "../user-identity.ts";
 import { CONFIG_PRESETS, detectActivePreset, type ConfigPresetId } from "./config-presets.ts";
 
 // ── Types ──
@@ -127,14 +132,16 @@ function renderLocalUserAvatarPreview(
   name: string | null | undefined,
   avatar: string | null | undefined,
 ) {
-  const trimmed = normalizeOptionalString(avatar);
-  const label = normalizeOptionalString(name) ?? "You";
-  if (trimmed && isRenderableControlUiAvatarUrl(trimmed)) {
-    return html`<img class="qs-user-avatar" src=${trimmed} alt=${label} />`;
+  const identity = normalizeLocalUserIdentity({ name, avatar });
+  const label = resolveLocalUserName(identity);
+  const avatarUrl = resolveLocalUserAvatarUrl(identity);
+  const avatarText = resolveLocalUserAvatarText(identity);
+  if (avatarUrl) {
+    return html`<img class="qs-user-avatar" src=${avatarUrl} alt=${label} />`;
   }
-  if (trimmed) {
+  if (avatarText) {
     return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${label}>
-      ${trimmed}
+      ${avatarText}
     </div>`;
   }
   return html`
@@ -433,8 +440,12 @@ function renderAppearanceCard(props: QuickSettingsProps) {
 }
 
 function renderPersonalCard(props: QuickSettingsProps) {
-  const avatarText =
-    props.userAvatar && !isRenderableControlUiAvatarUrl(props.userAvatar) ? props.userAvatar : "";
+  const identity = normalizeLocalUserIdentity({
+    name: props.userName ?? null,
+    avatar: props.userAvatar ?? null,
+  });
+  const avatarText = resolveLocalUserAvatarText(identity) ?? "";
+  const label = resolveLocalUserName(identity);
   return html`
     <div class="qs-card">
       ${renderCardHeader(icons.image, "Personal")}
@@ -442,9 +453,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
         <div class="qs-personal-preview">
           ${renderLocalUserAvatarPreview(props.userName, props.userAvatar)}
           <div class="qs-personal-preview__copy">
-            <div class="qs-personal-preview__title">
-              ${normalizeOptionalString(props.userName) ?? "You"}
-            </div>
+            <div class="qs-personal-preview__title">${label}</div>
             <div class="muted">This browser only</div>
           </div>
         </div>
@@ -490,7 +499,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
           <button
             type="button"
             class="btn btn--sm btn--ghost"
-            ?disabled=${!props.userName && !props.userAvatar}
+            ?disabled=${!hasLocalUserIdentity(identity)}
             @click=${() => {
               props.onUserNameChange?.("");
               props.onUserAvatarChange?.(null);
@@ -541,6 +550,10 @@ function renderConnectionFooter(props: QuickSettingsProps) {
   `;
 }
 
+function renderStack(...cards: TemplateResult[]) {
+  return html`<div class="qs-stack">${cards}</div>`;
+}
+
 // ── Main render ──
 
 export function renderQuickSettings(props: QuickSettingsProps) {
@@ -554,9 +567,10 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       </div>
 
       <div class="qs-grid">
-        ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderApiKeysCard(props)}
-        ${renderAutomationsCard(props)} ${renderSecurityCard(props)} ${renderAppearanceCard(props)}
-        ${renderPersonalCard(props)} ${renderPresetsCard(props)}
+        ${renderStack(renderModelCard(props), renderSecurityCard(props))}
+        ${renderStack(renderChannelsCard(props), renderAutomationsCard(props))}
+        ${renderStack(renderApiKeysCard(props), renderAppearanceCard(props))}
+        ${renderStack(renderPersonalCard(props))} ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}
