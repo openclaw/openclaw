@@ -943,6 +943,59 @@ function hasAssistantNonTextContent(message: unknown): boolean {
   );
 }
 
+function extractHistoryMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as { text?: unknown; content?: unknown };
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return undefined;
+  }
+
+  const texts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type === "text" && typeof typed.text === "string") {
+      texts.push(typed.text);
+    }
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
+}
+
+function isCompactionHistoryMarker(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const openclaw = (message as { __openclaw?: unknown }).__openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  return (openclaw as { kind?: unknown }).kind === "compaction";
+}
+
+function shouldDropInternalHistoryMessage(message: unknown): boolean {
+  if (isCompactionHistoryMarker(message)) {
+    return true;
+  }
+  const text = extractHistoryMessageText(message)?.trim();
+  if (!text) {
+    return false;
+  }
+  return (
+    text.startsWith("Pre-compaction memory flush.") ||
+    text.startsWith("[Post-compaction context refresh]")
+  );
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -971,12 +1024,20 @@ export function sanitizeChatHistoryMessages(
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
+    if (shouldDropInternalHistoryMessage(message)) {
+      changed = true;
+      continue;
+    }
     if (shouldDropAssistantHistoryMessage(message)) {
       changed = true;
       continue;
     }
     const res = sanitizeChatHistoryMessage(message, maxChars);
     changed ||= res.changed;
+    if (shouldDropInternalHistoryMessage(res.message)) {
+      changed = true;
+      continue;
+    }
     if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
       continue;

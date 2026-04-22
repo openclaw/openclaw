@@ -565,6 +565,52 @@ describe("gateway server chat", () => {
     expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
   });
 
+  test("chat.history hides compaction and memory recovery artifacts", async () => {
+    const historyMessages = await withMainSessionStore(async (dir) => {
+      await fs.writeFile(
+        path.join(dir, "sess-main.jsonl"),
+        [
+          JSON.stringify({ message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
+          JSON.stringify({
+            type: "compaction",
+            id: "comp-1",
+            timestamp: "2026-02-07T00:00:00.000Z",
+            summary: "Compacted history",
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "Pre-compaction memory flush.\nNO_REPLY" }],
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "system",
+              content: [
+                {
+                  type: "text",
+                  text: "[Post-compaction context refresh]\n\nReload workspace state.",
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            message: { role: "assistant", content: [{ type: "text", text: "real reply" }] },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(res.ok).toBe(true);
+      return res.payload?.messages ?? [];
+    });
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
+  });
+
   test("chat.history hides assistant announce/reply skip-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {

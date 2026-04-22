@@ -301,6 +301,50 @@ describe("sanitizeChatHistoryMessages", () => {
       },
     ]);
   });
+
+  it("drops compaction and internal memory recovery artifacts from chat history", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        __openclaw: { kind: "compaction" },
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Pre-compaction memory flush.\nNO_REPLY" }],
+        timestamp: 3,
+      },
+      {
+        role: "system",
+        content: [{ type: "text", text: "[Post-compaction context refresh]\n\nreload state" }],
+        timestamp: 4,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 5,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 5,
+      },
+    ]);
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
