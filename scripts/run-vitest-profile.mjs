@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./lib/error-format.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 export function parseArgs(argv) {
   const args = {
@@ -42,7 +43,14 @@ export function resolveVitestProfileDir({ mode, outputDir }) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-vitest-${mode}-profile-`));
 }
 
-export function buildVitestProfileCommand({ mode, outputDir }) {
+export function buildVitestProfileCommand({
+  mode,
+  outputDir,
+  corepackAvailable,
+  corepackCommand,
+  npmExecPath,
+  nodeExecPath,
+}) {
   if (mode === "main") {
     return {
       command: process.execPath,
@@ -58,9 +66,12 @@ export function buildVitestProfileCommand({ mode, outputDir }) {
     };
   }
 
-  return {
-    command: "pnpm",
-    args: [
+  return resolvePnpmRunner({
+    corepackAvailable,
+    corepackCommand,
+    npmExecPath,
+    nodeExecPath,
+    pnpmArgs: [
       "vitest",
       "run",
       "--config",
@@ -71,7 +82,7 @@ export function buildVitestProfileCommand({ mode, outputDir }) {
       "--execArgv=--heap-prof",
       `--execArgv=--heap-prof-dir=${outputDir}`,
     ],
-  };
+  });
 }
 
 function main() {
@@ -88,7 +99,8 @@ function main() {
 
   const result = spawnSync(plan.command, plan.args, {
     stdio: "inherit",
-    shell: process.platform === "win32" && plan.command === "pnpm",
+    shell: plan.shell ?? false,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
     env: process.env,
   });
 

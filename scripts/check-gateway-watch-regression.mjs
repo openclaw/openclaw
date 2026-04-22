@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { writeBuildStamp } from "./build-stamp.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -222,10 +223,13 @@ function writeSnapshot(snapshotDir) {
 }
 
 function runCheckedCommand(command, args) {
-  const result = spawnSync(command, args, {
+  const runner = command === "pnpm" ? resolvePnpmRunner({ pnpmArgs: args }) : null;
+  const result = spawnSync(runner?.command ?? command, runner?.args ?? args, {
     cwd: process.cwd(),
     stdio: "inherit",
     env: process.env,
+    shell: runner?.shell ?? false,
+    windowsVerbatimArguments: runner?.windowsVerbatimArguments,
   });
   if (typeof result.status === "number" && result.status === 0) {
     return;

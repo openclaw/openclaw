@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_PNPM_COMMAND="$ROOT_DIR/scripts/pre-commit/run-pnpm-command.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
@@ -154,7 +155,7 @@ kill_all_openclaw
 stop_launch_agent
 
 # Bundle Gateway-hosted Canvas A2UI assets.
-run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
+run_step "bundle canvas a2ui" "$RUN_PNPM_COMMAND" canvas:a2ui:bundle
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"

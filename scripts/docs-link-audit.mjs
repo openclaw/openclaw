@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, "docs");
@@ -282,8 +283,15 @@ function parseNodeMajor(version) {
  */
 export function resolveMintlifyAnchorAuditInvocation(params) {
   const nodeVersion = params.nodeVersion ?? process.versions.node;
+  const baseRunner = resolvePnpmRunner({
+    pnpmArgs: MINTLIFY_BROKEN_LINKS_ARGS,
+    corepackAvailable: params.corepackAvailable,
+    corepackCommand: params.corepackCommand,
+    npmExecPath: params.npmExecPath,
+    nodeExecPath: params.nodeExecPath,
+  });
   if (parseNodeMajor(nodeVersion) < NODE_25_UNSUPPORTED_BY_MINTLIFY) {
-    return { command: "pnpm", args: MINTLIFY_BROKEN_LINKS_ARGS };
+    return baseRunner;
   }
 
   const node22Probe = "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)";
@@ -291,12 +299,12 @@ export function resolveMintlifyAnchorAuditInvocation(params) {
     {
       command: "fnm",
       probeArgs: ["exec", "--using=22", "node", "-e", node22Probe],
-      args: ["exec", "--using=22", "pnpm", ...MINTLIFY_BROKEN_LINKS_ARGS],
+      args: ["exec", "--using=22", baseRunner.command, ...baseRunner.args],
     },
     {
       command: "mise",
       probeArgs: ["exec", "node@22", "--", "node", "-e", node22Probe],
-      args: ["exec", "node@22", "--", "pnpm", ...MINTLIFY_BROKEN_LINKS_ARGS],
+      args: ["exec", "node@22", "--", baseRunner.command, ...baseRunner.args],
     },
   ];
 
@@ -310,7 +318,7 @@ export function resolveMintlifyAnchorAuditInvocation(params) {
     }
   }
 
-  return { command: "pnpm", args: MINTLIFY_BROKEN_LINKS_ARGS };
+  return baseRunner;
 }
 
 export function auditDocsLinks() {
@@ -461,6 +469,10 @@ export function runDocsLinkAuditCli(options = {}) {
         cwd: anchorDocsDir,
         nodeVersion: options.nodeVersion,
         spawnSyncImpl,
+        corepackAvailable: options.corepackAvailable,
+        corepackCommand: options.corepackCommand,
+        npmExecPath: options.npmExecPath,
+        nodeExecPath: options.nodeExecPath,
       });
       const result = spawnSyncImpl(invocation.command, invocation.args, {
         cwd: anchorDocsDir,

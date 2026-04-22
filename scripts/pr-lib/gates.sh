@@ -2,10 +2,10 @@ run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
 
   bootstrap_deps_if_needed
-  run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
-  run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
+  run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" run_pnpm_command build
+  run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" run_pnpm_command check
   if [ "$docs_only" != "true" ]; then
-    run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
+    run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" run_pnpm_command test
   fi
 }
 
@@ -95,8 +95,8 @@ prepare_gates() {
     gates_mode="reused_docs_only"
     echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
   else
-    run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+    run_quiet_logged "pnpm build" ".local/gates-build.log" run_pnpm_command build
+    run_quiet_logged "pnpm check" ".local/gates-check.log" run_pnpm_command check
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"
@@ -108,10 +108,10 @@ prepare_gates() {
         run_quiet_logged \
           "pnpm test" \
           ".local/gates-test.log" \
-          env OPENCLAW_VITEST_MAX_WORKERS="$OPENCLAW_VITEST_MAX_WORKERS" pnpm test
+          env OPENCLAW_VITEST_MAX_WORKERS="$OPENCLAW_VITEST_MAX_WORKERS" run_pnpm_command test
       else
         echo "Running pnpm test with host-aware scheduling defaults."
-        run_quiet_logged "pnpm test" ".local/gates-test.log" pnpm test
+        run_quiet_logged "pnpm test" ".local/gates-test.log" run_pnpm_command test
       fi
       previous_full_gates_head="$current_head"
     fi

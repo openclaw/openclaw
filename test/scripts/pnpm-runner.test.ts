@@ -81,6 +81,7 @@ describe("resolvePnpmRunner", () => {
           npmExecPath,
           pnpmArgs: ["exec", "vitest", "run"],
           platform: "linux",
+          corepackAvailable: false,
         }),
       ).toEqual({
         command: "pnpm",
@@ -92,12 +93,28 @@ describe("resolvePnpmRunner", () => {
     }
   });
 
-  it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
+  it("falls back to corepack pnpm on non-Windows when npm_execpath is missing", () => {
     expect(
       resolvePnpmRunner({
         npmExecPath: "",
         pnpmArgs: ["exec", "vitest", "run"],
         platform: "linux",
+        corepackAvailable: true,
+      }),
+    ).toEqual({
+      command: "corepack",
+      args: ["pnpm", "exec", "vitest", "run"],
+      shell: false,
+    });
+  });
+
+  it("falls back to bare pnpm when npm_execpath and corepack are unavailable", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath: "",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "linux",
+        corepackAvailable: false,
       }),
     ).toEqual({
       command: "pnpm",
@@ -106,13 +123,31 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
-  it("wraps pnpm.cmd via cmd.exe on Windows when npm_execpath is unavailable", () => {
+  it("wraps corepack pnpm via cmd.exe on Windows when npm_execpath is unavailable", () => {
     expect(
       resolvePnpmRunner({
         comSpec: "C:\\Windows\\System32\\cmd.exe",
         npmExecPath: "",
         pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
         platform: "win32",
+        corepackAvailable: true,
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", 'corepack pnpm exec vitest run -t "path with spaces"'],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("wraps pnpm.cmd via cmd.exe on Windows when npm_execpath and corepack are unavailable", () => {
+    expect(
+      resolvePnpmRunner({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmExecPath: "",
+        pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
+        platform: "win32",
+        corepackAvailable: false,
       }),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
@@ -129,6 +164,7 @@ describe("resolvePnpmRunner", () => {
         npmExecPath: "",
         pnpmArgs: ["exec", "vitest", "-t", "@scope/pkg@^1.2.3"],
         platform: "win32",
+        corepackAvailable: false,
       }),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
@@ -147,6 +183,7 @@ describe("resolvePnpmRunner", () => {
         npmExecPath: "",
         pnpmArgs: ["exec", "vitest", "run"],
         platform: "linux",
+        corepackAvailable: false,
         env,
       }),
     ).toEqual({

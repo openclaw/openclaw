@@ -20,6 +20,10 @@ const {
   runDocsLinkAuditCli: (options?: {
     args?: string[];
     nodeVersion?: string;
+    corepackAvailable?: boolean;
+    corepackCommand?: string;
+    npmExecPath?: string;
+    nodeExecPath?: string;
     spawnSyncImpl?: (
       command: string,
       args: string[],
@@ -161,6 +165,8 @@ describe("docs-link-audit", () => {
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
       nodeVersion: "22.21.1",
+      corepackAvailable: true,
+      npmExecPath: "",
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -175,8 +181,8 @@ describe("docs-link-audit", () => {
 
     expect(exitCode).toBe(0);
     expect(invocation).toBeDefined();
-    expect(invocation?.command).toBe("pnpm");
-    expect(invocation?.args).toEqual(["dlx", "mint", "broken-links", "--check-anchors"]);
+    expect(invocation?.command).toBe("corepack");
+    expect(invocation?.args).toEqual(["pnpm", "dlx", "mint", "broken-links", "--check-anchors"]);
     expect(invocation?.options.stdio).toBe("inherit");
     expect(invocation?.options.cwd).toBe(anchorDocsDir);
     expect(cleanedDir).toBe(anchorDocsDir);
@@ -194,6 +200,8 @@ describe("docs-link-audit", () => {
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
       nodeVersion: "25.3.0",
+      corepackAvailable: true,
+      npmExecPath: "",
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -221,7 +229,16 @@ describe("docs-link-audit", () => {
     });
     expect(invocations[1]).toMatchObject({
       command: "fnm",
-      args: ["exec", "--using=22", "pnpm", "dlx", "mint", "broken-links", "--check-anchors"],
+      args: [
+        "exec",
+        "--using=22",
+        "corepack",
+        "pnpm",
+        "dlx",
+        "mint",
+        "broken-links",
+        "--check-anchors",
+      ],
       options: { stdio: "inherit" },
     });
     expect(invocations[0]?.options.cwd).toBe(anchorDocsDir);

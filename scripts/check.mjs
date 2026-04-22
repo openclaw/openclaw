@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 export async function main(argv = process.argv.slice(2)) {
   const timed = argv.includes("--timed");
@@ -87,9 +88,11 @@ async function runSerial(commands) {
 
 async function runCommand(command) {
   const startedAt = performance.now();
-  const child = spawn("pnpm", command.args, {
+  const runner = resolvePnpmRunner({ pnpmArgs: command.args });
+  const child = spawn(runner.command, runner.args, {
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: runner.shell,
+    windowsVerbatimArguments: runner.windowsVerbatimArguments,
   });
 
   return await new Promise((resolve) => {

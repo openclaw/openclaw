@@ -1,4 +1,4 @@
 .PHONY: build
 
 build:
-	pnpm build
+	./scripts/pre-commit/run-pnpm-command.sh build

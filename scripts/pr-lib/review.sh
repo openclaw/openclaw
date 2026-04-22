@@ -466,7 +466,7 @@ review_tests() {
   bootstrap_deps_if_needed
 
   local run_log=".local/review-tests-run.log"
-  run_quiet_logged "pnpm test" "$run_log" pnpm test -- "$@"
+  run_quiet_logged "pnpm test" "$run_log" run_pnpm_command test -- "$@"
 
   local missing_run=()
   for target in "$@"; do

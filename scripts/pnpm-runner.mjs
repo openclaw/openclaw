@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -40,6 +40,19 @@ function isNodeRunnablePnpmExecPath(value) {
   return hasScriptShebang(value);
 }
 
+function hasCorepackPnpmAvailable(params = {}) {
+  if (typeof params.corepackAvailable === "boolean") {
+    return params.corepackAvailable;
+  }
+
+  const corepackCommand = params.corepackCommand ?? "corepack";
+  const probe = spawnSync(corepackCommand, ["pnpm", "--version"], {
+    stdio: "ignore",
+    shell: false,
+  });
+  return probe.status === 0;
+}
+
 export function resolvePnpmRunner(params = {}) {
   const pnpmArgs = params.pnpmArgs ?? [];
   const nodeArgs = params.nodeArgs ?? [];
@@ -47,6 +60,7 @@ export function resolvePnpmRunner(params = {}) {
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+  const corepackCommand = params.corepackCommand ?? "corepack";
 
   if (
     typeof npmExecPath === "string" &&
@@ -56,6 +70,23 @@ export function resolvePnpmRunner(params = {}) {
     return {
       command: nodeExecPath,
       args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+      shell: false,
+    };
+  }
+
+  if (hasCorepackPnpmAvailable(params)) {
+    if (platform === "win32") {
+      return {
+        command: comSpec,
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(corepackCommand, ["pnpm", ...pnpmArgs])],
+        shell: false,
+        windowsVerbatimArguments: true,
+      };
+    }
+
+    return {
+      command: corepackCommand,
+      args: ["pnpm", ...pnpmArgs],
       shell: false,
     };
   }

@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+RUN_PNPM_COMMAND="$ROOT_DIR/scripts/pre-commit/run-pnpm-command.sh"
 cd "$ROOT_DIR"
 
 log_step() {
@@ -23,8 +24,8 @@ run_protocol_ci_mirror() {
   local before after
   before="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
 
-  run_step pnpm protocol:gen
-  run_step pnpm protocol:gen:swift
+  run_step "$RUN_PNPM_COMMAND" protocol:gen
+  run_step "$RUN_PNPM_COMMAND" protocol:gen:swift
 
   after="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
   if [[ "$before" != "$after" ]]; then
@@ -51,18 +52,18 @@ has_native_swift_changes() {
 }
 
 run_linux_ci_mirror() {
-  run_step pnpm check
-  run_step pnpm build:strict-smoke
-  run_step pnpm lint:ui:no-raw-window-open
+  run_step "$RUN_PNPM_COMMAND" check
+  run_step "$RUN_PNPM_COMMAND" build:strict-smoke
+  run_step "$RUN_PNPM_COMMAND" lint:ui:no-raw-window-open
   run_protocol_ci_mirror
-  run_step pnpm canvas:a2ui:bundle
+  run_step "$RUN_PNPM_COMMAND" canvas:a2ui:bundle
   run_step node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts --maxWorkers=1
   run_step env CI=true node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --maxWorkers=1
 
   log_step "OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-1} NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=6144} pnpm test"
   OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
   NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=6144}" \
-    pnpm test
+    "$RUN_PNPM_COMMAND" test
 }
 
 run_macos_ci_mirror() {

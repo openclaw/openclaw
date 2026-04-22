@@ -6,6 +6,12 @@ require_artifact() {
   fi
 }
 
+run_pnpm_command() {
+  local root
+  root="$(common_repo_root)"
+  "$root/scripts/pre-commit/run-pnpm-command.sh" "$@"
+}
+
 path_is_docsish() {
   local path="$1"
   case "$path" in
@@ -144,7 +150,7 @@ run_quiet_logged() {
 
 bootstrap_deps_if_needed() {
   if [ ! -x node_modules/.bin/vitest ]; then
-    run_quiet_logged "pnpm install --frozen-lockfile" ".local/bootstrap-install.log" pnpm install --frozen-lockfile
+    run_quiet_logged "pnpm install --frozen-lockfile" ".local/bootstrap-install.log" run_pnpm_command install --frozen-lockfile
   fi
 }
 

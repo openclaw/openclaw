@@ -40,22 +40,29 @@ describe("scripts/run-vitest-profile", () => {
   });
 
   it("builds runner cpu and heap profiling args", () => {
-    expect(buildVitestProfileCommand({ mode: "runner", outputDir: "/tmp/profile-runner" })).toEqual(
-      {
-        command: "pnpm",
-        args: [
-          "vitest",
-          "run",
-          "--config",
-          "test/vitest/vitest.unit.config.ts",
-          "--no-file-parallelism",
-          "--execArgv=--cpu-prof",
-          "--execArgv=--cpu-prof-dir=/tmp/profile-runner",
-          "--execArgv=--heap-prof",
-          "--execArgv=--heap-prof-dir=/tmp/profile-runner",
-        ],
-      },
-    );
+    expect(
+      buildVitestProfileCommand({
+        mode: "runner",
+        outputDir: "/tmp/profile-runner",
+        corepackAvailable: true,
+        npmExecPath: "",
+      }),
+    ).toEqual({
+      command: "corepack",
+      args: [
+        "pnpm",
+        "vitest",
+        "run",
+        "--config",
+        "test/vitest/vitest.unit.config.ts",
+        "--no-file-parallelism",
+        "--execArgv=--cpu-prof",
+        "--execArgv=--cpu-prof-dir=/tmp/profile-runner",
+        "--execArgv=--heap-prof",
+        "--execArgv=--heap-prof-dir=/tmp/profile-runner",
+      ],
+      shell: false,
+    });
   });
 
   it("parses mode and explicit output dir", () => {

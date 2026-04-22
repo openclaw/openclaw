@@ -41,7 +41,7 @@ USAGE
 require_cmds() {
   local missing=()
   local cmd
-  for cmd in git gh jq rg pnpm node; do
+  for cmd in git gh jq rg node; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi

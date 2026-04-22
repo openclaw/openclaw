@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 type RunResult = {
   code: number | null;
@@ -33,9 +34,12 @@ async function runCommand(
   env: NodeJS.ProcessEnv,
 ): Promise<RunResult> {
   return await new Promise((resolve, reject) => {
-    const child = spawn("pnpm", args, {
+    const runner = resolvePnpmRunner({ pnpmArgs: args, env });
+    const child = spawn(runner.command, runner.args, {
       env,
       stdio: ["ignore", "pipe", "pipe"],
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
     });
     let stdout = "";
     let stderr = "";

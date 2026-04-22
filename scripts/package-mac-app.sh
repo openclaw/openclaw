@@ -5,6 +5,7 @@ set -euo pipefail
 # Outputs to dist/OpenClaw.app
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+RUN_PNPM_COMMAND="$ROOT_DIR/scripts/pre-commit/run-pnpm-command.sh"
 APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
@@ -116,7 +117,7 @@ merge_framework_machos() {
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"
-  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+  (cd "$ROOT_DIR" && "$RUN_PNPM_COMMAND" install --no-frozen-lockfile --config.node-linker=hoisted)
 else
   echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -141,7 +142,7 @@ fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
+  (cd "$ROOT_DIR" && "$RUN_PNPM_COMMAND" build)
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
