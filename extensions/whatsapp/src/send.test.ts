@@ -231,6 +231,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "voice note", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/voice.opus",
     });
     expect(sendMessage).toHaveBeenLastCalledWith(
@@ -251,6 +252,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/voice.webm",
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "", buf, "audio/webm");
@@ -273,6 +275,7 @@ describe("web outbound", () => {
     });
     await sendMessageWhatsApp("+1555", "", {
       verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/voice.mp3",
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "", buf, "audio/mpeg");
