@@ -148,6 +148,59 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
+  it("keeps the selected profile tokens when hydrating from a same-account Codex CLI auth file", async () => {
+    const sourceCodexHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-source-home-"));
+    tempDirs.push(sourceCodexHome);
+    await fs.writeFile(
+      path.join(sourceCodexHome, "auth.json"),
+      `${JSON.stringify(
+        {
+          auth_mode: "chatgpt",
+          tokens: {
+            id_token: "source-id-token",
+            access_token: "stale-source-access-token",
+            refresh_token: "stale-source-refresh-token",
+            account_id: "acct-123",
+          },
+          last_refresh: "2026-04-22T00:00:00.000Z",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const agentDir = await createAgentDirWithDefaultProfile({
+      access: "selected-profile-access-token",
+      refresh: "selected-profile-refresh-token",
+      accountId: "acct-123",
+    });
+
+    const result = await bridgeCodexAppServerStartOptions({
+      startOptions: {
+        transport: "stdio",
+        command: "codex",
+        args: ["app-server"],
+        headers: {},
+        env: { CODEX_HOME: sourceCodexHome },
+      },
+      agentDir,
+    });
+
+    expect(result.env?.CODEX_HOME).not.toBe(sourceCodexHome);
+    const authFile = JSON.parse(
+      await fs.readFile(path.join(result.env?.CODEX_HOME ?? "", "auth.json"), "utf8"),
+    );
+    expect(authFile).toEqual({
+      auth_mode: "chatgpt",
+      tokens: {
+        id_token: "source-id-token",
+        access_token: "selected-profile-access-token",
+        refresh_token: "selected-profile-refresh-token",
+        account_id: "acct-123",
+      },
+      last_refresh: "2026-04-22T00:00:00.000Z",
+    });
+  });
+
   it("leaves start options unchanged when canonical oauth is unavailable", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     tempDirs.push(agentDir);

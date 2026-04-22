@@ -212,8 +212,6 @@ type CodexAuthBridgeRecord = {
 };
 
 type CodexAuthBridgeMaterial = {
-  access: string;
-  refresh: string;
   accountId?: string;
   idToken?: string;
   lastRefresh?: string | number;
@@ -235,21 +233,19 @@ export function buildCodexAuthBridgeFile(
 ): string {
   const lastRefresh =
     normalizeCodexAuthLastRefresh(material.lastRefresh) ?? new Date().toISOString();
+  const openaiApiKey = readCodexAuthString(material.openaiApiKey);
+  const idToken = readCodexAuthString(material.idToken) ?? readCodexAuthString(credential.idToken);
+  const accountId =
+    readCodexAuthString(material.accountId) ?? readCodexAuthString(credential.accountId);
   return `${JSON.stringify(
     {
       auth_mode: "chatgpt",
-      ...(readCodexAuthString(material.openaiApiKey)
-        ? { OPENAI_API_KEY: material.openaiApiKey }
-        : {}),
+      ...(openaiApiKey ? { OPENAI_API_KEY: openaiApiKey } : {}),
       tokens: {
-        ...((material.idToken ?? credential.idToken)
-          ? { id_token: material.idToken ?? credential.idToken }
-          : {}),
-        access_token: material.access ?? credential.access,
-        refresh_token: material.refresh ?? credential.refresh,
-        ...((material.accountId ?? credential.accountId)
-          ? { account_id: material.accountId ?? credential.accountId }
-          : {}),
+        ...(idToken ? { id_token: idToken } : {}),
+        access_token: credential.access,
+        refresh_token: credential.refresh,
+        ...(accountId ? { account_id: accountId } : {}),
       },
       last_refresh: lastRefresh,
     },
@@ -316,20 +312,15 @@ function resolveCodexAuthBridgeMaterial(params: {
   if (!codexAuthSourceMatchesCredential(params.credential, { access, refresh, accountId })) {
     return {};
   }
+  const idToken = readCodexAuthString(tokens.id_token);
+  const lastRefresh = normalizeCodexAuthLastRefresh(source.last_refresh);
+  const openaiApiKey = readCodexAuthString(source.OPENAI_API_KEY);
 
   return {
-    access,
-    refresh,
     ...(accountId ? { accountId } : {}),
-    ...(readCodexAuthString(tokens.id_token)
-      ? { idToken: readCodexAuthString(tokens.id_token) }
-      : {}),
-    ...(normalizeCodexAuthLastRefresh(source.last_refresh)
-      ? { lastRefresh: normalizeCodexAuthLastRefresh(source.last_refresh) }
-      : {}),
-    ...(readCodexAuthString(source.OPENAI_API_KEY)
-      ? { openaiApiKey: readCodexAuthString(source.OPENAI_API_KEY) }
-      : {}),
+    ...(idToken ? { idToken } : {}),
+    ...(lastRefresh ? { lastRefresh } : {}),
+    ...(openaiApiKey ? { openaiApiKey } : {}),
   };
 }
 
