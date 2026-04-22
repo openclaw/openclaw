@@ -47,9 +47,12 @@ describe("cli-session helpers", () => {
       claudeCliSessionId: "legacy-session",
     };
 
-    expect(resolveCliSessionReuse({ binding: getCliSessionBinding(entry, "claude-cli") })).toEqual({
-      sessionId: "legacy-session",
-    });
+    expect(
+      resolveCliSessionReuse({
+        binding: getCliSessionBinding(entry, "claude-cli"),
+        authEpochVersion: 2,
+      }),
+    ).toEqual({ sessionId: "legacy-session" });
   });
 
   it("invalidates legacy bindings when auth, prompt, or MCP state changes", () => {
@@ -64,18 +67,21 @@ describe("cli-session helpers", () => {
     expect(
       resolveCliSessionReuse({
         binding,
+        authEpochVersion: 2,
         authProfileId: "anthropic:work",
       }),
     ).toEqual({ invalidatedReason: "auth-profile" });
     expect(
       resolveCliSessionReuse({
         binding,
+        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-hash",
       }),
     ).toEqual({ invalidatedReason: "system-prompt" });
     expect(
       resolveCliSessionReuse({
         binding,
+        authEpochVersion: 2,
         mcpConfigHash: "mcp-hash",
       }),
     ).toEqual({ invalidatedReason: "mcp" });

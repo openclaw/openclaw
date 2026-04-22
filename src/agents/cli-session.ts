@@ -126,7 +126,7 @@ export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
   authEpoch?: string;
-  authEpochVersion?: number;
+  authEpochVersion: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
