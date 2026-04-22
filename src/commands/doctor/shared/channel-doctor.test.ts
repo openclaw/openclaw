@@ -141,6 +141,57 @@ describe("channel doctor compatibility mutations", () => {
     expect(collectMutableAllowlistWarnings).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores malformed doctor adapter values so valid fallbacks still run", async () => {
+    const normalizeCompatibilityConfig = vi.fn(({ cfg }: { cfg: unknown }) => ({
+      config: cfg,
+      changes: ["setup"],
+    }));
+    const collectMutableAllowlistWarnings = vi.fn(() => ["runtime warning"]);
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "matrix",
+          doctor: {
+            normalizeCompatibilityConfig: null,
+            collectMutableAllowlistWarnings: "not-a-function",
+            warnOnEmptyGroupSenderAllowlist: "yes",
+          },
+        },
+      ],
+    });
+    mocks.getBundledChannelSetupPlugin.mockImplementation((id: string) =>
+      id === "matrix"
+        ? {
+            id: "matrix",
+            doctor: { normalizeCompatibilityConfig },
+          }
+        : undefined,
+    );
+    mocks.getBundledChannelPlugin.mockImplementation((id: string) =>
+      id === "matrix"
+        ? {
+            id: "matrix",
+            doctor: { collectMutableAllowlistWarnings },
+          }
+        : undefined,
+    );
+
+    const cfg = {
+      channels: {
+        matrix: {
+          enabled: true,
+        },
+      },
+    };
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg as never)).toHaveLength(1);
+    await expect(
+      collectChannelDoctorMutableAllowlistWarnings({ cfg: cfg as never }),
+    ).resolves.toEqual(["runtime warning"]);
+    expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
+    expect(collectMutableAllowlistWarnings).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to setup doctor adapters when read-only plugins lack doctor hooks", () => {
     const normalizeCompatibilityConfig = vi.fn(({ cfg }: { cfg: unknown }) => ({
       config: cfg,

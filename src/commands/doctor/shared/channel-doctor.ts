@@ -25,6 +25,29 @@ type ChannelDoctorEmptyAllowlistLookupParams = ChannelDoctorEmptyAllowlistAccoun
   cfg?: OpenClawConfig;
 };
 
+const channelDoctorFunctionKeys = new Set<keyof ChannelDoctorAdapter>([
+  "normalizeCompatibilityConfig",
+  "collectPreviewWarnings",
+  "collectMutableAllowlistWarnings",
+  "repairConfig",
+  "runConfigSequence",
+  "cleanStaleConfig",
+  "collectEmptyAllowlistExtraWarnings",
+  "shouldSkipDefaultEmptyGroupAllowlistWarning",
+]);
+
+const channelDoctorBooleanKeys = new Set<keyof ChannelDoctorAdapter>([
+  "groupAllowFromFallbackToAllowFrom",
+  "warnOnEmptyGroupSenderAllowlist",
+]);
+
+const channelDoctorStringEnumValues: Partial<
+  Record<keyof ChannelDoctorAdapter, ReadonlySet<string>>
+> = {
+  dmAllowFromMode: new Set(["topOnly", "topOrNested", "nestedOnly"]),
+  groupModel: new Set(["sender", "route", "hybrid"]),
+};
+
 export type ChannelDoctorEmptyAllowlistPolicyHooks = {
   extraWarningsForAccount: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
   shouldSkipDefaultEmptyGroupAllowlistWarning: (
@@ -89,12 +112,33 @@ function mergeDoctorAdapters(
       continue;
     }
     for (const [key, value] of Object.entries(adapter)) {
-      if (value !== undefined && merged[key] === undefined) {
+      if (merged[key] === undefined && isValidChannelDoctorAdapterValue(key, value)) {
         merged[key] = value;
       }
     }
   }
   return Object.keys(merged).length > 0 ? (merged as ChannelDoctorAdapter) : undefined;
+}
+
+function isValidChannelDoctorAdapterValue(key: string, value: unknown): boolean {
+  if (value == null) {
+    return false;
+  }
+  const typedKey = key as keyof ChannelDoctorAdapter;
+  if (channelDoctorFunctionKeys.has(typedKey)) {
+    return typeof value === "function";
+  }
+  if (channelDoctorBooleanKeys.has(typedKey)) {
+    return typeof value === "boolean";
+  }
+  const enumValues = channelDoctorStringEnumValues[typedKey];
+  if (enumValues) {
+    return typeof value === "string" && enumValues.has(value);
+  }
+  if (typedKey === "legacyConfigRules") {
+    return Array.isArray(value);
+  }
+  return false;
 }
 
 function listChannelDoctorEntries(
