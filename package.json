@@ -1662,7 +1662,6 @@
     "patchedDependencies": {
       "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch"
     },
-  "pnpm": {
     "minimumReleaseAge": 2880,
     "minimumReleaseAgeExclude": [
       "acpx",
