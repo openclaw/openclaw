@@ -48,10 +48,16 @@ export function registerCronEditCommand(cron: Command) {
       .option("--session-key <key>", "Set session key for job routing")
       .option("--clear-session-key", "Unset session key", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
-      .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
+      .option(
+        "--at <when>",
+        "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m",
+      )
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
-      .option("--tz <iana>", "Timezone for cron expressions (IANA)")
+      .option(
+        "--tz <iana>",
+        "Timezone for interpreting --cron expressions and offset-less --at datetime strings (IANA, default: UTC)",
+      )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
