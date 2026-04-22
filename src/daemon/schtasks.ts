@@ -108,6 +108,143 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
+type BatchScriptLine =
+  | { kind: "empty" }
+  | { kind: "echo" }
+  | { kind: "comment" }
+  | { kind: "env_scope" }
+  | { kind: "setlocal" }
+  | { kind: "endlocal" }
+  | { kind: "env_assignment"; key: string; value: string }
+  | { kind: "working_directory"; path: string }
+  | { kind: "command"; raw: string };
+
+function restoreEnvironmentSnapshot(
+  target: Record<string, string>,
+  snapshot: Record<string, string>,
+): void {
+  for (const key of Object.keys(target)) {
+    if (!(key in snapshot)) {
+      delete target[key];
+    }
+  }
+  for (const [key, value] of Object.entries(snapshot)) {
+    target[key] = value;
+  }
+}
+
+type BatchStatementSplit = {
+  statement: string;
+  remainder: string;
+  /** True when split at a single `|` (CMD pipe). LHS side effects do not apply to the RHS command. */
+  usedSinglePipe: boolean;
+};
+
+function isBackslashEscapedQuote(value: string, index: number): boolean {
+  return index > 0 && value[index - 1] === "\\";
+}
+
+function splitFirstBatchStatement(rawLine: string): BatchStatementSplit {
+  let inQuotes = false;
+  let escaped = false;
+  for (let index = 0; index < rawLine.length; index += 1) {
+    const current = rawLine[index];
+    if (!current) {
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (current === "^") {
+      escaped = true;
+      continue;
+    }
+    if (current === '"' && !isBackslashEscapedQuote(rawLine, index)) {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (inQuotes) {
+      continue;
+    }
+
+    const next = rawLine[index + 1] ?? "";
+    if ((current === "&" && next === "&") || (current === "|" && next === "|")) {
+      return {
+        statement: rawLine.slice(0, index).trim(),
+        remainder: rawLine.slice(index + 2).trim(),
+        usedSinglePipe: false,
+      };
+    }
+    // Single `|` is CMD pipe; split so prologue directives (setlocal, set, …) do not
+    // hide the real command on the same line (e.g. `setlocal … | node gateway.js`).
+    if (current === "|") {
+      return {
+        statement: rawLine.slice(0, index).trim(),
+        remainder: rawLine.slice(index + 1).trim(),
+        usedSinglePipe: true,
+      };
+    }
+    if (current === "&") {
+      const prev = index > 0 ? rawLine[index - 1] : "";
+      // `2>&1`-style merges use `&` after `>`; `<&3` input-handle redirection uses `&` after `<`.
+      // Those are not CMD chain separators (unquoted `&` / `&&`).
+      if (prev !== ">" && prev !== "<") {
+        return {
+          statement: rawLine.slice(0, index).trim(),
+          remainder: rawLine.slice(index + 1).trim(),
+          usedSinglePipe: false,
+        };
+      }
+    }
+  }
+  return {
+    statement: rawLine.trim(),
+    remainder: "",
+    usedSinglePipe: false,
+  };
+}
+
+function classifyBatchScriptLine(rawLine: string): BatchScriptLine {
+  const line = rawLine.trim();
+  if (!line) {
+    return { kind: "empty" };
+  }
+
+  const lower = normalizeLowercaseStringOrEmpty(line);
+  if (line.startsWith("@echo")) {
+    return { kind: "echo" };
+  }
+  if (lower === "rem" || lower.startsWith("rem ")) {
+    return { kind: "comment" };
+  }
+  if (lower === "setlocal" || lower.startsWith("setlocal ")) {
+    return { kind: "setlocal" };
+  }
+  if (lower === "endlocal" || lower.startsWith("endlocal ")) {
+    return { kind: "endlocal" };
+  }
+  if (lower.startsWith("set ")) {
+    const assignment = parseCmdSetAssignment(line.slice(4));
+    if (assignment) {
+      return {
+        kind: "env_assignment",
+        key: assignment.key,
+        value: assignment.value,
+      };
+    }
+    // Non-assignment SET forms (set /a, set /p, bare `set VAR`, etc.): skip like the pre-refactor loop.
+    return { kind: "env_scope" };
+  }
+  if (lower.startsWith("cd /d ")) {
+    return {
+      kind: "working_directory",
+      path: line.slice("cd /d ".length).trim().replace(/^"|"$/g, ""),
+    };
+  }
+  return { kind: "command", raw: line };
+}
+
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -117,31 +254,114 @@ export async function readScheduledTaskCommand(
     let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
+    const setlocalStack: Array<Record<string, string>> = [];
     for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      const lower = normalizeLowercaseStringOrEmpty(line);
-      if (line.startsWith("@echo")) {
-        continue;
-      }
-      if (lower.startsWith("rem ")) {
-        continue;
-      }
-      if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(line.slice(4));
-        if (assignment) {
-          environment[assignment.key] = assignment.value;
+      let remainder = rawLine;
+      // Mutations after a pipe (`a | b`) belong to stage-local contexts; accumulate RHS
+      // setup (`set … && node …`) into `pipeRhsStaging` and merge only when we take a
+      // command from that RHS. Discard staging if the line ends without a command so
+      // `rem | set VAR=1` cannot leak VAR to the next physical line.
+      let pipeRhsStaging: {
+        environment: Record<string, string>;
+        workingDirectory: string;
+        setlocalStack: Array<Record<string, string>>;
+      } | null = null;
+
+      while (remainder.trim()) {
+        const split = splitFirstBatchStatement(remainder);
+        remainder = split.remainder;
+        const lhsPipeStage =
+          split.usedSinglePipe && split.remainder.trim() !== "";
+        const parsedLine = classifyBatchScriptLine(split.statement);
+
+        if (parsedLine.kind === "command") {
+          if (lhsPipeStage) {
+            // Runnable command on the LHS of a later `|` (e.g. `… && node … | findstr`):
+            // still merge any `set`/`cd` setup that ran earlier in the same stage before this
+            // command (e.g. `rem | set PORT=1 && node g.js | findstr`).
+            if (pipeRhsStaging) {
+              Object.assign(environment, pipeRhsStaging.environment);
+              if (pipeRhsStaging.workingDirectory) {
+                workingDirectory = pipeRhsStaging.workingDirectory;
+              }
+            }
+            commandLine = parsedLine.raw;
+            break;
+          }
+          if (pipeRhsStaging) {
+            Object.assign(environment, pipeRhsStaging.environment);
+            if (pipeRhsStaging.workingDirectory) {
+              workingDirectory = pipeRhsStaging.workingDirectory;
+            }
+          }
+          commandLine = parsedLine.raw;
+          break;
         }
-        continue;
+
+        if (lhsPipeStage) {
+          pipeRhsStaging ??= {
+            environment: {},
+            workingDirectory: "",
+            setlocalStack: [],
+          };
+        }
+
+        const suppressMutationEffects = lhsPipeStage;
+        switch (parsedLine.kind) {
+          case "empty":
+          case "echo":
+          case "comment":
+          case "env_scope":
+            continue;
+          case "setlocal":
+            if (!suppressMutationEffects) {
+              if (pipeRhsStaging) {
+                pipeRhsStaging.setlocalStack.push({ ...pipeRhsStaging.environment });
+              } else {
+                setlocalStack.push({ ...environment });
+              }
+            }
+            continue;
+          case "endlocal": {
+            if (suppressMutationEffects) {
+              continue;
+            }
+            if (pipeRhsStaging) {
+              const snapshot = pipeRhsStaging.setlocalStack.pop();
+              if (snapshot) {
+                restoreEnvironmentSnapshot(pipeRhsStaging.environment, snapshot);
+              }
+            } else {
+              const snapshot = setlocalStack.pop();
+              if (snapshot) {
+                restoreEnvironmentSnapshot(environment, snapshot);
+              }
+            }
+            continue;
+          }
+          case "env_assignment":
+            if (!suppressMutationEffects) {
+              if (pipeRhsStaging) {
+                pipeRhsStaging.environment[parsedLine.key] = parsedLine.value;
+              } else {
+                environment[parsedLine.key] = parsedLine.value;
+              }
+            }
+            continue;
+          case "working_directory":
+            if (!suppressMutationEffects) {
+              if (pipeRhsStaging) {
+                pipeRhsStaging.workingDirectory = parsedLine.path;
+              } else {
+                workingDirectory = parsedLine.path;
+              }
+            }
+            continue;
+        }
       }
-      if (lower.startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
-        continue;
+      if (commandLine) {
+        break;
       }
-      commandLine = line;
-      break;
     }
     if (!commandLine) {
       return null;

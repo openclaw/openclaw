@@ -8,6 +8,7 @@ import {
   readScheduledTaskCommand,
   resolveTaskScriptPath,
 } from "./schtasks.js";
+import { quoteCmdScriptArg } from "./cmd-argv.js";
 
 describe("schtasks runtime parsing", () => {
   it.each(["Ready", "Running"])("parses %s status", (status) => {
@@ -243,6 +244,344 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("ignores setlocal directives before the real gateway command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "setlocal enabledelayedexpansion",
+          "set OPENCLAW_PORT=18789",
+          "node gateway.js --verbose",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--verbose"],
+          environment: {
+            OPENCLAW_PORT: "18789",
+          },
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("ignores set lines that do not parse as assignments before the gateway command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "set /a 1+1",
+          "set DISPLAY_ONLY_VAR",
+          "set OPENCLAW_PORT=18789",
+          "node gateway.js --verbose",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--verbose"],
+          environment: {
+            OPENCLAW_PORT: "18789",
+          },
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("ignores bare setlocal lines", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "setlocal", "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("parses the real command when setlocal shares a line with && chaining", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "setlocal enabledelayedexpansion && set OPENCLAW_PORT=18789 && node gateway.js --verbose",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--verbose"],
+          environment: {
+            OPENCLAW_PORT: "18789",
+          },
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("parses the real command when setlocal shares a line with single-pipe chaining", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "setlocal enabledelayedexpansion | node gateway.js --port 18789"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("does not apply set from the left side of a pipe to the parsed gateway command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "set OPENCLAW_GATEWAY_PORT=99999 | node gateway.js gateway"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "gateway"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+        expect(result?.environment?.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+      },
+    );
+  });
+
+  it("does not apply set from a right-hand pipe stage to following script lines", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "rem | set OPENCLAW_GATEWAY_PORT=99999",
+          "node gateway.js --port 18789",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+        expect(result?.environment?.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+      },
+    );
+  });
+
+  it("applies RHS pipe-stage set before the same stage's command (chained with &&)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "rem | set OPENCLAW_GATEWAY_PORT=9999 && node gateway.js gateway",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "gateway"],
+          environment: {
+            OPENCLAW_GATEWAY_PORT: "9999",
+          },
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("applies staged RHS env before a pipe-stage command when a second pipe follows (e.g. findstr)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "rem | set OPENCLAW_GATEWAY_PORT=9999 && node gateway.js gateway | findstr /i running",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "gateway"],
+          environment: {
+            OPENCLAW_GATEWAY_PORT: "9999",
+          },
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("does not apply cd from the left side of a pipe to the parsed gateway command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ['@echo off', 'cd /d "D:\\PipeLeftOnly" | node gateway.js gateway'],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "gateway"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+        expect(result?.workingDirectory).toBeUndefined();
+      },
+    );
+  });
+
+  it("keeps the gateway launch on the left side of a pipe (e.g. piped to findstr)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "node gateway.js --port 18789 | findstr Running"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("parses the real command when endlocal shares a line with a fallback command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "endlocal || node gateway.js --port 18789"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("does not split chained statements inside backslash-escaped quotes", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ['@echo off', 'node gateway.js --flag "a\\"b&c" --port 18789'],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--flag", 'a"b&c', "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("preserves chained separators inside rendered backslash-plus-quote arguments", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          `node gateway.js --flag ${quoteCmdScriptArg('a\\"b&c')} --port 18789`,
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--flag", 'a\\"b&c', "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("drops setlocal-scoped assignments after endlocal before the real command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "setlocal enabledelayedexpansion",
+          "set FOO=bar",
+          "endlocal",
+          "node gateway.js --port 18789",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("restores outer env assignments after endlocal (shadowed vars)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "set OPENCLAW_GATEWAY_PORT=18789",
+          "setlocal enabledelayedexpansion",
+          "set OPENCLAW_GATEWAY_PORT=99999",
+          "endlocal",
+          "node gateway.js gateway",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "gateway"],
+          environment: {
+            OPENCLAW_GATEWAY_PORT: "18789",
+          },
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("returns null when script contains only env-scope directives and comments", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "setlocal", "rem comment", "endlocal"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toBeNull();
+      },
+    );
+  });
+
+  it("preserves working directory and env assignments around setlocal directives", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "setlocal enabledelayedexpansion",
+          "cd /d C:\\Projects\\openclaw",
+          "set NODE_ENV=production",
+          "node gateway.js --port 18789",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--port", "18789"],
+          workingDirectory: "C:\\Projects\\openclaw",
+          environment: {
+            NODE_ENV: "production",
+          },
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
   it("parses command with Windows backslash paths", async () => {
     await withScheduledTaskScript(
       {
@@ -330,6 +669,21 @@ describe("readScheduledTaskCommand", () => {
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
           OC_QUOTE: 'he said "hi"',
+        });
+      },
+    );
+  });
+
+  it("does not split batch chains on `<&` input-handle redirection (#66062)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "node gateway.js gateway <&3 --port 18789"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "gateway", "<&3", "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
