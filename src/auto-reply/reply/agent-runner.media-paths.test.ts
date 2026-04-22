@@ -127,7 +127,6 @@ describe("runReplyAgent media path normalization", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing: createMockTypingController(),
       sessionCtx: {
         Provider: "telegram",

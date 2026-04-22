@@ -22,6 +22,13 @@ export type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  /**
+   * Returns true when the agent loop is NOT actively running — either before
+   * the first prompt starts (startup window) or after the prompt finishes
+   * (teardown window).  During these windows the steering queue will NOT be
+   * drained, so accepting messages would silently drop them.
+   */
+  isStopped?: () => boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;
 };
@@ -107,12 +114,12 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return false;
   }
-  if (!handle.isStreaming()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
-  }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
+    return false;
+  }
+  if (handle.isStopped?.()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=agent_stopped`);
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
@@ -216,6 +223,18 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
   );
 }
 
+/**
+ * Check whether an embedded run is active for a given session key.
+ * Resolves the session key to a session ID, then checks the active run registry.
+ */
+export function isEmbeddedPiRunActiveForSessionKey(sessionKey: string): boolean {
+  const sessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
+  if (!sessionId) {
+    return false;
+  }
+  return isEmbeddedPiRunActive(sessionId);
+}
+
 export function getActiveEmbeddedRunCount(): number {
   let activeCount = ACTIVE_EMBEDDED_RUNS.size;
   for (const sessionId of listActiveReplyRunSessionIds()) {
@@ -300,15 +319,19 @@ export async function waitForActiveEmbeddedRuns(
   }
 }
 
-export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
+export async function waitForEmbeddedPiRunEnd(
+  sessionId: string,
+  timeoutMs = 15_000,
+): Promise<boolean> {
   if (!sessionId) {
-    return Promise.resolve(true);
+    return true;
   }
   if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
     return waitForReplyRunEndBySessionId(sessionId, timeoutMs);
   }
   diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
-  return new Promise((resolve) => {
+  const startMs = Date.now();
+  const embeddedRunEnded = await new Promise<boolean>((resolve) => {
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
     const waiter: EmbeddedRunWaiter = {
       resolve,
@@ -335,6 +358,17 @@ export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): 
       resolve(true);
     }
   });
+  if (!embeddedRunEnded) {
+    return false;
+  }
+  // After the embedded run handle is removed, the ReplyOperation in the
+  // reply-run-registry may still be active (cleared in the handler's finally
+  // block). Wait for it with the remaining budget so callers see a fully
+  // idle session.
+  // NOTE: The 100ms floor means this function can exceed the stated timeoutMs
+  // by up to 100ms in the worst case (embedded wait consumed the full budget).
+  const remainingMs = Math.max(100, timeoutMs - (Date.now() - startMs));
+  return waitForReplyRunEndBySessionId(sessionId, remainingMs);
 }
 
 function notifyEmbeddedRunEnded(sessionId: string) {
@@ -397,6 +431,63 @@ export function clearActiveEmbeddedRun(
   } else {
     diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
+}
+
+/**
+ * Force-detach an active embedded run from the scheduling registry.
+ *
+ * Used by interrupt mode when the abort+wait path times out: the old run's
+ * handle is removed from ACTIVE_EMBEDDED_RUNS so a new run can be registered
+ * immediately. The old run continues in the background but no longer blocks
+ * scheduling.
+ *
+ * The old run's finally block will eventually call `clearActiveEmbeddedRun`,
+ * which does a handle identity check — since the handle was already removed
+ * here, that call becomes a no-op ("handle_mismatch"). This is safe:
+ * the old run can still persist its transcript and clean up resources,
+ * it just no longer blocks the scheduling registry.
+ *
+ * Returns true if a run was detached, false if nothing was registered.
+ */
+export function forceDetachEmbeddedRun(sessionId: string): boolean {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    return false;
+  }
+  // Resolve sessionKey before clearing the reverse map so we can log
+  // the state transition.
+  let sessionKey: string | undefined;
+  for (const [key, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
+    if (activeSessionId === sessionId) {
+      sessionKey = key;
+      break;
+    }
+  }
+  ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+  EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
+  clearActiveRunSessionKeys(sessionId);
+  if (sessionKey) {
+    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "force_detached" });
+  }
+  diag.warn(`force-detached run: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+  // Clean up any pending waiters immediately with false ("not cleanly ended").
+  // The detached run continues executing in the background, so we must NOT
+  // resolve with true (which would signal idle). Resolving with false gives
+  // callers (session-reset, session management) the conservative signal that
+  // the session is not cleanly idle — they will return "still active" to the
+  // user. This also prevents stale waiters from being accidentally resolved
+  // later when a replacement run finishes and calls clearActiveEmbeddedRun
+  // with the same sessionId.
+  const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
+  if (waiters) {
+    EMBEDDED_RUN_WAITERS.delete(sessionId);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(false);
+    }
+  }
+  return true;
 }
 
 export const __testing = {

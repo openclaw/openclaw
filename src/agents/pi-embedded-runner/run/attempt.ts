@@ -1726,6 +1726,8 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
+      let agentLoopStarted = false;
+      let agentLoopStopped = false;
       const queueHandle: EmbeddedPiQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -1736,6 +1738,7 @@ export async function runEmbeddedAttempt(
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
+        isStopped: () => !agentLoopStarted || agentLoopStopped,
         cancel: () => {
           abortRun();
         },
@@ -2205,6 +2208,9 @@ export async function runEmbeddedAttempt(
               inFlightPrompt: effectivePrompt,
             });
 
+            // Mark the agent loop as started right before prompt submission
+            // so steer messages are only accepted once the agent is actually running.
+            agentLoopStarted = true;
             // Only pass images option if there are actually images to pass
             // This avoids potential issues with models that don't expect the images parameter
             if (imageResult.images.length > 0) {
@@ -2237,6 +2243,9 @@ export async function runEmbeddedAttempt(
             promptErrorSource = "prompt";
           }
         } finally {
+          // Mark the agent loop as stopped so queueEmbeddedPiMessage rejects
+          // new steer messages — the steering queue will no longer be drained.
+          agentLoopStopped = true;
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );

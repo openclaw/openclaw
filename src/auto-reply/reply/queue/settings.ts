@@ -1,4 +1,6 @@
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
+import type { SessionEntry } from "../../../config/sessions.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
@@ -18,6 +20,32 @@ function resolveChannelDebounce(
   }
   const value = byChannel[channelKey];
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
+}
+
+/**
+ * Resolve just the effective queue mode using the same cascade as
+ * resolveQueueSettings (session → channel → global → default).
+ *
+ * Used by hot-path code (e.g. Telegram sequentializer) that needs the
+ * mode early without constructing the full ResolveQueueSettingsParams.
+ */
+export function resolveEffectiveQueueMode(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  sessionEntry?: SessionEntry;
+}): QueueMode {
+  const channelKey = normalizeOptionalLowercaseString(params.channel);
+  const queueCfg = params.cfg.messages?.queue;
+  const providerModeRaw =
+    channelKey && queueCfg?.byChannel
+      ? (queueCfg.byChannel as Record<string, string | undefined>)[channelKey]
+      : undefined;
+  return (
+    normalizeQueueMode(params.sessionEntry?.queueMode) ??
+    normalizeQueueMode(providerModeRaw) ??
+    normalizeQueueMode(queueCfg?.mode) ??
+    defaultQueueModeForChannel(channelKey)
+  );
 }
 
 export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {

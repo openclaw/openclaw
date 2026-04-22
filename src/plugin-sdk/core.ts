@@ -110,6 +110,7 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export type { ReplyPayload } from "./reply-payload.js";
+export { resolveEffectiveQueueMode } from "../auto-reply/reply/queue/settings.js";
 export type { AllowlistMatch } from "../channels/allowlist-match.js";
 export type {
   BaseProbeResult,

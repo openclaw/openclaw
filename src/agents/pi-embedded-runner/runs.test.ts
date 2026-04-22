@@ -5,23 +5,29 @@ import {
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   consumeEmbeddedRunModelSwitch,
+  forceDetachEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedPiRunActive,
+  isEmbeddedPiRunActiveForSessionKey,
+  queueEmbeddedPiMessage,
   requestEmbeddedRunModelSwitch,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
+  waitForEmbeddedPiRunEnd,
 } from "./runs.js";
 
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
 function createRunHandle(
-  overrides: { isCompacting?: boolean; abort?: () => void } = {},
+  overrides: { isCompacting?: boolean; isStopped?: boolean; abort?: () => void } = {},
 ): RunHandle {
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
     isStreaming: () => true,
     isCompacting: () => overrides.isCompacting ?? false,
+    isStopped: () => overrides.isStopped ?? false,
     abort,
   };
 }
@@ -171,5 +177,152 @@ describe("pi-embedded runner run registry", () => {
     clearActiveEmbeddedRun("session-clear-switch", handle);
 
     expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
+  });
+});
+
+describe("queueEmbeddedPiMessage", () => {
+  afterEach(() => {
+    __testing.resetActiveEmbeddedRuns();
+  });
+
+  function createQueueableHandle(
+    overrides: { isCompacting?: boolean; isStreaming?: boolean; isStopped?: boolean } = {},
+  ): RunHandle & { queueMessageSpy: ReturnType<typeof vi.fn> } {
+    const queueMessageSpy = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    return {
+      queueMessage: queueMessageSpy,
+      isStreaming: () => overrides.isStreaming ?? true,
+      isCompacting: () => overrides.isCompacting ?? false,
+      isStopped: () => overrides.isStopped ?? false,
+      abort: () => {},
+      queueMessageSpy,
+    };
+  }
+
+  it("returns false when no active run exists for the session", () => {
+    const result = queueEmbeddedPiMessage("no-such-session", "hello");
+    expect(result).toBe(false);
+  });
+
+  it("queues message when session is active but NOT streaming (original bug case)", () => {
+    const handle = createQueueableHandle({ isStreaming: false });
+    setActiveEmbeddedRun("session-not-streaming", handle);
+
+    const result = queueEmbeddedPiMessage("session-not-streaming", "steer message");
+
+    expect(result).toBe(true);
+    expect(handle.queueMessageSpy).toHaveBeenCalledWith("steer message");
+  });
+
+  it("returns false when session is active but compacting", () => {
+    const handle = createQueueableHandle({ isCompacting: true });
+    setActiveEmbeddedRun("session-compacting", handle);
+
+    const result = queueEmbeddedPiMessage("session-compacting", "steer message");
+
+    expect(result).toBe(false);
+    expect(handle.queueMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("queues message when session is active and streaming (not compacting)", () => {
+    const handle = createQueueableHandle();
+    setActiveEmbeddedRun("session-streaming", handle);
+
+    const result = queueEmbeddedPiMessage("session-streaming", "steer message");
+
+    expect(result).toBe(true);
+    expect(handle.queueMessageSpy).toHaveBeenCalledWith("steer message");
+  });
+
+  it("returns false when agent loop is not yet running or already stopped", () => {
+    const handle = createQueueableHandle({ isStopped: true });
+    setActiveEmbeddedRun("session-stopped", handle);
+
+    const result = queueEmbeddedPiMessage("session-stopped", "steer message");
+
+    expect(result).toBe(false);
+    expect(handle.queueMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("queues message when session is active, not streaming, and not stopped (tool execution)", () => {
+    const handle = createQueueableHandle({ isStreaming: false, isStopped: false });
+    setActiveEmbeddedRun("session-tool-exec", handle);
+
+    const result = queueEmbeddedPiMessage("session-tool-exec", "steer message");
+
+    expect(result).toBe(true);
+    expect(handle.queueMessageSpy).toHaveBeenCalledWith("steer message");
+  });
+});
+
+describe("isEmbeddedPiRunActiveForSessionKey", () => {
+  afterEach(() => {
+    __testing.resetActiveEmbeddedRuns();
+  });
+
+  it("returns true when a run is active for the resolved session key", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-abc", handle, "key-abc");
+    expect(isEmbeddedPiRunActiveForSessionKey("key-abc")).toBe(true);
+  });
+
+  it("returns false when no run is active for the session key", () => {
+    expect(isEmbeddedPiRunActiveForSessionKey("key-nonexistent")).toBe(false);
+  });
+
+  it("returns false after the run is cleared", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-cleared", handle, "key-cleared");
+    clearActiveEmbeddedRun("session-cleared", handle, "key-cleared");
+    expect(isEmbeddedPiRunActiveForSessionKey("key-cleared")).toBe(false);
+  });
+});
+
+describe("forceDetachEmbeddedRun", () => {
+  afterEach(() => {
+    __testing.resetActiveEmbeddedRuns();
+  });
+
+  it("removes the run from the registry without notifying global waiters", async () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-detach", handle, "key-detach");
+
+    // A concurrent waiter (e.g. session-reset) should NOT be resolved by
+    // forceDetach — the detached run is still executing in the background.
+    const waitPromise = waitForEmbeddedPiRunEnd("session-detach", 500);
+
+    const detached = forceDetachEmbeddedRun("session-detach");
+    expect(detached).toBe(true);
+
+    // Registry is cleared
+    expect(isEmbeddedPiRunActive("session-detach")).toBe(false);
+    expect(isEmbeddedPiRunActiveForSessionKey("key-detach")).toBe(false);
+
+    // Waiter resolves with false (force-detach cleans up waiters with
+    // conservative "not cleanly ended" signal). session-reset should see
+    // the run as still active since the detached run is still executing.
+    const ended = await waitPromise;
+    expect(ended).toBe(false);
+  });
+
+  it("returns false when no run is registered", () => {
+    expect(forceDetachEmbeddedRun("nonexistent")).toBe(false);
+  });
+
+  it("old run's clearActiveEmbeddedRun becomes no-op after force-detach", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-overlap", handle, "key-overlap");
+
+    forceDetachEmbeddedRun("session-overlap");
+
+    // Register a new run for the same session
+    const newHandle = createRunHandle();
+    setActiveEmbeddedRun("session-overlap", newHandle, "key-overlap");
+
+    // Old run's finally block calls clearActiveEmbeddedRun with old handle
+    clearActiveEmbeddedRun("session-overlap", handle, "key-overlap");
+
+    // New run should still be active (handle mismatch → no-op)
+    expect(isEmbeddedPiRunActive("session-overlap")).toBe(true);
   });
 });
