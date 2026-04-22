@@ -21,7 +21,6 @@ import {
   emitSubagentEndedHookOnce,
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
-import { runOutcomesEqual } from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
@@ -32,7 +31,6 @@ import {
   resolveSubagentSessionStatus,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import { resolveArchiveAfterMs } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
