@@ -8,6 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import type { CommandsPort, ApproveRuntimeGetter } from "../adapter/commands.port.js";
 import { debugLog } from "../utils/log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "../utils/platform.js";
 import {
@@ -19,18 +20,24 @@ import {
   type QueueSnapshot,
 } from "./slash-commands.js";
 
-// ---- Injected dependency ----
+// ---- Dependencies injected once via initCommands() ----
 
-/** Resolve the framework runtime version — injected to avoid plugin-sdk dependency. */
-let _resolveVersion: (() => string) | null = null;
+let _resolveVersion: () => string = () => "unknown";
+let _approveRuntimeGetter: ApproveRuntimeGetter | null = null;
+let PLUGIN_VERSION = "unknown";
 
-/** Register the version resolver — called by the outer layer. */
-export function registerVersionResolver(fn: () => string): void {
-  _resolveVersion = fn;
+/**
+ * Initialize command dependencies from the EngineAdapters.commands port.
+ * Called once by the bridge layer during startup.
+ */
+export function initCommands(port: CommandsPort): void {
+  _resolveVersion = port.resolveVersion;
+  PLUGIN_VERSION = port.pluginVersion;
+  _approveRuntimeGetter = port.approveRuntimeGetter ?? null;
 }
 
 function resolveRuntimeServiceVersion(): string {
-  return _resolveVersion?.() ?? "unknown";
+  return _resolveVersion();
 }
 
 // Re-export core types for backward compatibility.
@@ -41,16 +48,6 @@ export type {
   QQBotFrameworkCommand,
   QueueSnapshot,
 } from "./slash-commands.js";
-
-// Plugin version — injected by the outer layer via registerPluginVersion().
-let PLUGIN_VERSION = "unknown";
-
-/** Register the plugin version — called by the outer layer. */
-export function registerPluginVersion(version: string): void {
-  if (version) {
-    PLUGIN_VERSION = version;
-  }
-}
 
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
 const QQBOT_UPGRADE_GUIDE_URL = "https://q.qq.com/qqbot/openclaw/upgrade.html";
@@ -713,33 +710,6 @@ registerCommand({
 
 // ============ /bot-approve 审批配置管理 ============
 
-/** Injected runtime getter — set by the outer bootstrap layer. */
-let _runtimeGetter:
-  | (() => {
-      config: {
-        current: () => Record<string, unknown>;
-        replaceConfigFile: (params: {
-          nextConfig: Record<string, unknown>;
-          afterWrite: { mode: "auto" };
-        }) => Promise<unknown>;
-      };
-    })
-  | null = null;
-
-/** Register the runtime getter — called by the outer layer during startup. */
-export function registerApproveRuntimeGetter(
-  getter: () => {
-    config: {
-      current: () => Record<string, unknown>;
-      replaceConfigFile: (params: {
-        nextConfig: Record<string, unknown>;
-        afterWrite: { mode: "auto" };
-      }) => Promise<unknown>;
-    };
-  },
-): void {
-  _runtimeGetter = getter;
-}
 
 /**
  * /bot-approve — 管理命令执行审批配置
@@ -764,12 +734,12 @@ registerCommand({
   handler: async (ctx) => {
     const arg = ctx.args.trim().toLowerCase();
 
-    let runtime: ReturnType<NonNullable<typeof _runtimeGetter>>;
+    let runtime: ReturnType<NonNullable<typeof _approveRuntimeGetter>>;
     try {
-      if (!_runtimeGetter) {
+      if (!_approveRuntimeGetter) {
         throw new Error("runtime not available");
       }
-      runtime = _runtimeGetter();
+      runtime = _approveRuntimeGetter();
     } catch {
       // runtime 不可用时返回操作指引
       return [

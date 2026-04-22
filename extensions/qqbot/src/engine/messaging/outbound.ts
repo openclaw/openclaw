@@ -2,46 +2,30 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "../api/retry.js";
 import { MediaFileType } from "../types.js";
+import type { OutboundAudioPort } from "../adapter/audio.port.js";
 import { formatErrorMessage } from "../utils/format.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../utils/string-normalize.js";
 
-// ---- Injected audio-convert dependencies ----
+// ---- Outbound audio adapter — injected once by gateway startup ----
 
-/** Audio conversion interface — implemented by the upper-layer audio-convert module. */
-export interface OutboundAudioAdapter {
-  audioFileToSilkBase64(
-    audioPath: string,
-    directUploadFormats?: string[],
-  ): Promise<string | undefined>;
-  isAudioFile(pathOrUrl: string, mimeType?: string): boolean;
-  shouldTranscodeVoice(filePath: string): boolean;
-  waitForFile(filePath: string, maxWaitMs?: number): Promise<number>;
+let _audioPort: OutboundAudioPort | null = null;
+
+/**
+ * Initialize the outbound audio adapter. Called once by gateway startup
+ * via `adapters.outboundAudio`.
+ */
+export function setOutboundAudioPort(port: OutboundAudioPort): void {
+  _audioPort = port;
 }
 
-let _audioAdapter: OutboundAudioAdapter | null = null;
-let _audioAdapterFactory: (() => OutboundAudioAdapter) | null = null;
-
-/** Register the audio conversion adapter — called by gateway startup. */
-export function registerOutboundAudioAdapter(adapter: OutboundAudioAdapter): void {
-  _audioAdapter = adapter;
-}
-
-/** Register a factory that creates the adapter on first access (lazy init). */
-export function registerOutboundAudioAdapterFactory(factory: () => OutboundAudioAdapter): void {
-  _audioAdapterFactory = factory;
-}
-
-function getAudio(): OutboundAudioAdapter {
-  if (!_audioAdapter && _audioAdapterFactory) {
-    _audioAdapter = _audioAdapterFactory();
+function getAudio(): OutboundAudioPort {
+  if (!_audioPort) {
+    throw new Error("OutboundAudioPort not initialized — call setOutboundAudioPort first");
   }
-  if (!_audioAdapter) {
-    throw new Error("OutboundAudioAdapter not registered");
-  }
-  return _audioAdapter;
+  return _audioPort;
 }
 
 // Re-alias for use in the file.

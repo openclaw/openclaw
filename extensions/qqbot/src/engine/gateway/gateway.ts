@@ -6,7 +6,7 @@
  * - dispatchOutbound: AI dispatch, deliver callbacks, timeouts
  *
  * The only responsibilities of this file are:
- * 1. Register audio adapters
+ * 1. Initialize adapters from EngineAdapters
  * 2. Initialize API config + refIdx cache hook
  * 3. Create the message handler (inbound → outbound pipeline)
  * 4. Start GatewayConnection
@@ -15,7 +15,10 @@
 import path from "node:path";
 import { getPlatformAdapter } from "../adapter/index.js";
 import { parseApprovalButtonData } from "../approval/index.js";
-import { registerOutboundAudioAdapter } from "../messaging/outbound.js";
+import { initCommands } from "../commands/slash-commands-impl.js";
+import { createNodeSessionStoreReader } from "../group/activation.js";
+import type { HistoryEntry } from "../group/history.js";
+import { setOutboundAudioPort } from "../messaging/outbound.js";
 import {
   clearTokenCache,
   getAccessToken,
@@ -28,20 +31,10 @@ import {
 } from "../messaging/sender.js";
 import { setRefIndex } from "../ref/store.js";
 import type { InteractionEvent } from "../types.js";
-import {
-  audioFileToSilkBase64,
-  convertSilkToWav,
-  isVoiceAttachment,
-  isAudioFile,
-  shouldTranscodeVoice,
-  waitForFile,
-} from "../utils/audio.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
-import { formatDuration } from "../utils/format.js";
 import { runWithRequestContext } from "../utils/request-context.js";
 import { GatewayConnection } from "./gateway-connection.js";
-import { registerAudioConvertAdapter } from "./inbound-attachments.js";
-import { buildInboundContext } from "./inbound-pipeline.js";
+import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipeline.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type {
@@ -61,16 +54,11 @@ export type { CoreGatewayContext } from "./types.js";
  * Start the Gateway WebSocket connection with automatic reconnect support.
  */
 export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
-  const { account, log, runtime } = ctx;
+  const { account, log, runtime, adapters } = ctx;
 
-  // ---- 1. Register audio adapters ----
-  registerAudioConvertAdapter({ convertSilkToWav, isVoiceAttachment, formatDuration });
-  registerOutboundAudioAdapter({
-    audioFileToSilkBase64: async (p, f) => (await audioFileToSilkBase64(p, f)) ?? undefined,
-    isAudioFile,
-    shouldTranscodeVoice,
-    waitForFile,
-  });
+  // ---- 1. Initialize adapters ----
+  setOutboundAudioPort(adapters.outboundAudio);
+  initCommands(adapters.commands);
 
   // ---- 2. Validate ----
   if (!account.appId || !account.clientSecret) {
@@ -120,7 +108,23 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     });
   });
 
-  // ---- 6. Message handler ----
+  // ---- 6. Group support (per-connection state) ----
+  const groupOpts = {
+    enabled: ctx.group?.enabled ?? true,
+    allowTextCommands: ctx.group?.allowTextCommands,
+    isControlCommand: ctx.group?.isControlCommand,
+    resolveIntroHint: ctx.group?.resolveIntroHint,
+    sessionStoreReader: ctx.group?.sessionStoreReader,
+  };
+  const groupChatEnabled = groupOpts.enabled;
+  const groupHistories: Map<string, HistoryEntry[]> | undefined = groupChatEnabled
+    ? new Map()
+    : undefined;
+  const sessionStoreReader = groupChatEnabled
+    ? (groupOpts.sessionStoreReader ?? createNodeSessionStoreReader())
+    : undefined;
+
+  // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
     log?.info(`Processing message from ${event.senderId}: ${event.content}`);
 
@@ -136,10 +140,27 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       log,
       runtime,
       startTyping: (ev) => startTypingForEvent(ev, account, log),
+      groupHistories,
+      sessionStoreReader,
+      allowTextCommands: groupOpts.allowTextCommands,
+      isControlCommand: groupOpts.isControlCommand,
+      resolveGroupIntroHint: groupOpts.resolveIntroHint,
+      adapters,
     });
 
     if (inbound.blocked) {
       log?.info(`Dropped inbound qqbot message: ${inbound.blockReason ?? "blocked by allowFrom"}`);
+      inbound.typing.keepAlive?.stop();
+      return;
+    }
+
+    // Group gate decided to stop early (drop_other_mention, block, skip
+    // no-mention). History has already been recorded inside the
+    // pipeline; there is no outbound to dispatch.
+    if (inbound.skipped) {
+      log?.info(
+        `Skipped group inbound: reason=${inbound.skipReason ?? "unknown"} group=${event.groupOpenid ?? ""}`,
+      );
       inbound.typing.keepAlive?.stop();
       return;
     }
@@ -158,13 +179,24 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       inbound.typing.keepAlive?.stop();
+      // Reset the buffered non-@ chatter after every @-activation turn
+      // (success or failure), matching the standalone build. Guards
+      // against stale history leaking into the next reply.
+      if (event.type === "group" && event.groupOpenid && inbound.group) {
+        clearGroupPendingHistory({
+          historyMap: groupHistories,
+          groupOpenid: event.groupOpenid,
+          historyLimit: inbound.group.historyLimit,
+          historyPort: adapters.history,
+        });
+      }
     }
   };
 
-  // ---- 7. Interaction handler ----
+  // ---- 8. Interaction handler ----
   const handleInteraction = createApprovalInteractionHandler(account, log);
 
-  // ---- 8. Start connection ----
+  // ---- 9. Start connection ----
   const connection = new GatewayConnection({
     account,
     abortSignal: ctx.abortSignal,

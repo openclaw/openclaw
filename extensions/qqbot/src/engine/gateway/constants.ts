@@ -94,6 +94,13 @@ export const GatewayEvent = {
   C2C_MESSAGE_CREATE: "C2C_MESSAGE_CREATE",
   AT_MESSAGE_CREATE: "AT_MESSAGE_CREATE",
   DIRECT_MESSAGE_CREATE: "DIRECT_MESSAGE_CREATE",
+  /** Group message that explicitly @-mentions the bot. */
   GROUP_AT_MESSAGE_CREATE: "GROUP_AT_MESSAGE_CREATE",
+  /**
+   * Group message that does NOT mention the bot. Still dispatched to the
+   * pipeline so the group history buffer and the `requireMention=false`
+   * path can observe it.
+   */
+  GROUP_MESSAGE_CREATE: "GROUP_MESSAGE_CREATE",
   INTERACTION_CREATE: "INTERACTION_CREATE",
 } as const;
