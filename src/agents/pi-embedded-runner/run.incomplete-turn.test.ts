@@ -1,8 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedLog,
@@ -357,6 +363,97 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("Please try again");
+  });
+
+  it("recovers a late assistant message from the session file before surfacing an empty-turn error", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-turn-"));
+    const sessionFile = path.join(sessionDir, "session.jsonl");
+    const sessionManager = SessionManager.open(sessionFile);
+    const userMessage = {
+      role: "user",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "what model now?" }],
+    } as const satisfies AgentMessage;
+    const toolCallAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      api: "google-generative-ai",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      content: [{ type: "toolCall", id: "call_1", name: "session_status", arguments: {} }],
+    } as const satisfies AgentMessage;
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "session_status",
+      isError: false,
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "current model: gemini-3-flash-preview" }],
+    } as const satisfies AgentMessage;
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      api: "google-generative-ai",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "I've shifted over to gemini-3-flash-preview now." }],
+    } as const satisfies AgentMessage;
+    sessionManager.appendMessage(userMessage);
+    sessionManager.appendMessage(toolCallAssistant);
+    sessionManager.appendMessage(toolResult);
+    sessionManager.appendMessage(finalAssistant);
+
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as
+        | { lastAssistant?: { content?: Array<{ type?: string; text?: string }> } }
+        | undefined;
+      const text = params?.lastAssistant?.content?.find((part) => part.type === "text")?.text;
+      return text ? [{ text }] : [];
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        messagesSnapshot: [userMessage, toolCallAssistant, toolResult] as never,
+        lastAssistant: toolCallAssistant as never,
+        currentAttemptAssistant: toolCallAssistant as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      sessionFile,
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      runId: "run-empty-turn-late-assistant-recovery",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "I've shifted over to gemini-3-flash-preview now.",
+      },
+    ]);
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("recovered late assistant turn after empty snapshot"),
+    );
   });
 
   it("does not retry reasoning-only turns for non-openai assistant metadata", async () => {
