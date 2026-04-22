@@ -2,13 +2,13 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { readStringValue } from "../shared/string-coerce.js";
 import { mapOpenAIReasoningEffortForModel } from "./openai-reasoning-compat.js";
 import { normalizeOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
+import { resolveOpenAITextVerbosity } from "./openai-text-verbosity.js";
 import type {
   FunctionToolDefinition,
   InputItem,
   ResponseCreateEvent,
   WarmUpEvent,
 } from "./openai-ws-types.js";
-import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 
@@ -79,12 +79,12 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
       streamOpts?.reasoning ??
       (params.model.reasoning ? "high" : undefined),
   });
-  if (reasoningEffort !== "none" && (reasoningEffort || streamOpts?.reasoningSummary)) {
+  if (reasoningEffort || streamOpts?.reasoningSummary) {
     const reasoning: { effort?: string; summary?: string } = {};
     if (reasoningEffort !== undefined) {
       reasoning.effort = normalizeOpenAIReasoningEffort(reasoningEffort);
     }
-    if (streamOpts?.reasoningSummary !== undefined) {
+    if (reasoningEffort !== "none" && streamOpts?.reasoningSummary !== undefined) {
       reasoning.summary = streamOpts.reasoningSummary;
     }
     extraParams.reasoning = reasoning;

@@ -244,8 +244,10 @@ record, updates that installed plugin, and records the new npm spec for future
 id-based updates.
 
 When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
-global `--yes` to bypass prompts in CI/non-interactive runs.
+OpenClaw treats that as npm artifact drift. The interactive
+`openclaw plugins update` command prints the expected and actual hashes and asks
+for confirmation before proceeding. Non-interactive update helpers fail closed
+unless the caller supplies an explicit continuation policy.
 
 `--dangerously-force-unsafe-install` is also available on `plugins update` as a
 break-glass override for built-in dangerous-code scan false positives during
@@ -291,6 +293,10 @@ openclaw plugins doctor
 `doctor` reports plugin load errors, manifest/discovery diagnostics, and
 compatibility notices. When everything is clean it prints `No plugin issues
 detected.`
+
+For module-shape failures such as missing `register`/`activate` exports, rerun
+with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in
+the diagnostic output.
 
 ### Marketplace
 
