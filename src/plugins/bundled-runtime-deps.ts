@@ -328,6 +328,7 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   config: OpenClawConfig;
   pluginId: string;
   pluginDir: string;
+  includeConfiguredChannels?: boolean;
 }): boolean {
   const plugins = normalizePluginsConfig(params.config.plugins);
   if (!plugins.enabled) {
@@ -355,7 +356,8 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
       channelConfig &&
       typeof channelConfig === "object" &&
       !Array.isArray(channelConfig) &&
-      (channelConfig as { enabled?: unknown }).enabled === true
+      (params.includeConfiguredChannels ||
+        (channelConfig as { enabled?: unknown }).enabled === true)
     ) {
       return true;
     }
@@ -368,6 +370,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   pluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
+  includeConfiguredChannels?: boolean;
 }): boolean {
   if (params.pluginIds && !params.pluginIds.has(params.pluginId)) {
     return false;
@@ -379,6 +382,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
     config: params.config,
     pluginId: params.pluginId,
     pluginDir: params.pluginDir,
+    includeConfiguredChannels: params.includeConfiguredChannels,
   });
 }
 
@@ -386,6 +390,7 @@ function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   pluginIds?: ReadonlySet<string>;
+  includeConfiguredChannels?: boolean;
 }): {
   deps: RuntimeDepEntry[];
   conflicts: RuntimeDepConflict[];
@@ -404,6 +409,7 @@ function collectBundledPluginRuntimeDeps(params: {
         pluginIds: params.pluginIds,
         pluginId,
         pluginDir,
+        includeConfiguredChannels: params.includeConfiguredChannels,
       })
     ) {
       continue;
@@ -476,21 +482,24 @@ export function scanBundledPluginRuntimeDeps(params: {
   packageRoot: string;
   config?: OpenClawConfig;
   pluginIds?: readonly string[];
+  includeConfiguredChannels?: boolean;
 }): {
+  deps: RuntimeDepEntry[];
   missing: RuntimeDepEntry[];
   conflicts: RuntimeDepConflict[];
 } {
   if (isSourceCheckoutRoot(params.packageRoot)) {
-    return { missing: [], conflicts: [] };
+    return { deps: [], missing: [], conflicts: [] };
   }
   const extensionsDir = path.join(params.packageRoot, "dist", "extensions");
   if (!fs.existsSync(extensionsDir)) {
-    return { missing: [], conflicts: [] };
+    return { deps: [], missing: [], conflicts: [] };
   }
   const { deps, conflicts } = collectBundledPluginRuntimeDeps({
     extensionsDir,
     config: params.config,
     pluginIds: normalizePluginIdSet(params.pluginIds),
+    includeConfiguredChannels: params.includeConfiguredChannels,
   });
   const missing = deps.filter(
     (dep) =>
@@ -501,7 +510,7 @@ export function scanBundledPluginRuntimeDeps(params: {
           !fs.existsSync(path.join(extensionsDir, pluginId, dependencySentinelPath(dep.name))),
       ),
   );
-  return { missing, conflicts };
+  return { deps, missing, conflicts };
 }
 
 export function resolveBundledRuntimeDependencyInstallRoot(pluginRoot: string): string {
