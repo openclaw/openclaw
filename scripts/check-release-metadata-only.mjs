@@ -22,7 +22,9 @@ function parseArgs(argv) {
   const args = { staged: false, base: "origin/main", head: "HEAD", paths: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--staged") {
+    if (arg === "--") {
+      continue;
+    } else if (arg === "--staged") {
       args.staged = true;
     } else if (arg === "--base") {
       args.base = argv[++index] ?? "";
@@ -39,6 +41,7 @@ function git(args) {
   return execFileSync("git", args, {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
   });
 }
 
