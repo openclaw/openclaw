@@ -1,3 +1,4 @@
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   definePluginEntry,
@@ -72,20 +73,6 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
   return { id, name };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function resolveThreadOwnershipPluginConfigFromConfig(
-  config: OpenClawConfig,
-): ThreadOwnershipConfig | undefined {
-  return asRecord(asRecord(config.plugins?.entries)?.["thread-ownership"])?.config as
-    | ThreadOwnershipConfig
-    | undefined;
-}
-
 export default definePluginEntry({
   id: "thread-ownership",
   name: "Thread Ownership",
@@ -94,7 +81,7 @@ export default definePluginEntry({
     const resolveCurrentState = () => {
       const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
       const pluginCfg =
-        resolveThreadOwnershipPluginConfigFromConfig(currentConfig) ||
+        resolvePluginConfigObject(currentConfig, "thread-ownership") ||
         ((api.pluginConfig ?? {}) as ThreadOwnershipConfig);
       return {
         currentConfig,

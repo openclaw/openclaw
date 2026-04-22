@@ -9,6 +9,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolvePluginConfigObject,
   resolveSessionStoreEntry,
   updateSessionStore,
   type OpenClawConfig,
@@ -573,12 +574,8 @@ function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   if (entry?.enabled === false) {
     return false;
   }
-  const pluginConfig = asRecord(entry?.config);
+  const pluginConfig = resolvePluginConfigObject(cfg, "active-memory");
   return pluginConfig?.enabled !== false;
-}
-
-function resolveActiveMemoryPluginConfigFromConfig(cfg: OpenClawConfig): unknown {
-  return asRecord(cfg.plugins?.entries?.["active-memory"])?.config;
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(
@@ -1887,7 +1884,7 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig =
-        resolveActiveMemoryPluginConfigFromConfig(api.runtime.config.loadConfig()) ??
+        resolvePluginConfigObject(api.runtime.config.loadConfig(), "active-memory") ??
         api.pluginConfig;
       config = normalizePluginConfig(livePluginConfig);
       warnDeprecatedModelFallbackPolicy(livePluginConfig);

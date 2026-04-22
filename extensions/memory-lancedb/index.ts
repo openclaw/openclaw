@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -311,9 +312,7 @@ export default definePluginEntry({
     const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
     const resolveCurrentHookConfig = () => {
       const runtimeConfig = api.runtime.config?.loadConfig?.();
-      const runtimePlugins = asRecord(asRecord(runtimeConfig)?.plugins);
-      const runtimeEntries = asRecord(runtimePlugins?.entries);
-      const runtimePluginConfig = asRecord(runtimeEntries?.["memory-lancedb"])?.config;
+      const runtimePluginConfig = resolvePluginConfigObject(runtimeConfig, "memory-lancedb");
       if (!runtimePluginConfig) {
         return cfg;
       }

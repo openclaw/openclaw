@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/OpenAI websocket: route native OpenAI websocket metadata and session-header decisions through the shared endpoint classifier so local mocks and custom `models.providers.openai.baseUrl` endpoints stay out of the native OpenAI path consistently across embedded-runner and websocket transport code. Thanks @vincentkoc.
 - Discord: normalize prefixed channel targets only at the thread-binding API boundary, so `sessions_spawn({ runtime: "acp", thread: true })` can create child threads from Discord channels without breaking current-channel ACP bindings. (#68034) Thanks @Zetarcos.
 - Discord: harden inbound thread metadata handling against partial Carbon channel getters, so non-command thread messages and queued jobs no longer crash when `name`, `parentId`, `parent`, or `ownerId` requires fetched raw data.
 - Discord: let `message` tool reactions resolve `user:<id>` DM targets and preserve `channels.discord.guilds.<guild>.channels.<channel>.requireMention: false` during reply-stage activation fallback. Fixes #70165 and #69441.
