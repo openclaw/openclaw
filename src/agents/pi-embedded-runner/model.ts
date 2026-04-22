@@ -151,6 +151,13 @@ function normalizeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
+  if (!params.model) {
+    throw new Error(
+      `normalizeResolvedModel: model is ${String(params.model)} for provider "${params.provider}". ` +
+        "This usually means a provider plugin or config-driven model resolution returned an " +
+        "unexpected result. Check the provider configuration and any custom runtime plugins.",
+    );
+  }
   const normalizedInputModel = {
     ...params.model,
     input: resolveProviderModelInput({
