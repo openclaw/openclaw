@@ -442,4 +442,32 @@ describe("diagnostic support export", () => {
     expect(combined).toContain("status snapshot failed");
     expect(combined).toContain("health snapshot failed");
   });
+
+  it("keeps writing when log tail collection fails", async () => {
+    const fakeToken = "sk-test-log-tail-secret-token-1234567890";
+    const outputPath = path.join(tempDir, "support-failed-log-tail.zip");
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      now: new Date("2026-04-22T12:00:02.000Z"),
+      readLogTail: async () => {
+        throw new Error(`log tail failed at ${tempDir}/openclaw.log with token ${fakeToken}`);
+      },
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    expect(Object.keys(entries).toSorted()).toContain("logs/openclaw-sanitized.jsonl");
+
+    const combined = Object.values(entries).join("\n");
+    expect(combined).not.toContain(fakeToken);
+    expect(combined).not.toContain(tempDir);
+    expect(combined).toContain("log-tail-read-failed");
+    expect(combined).toContain("sanitized log tail unavailable");
+  });
 });

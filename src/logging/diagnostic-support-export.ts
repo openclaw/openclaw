@@ -133,12 +133,14 @@ type ConfigExport = {
 };
 
 type SanitizedLogTail = {
+  status: "included" | "failed";
   file: string;
   cursor: number;
   size: number;
   lineCount: number;
   truncated: boolean;
   reset: boolean;
+  error?: string;
   lines: Array<Record<string, unknown>>;
 };
 
@@ -332,8 +334,8 @@ function readConfigExport(options: {
   }
 }
 
-function redactErrorForSupport(error: unknown): string {
-  return redactTextForSupport(error instanceof Error ? error.message : String(error));
+function redactErrorForSupport(error: unknown, redaction: SupportRedactionContext): string {
+  return redactSupportString(error instanceof Error ? error.message : String(error), redaction);
 }
 
 async function collectSupportSnapshot(params: {
@@ -359,7 +361,7 @@ async function collectSupportSnapshot(params: {
       }),
     };
   } catch (error) {
-    const redactedError = redactErrorForSupport(error);
+    const redactedError = redactErrorForSupport(error, params.redaction);
     return {
       summary: {
         status: "failed",
@@ -571,6 +573,7 @@ function isSafeLogField(key: string, value: unknown): boolean {
 
 function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext): SanitizedLogTail {
   return {
+    status: "included",
     file: redactPathForSupport(tail.file, options),
     cursor: tail.cursor,
     size: tail.size,
@@ -579,6 +582,39 @@ function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext)
     reset: tail.reset,
     lines: tail.lines.map((line) => sanitizeLogRecord(line, options)),
   };
+}
+
+async function collectSupportLogTail(params: {
+  readLogTail: typeof readConfiguredLogTail;
+  limit: number;
+  maxBytes: number;
+  redaction: SupportRedactionContext;
+}): Promise<SanitizedLogTail> {
+  try {
+    const tail = await params.readLogTail({
+      limit: params.limit,
+      maxBytes: params.maxBytes,
+    });
+    return sanitizeLogTail(tail, params.redaction);
+  } catch (error) {
+    const redactedError = redactErrorForSupport(error, params.redaction);
+    return {
+      status: "failed",
+      file: "unavailable",
+      cursor: 0,
+      size: 0,
+      lineCount: 0,
+      truncated: false,
+      reset: false,
+      error: redactedError,
+      lines: [
+        {
+          omitted: "log-tail-read-failed",
+          error: redactedError,
+        },
+      ],
+    };
+  }
 }
 
 function describeStabilityForDiagnostics(
@@ -606,7 +642,7 @@ function describeStabilityForDiagnostics(
   return {
     status: "failed" as const,
     path: stability.path ? redactPathForSupport(stability.path, redaction) : undefined,
-    error: redactErrorForSupport(stability.error),
+    error: redactErrorForSupport(stability.error, redaction),
   };
 }
 
@@ -647,7 +683,9 @@ function renderSummary(params: {
     "## Contents",
     "",
     `- ${stabilityLine}`,
-    `- sanitized log tail (${params.logTail.lineCount} line(s), inspected ${params.logTail.size} byte(s), raw messages omitted)`,
+    params.logTail.status === "failed"
+      ? `- sanitized log tail unavailable (${params.logTail.error})`
+      : `- sanitized log tail (${params.logTail.lineCount} line(s), inspected ${params.logTail.size} byte(s), raw messages omitted)`,
     `- ${configLine}`,
     `- ${supportSnapshotLine("gateway status", params.status)}`,
     `- ${supportSnapshotLine("gateway health", params.health)}`,
@@ -718,11 +756,12 @@ export async function buildDiagnosticSupportExport(
   const configPath = resolveConfigPath(env, stateDir);
   const stability = readStabilityBundle(options.stabilityBundle, stateDir);
   const redaction = { env, stateDir };
-  const tail = await (options.readLogTail ?? readConfiguredLogTail)({
+  const logTail = await collectSupportLogTail({
+    readLogTail: options.readLogTail ?? readConfiguredLogTail,
     limit: normalizePositiveInteger(options.logLimit, DEFAULT_LOG_LIMIT),
     maxBytes: normalizePositiveInteger(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES),
+    redaction,
   });
-  const logTail = sanitizeLogTail(tail, redaction);
   const config = readConfigExport({ configPath, env, stateDir });
   const [statusSnapshot, healthSnapshot] = await Promise.all([
     collectSupportSnapshot({
