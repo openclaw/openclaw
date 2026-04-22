@@ -627,7 +627,16 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!sessionKeyRaw) {
         return;
       }
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const { canonicalKey: sessionKey, entry: sessionEntry } = loadSessionEntry(sessionKeyRaw);
+
+      // Heartbeat isolated sessions already contain the exec/tool transcript in-band.
+      // Re-enqueuing exec node events back into the same synthetic `:heartbeat`
+      // session creates a self-wake loop: heartbeat -> exec -> exec-event wake ->
+      // heartbeat. Suppress node-level exec system events for these synthetic
+      // heartbeat sessions and keep the exec result only in the current transcript.
+      if (sessionEntry?.heartbeatIsolatedBaseSessionKey) {
+        return;
+      }
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.

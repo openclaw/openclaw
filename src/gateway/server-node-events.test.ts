@@ -16,6 +16,7 @@ const buildSessionLookup = (
     label?: string;
     spawnedBy?: string;
     parentSessionKey?: string;
+    heartbeatIsolatedBaseSessionKey?: string;
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
@@ -33,6 +34,7 @@ const buildSessionLookup = (
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,
+    heartbeatIsolatedBaseSessionKey: entry.heartbeatIsolatedBaseSessionKey,
   },
   canonicalKey: sessionKey,
   legacyKey: undefined,
@@ -278,6 +280,28 @@ describe("node exec events", () => {
       reason: "exec-event",
       sessionKey: "agent:main:node-node-2",
     });
+  });
+
+  it("suppresses exec node events for synthetic heartbeat-isolated sessions", async () => {
+    loadSessionEntryMock.mockReturnValueOnce(
+      buildSessionLookup("agent:main:main:heartbeat", {
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      }),
+    );
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main:heartbeat",
+        runId: "run-heartbeat-exec",
+        exitCode: 0,
+        timedOut: false,
+        output: "(no output)",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
