@@ -56,17 +56,21 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
 }
 
 /**
- * Strip thinking blocks that have obviously invalid `thinkingSignature` from
- * assistant messages. This prevents Anthropic API rejection errors like
- * "Invalid signature in thinking block" caused by empty signatures that were
- * persisted from Bedrock streaming responses.
+ * Strip thinking blocks that have obviously invalid signatures from assistant
+ * messages. This prevents Anthropic API rejection errors like "Invalid
+ * signature in thinking block" caused by empty signatures that were persisted
+ * from Bedrock streaming responses.
  *
- * Only strips thinking blocks with missing, empty, or non-string signatures —
- * the clearly broken cases. Does NOT attempt length-based heuristics to guess
+ * Covers both block shapes:
+ *   - `type: "thinking"` blocks carry the signature in `thinkingSignature`.
+ *   - `type: "redacted_thinking"` blocks carry it in `signature`.
+ *
+ * Only strips blocks with missing, empty, or non-string signatures — the
+ * clearly broken cases. Does NOT attempt length-based heuristics to guess
  * whether a signature is valid; the API itself is the authoritative validator.
  *
  * Unlike `dropThinkingBlocks` which removes ALL thinking blocks, this function
- * preserves thinking blocks that have a non-empty string signature.
+ * preserves blocks that have a non-empty string signature.
  *
  * Returns the original array reference when nothing was changed.
  */
@@ -85,12 +89,20 @@ export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentM
         nextContent.push(block);
         continue;
       }
-      const rec = block as { type?: unknown; thinkingSignature?: unknown };
-      if (rec.type !== "thinking") {
+      const rec = block as {
+        type?: unknown;
+        thinkingSignature?: unknown;
+        signature?: unknown;
+      };
+      let sig: unknown;
+      if (rec.type === "thinking") {
+        sig = rec.thinkingSignature;
+      } else if (rec.type === "redacted_thinking") {
+        sig = rec.signature;
+      } else {
         nextContent.push(block);
         continue;
       }
-      const sig = rec.thinkingSignature;
       if (typeof sig === "string" && sig.length > 0) {
         nextContent.push(block);
         continue;

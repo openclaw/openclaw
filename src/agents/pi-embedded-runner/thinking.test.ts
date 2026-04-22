@@ -225,6 +225,53 @@ describe("stripInvalidThinkingSignatures", () => {
     const result = stripInvalidThinkingSignatures(messages);
     expect(result).toBe(messages);
   });
+
+  it("strips redacted_thinking blocks with empty signature", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", signature: "" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+  });
+
+  it("strips redacted_thinking blocks with missing signature", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "redacted_thinking" }, { type: "text", text: "answer" }],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+  });
+
+  it("keeps redacted_thinking blocks with non-empty signatures", () => {
+    const validSig = "c".repeat(356);
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", signature: validSig },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).toBe(messages);
+  });
 });
 
 describe("isInvalidThinkingSignatureError", () => {
