@@ -140,6 +140,13 @@ openclaw doctor
 `gateway status --deep` is for extra service discovery (LaunchDaemons/systemd system
 units/schtasks), not a deeper RPC health probe.
 
+Restart semantics:
+
+- `openclaw gateway restart` can still interrupt the **active in-flight top-level turn**.
+- The **session/history survives**.
+- Restart is now treated as a **terminal handoff** with durable restart intent and post-boot follow-up instead of a silent mid-turn disappearance.
+- Details: [/gateway/restart-handoff](/gateway/restart-handoff).
+
 ## Multiple gateways (same host)
 
 Most installs should run one gateway per machine. A single gateway can host multiple

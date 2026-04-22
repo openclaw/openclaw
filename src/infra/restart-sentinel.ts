@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { RestartTransaction } from "./restart-transaction.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -43,6 +44,7 @@ export type RestartSentinelPayload = {
   message?: string | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
+  transaction?: RestartTransaction | null;
 };
 
 export type RestartSentinel = {
@@ -119,7 +121,7 @@ export async function consumeRestartSentinel(
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
   const message = payload.message?.trim();
-  if (message && !payload.stats) {
+  if (message && !payload.stats && !payload.transaction?.interruptedTurn) {
     return message;
   }
   const lines: string[] = [summarizeRestartSentinel(payload)];
@@ -129,6 +131,20 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   const reason = payload.stats?.reason?.trim();
   if (reason && reason !== message) {
     lines.push(`Reason: ${reason}`);
+  }
+  const interruptedTurn = payload.transaction?.interruptedTurn;
+  if (interruptedTurn) {
+    const phase = interruptedTurn.phase?.trim();
+    lines.push(
+      phase
+        ? `Previous turn was interrupted by gateway restart while in ${phase}.`
+        : "Previous turn was interrupted by gateway restart.",
+    );
+    if (!interruptedTurn.resumeEligible) {
+      lines.push(
+        "That work was not auto-resumed. If you want me to continue, send another message.",
+      );
+    }
   }
   if (payload.doctorHint?.trim()) {
     lines.push(payload.doctorHint.trim());

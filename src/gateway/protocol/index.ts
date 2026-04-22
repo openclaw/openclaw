@@ -79,6 +79,8 @@ import {
   ConfigGetParamsSchema,
   type ConfigPatchParams,
   ConfigPatchParamsSchema,
+  type GatewayRestartParams,
+  GatewayRestartParamsSchema,
   type ConfigSchemaLookupParams,
   ConfigSchemaLookupParamsSchema,
   type ConfigSchemaLookupResult,
@@ -414,6 +416,9 @@ export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetPar
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
 export const validateConfigPatchParams = ajv.compile<ConfigPatchParams>(ConfigPatchParamsSchema);
+export const validateGatewayRestartParams = ajv.compile<GatewayRestartParams>(
+  GatewayRestartParamsSchema,
+);
 export const validateConfigSchemaParams = ajv.compile<ConfigSchemaParams>(ConfigSchemaParamsSchema);
 export const validateConfigSchemaLookupParams = ajv.compile<ConfigSchemaLookupParams>(
   ConfigSchemaLookupParamsSchema,

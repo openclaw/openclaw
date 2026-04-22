@@ -6,11 +6,11 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
+import { requestGatewayRestartTransaction } from "../restart-transaction.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -26,6 +26,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext: requestedDeliveryContext,
       threadId: requestedThreadId,
       note,
+      reason,
       restartDelayMs,
     } = parseRestartRequestParams(params);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
@@ -104,25 +105,27 @@ export const updateHandlers: GatewayRequestHandlers = {
     // Only restart the gateway when the update actually succeeded.
     // Restarting after a failed update leaves the process in a broken state
     // (corrupted node_modules, partial builds) and causes a crash loop.
-    const restart =
+    const restartRequest =
       result.status === "ok"
-        ? scheduleGatewaySigusr1Restart({
-            delayMs: restartDelayMs,
-            reason: "update.run",
-            audit: {
+        ? await requestGatewayRestartTransaction({
+            payload,
+            requester: {
               actor: actor.actor,
               deviceId: actor.deviceId,
               clientIp: actor.clientIp,
-              changedPaths: [],
+              entryPoint: "update.run",
             },
+            entryPoint: "update.run",
+            reason: reason ?? "update.run",
+            restartDelayMs,
           })
         : null;
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
     );
-    if (restart?.coalesced) {
+    if (restartRequest?.restart.coalesced) {
       context?.logGateway?.warn(
-        `update.run restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+        `update.run restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restartRequest.restart.delayMs}`,
       );
     }
 
@@ -131,10 +134,13 @@ export const updateHandlers: GatewayRequestHandlers = {
       {
         ok: result.status !== "error",
         result,
-        restart,
+        restart: restartRequest?.restart ?? null,
+        transaction: restartRequest?.transaction,
         sentinel: {
-          path: sentinelPath,
-          payload,
+          path: restartRequest?.sentinelPath ?? sentinelPath,
+          payload: restartRequest
+            ? { ...payload, transaction: restartRequest.transaction }
+            : payload,
         },
       },
       undefined,

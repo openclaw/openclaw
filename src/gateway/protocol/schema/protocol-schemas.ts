@@ -76,6 +76,7 @@ import {
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
+  GatewayRestartParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
 import {
@@ -264,6 +265,7 @@ export const ProtocolSchemas = {
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,
   ConfigPatchParams: ConfigPatchParamsSchema,
+  GatewayRestartParams: GatewayRestartParamsSchema,
   ConfigSchemaParams: ConfigSchemaParamsSchema,
   ConfigSchemaLookupParams: ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,

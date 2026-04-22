@@ -7,7 +7,12 @@ let capturedPayload: RestartSentinelPayload | undefined;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
 
-const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
+const requestGatewayRestartTransactionMock = vi.fn(async () => ({
+  mode: "drain-then-restart",
+  restart: { scheduled: true, delayMs: 0, coalesced: false },
+  transaction: { restartId: "restart-1", state: "restarting" },
+  sentinelPath: "/tmp/restart-sentinel.json",
+}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => ({ update: {} }),
@@ -53,8 +58,8 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../../infra/restart.js", () => ({
-  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+vi.mock("../restart-transaction.js", () => ({
+  requestGatewayRestartTransaction: requestGatewayRestartTransactionMock,
 }));
 
 vi.mock("../../infra/update-channels.js", () => ({
@@ -73,6 +78,7 @@ vi.mock("./restart-request.js", () => ({
   parseRestartRequestParams: (params: Record<string, unknown>) => ({
     sessionKey: params.sessionKey,
     note: params.note,
+    reason: params.reason,
     restartDelayMs: undefined,
   }),
 }));
@@ -90,8 +96,13 @@ beforeEach(() => {
     steps: [],
     durationMs: 100,
   });
-  scheduleGatewaySigusr1RestartMock.mockClear();
-  scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
+  requestGatewayRestartTransactionMock.mockClear();
+  requestGatewayRestartTransactionMock.mockResolvedValue({
+    mode: "drain-then-restart",
+    restart: { scheduled: true, delayMs: 0, coalesced: false },
+    transaction: { restartId: "restart-1", state: "restarting" },
+    sentinelPath: "/tmp/restart-sentinel.json",
+  });
 });
 
 async function invokeUpdateRun(
@@ -170,9 +181,9 @@ describe("update.run restart scheduling", () => {
       payload = typed;
     });
 
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(requestGatewayRestartTransactionMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);
-    expect(payload?.restart).toEqual({ scheduled: true });
+    expect(payload?.restart).toEqual({ scheduled: true, delayMs: 0, coalesced: false });
   });
 
   it("skips restart when update fails", async () => {
@@ -191,7 +202,7 @@ describe("update.run restart scheduling", () => {
       payload = typed;
     });
 
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(requestGatewayRestartTransactionMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
   });
