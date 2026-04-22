@@ -7,6 +7,7 @@ import {
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
+import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import {
   createPluginActivationSource,
   normalizePluginId,
@@ -76,6 +77,57 @@ function shouldConsiderForGatewayStartup(params: {
   return params.explicitMemorySlotStartupPluginId === params.plugin.id;
 }
 
+function hasConfiguredStartupChannel(params: {
+  plugin: PluginManifestRecord;
+  configuredChannelIds: ReadonlySet<string>;
+}): boolean {
+  return params.plugin.channels.some((channelId) => params.configuredChannelIds.has(channelId));
+}
+
+function canStartConfiguredChannelPlugin(params: {
+  plugin: PluginManifestRecord;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+  activationSource: ReturnType<typeof createPluginActivationSource>;
+}): boolean {
+  if (!params.pluginsConfig.enabled) {
+    return false;
+  }
+  if (params.pluginsConfig.deny.includes(params.plugin.id)) {
+    return false;
+  }
+  if (params.pluginsConfig.entries[params.plugin.id]?.enabled === false) {
+    return false;
+  }
+  const explicitBundledChannelConfig =
+    params.plugin.origin === "bundled" &&
+    params.plugin.channels.some((channelId) =>
+      hasExplicitChannelConfig({
+        config: params.activationSource.rootConfig ?? params.config,
+        channelId,
+      }),
+    );
+  if (
+    params.pluginsConfig.allow.length > 0 &&
+    !params.pluginsConfig.allow.includes(params.plugin.id) &&
+    !explicitBundledChannelConfig
+  ) {
+    return false;
+  }
+  if (params.plugin.origin === "bundled") {
+    return true;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.id,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: params.plugin.enabledByDefault,
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && activationState.explicitlyEnabled;
+}
+
 export function resolveChannelPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -101,6 +153,10 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   if (configuredChannelIds.size === 0) {
     return [];
   }
+  const pluginsConfig = normalizePluginsConfig(params.config.plugins);
+  const activationSource = createPluginActivationSource({
+    config: params.config,
+  });
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -108,8 +164,14 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   })
     .plugins.filter(
       (plugin) =>
-        plugin.channels.some((channelId) => configuredChannelIds.has(channelId)) &&
-        plugin.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
+        hasConfiguredStartupChannel({ plugin, configuredChannelIds }) &&
+        plugin.startupDeferConfiguredChannelFullLoadUntilAfterListen === true &&
+        canStartConfiguredChannelPlugin({
+          plugin,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+        }),
     )
     .map((plugin) => plugin.id);
 }
@@ -157,8 +219,13 @@ export function resolveGatewayStartupPluginIds(params: {
     env: params.env,
   })
     .plugins.filter((plugin) => {
-      if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
-        return true;
+      if (hasConfiguredStartupChannel({ plugin, configuredChannelIds })) {
+        return canStartConfiguredChannelPlugin({
+          plugin,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+        });
       }
       if (requiredAgentHarnessPluginIds.has(plugin.id)) {
         const activationState = resolveEffectivePluginActivationState({

@@ -37,6 +37,7 @@ import {
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPresencePolicy,
+  resolveConfiguredDeferredChannelPluginIds,
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
@@ -178,6 +179,25 @@ function createManifestRegistryFixture() {
       },
     ],
     diagnostics: [],
+  };
+}
+
+function createManifestRegistryFixtureWithWorkspaceDemoChannel() {
+  const fixture = createManifestRegistryFixture();
+  return {
+    ...fixture,
+    plugins: [
+      ...fixture.plugins,
+      {
+        id: "workspace-demo-channel-plugin",
+        channels: ["demo-channel"],
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        origin: "workspace",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+    ],
   };
 }
 
@@ -418,6 +438,74 @@ describe("resolveGatewayStartupPluginIds", () => {
     expectStartupPluginIdsCase({
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
+      expected: ["browser"],
+    });
+  });
+
+  it("does not let weak channel presence start untrusted workspace channel owners", () => {
+    loadPluginManifestRegistry
+      .mockReset()
+      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    const config = {} as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config,
+      env: {
+        DEMO_CHANNEL_ANYTHING: "1",
+      } as NodeJS.ProcessEnv,
+      expected: ["demo-channel", "browser"],
+    });
+    expect(
+      resolveConfiguredDeferredChannelPluginIds({
+        config,
+        workspaceDir: "/tmp",
+        env: {
+          DEMO_CHANNEL_ANYTHING: "1",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps explicitly trusted deferred channel owners eligible at startup", () => {
+    loadPluginManifestRegistry
+      .mockReset()
+      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    expect(
+      resolveConfiguredDeferredChannelPluginIds({
+        config: {
+          channels: {
+            "demo-channel": {
+              token: "configured",
+            },
+          },
+          plugins: {
+            allow: ["workspace-demo-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toEqual(["workspace-demo-channel-plugin"]);
+  });
+
+  it("preserves explicit bundled channel config under restrictive allowlists", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {
+          "demo-channel": {
+            token: "configured",
+          },
+        },
+        plugins: {
+          allow: ["browser"],
+        },
+      } as OpenClawConfig,
+      env: {},
       expected: ["demo-channel", "browser"],
     });
   });
