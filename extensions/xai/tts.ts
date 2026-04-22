@@ -1,3 +1,4 @@
+import { postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import {
   asObject,
   readResponseTextLimited,
@@ -108,28 +109,26 @@ export async function xaiTTS(params: {
     throw new Error(`Invalid voice: ${voiceId}`);
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(`${normalizeXaiTtsBaseUrl(baseUrl)}/tts`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+  const { response, release } = await postJsonRequest({
+    url: `${normalizeXaiTtsBaseUrl(baseUrl)}/tts`,
+    headers: new Headers({
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    }),
+    body: {
+      text,
+      voice_id: voiceId,
+      language,
+      output_format: {
+        codec: responseFormat,
       },
-      body: JSON.stringify({
-        text,
-        voice_id: voiceId,
-        language,
-        output_format: {
-          codec: responseFormat,
-        },
-        ...(speed != null && { speed }),
-      }),
-      signal: controller.signal,
-    });
-
+      ...(speed != null && { speed }),
+    },
+    timeoutMs,
+    fetchFn: fetch,
+    auditContext: "xai tts",
+  });
+  try {
     if (!response.ok) {
       const detail = await extractXaiErrorDetail(response);
       const requestId =
@@ -144,6 +143,6 @@ export async function xaiTTS(params: {
 
     return Buffer.from(await response.arrayBuffer());
   } finally {
-    clearTimeout(timeout);
+    await release();
   }
 }
