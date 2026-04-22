@@ -5,6 +5,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
+import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
@@ -322,12 +323,12 @@ export type ChannelStreamingAdapter = {
 // their side and cast at the boundary.
 export type ChannelStructuredComponents = unknown[];
 
-export type ChannelCrossContextComponentsFactory = (params: {
+export type ChannelCrossContextPresentationFactory = (params: {
   originLabel: string;
   message: string;
   cfg: OpenClawConfig;
   accountId?: string | null;
-}) => ChannelStructuredComponents;
+}) => MessagePresentation;
 
 export type ChannelReplyTransport = {
   replyToId?: string | null;
@@ -383,6 +384,10 @@ export type ChannelThreadingAdapter = {
     to: string;
     toolContext?: ChannelThreadingToolContext;
     replyToId?: string | null;
+  }) => string | undefined;
+  resolveCurrentChannelId?: (params: {
+    to: string;
+    threadId?: string | number | null;
   }) => string | undefined;
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
@@ -520,7 +525,7 @@ export type ChannelMessagingAdapter = {
    * is part of the destination identity, not a transient reply thread.
    */
   preserveHeartbeatThreadIdForGroupRoute?: boolean;
-  buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
+  buildCrossContextPresentation?: ChannelCrossContextPresentationFactory;
   transformReplyPayload?: (params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;

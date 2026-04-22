@@ -82,6 +82,7 @@ const ChannelStreamingBlockSchema = z
 const ChannelStreamingPreviewSchema = z
   .object({
     chunk: BlockStreamingChunkSchema.optional(),
+    toolProgress: z.boolean().optional(),
   })
   .strict();
 const ChannelPreviewStreamingConfigSchema = z
@@ -1460,6 +1461,7 @@ export const BlueBubblesAccountSchemaBase = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
+    coalesceSameSenderDms: z.boolean().optional(),
   })
   .strict();
 

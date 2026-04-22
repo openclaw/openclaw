@@ -28,7 +28,17 @@ export type ThinkingCatalogEntry = {
   reasoning?: boolean;
 };
 
-const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
+export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
+export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
+  off: 0,
+  minimal: 10,
+  low: 20,
+  medium: 30,
+  high: 40,
+  adaptive: 30,
+  xhigh: 60,
+  max: 70,
+};
 const NO_THINKING_LEVELS: ThinkLevel[] = [...BASE_THINKING_LEVELS];
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
@@ -100,10 +110,6 @@ export function formatThinkingLevels(
 
 export function formatXHighModelHint(): string {
   return "provider models that advertise xhigh reasoning";
-}
-
-export function formatMaxModelHint(): string {
-  return "provider models that advertise max reasoning";
 }
 
 export function resolveThinkingDefaultForModel(params: {

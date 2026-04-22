@@ -90,7 +90,7 @@ explicitly promotes one as public.
     | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
     | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
-    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
+    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink`, draft stream lifecycle/finalization helpers |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Shared inbound record-and-dispatch helpers |
     | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
@@ -109,13 +109,13 @@ explicitly promotes one as public.
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
     | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
-    | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
+    | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
     | `plugin-sdk/channel-mention-gating` | Narrow mention-policy helpers without the broader inbound runtime surface |
     | `plugin-sdk/channel-location` | Channel location context and formatting helpers |
     | `plugin-sdk/channel-logging` | Channel logging helpers for inbound drops and typing/ack failures |
     | `plugin-sdk/channel-send-result` | Reply result types |
-    | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
+    | `plugin-sdk/channel-actions` | Channel message-action helpers, plus deprecated native schema helpers kept for plugin compatibility |
     | `plugin-sdk/channel-targets` | Target parsing/matching helpers |
     | `plugin-sdk/channel-contract` | Channel contract types |
     | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |

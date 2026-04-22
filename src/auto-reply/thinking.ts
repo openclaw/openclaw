@@ -1,7 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
-  listThinkingLevels as listThinkingLevelsFallback,
+  BASE_THINKING_LEVELS,
+  normalizeThinkLevel,
   resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
+  THINKING_LEVEL_RANKS,
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
@@ -29,118 +31,182 @@ export type {
   VerboseLevel,
 } from "./thinking.shared.js";
 import {
-  resolveProviderAdaptiveThinking,
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
-  resolveProviderMaxThinking,
+  resolveProviderThinkingProfile,
   resolveProviderXHighThinking,
 } from "../plugins/provider-thinking.js";
+import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
-export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  const providerRaw = normalizeOptionalString(provider);
+type ThinkingLevelOption = {
+  id: ThinkLevel;
+  label: string;
+  rank: number;
+};
+
+type ResolvedThinkingProfile = {
+  levels: ThinkingLevelOption[];
+  defaultLevel?: ThinkLevel | null;
+};
+
+function resolveThinkingPolicyContext(params: {
+  provider?: string | null;
+  model?: string | null;
+  catalog?: ThinkingCatalogEntry[];
+}) {
+  const providerRaw = normalizeOptionalString(params.provider);
   const normalizedProvider = providerRaw ? normalizeProviderId(providerRaw) : "";
-  if (!normalizedProvider) {
-    return false;
+  const modelId = normalizeOptionalString(params.model) ?? "";
+  const modelKey = normalizeOptionalLowercaseString(params.model) ?? "";
+  const candidate = params.catalog?.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  return { normalizedProvider, modelId, modelKey, reasoning: candidate?.reasoning };
+}
+
+function normalizeProfileLevel(
+  level: ProviderThinkingProfile["levels"][number],
+): ThinkingLevelOption | undefined {
+  const normalized = normalizeThinkLevel(level.id);
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    id: normalized,
+    label: normalizeOptionalString(level.label) ?? normalized,
+    rank: Number.isFinite(level.rank) ? (level.rank as number) : THINKING_LEVEL_RANKS[normalized],
+  };
+}
+
+function normalizeThinkingProfile(profile: ProviderThinkingProfile): ResolvedThinkingProfile {
+  const byId = new Map<ThinkLevel, ThinkingLevelOption>();
+  for (const raw of profile.levels) {
+    const level = normalizeProfileLevel(raw);
+    if (level) {
+      byId.set(level.id, level);
+    }
+  }
+  const levels = [...byId.values()].toSorted((a, b) => a.rank - b.rank);
+  const rawDefaultLevel = profile.defaultLevel
+    ? normalizeThinkLevel(profile.defaultLevel)
+    : undefined;
+  const defaultLevel = rawDefaultLevel && byId.has(rawDefaultLevel) ? rawDefaultLevel : undefined;
+  return { levels, defaultLevel };
+}
+
+function buildBaseThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
+  return {
+    levels: BASE_THINKING_LEVELS.map((id) => ({
+      id,
+      label: id,
+      rank: THINKING_LEVEL_RANKS[id],
+    })),
+    defaultLevel,
+  };
+}
+
+function buildBinaryThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
+  return {
+    levels: [
+      { id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off },
+      { id: "low", label: "on", rank: THINKING_LEVEL_RANKS.low },
+    ],
+    defaultLevel,
+  };
+}
+
+function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
+  if (profile.levels.some((level) => level.id === id)) {
+    return;
+  }
+  profile.levels.push({ id, label: id, rank: THINKING_LEVEL_RANKS[id] });
+  profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
+}
+
+export function resolveThinkingProfile(params: {
+  provider?: string | null;
+  model?: string | null;
+  catalog?: ThinkingCatalogEntry[];
+}): ResolvedThinkingProfile {
+  const context = resolveThinkingPolicyContext(params);
+  if (!context.normalizedProvider) {
+    return buildBaseThinkingProfile();
+  }
+  const providerContext = {
+    provider: context.normalizedProvider,
+    modelId: context.modelId,
+    reasoning: context.reasoning,
+  };
+  const pluginProfile = resolveProviderThinkingProfile({
+    provider: context.normalizedProvider,
+    context: providerContext,
+  });
+  if (pluginProfile) {
+    const normalized = normalizeThinkingProfile(pluginProfile);
+    if (normalized.levels.length > 0) {
+      return normalized;
+    }
   }
 
-  const pluginDecision = resolveProviderBinaryThinking({
-    provider: normalizedProvider,
+  const defaultLevel = resolveProviderDefaultThinkingLevel({
+    provider: context.normalizedProvider,
+    context: providerContext,
+  });
+  const binaryDecision = resolveProviderBinaryThinking({
+    provider: context.normalizedProvider,
     context: {
-      provider: normalizedProvider,
-      modelId: normalizeOptionalString(model) ?? "",
+      provider: context.normalizedProvider,
+      modelId: context.modelId,
     },
   });
-  if (typeof pluginDecision === "boolean") {
-    return pluginDecision;
+  const profile =
+    binaryDecision === true
+      ? buildBinaryThinkingProfile(defaultLevel)
+      : buildBaseThinkingProfile(defaultLevel);
+  const policyContext = {
+    provider: context.normalizedProvider,
+    modelId: context.modelKey || context.modelId,
+  };
+  if (
+    resolveProviderXHighThinking({
+      provider: context.normalizedProvider,
+      context: policyContext,
+    }) === true
+  ) {
+    appendProfileLevel(profile, "xhigh");
   }
-  return false;
+  return profile;
+}
+
+export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
+  const profile = resolveThinkingProfile({ provider, model });
+  return profile.levels.length === 2 && profile.levels.some((level) => level.label === "on");
+}
+
+function supportsThinkingLevel(
+  provider: string | null | undefined,
+  model: string | null | undefined,
+  level: ThinkLevel,
+): boolean {
+  return resolveThinkingProfile({ provider, model }).levels.some((entry) => entry.id === level);
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = normalizeOptionalLowercaseString(model);
-  if (!modelKey) {
-    return false;
-  }
-  const providerRaw = normalizeOptionalString(provider);
-  const providerKey = providerRaw ? normalizeProviderId(providerRaw) : "";
-  if (providerKey) {
-    const pluginDecision = resolveProviderXHighThinking({
-      provider: providerKey,
-      context: {
-        provider: providerKey,
-        modelId: modelKey,
-      },
-    });
-    if (typeof pluginDecision === "boolean") {
-      return pluginDecision;
-    }
-  }
-  return false;
-}
-
-export function supportsAdaptiveThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = normalizeOptionalLowercaseString(model);
-  if (!modelKey) {
-    return false;
-  }
-  const providerRaw = normalizeOptionalString(provider);
-  const providerKey = providerRaw ? normalizeProviderId(providerRaw) : "";
-  if (!providerKey) {
-    return false;
-  }
-  const pluginDecision = resolveProviderAdaptiveThinking({
-    provider: providerKey,
-    context: {
-      provider: providerKey,
-      modelId: modelKey,
-    },
-  });
-  return pluginDecision === true;
-}
-
-export function supportsMaxThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = normalizeOptionalLowercaseString(model);
-  if (!modelKey) {
-    return false;
-  }
-  const providerRaw = normalizeOptionalString(provider);
-  const providerKey = providerRaw ? normalizeProviderId(providerRaw) : "";
-  if (!providerKey) {
-    return false;
-  }
-  const pluginDecision = resolveProviderMaxThinking({
-    provider: providerKey,
-    context: {
-      provider: providerKey,
-      modelId: modelKey,
-    },
-  });
-  return pluginDecision === true;
+  return supportsThinkingLevel(provider, model, "xhigh");
 }
 
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
-  const levels = listThinkingLevelsFallback(provider, model);
-  if (supportsXHighThinking(provider, model)) {
-    levels.push("xhigh");
-  }
-  if (supportsAdaptiveThinking(provider, model)) {
-    levels.push("adaptive");
-  }
-  if (supportsMaxThinking(provider, model)) {
-    levels.push("max");
-  }
-  return levels;
+  const profile = resolveThinkingProfile({ provider, model });
+  return profile.levels.map((level) => level.id);
 }
 
 export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
-  if (isBinaryThinkingProvider(provider, model)) {
-    return ["off", "on"];
-  }
-  return listThinkingLevels(provider, model);
+  const profile = resolveThinkingProfile({ provider, model });
+  return profile.levels.map((level) => level.label);
 }
 
 export function formatThinkingLevels(
@@ -156,20 +222,13 @@ export function resolveThinkingDefaultForModel(params: {
   model: string;
   catalog?: ThinkingCatalogEntry[];
 }): ThinkLevel {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  const pluginDecision = resolveProviderDefaultThinkingLevel({
-    provider: normalizedProvider,
-    context: {
-      provider: normalizedProvider,
-      modelId: params.model,
-      reasoning: candidate?.reasoning,
-    },
+  const profile = resolveThinkingProfile({
+    provider: params.provider,
+    model: params.model,
+    catalog: params.catalog,
   });
-  if (pluginDecision) {
-    return pluginDecision;
+  if (profile.defaultLevel) {
+    return profile.defaultLevel;
   }
   return resolveThinkingDefaultForModelFallback(params);
 }
@@ -178,19 +237,19 @@ export function resolveLargestSupportedThinkingLevel(
   provider?: string | null,
   model?: string | null,
 ): ThinkLevel {
-  if (isBinaryThinkingProvider(provider, model)) {
-    return "low";
-  }
-  if (supportsMaxThinking(provider, model)) {
-    return "max";
-  }
-  if (supportsXHighThinking(provider, model)) {
-    return "xhigh";
-  }
-  if (supportsAdaptiveThinking(provider, model)) {
-    return "adaptive";
-  }
-  return "high";
+  const profile = resolveThinkingProfile({ provider, model });
+  return (
+    profile.levels.filter((level) => level.id !== "off").toSorted((a, b) => b.rank - a.rank)[0]
+      ?.id ?? "off"
+  );
+}
+
+export function isThinkingLevelSupported(params: {
+  provider?: string | null;
+  model?: string | null;
+  level: ThinkLevel;
+}): boolean {
+  return supportsThinkingLevel(params.provider, params.model, params.level);
 }
 
 export function resolveSupportedThinkingLevel(params: {
@@ -198,10 +257,15 @@ export function resolveSupportedThinkingLevel(params: {
   model?: string | null;
   level: ThinkLevel;
 }): ThinkLevel {
-  if (params.level !== "max") {
+  const profile = resolveThinkingProfile({ provider: params.provider, model: params.model });
+  if (profile.levels.some((entry) => entry.id === params.level)) {
     return params.level;
   }
-  return supportsMaxThinking(params.provider, params.model)
-    ? "max"
-    : resolveLargestSupportedThinkingLevel(params.provider, params.model);
+  const requestedRank = THINKING_LEVEL_RANKS[params.level];
+  const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
+  return (
+    ranked.find((level) => level.id !== "off" && level.rank <= requestedRank)?.id ??
+    ranked.find((level) => level.id !== "off")?.id ??
+    "off"
+  );
 }
