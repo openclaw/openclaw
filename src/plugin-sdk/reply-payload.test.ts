@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-runtime.js", () => ({
+vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 import {
