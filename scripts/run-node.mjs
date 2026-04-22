@@ -718,7 +718,7 @@ const withRunNodeBuildLock = async (deps, callback) => {
 
 const syncRuntimeArtifacts = async (deps) => {
   try {
-    await deps.runRuntimePostBuild({ cwd: deps.cwd });
+    await deps.runRuntimePostBuild({ cwd: deps.cwd, env: deps.env });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,

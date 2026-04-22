@@ -263,9 +263,12 @@ By default, the plugin starts Codex locally with:
 codex app-server --listen stdio://
 ```
 
-By default, OpenClaw asks Codex to request native approvals. You can tune that
-policy further, for example by tightening it and routing reviews through the
-guardian:
+By default, OpenClaw starts local Codex harness sessions fully unchained:
+`approvalPolicy: "never"` and `sandbox: "danger-full-access"`. That matches the
+trusted local operator posture used by the Codex CLI and lets autonomous
+heartbeats use network and shell tools without waiting on an invisible native
+approval path. You can tighten that policy, for example by routing reviews
+through the guardian:
 
 ```json5
 {
@@ -320,8 +323,8 @@ Supported `appServer` fields:
 | `authToken`         | unset                                    | Bearer token for WebSocket transport.                                    |
 | `headers`           | `{}`                                     | Extra WebSocket headers.                                                 |
 | `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                              |
-| `approvalPolicy`    | `"on-request"`                           | Native Codex approval policy sent to thread start/resume/turn.           |
-| `sandbox`           | `"workspace-write"`                      | Native Codex sandbox mode sent to thread start/resume.                   |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.           |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                   |
 | `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex guardian review native approvals. |
 | `serviceTier`       | unset                                    | Optional Codex service tier, for example `"priority"`.                   |
 
