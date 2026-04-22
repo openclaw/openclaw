@@ -1021,6 +1021,82 @@ describe("memory-core dreaming phases", () => {
     expect(second.nextState.pendingPaths).toBeUndefined();
   });
 
+  it("keeps changed tracked daily files pending when ingestion hits the cap", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    for (const day of ["2026-04-06", "2026-04-05", "2026-04-04", "2026-04-03", "2026-04-02"]) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${day}.md`),
+        [
+          `# ${day}`,
+          "",
+          ...Array.from({ length: 28 }, (_unused, index) => `- Durable ${day} ${index + 1}.`),
+        ].join("\n"),
+        "utf-8",
+      );
+    }
+
+    const seeded = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 10,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
+      state: { version: 1, files: {} },
+    });
+    const baseline = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 10,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:00:00.000Z"),
+      state: seeded.nextState,
+    });
+
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-02.md"),
+      [
+        "# 2026-04-02",
+        "",
+        ...Array.from({ length: 28 }, (_unused, index) => `- Updated 2026-04-02 ${index + 1}.`),
+      ].join("\n"),
+      "utf-8",
+    );
+    for (const day of ["2026-04-06", "2026-04-05", "2026-04-04", "2026-04-03"]) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${day}.md`),
+        [
+          `# ${day}`,
+          "",
+          ...Array.from({ length: 28 }, (_unused, index) => `- Updated ${day} ${index + 1}.`),
+        ].join("\n"),
+        "utf-8",
+      );
+    }
+
+    const capped = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 10,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:10:00.000Z"),
+      state: baseline.nextState,
+    });
+
+    expect(capped.nextState.pendingPaths).toEqual(["memory/2026-04-02.md"]);
+
+    const retried = await __testing.collectDailyIngestionBatches({
+      workspaceDir,
+      lookbackDays: 10,
+      limit: 5,
+      nowMs: Date.parse("2026-04-06T10:15:00.000Z"),
+      state: capped.nextState,
+    });
+
+    expect(retried.batches).toHaveLength(1);
+    expect(retried.batches[0]?.results[0]?.path).toBe("memory/2026-04-02.md");
+    expect(
+      retried.batches[0]?.results.some((result) => result.snippet.includes("Updated 2026-04-02")),
+    ).toBe(true);
+    expect(retried.nextState.pendingPaths).toBeUndefined();
+  });
+
   it("skips rereading unchanged daily notes that already match the checkpoint", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const relativePath = "memory/2026-04-06.md";

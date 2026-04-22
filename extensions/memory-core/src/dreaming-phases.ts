@@ -1279,9 +1279,8 @@ async function collectDailyIngestionBatches(params: {
     if (exhausted) {
       if (candidate.previous) {
         nextFiles[candidate.relativePath] = candidate.previous;
-      } else {
-        pendingPaths.add(candidate.relativePath);
       }
+      pendingPaths.add(candidate.relativePath);
       continue;
     }
     const lines = stripManagedDailyDreamingLines(candidate.raw.split(/\r?\n/));

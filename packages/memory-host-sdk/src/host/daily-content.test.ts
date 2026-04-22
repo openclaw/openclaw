@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   areSessionSummaryDailyMemoryDependenciesCurrent,
   filterOutSessionSummaryDailyMemoryFiles,
+  filterSessionSummaryDailyMemoryFiles,
   isLikelyMissingSessionSummaryDailyMemory,
   isLikelySessionSummaryDailyMemorySnippet,
   isSessionSummaryDailyMemory,
@@ -468,6 +469,68 @@ describe("daily-content", () => {
     ).resolves.toEqual([notePath]);
   });
 
+  it("keeps only session-summary bookkeeping files when requested", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-summary-only-"));
+    tmpDirs.push(root);
+    const notePath = path.join(root, "2026-04-19.md");
+    const sessionSummaryPath = path.join(root, "2026-04-19-session-reset.md");
+    await fs.writeFile(notePath, "## Durable Notes\n\nKeep this.\n", "utf-8");
+    await fs.writeFile(
+      sessionSummaryPath,
+      [
+        "# Session: 2026-04-19 10:00:00 America/New_York",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: abc123",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    await expect(
+      filterSessionSummaryDailyMemoryFiles([notePath, sessionSummaryPath]),
+    ).resolves.toEqual([sessionSummaryPath]);
+  });
+
+  it("uses bounded prefix probes while filtering bookkeeping files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-bounded-"));
+    tmpDirs.push(root);
+    const notePath = path.join(root, "2026-04-19.md");
+    const sessionSummaryPath = path.join(root, "2026-04-19-session-reset.md");
+    await fs.writeFile(notePath, "## Durable Notes\n\nKeep this.\n", "utf-8");
+    await fs.writeFile(
+      sessionSummaryPath,
+      [
+        "# Session: 2026-04-19 10:00:00 America/New_York",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: abc123",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping only",
+        "",
+        "x".repeat(128 * 1024),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    try {
+      await expect(
+        filterOutSessionSummaryDailyMemoryFiles([notePath, sessionSummaryPath]),
+      ).resolves.toEqual([notePath]);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
   it("skips unreadable daily files while filtering bookkeeping files", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-unreadable-"));
     tmpDirs.push(root);
@@ -476,8 +539,8 @@ describe("daily-content", () => {
     await fs.writeFile(notePath, "## Durable Notes\n\nKeep this.\n", "utf-8");
     await fs.writeFile(unreadablePath, "## Hidden Notes\n\nSkip this.\n", "utf-8");
 
-    const originalReadFile = fs.readFile.bind(fs);
-    const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+    const originalOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
       const resolvedTarget =
         typeof target === "string"
           ? target
@@ -491,7 +554,7 @@ describe("daily-content", () => {
         error.code = "EACCES";
         throw error;
       }
-      return await originalReadFile(target, options);
+      return await originalOpen(target, flags, mode);
     });
 
     try {
@@ -499,7 +562,7 @@ describe("daily-content", () => {
         filterOutSessionSummaryDailyMemoryFiles([notePath, unreadablePath]),
       ).resolves.toEqual([notePath]);
     } finally {
-      readFile.mockRestore();
+      open.mockRestore();
     }
   });
 
@@ -511,8 +574,8 @@ describe("daily-content", () => {
     await fs.writeFile(notePath, "## Durable Notes\n\nKeep this.\n", "utf-8");
     await fs.writeFile(unreadablePath, "## Hidden Notes\n\nStop here.\n", "utf-8");
 
-    const originalReadFile = fs.readFile.bind(fs);
-    const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+    const originalOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
       const resolvedTarget =
         typeof target === "string"
           ? target
@@ -526,7 +589,7 @@ describe("daily-content", () => {
         error.code = "EACCES";
         throw error;
       }
-      return await originalReadFile(target, options);
+      return await originalOpen(target, flags, mode);
     });
 
     try {
@@ -536,7 +599,7 @@ describe("daily-content", () => {
         }),
       ).rejects.toMatchObject({ code: "EACCES" });
     } finally {
-      readFile.mockRestore();
+      open.mockRestore();
     }
   });
 
@@ -773,6 +836,24 @@ describe("daily-content", () => {
         buildSessionSummaryDailyMemoryProbePaths(
           "C:/Users/example/workspace",
           "c:/Users/example/workspace/memory/2026-04-19-vendor-pitch.md",
+        ).map((candidate) => candidate.relativePath),
+      ).toEqual(["memory/2026-04-19-vendor-pitch.md"]);
+    } finally {
+      resolveSpy.mockRestore();
+    }
+  });
+
+  it("treats Windows path segment case as equivalent for in-workspace absolute probe paths", () => {
+    const resolveSpy = vi
+      .spyOn(path, "resolve")
+      .mockImplementation(((...segments: string[]) =>
+        path.win32.resolve(...segments)) as typeof path.resolve);
+
+    try {
+      expect(
+        buildSessionSummaryDailyMemoryProbePaths(
+          "C:/Users/Example/Repo",
+          "c:/users/example/repo/memory/2026-04-19-vendor-pitch.md",
         ).map((candidate) => candidate.relativePath),
       ).toEqual(["memory/2026-04-19-vendor-pitch.md"]);
     } finally {

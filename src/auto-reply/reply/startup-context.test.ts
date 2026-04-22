@@ -425,6 +425,58 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12.md]");
   });
 
+  it("prioritizes same-day session summaries for older selected startup days when widening the window", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-10.md"),
+      "yesterday notes",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-09.md"),
+      "C".repeat(600),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-09-reset-summary.md"),
+      [
+        "# Session: 2026-04-09 18:00:00 America/Chicago",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: reset-123",
+        "- **Source**: cli",
+        "",
+        "assistant: older continuity",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 3,
+              maxFileChars: 160,
+              maxTotalChars: 460,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-09-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-09.md]");
+  });
+
   it("caps UTC/local boundary loading to startupContext.dailyMemoryDays", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");

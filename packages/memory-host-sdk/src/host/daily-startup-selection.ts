@@ -200,9 +200,7 @@ export async function selectStartupDailyMemoryPaths(params: {
     persistIndex: false,
   });
   const memoryDir = path.join(params.workspaceDir, "memory");
-  const summaryPriorityDays = [...new Set([currentLocalDay, localYesterday, utcToday])].filter(
-    (day) => Boolean(day) && targetDays.includes(day),
-  );
+  const summaryPriorityDays = [...new Set(targetDays)].filter(Boolean);
   const sessionSummaryPaths = new Set<string>();
   for (const day of summaryPriorityDays) {
     const daySummaryPaths = await resolveStartupSessionSummaryPaths({

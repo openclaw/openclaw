@@ -48,7 +48,7 @@ function normalizeSessionSummaryWorkspaceComparablePath(rawPath: string): string
   if (!path.win32.isAbsolute(normalizedPath)) {
     return normalizedPath;
   }
-  return normalizedPath.replace(/^([a-z]):/i, (_, drive: string) => `${drive.toLowerCase()}:`);
+  return normalizedPath.toLowerCase();
 }
 
 function resolveSessionSummaryProbeInputPath(workspaceDir: string, filePath: string): string {
@@ -439,28 +439,52 @@ async function hasSiblingDailyMemoryVariantSnippetMatch(params: {
   return false;
 }
 
-export async function filterOutSessionSummaryDailyMemoryFiles(
-  filePaths: string[],
-  opts?: { tolerateReadErrors?: boolean },
-): Promise<string[]> {
-  const tolerateReadErrors = opts?.tolerateReadErrors !== false;
+async function filterDailyMemoryFilesBySessionSummary(params: {
+  filePaths: string[];
+  includeSessionSummaries: boolean;
+  tolerateReadErrors?: boolean;
+}): Promise<string[]> {
+  const tolerateReadErrors = params.tolerateReadErrors !== false;
   const keptPaths: string[] = [];
-  for (const filePath of filePaths) {
-    const raw = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
+  for (const filePath of params.filePaths) {
+    const raw = await readSessionSummaryProbePrefixFromFile(filePath).catch((error: unknown) => {
       if (tolerateReadErrors && isBenignSessionSummaryDailyMemoryProbeError(error)) {
         return null;
       }
       throw error;
     });
-    if (raw === null || isSessionSummaryDailyMemory(raw)) {
+    if (raw === null) {
       continue;
     }
-    keptPaths.push(filePath);
+    const isSummary = isSessionSummaryDailyMemory(raw);
+    if (isSummary === params.includeSessionSummaries) {
+      keptPaths.push(filePath);
+    }
   }
   return keptPaths;
 }
 
-export const filterSessionSummaryDailyMemoryFiles = filterOutSessionSummaryDailyMemoryFiles;
+export async function filterOutSessionSummaryDailyMemoryFiles(
+  filePaths: string[],
+  opts?: { tolerateReadErrors?: boolean },
+): Promise<string[]> {
+  return await filterDailyMemoryFilesBySessionSummary({
+    filePaths,
+    includeSessionSummaries: false,
+    tolerateReadErrors: opts?.tolerateReadErrors,
+  });
+}
+
+export async function filterSessionSummaryDailyMemoryFiles(
+  filePaths: string[],
+  opts?: { tolerateReadErrors?: boolean },
+): Promise<string[]> {
+  return await filterDailyMemoryFilesBySessionSummary({
+    filePaths,
+    includeSessionSummaries: true,
+    tolerateReadErrors: opts?.tolerateReadErrors,
+  });
+}
 
 export async function isSessionSummaryDailyMemoryPath(params: {
   workspaceDir: string;
