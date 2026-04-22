@@ -104,6 +104,9 @@ function createAppServerHarness(
         interval: 1,
       });
     },
+    async notify(notification: CodexServerNotification) {
+      await notify(notification);
+    },
     async completeTurn(params: { threadId: string; turnId: string }) {
       await notify({
         method: "turn/completed",
@@ -616,6 +619,50 @@ describe("runCodexAppServerAttempt", () => {
         createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
       ),
     ).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+    });
+  });
+
+  it("does not complete on unscoped turn/completed notifications", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-wrong", text: "wrong completion" }],
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(resolved).toBe(false);
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-right", text: "final completion" }],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      assistantTexts: ["final completion"],
       aborted: false,
       timedOut: false,
     });

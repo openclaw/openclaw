@@ -175,7 +175,8 @@ export async function runCodexAppServerAttempt(
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
     const isTurnCompletion =
-      notification.method === "turn/completed" && isTurnNotification(notification.params, turnId);
+      notification.method === "turn/completed" &&
+      isTurnNotification(notification.params, thread.threadId, turnId);
     try {
       await projector.handleNotification(notification);
     } catch (error) {
@@ -562,16 +563,15 @@ function readDynamicToolCallParams(
   };
 }
 
-function isTurnNotification(value: JsonValue | undefined, turnId: string): boolean {
+function isTurnNotification(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
   if (!isJsonObject(value)) {
     return false;
   }
-  const directTurnId = readString(value, "turnId");
-  if (directTurnId === turnId) {
-    return true;
-  }
-  const turn = isJsonObject(value.turn) ? value.turn : undefined;
-  return readString(turn ?? {}, "id") === turnId;
+  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
