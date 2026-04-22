@@ -635,6 +635,53 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
   });
 
+  it("uses a fixed larger probe budget for summary selection when maxFileBytes is tiny", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-10.md"),
+      "older fallback notes".repeat(40),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-12-reset-summary.md"),
+      [
+        "# Session: 2026-04-12 00:30:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: low-byte-summary",
+        "- **Source**: cli",
+        "",
+        "## Conversation Summary",
+        "",
+        "assistant: boundary continuity that must still be selected",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 1,
+              maxFileBytes: 32,
+              maxFileChars: 220,
+              maxTotalChars: 320,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 12, 0, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+  });
+
   it("prefers the UTC boundary summary over the local-yesterday fallback when only one extra day fits", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(
@@ -1153,9 +1200,10 @@ describe("buildSessionStartupContextPrelude", () => {
 
       expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
       expect(prelude).not.toContain("memory/2026-04-11-reset-summary.md");
-      // Two reads classify same-day files, one confirms the selected day is readable,
-      // and one loads the only block that fit.
-      expect(readSpy).toHaveBeenCalledTimes(4);
+      // Selection now uses its own probe reads, and prompt injection rereads the chosen
+      // file with the user-configured byte cap. Each file open issues one read for data
+      // and one more to observe EOF, so three file opens surface as six fs.read calls.
+      expect(readSpy).toHaveBeenCalledTimes(6);
     } finally {
       readSpy.mockRestore();
     }

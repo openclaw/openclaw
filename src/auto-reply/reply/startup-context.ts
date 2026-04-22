@@ -3,7 +3,10 @@ import path from "node:path";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
-import { readSessionSummaryProbePrefixFromFd } from "../../memory-host-sdk/host/daily-session-summary-io.js";
+import {
+  readSessionSummaryProbePrefixFromFd,
+  SESSION_SUMMARY_DAILY_MEMORY_PROBE_MAX_BYTES,
+} from "../../memory-host-sdk/host/daily-session-summary-io.js";
 import { selectStartupDailyMemoryPaths } from "../../memory-host-sdk/host/daily-startup-selection.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
@@ -14,6 +17,7 @@ const STARTUP_MEMORY_FILE_MAX_BYTES_CAP = 64 * 1024;
 const STARTUP_MEMORY_FILE_MAX_CHARS_CAP = 10_000;
 const STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP = 50_000;
 const STARTUP_MEMORY_DAILY_DAYS_CAP = 14;
+const STARTUP_MEMORY_SELECTION_PROBE_MAX_BYTES = SESSION_SUMMARY_DAILY_MEMORY_PROBE_MAX_BYTES;
 
 export function shouldApplyStartupContext(params: {
   cfg?: OpenClawConfig;
@@ -69,9 +73,8 @@ async function resolveStartupDailyMemoryPaths(params: {
   dailyMemoryDays: number;
   nowMs: number;
   timezone: string;
-  maxFileBytes: number;
-  readCache: Map<string, string | null>;
 }): Promise<string[]> {
+  const selectionReadCache = new Map<string, string | null>();
   return await selectStartupDailyMemoryPaths({
     workspaceDir: params.workspaceDir,
     dailyMemoryDays: params.dailyMemoryDays,
@@ -81,8 +84,8 @@ async function resolveStartupDailyMemoryPaths(params: {
       await readStartupMemoryFile({
         workspaceDir: params.workspaceDir,
         relativePath,
-        maxFileBytes: params.maxFileBytes,
-        readCache: params.readCache,
+        maxFileBytes: STARTUP_MEMORY_SELECTION_PROBE_MAX_BYTES,
+        readCache: selectionReadCache,
       }),
   });
 }
@@ -206,8 +209,6 @@ export async function buildSessionStartupContextPrelude(params: {
     dailyMemoryDays: limits.dailyMemoryDays,
     nowMs,
     timezone,
-    maxFileBytes: limits.maxFileBytes,
-    readCache,
   });
 
   const sections: string[] = [];
