@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "../agents/pi-tools.before-tool-call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -69,8 +73,17 @@ export async function handleMcpJsonRpc(params: {
         });
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
+      // Run the same pre-execution hook boundary as the agent and HTTP
+      // tool-invoke paths, so plugins that register `before_tool_call`
+      // (for policy, approval, rewriting params, etc.) also see tool
+      // invocations coming in through the loopback MCP bridge. Without
+      // this wrap, plugin-registered tools dispatched to Claude Code /
+      // Codex / other MCP clients via this server skip hooks entirely.
+      const wrappedTool = isToolWrappedWithBeforeToolCallHook(tool)
+        ? tool
+        : wrapToolWithBeforeToolCallHook(tool);
       try {
-        const result = await tool.execute(toolCallId, toolArgs);
+        const result = await wrappedTool.execute(toolCallId, toolArgs);
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
           isError: false,
