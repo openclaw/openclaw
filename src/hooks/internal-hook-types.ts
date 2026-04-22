@@ -13,6 +13,8 @@ export interface InternalHookEvent {
   timestamp: Date;
   /** Messages to send back to the user (hooks can push to this array) */
   messages: string[];
+  /** Deferred actions executed after all handlers complete. */
+  postHookActions?: Array<() => Promise<void> | void>;
 }
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
