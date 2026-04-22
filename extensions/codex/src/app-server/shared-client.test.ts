@@ -144,4 +144,47 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).toHaveBeenCalledTimes(2);
     expect(first.process.kill).toHaveBeenCalledWith("SIGTERM");
   });
+
+  it("does not let a superseded shared-client failure tear down the newer client", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+
+    const firstList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      startOptions: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "tok-first",
+        headers: {},
+      },
+    });
+    const firstFailure = firstList.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(first.writes.length).toBeGreaterThanOrEqual(1));
+
+    const secondList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      startOptions: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "tok-second",
+        headers: {},
+      },
+    });
+    await vi.waitFor(() => expect(second.writes.length).toBeGreaterThanOrEqual(1));
+
+    await expect(firstFailure).resolves.toBeInstanceOf(Error);
+
+    await sendInitializeResult(second, "openclaw/0.118.0 (macOS; test)");
+    await sendEmptyModelList(second);
+    await expect(secondList).resolves.toEqual({ models: [] });
+
+    expect(second.process.kill).not.toHaveBeenCalled();
+  });
 });
