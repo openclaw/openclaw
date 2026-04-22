@@ -14,6 +14,9 @@
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
+  "bundledDependencies": [
+    "grammy"
+  ],
   "openclaw": {
     "extensions": [
       "./index.ts"
