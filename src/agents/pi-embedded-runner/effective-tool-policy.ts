@@ -1,12 +1,15 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupContextFromSessionKey,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../subagent-capabilities.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -133,11 +136,23 @@ export function applyFinalEffectiveToolPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
+    cfg: params.config,
+  });
   const subagentPolicy =
-    isSubagentSessionKey(params.sessionKey) && params.sessionKey
-      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey)
+    params.sessionKey &&
+    isSubagentEnvelopeSession(params.sessionKey, {
+      cfg: params.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey, {
+          store: subagentStore,
+        })
       : undefined;
-  const ownerFiltered = applyOwnerOnlyToolPolicy(params.bundledTools, params.senderIsOwner === true);
+  const ownerFiltered = applyOwnerOnlyToolPolicy(
+    params.bundledTools,
+    params.senderIsOwner === true,
+  );
   // Suppress unavailable-core-tool warnings on every step of this pass.
   // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array
   // it's filtering, and this pass only sees the bundled MCP/LSP subset.
@@ -165,7 +180,7 @@ export function applyFinalEffectiveToolPolicy(
     }),
     { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
     { policy: subagentPolicy, label: "subagent tools.allow" },
-  ].map((step) => ({ ...step, suppressUnavailableCoreToolWarning: true }));
+  ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: ownerFiltered,
     toolMeta: (tool) => getPluginToolMeta(tool),

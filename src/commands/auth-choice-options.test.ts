@@ -143,7 +143,7 @@ describe("buildAuthChoiceOptions", () => {
         choiceId: "moonshot-api-key",
         choiceLabel: "Kimi API key (.ai)",
         groupId: "moonshot",
-        groupLabel: "Moonshot AI (Kimi K2.5)",
+        groupLabel: "Moonshot AI (Kimi K2.6)",
       },
       {
         pluginId: "minimax",
@@ -444,6 +444,53 @@ describe("buildAuthChoiceOptions", () => {
     expect(anthropicGroup?.options.map((option) => option.value)).toEqual([
       "anthropic-cli",
       "apiKey",
+    ]);
+  });
+
+  it("orders OpenAI auth methods as api key, login, import, then device pairing", () => {
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "openai-api-key",
+        label: "OpenAI API Key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -40,
+      },
+      {
+        value: "openai-codex",
+        label: "OpenAI Codex Browser Login",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -30,
+      },
+      {
+        value: "openai-codex-import",
+        label: "Import Existing Codex Login (~/.codex detected)",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -20,
+      },
+      {
+        value: "openai-codex-device-code",
+        label: "OpenAI Codex Device Pairing",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -10,
+      },
+    ]);
+
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const openAIGroup = groups.find((group) => group.value === "openai");
+
+    expect(openAIGroup).toBeDefined();
+    expect(openAIGroup?.options.map((option) => option.value)).toEqual([
+      "openai-api-key",
+      "openai-codex",
+      "openai-codex-import",
+      "openai-codex-device-code",
     ]);
   });
 

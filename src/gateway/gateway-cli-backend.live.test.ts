@@ -15,19 +15,23 @@ import {
   getFreeGatewayPort,
   matchesCliBackendReply,
   parseImageMode,
-  parseJsonStringArray,
   resolveCliModelSwitchProbeTarget,
+  resolveCliBackendLiveArgs,
+  parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
   shouldRunCliModelSwitchProbe,
   shouldRunCliMcpProbe,
   snapshotCliBackendLiveEnv,
   type SystemPromptReport,
-  verifyCliCronMcpProbe,
-  verifyCliBackendImageProbe,
   withClaudeMcpConfigOverrides,
   connectTestGatewayClient,
 } from "./gateway-cli-backend.live-helpers.js";
+import {
+  verifyCliBackendImageProbe,
+  verifyCliCronMcpLoopbackPreflight,
+  verifyCliCronMcpProbe,
+} from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -40,7 +44,9 @@ const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 const DEFAULT_PROVIDER = "claude-cli";
 const DEFAULT_MODEL =
   resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
-const CLI_BACKEND_LIVE_TIMEOUT_MS = 420_000;
+// The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
+// so the outer test budget needs enough headroom to finish those retries.
+const CLI_BACKEND_LIVE_TIMEOUT_MS = 720_000;
 
 function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CLI_DEBUG) {
@@ -104,14 +110,11 @@ describeLive("gateway live (cli backend)", () => {
         );
       }
 
-      const baseCliArgs =
-        parseJsonStringArray(
-          "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
-          process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
-        ) ?? providerDefaults?.args;
-      if (!baseCliArgs || baseCliArgs.length === 0) {
-        throw new Error(`OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`);
-      }
+      const { args: baseCliArgs, resumeArgs: baseCliResumeArgs } = resolveCliBackendLiveArgs({
+        providerId,
+        defaultArgs: providerDefaults?.args,
+        defaultResumeArgs: providerDefaults?.resumeArgs,
+      });
 
       const cliClearEnv =
         parseJsonStringArray(
@@ -190,6 +193,7 @@ describeLive("gateway live (cli backend)", () => {
               [providerId]: {
                 command: cliCommand,
                 args: cliArgs,
+                resumeArgs: baseCliResumeArgs,
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
                 systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
@@ -352,6 +356,18 @@ describeLive("gateway live (cli backend)", () => {
         }
 
         if (enableCliMcpProbe) {
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:start", {
+            sessionKey,
+            senderIsOwner: true,
+          });
+          await verifyCliCronMcpLoopbackPreflight({
+            sessionKey,
+            port,
+            token,
+            env: process.env,
+            senderIsOwner: true,
+          });
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:done");
           logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
           await verifyCliCronMcpProbe({
             client,

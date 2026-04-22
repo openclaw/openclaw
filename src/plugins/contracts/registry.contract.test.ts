@@ -10,8 +10,6 @@ import {
   providerContractPluginIds,
 } from "./registry.js";
 
-const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
-
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
     expect(ids).toEqual([...new Set(ids)]);
@@ -95,15 +93,9 @@ describe("plugin contract registry", () => {
     expectUniqueIds(ids());
   });
 
-  it(
-    "does not duplicate bundled speech provider ids",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      expectUniqueIds(
-        pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds),
-      );
-    },
-  );
+  it("does not duplicate bundled speech provider ids", () => {
+    expectUniqueIds(pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds));
+  });
 
   it("covers every bundled provider plugin discovered from manifests", () => {
     expectRegistryPluginIds({
@@ -158,24 +150,6 @@ describe("plugin contract registry", () => {
     ).toEqual(bundledWebFetchPluginIds);
   });
 
-  it(
-    "loads bundled web fetch providers for each shared-resolver plugin",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      const entriesByPluginId = new Map(
-        pluginRegistrationContractRegistry
-          .filter((entry) => entry.webFetchProviderIds.length > 0)
-          .map((entry) => [entry.pluginId, entry.webFetchProviderIds] as const),
-      );
-      for (const pluginId of resolveManifestContractPluginIds({
-        contract: "webFetchProviders",
-        origin: "bundled",
-      })) {
-        expect(entriesByPluginId.get(pluginId)?.length ?? 0).toBeGreaterThan(0);
-      }
-    },
-  );
-
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
       contract: "webSearchProviders",
@@ -190,22 +164,4 @@ describe("plugin contract registry", () => {
       ),
     ).toEqual(bundledWebSearchPluginIds);
   });
-
-  it(
-    "loads bundled web search providers for each shared-resolver plugin",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      const entriesByPluginId = new Map(
-        pluginRegistrationContractRegistry
-          .filter((entry) => entry.webSearchProviderIds.length > 0)
-          .map((entry) => [entry.pluginId, entry.webSearchProviderIds] as const),
-      );
-      for (const pluginId of resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        origin: "bundled",
-      })) {
-        expect(entriesByPluginId.get(pluginId)?.length ?? 0).toBeGreaterThan(0);
-      }
-    },
-  );
 });

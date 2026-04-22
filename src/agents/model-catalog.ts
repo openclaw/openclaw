@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -50,10 +51,14 @@ function loadModelSuppression() {
   return modelSuppressionPromise;
 }
 
-export function resetModelCatalogCacheForTest() {
+export function resetModelCatalogCache() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
   importPiSdk = defaultImportPiSdk;
+}
+
+export function resetModelCatalogCacheForTest() {
+  resetModelCatalogCache();
 }
 
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
@@ -116,7 +121,6 @@ export async function loadModelCatalog(params?: {
       const agentDir = resolveOpenClawAgentDir();
       const { shouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
-      const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       logStage("auth-storage-ready");
       const registry = instantiatePiModelRegistry(

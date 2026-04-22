@@ -54,6 +54,27 @@ function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
   ).toEqual({ enabled: true });
 }
 
+type DemoDmAccount = {
+  accountId?: string | null;
+  dmPolicy?: string;
+  allowFrom?: string[];
+};
+
+function createDemoDmSecurityResolver(
+  params: {
+    inheritSharedDefaultsFromDefaultAccount?: boolean;
+  } = {},
+) {
+  return createScopedDmSecurityResolver<DemoDmAccount>({
+    channelKey: "demo",
+    resolvePolicy: (account) => account.dmPolicy,
+    resolveAllowFrom: (account) => account.allowFrom,
+    policyPathSuffix: "dmPolicy",
+    normalizeEntry: (raw) => raw.toLowerCase(),
+    ...params,
+  });
+}
+
 describe("mapAllowFromEntries", () => {
   it.each([
     {
@@ -311,17 +332,7 @@ describe("createScopedChannelConfigAdapter", () => {
 
 describe("createScopedDmSecurityResolver", () => {
   it("builds account-aware DM policy payloads", () => {
-    const resolveDmPolicy = createScopedDmSecurityResolver<{
-      accountId?: string | null;
-      dmPolicy?: string;
-      allowFrom?: string[];
-    }>({
-      channelKey: "demo",
-      resolvePolicy: (account) => account.dmPolicy,
-      resolveAllowFrom: (account) => account.allowFrom,
-      policyPathSuffix: "dmPolicy",
-      normalizeEntry: (raw) => raw.toLowerCase(),
-    });
+    const resolveDmPolicy = createDemoDmSecurityResolver();
 
     expect(
       resolveDmPolicy({
@@ -346,6 +357,80 @@ describe("createScopedDmSecurityResolver", () => {
       allowFrom: ["Owner"],
       policyPath: "channels.demo.accounts.alt.dmPolicy",
       allowFromPath: "channels.demo.accounts.alt.",
+      approveHint: formatPairingApproveHint("demo"),
+      normalizeEntry: expect.any(Function),
+    });
+  });
+
+  it("uses accounts.default paths when named accounts inherit shared defaults", () => {
+    const resolveDmPolicy = createDemoDmSecurityResolver({
+      inheritSharedDefaultsFromDefaultAccount: true,
+    });
+
+    expect(
+      resolveDmPolicy({
+        cfg: {
+          channels: {
+            demo: {
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["Owner"],
+                },
+                alt: {},
+              },
+            },
+          },
+        },
+        accountId: "alt",
+        account: {
+          accountId: "alt",
+          dmPolicy: "allowlist",
+          allowFrom: ["Owner"],
+        },
+      }),
+    ).toEqual({
+      policy: "allowlist",
+      allowFrom: ["Owner"],
+      policyPath: "channels.demo.accounts.default.dmPolicy",
+      allowFromPath: "channels.demo.accounts.default.",
+      approveHint: formatPairingApproveHint("demo"),
+      normalizeEntry: expect.any(Function),
+    });
+  });
+
+  it("ignores accounts.default paths unless the channel opts into shared default-account inheritance", () => {
+    const resolveDmPolicy = createDemoDmSecurityResolver();
+
+    expect(
+      resolveDmPolicy({
+        cfg: {
+          channels: {
+            demo: {
+              dmPolicy: "pairing",
+              allowFrom: ["*"],
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["Owner"],
+                },
+                alt: {},
+              },
+            },
+          },
+        },
+        accountId: "alt",
+        account: {
+          accountId: "alt",
+          dmPolicy: "pairing",
+          allowFrom: ["*"],
+        },
+      }),
+    ).toEqual({
+      policy: "pairing",
+      allowFrom: ["*"],
+      policyPath: "channels.demo.dmPolicy",
+      allowFromPath: "channels.demo.",
       approveHint: formatPairingApproveHint("demo"),
       normalizeEntry: expect.any(Function),
     });

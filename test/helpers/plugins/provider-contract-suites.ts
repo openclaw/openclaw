@@ -8,8 +8,46 @@ import type {
 
 type Lazy<T> = T | (() => T);
 
+type WebProviderCredentialContract = Pick<
+  WebSearchProviderPlugin,
+  | "createTool"
+  | "docsUrl"
+  | "envVars"
+  | "getCredentialValue"
+  | "hint"
+  | "id"
+  | "label"
+  | "placeholder"
+  | "setCredentialValue"
+  | "signupUrl"
+>;
+
 function resolveLazy<T>(value: Lazy<T>): T {
   return typeof value === "function" ? (value as () => T)() : value;
+}
+
+function expectWebProviderCredentialContract(
+  provider: WebProviderCredentialContract,
+  credentialValue: unknown,
+) {
+  expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+  expect(provider.label.trim()).not.toBe("");
+  expect(provider.hint.trim()).not.toBe("");
+  expect(provider.placeholder.trim()).not.toBe("");
+  expect(provider.signupUrl.startsWith("https://")).toBe(true);
+  if (provider.docsUrl) {
+    expect(provider.docsUrl.startsWith("http")).toBe(true);
+  }
+
+  expect(provider.envVars).toEqual([...new Set(provider.envVars)]);
+  expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
+
+  const configTarget: Record<string, unknown> = {};
+  provider.setCredentialValue(configTarget, credentialValue);
+  expect(provider.getCredentialValue(configTarget)).toEqual(credentialValue);
+
+  expect(typeof provider.createTool).toBe("function");
+  return configTarget;
 }
 
 export function installProviderPluginContractSuite(params: { provider: Lazy<ProviderPlugin> }) {
@@ -99,38 +137,8 @@ export function installWebSearchProviderContractSuite(params: {
     const provider = resolveLazy(params.provider);
     const credentialValue = resolveLazy(params.credentialValue);
 
-    expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
-    expect(provider.label.trim()).not.toBe("");
-    expect(provider.hint.trim()).not.toBe("");
-    expect(provider.placeholder.trim()).not.toBe("");
-    expect(provider.signupUrl.startsWith("https://")).toBe(true);
-    if (provider.docsUrl) {
-      expect(provider.docsUrl.startsWith("http")).toBe(true);
-    }
-
-    expect(provider.envVars).toEqual([...new Set(provider.envVars)]);
-    expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
-
-    const searchConfigTarget: Record<string, unknown> = {};
-    provider.setCredentialValue(searchConfigTarget, credentialValue);
+    const searchConfigTarget = expectWebProviderCredentialContract(provider, credentialValue);
     expect(provider.getCredentialValue(searchConfigTarget)).toEqual(credentialValue);
-
-    const config = {
-      tools: {
-        web: {
-          search: {
-            provider: provider.id,
-            ...searchConfigTarget,
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const tool = provider.createTool({ config, searchConfig: searchConfigTarget });
-
-    expect(tool).not.toBeNull();
-    expect(tool?.description.trim()).not.toBe("");
-    expect(tool?.parameters).toEqual(expect.any(Object));
-    expect(typeof tool?.execute).toBe("function");
     if (provider.runSetup) {
       expect(typeof provider.runSetup).toBe("function");
     }
@@ -146,17 +154,7 @@ export function installWebFetchProviderContractSuite(params: {
     const provider = resolveLazy(params.provider);
     const credentialValue = resolveLazy(params.credentialValue);
 
-    expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
-    expect(provider.label.trim()).not.toBe("");
-    expect(provider.hint.trim()).not.toBe("");
-    expect(provider.placeholder.trim()).not.toBe("");
-    expect(provider.signupUrl.startsWith("https://")).toBe(true);
-    if (provider.docsUrl) {
-      expect(provider.docsUrl.startsWith("http")).toBe(true);
-    }
-
-    expect(provider.envVars).toEqual([...new Set(provider.envVars)]);
-    expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
+    expectWebProviderCredentialContract(provider, credentialValue);
     expect(provider.credentialPath.trim()).not.toBe("");
     if (provider.inactiveSecretPaths) {
       expect(provider.inactiveSecretPaths).toEqual([...new Set(provider.inactiveSecretPaths)]);
@@ -177,22 +175,5 @@ export function installWebFetchProviderContractSuite(params: {
       const applied = provider.applySelectionConfig({} as OpenClawConfig);
       expect(applied.plugins?.entries?.[params.pluginId]?.enabled).toBe(true);
     }
-
-    const config = {
-      tools: {
-        web: {
-          fetch: {
-            provider: provider.id,
-            ...fetchConfigTarget,
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const tool = provider.createTool({ config, fetchConfig: fetchConfigTarget });
-
-    expect(tool).not.toBeNull();
-    expect(tool?.description.trim()).not.toBe("");
-    expect(tool?.parameters).toEqual(expect.any(Object));
-    expect(typeof tool?.execute).toBe("function");
   });
 }

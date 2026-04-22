@@ -172,6 +172,24 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
     expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
     expect(findCommandByNativeName("status", "slack")).toBeUndefined();
+    expect(
+      findCommandByNativeName("agentstatus", "slack", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("status");
+    expect(
+      findCommandByNativeName("status", "slack", {
+        includeBundledChannelFallback: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("can resolve default native command names without loading bundled channel fallbacks", () => {
+    expect(
+      findCommandByNativeName("status", "discord", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("status");
   });
 
   it("keeps discord native command specs within slash-command limits", () => {

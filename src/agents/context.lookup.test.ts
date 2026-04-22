@@ -426,6 +426,21 @@ describe("lookupContextTokens", () => {
     expect(explicitResult).toBe(2_000_000);
   });
 
+  it("resolveContextTokensForModel(model-only) does not force 1M for inferred anthropic opus 4.7 ids", async () => {
+    mockDiscoveryDeps([{ id: "anthropic/claude-opus-4.7-20260219", contextWindow: 200_000 }]);
+
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
+    lookupContextTokens("anthropic/claude-opus-4.7-20260219");
+    await flushAsyncWarmup();
+
+    const result = resolveContextTokensForModel({
+      model: "anthropic/claude-opus-4.7-20260219",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
   it("resolveContextTokensForModel: qualified key beats bare min when provider is explicit (original #35976 fix)", async () => {
     // Regression: when both "gemini-3.1-pro-preview" (bare, min=128k) AND
     // "google-gemini-cli/gemini-3.1-pro-preview" (qualified, 1M) are in cache,
