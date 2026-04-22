@@ -29,6 +29,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "tokenjuice"
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"

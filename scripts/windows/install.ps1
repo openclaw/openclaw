@@ -115,16 +115,36 @@ if (-not $srcExe) { $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "..\..\app
 
 # NEW: Automatic remote download if no local binary is found
 if (-not $srcExe) {
-    Write-Host "" -ForegroundColor Red
-    Write-Host "ERROR: OpenClaw desktop binary not found locally." -ForegroundColor Red
-    Write-Host "" 
-    Write-Host "To install the OpenClaw desktop app, either:" -ForegroundColor Yellow
-    Write-Host "  1. Build it locally:  pnpm install && pnpm tauri build" -ForegroundColor Gray
-    Write-Host "     Then re-run this script from: apps/windows/src-tauri/target/release/" -ForegroundColor Gray
-    Write-Host "  2. Download a pre-built release from the project releases page." -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "Note: The OpenClaw CLI is already installed via npm (openclaw command)." -ForegroundColor Cyan
-    exit 1
+    Write-Step "Local binary not found. Attempting to download latest release..."
+    try {
+        $repo = "openclaw/openclaw"
+        $apiUrl = "https://api.github.com/repos/$repo/releases/latest"
+        $release = Invoke-RestMethod -Uri $apiUrl -ErrorAction Stop
+        $asset = $release.assets | Where-Object { $_.name -like "OpenClaw.exe" -or $_.name -like "openclaw-desktop.exe" } | Select-Object -First 1
+        
+        if ($asset) {
+            $downloadUrl = $asset.browser_download_url
+            $tempExe = Join-Path $env:TEMP "OpenClaw_download.exe"
+            Write-Host "Downloading $($asset.name) from releases..." -ForegroundColor Gray
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $tempExe -ErrorAction Stop
+            $srcExe = Get-Item -Path $tempExe
+            Write-OK "Download complete."
+        } else {
+            throw "No desktop binary asset found in the latest release."
+        }
+    } catch {
+        Write-Host "" -ForegroundColor Red
+        Write-Host "ERROR: Could not download OpenClaw desktop binary automatically." -ForegroundColor Red
+        Write-Host "Reason: $_" -ForegroundColor Red
+        Write-Host "" 
+        Write-Host "To install the OpenClaw desktop app, either:" -ForegroundColor Yellow
+        Write-Host "  1. Build it locally:  pnpm install && pnpm tauri build" -ForegroundColor Gray
+        Write-Host "     Then re-run this script from: apps/windows/src-tauri/target/release/" -ForegroundColor Gray
+        Write-Host "  2. Download a pre-built release from: https://github.com/openclaw/openclaw/releases" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "Note: The OpenClaw CLI is already installed via npm (openclaw command)." -ForegroundColor Cyan
+        exit 1
+    }
 }
 
 

@@ -179,8 +179,22 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function sanitizeGeminiText(text: string): string {
-  return text.replace(/<\/?(?:final|thought|reasoning)(?:\/?)>/g, "");
+function sanitizeGeminiText(text: string, state: { buffer: string }): string {
+  const combined = state.buffer + text;
+  const sanitized = combined.replace(/<\/?(?:final|thought|reasoning)(?:\/?)>/g, "");
+
+  // Detect partial tag at the end to avoid leakage if split across chunks
+  const partialMatch = sanitized.match(
+    /<\/?(?:f|fi|fin|fina|final|t|th|tho|thou|thoug|thought|r|re|rea|reas|reaso|reason|reasoni|reasonin|reasoning)?(?:\/?)?$/i,
+  );
+
+  if (partialMatch) {
+    state.buffer = partialMatch[0];
+    return sanitized.slice(0, -state.buffer.length);
+  }
+
+  state.buffer = "";
+  return sanitized;
 }
 
 function resolveGoogleModelPath(modelId: string): string {
@@ -640,6 +654,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
         }
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
+        const sanitizerState = { buffer: "" };
         for await (const chunk of parseGoogleSseChunks(response, options?.signal)) {
           output.responseId ||= chunk.responseId;
           updateUsage(output, model, chunk);
@@ -690,7 +705,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
                     partial: output as never,
                   });
                 } else if (activeBlock?.type === "text") {
-                  const sanitizedDelta = sanitizeGeminiText(part.text);
+                  const sanitizedDelta = sanitizeGeminiText(part.text, sanitizerState);
                   activeBlock.text += sanitizedDelta;
                   activeBlock.textSignature = retainThoughtSignature(
                     activeBlock.textSignature,
