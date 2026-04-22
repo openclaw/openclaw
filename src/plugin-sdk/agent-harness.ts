@@ -54,3 +54,8 @@ export { resolveSandboxContext } from "../agents/sandbox.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export { acquireSessionWriteLock } from "../agents/session-write-lock.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+export {
+  resolveAgentHarnessBeforePromptBuildResult,
+  runAgentHarnessAfterCompactionHook,
+  runAgentHarnessBeforeCompactionHook,
+} from "../agents/harness/prompt-compaction-hook-helpers.js";

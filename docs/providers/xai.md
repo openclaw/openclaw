@@ -63,6 +63,32 @@ they follow the same API shape.
 current image-capable Grok refs in the bundled catalog.
 </Tip>
 
+## OpenClaw feature coverage
+
+The bundled plugin maps xAI's current public API surface onto OpenClaw's shared
+provider and tool contracts where the behavior fits cleanly.
+
+| xAI capability             | OpenClaw surface                       | Status                                                              |
+| -------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| Chat / Responses           | `xai/<model>` model provider           | Yes                                                                 |
+| Server-side web search     | `web_search` provider `grok`           | Yes                                                                 |
+| Server-side X search       | `x_search` tool                        | Yes                                                                 |
+| Server-side code execution | `code_execution` tool                  | Yes                                                                 |
+| Images                     | `image_generate`                       | Yes                                                                 |
+| Videos                     | `video_generate`                       | Yes                                                                 |
+| Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts` | Yes                                                                 |
+| Streaming TTS              | —                                      | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
+| Speech-to-text             | —                                      | Not exposed yet; needs a transcription provider surface             |
+| Realtime voice             | —                                      | Not exposed yet; different session/WebSocket contract               |
+| Files / batches            | Generic model API compatibility only   | Not a first-class OpenClaw tool                                     |
+
+<Note>
+OpenClaw uses xAI's REST image/video/TTS APIs for media generation and the
+Responses API for model, search, and code-execution tools. Features that need
+new OpenClaw contracts, such as streaming STT or Realtime voice sessions, are
+documented here as upstream capabilities rather than hidden plugin behavior.
+</Note>
+
 ### Fast-mode mappings
 
 `/fast on` or `agents.defaults.models["xai/<model>"].params.fastMode: true`
@@ -103,12 +129,17 @@ Legacy aliases still normalize to the canonical bundled ids:
     `video_generate` tool.
 
     - Default video model: `xai/grok-imagine-video`
-    - Modes: text-to-video, image-to-video, and remote video edit/extend flows
-    - Supports `aspectRatio` and `resolution`
+    - Modes: text-to-video, image-to-video, remote video edit, and remote video
+      extension
+    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`
+    - Resolutions: `480P`, `720P`
+    - Duration: 1-15 seconds for generation/image-to-video, 2-10 seconds for
+      extension
 
     <Warning>
     Local video buffers are not accepted. Use remote `http(s)` URLs for
-    video-reference and edit inputs.
+    video edit/extend inputs. Image-to-video accepts local image buffers because
+    OpenClaw can encode those as data URLs for xAI.
     </Warning>
 
     To use xAI as the default video provider:
@@ -128,6 +159,82 @@ Legacy aliases still normalize to the canonical bundled ids:
     <Note>
     See [Video Generation](/tools/video-generation) for shared tool parameters,
     provider selection, and failover behavior.
+    </Note>
+
+  </Accordion>
+
+  <Accordion title="Image generation">
+    The bundled `xai` plugin registers image generation through the shared
+    `image_generate` tool.
+
+    - Default image model: `xai/grok-imagine-image`
+    - Additional model: `xai/grok-imagine-image-pro`
+    - Modes: text-to-image and reference-image edit
+    - Reference inputs: one `image` or up to five `images`
+    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
+    - Resolutions: `1K`, `2K`
+    - Count: up to 4 images
+
+    OpenClaw asks xAI for `b64_json` image responses so generated media can be
+    stored and delivered through the normal channel attachment path. Local
+    reference images are converted to data URLs; remote `http(s)` references are
+    passed through.
+
+    To use xAI as the default image provider:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "xai/grok-imagine-image",
+          },
+        },
+      },
+    }
+    ```
+
+    <Note>
+    xAI also documents `quality`, `mask`, `user`, and additional native ratios
+    such as `1:2`, `2:1`, `9:20`, and `20:9`. OpenClaw forwards only the
+    shared cross-provider image controls today; unsupported native-only knobs
+    are intentionally not exposed through `image_generate`.
+    </Note>
+
+  </Accordion>
+
+  <Accordion title="Text-to-speech">
+    The bundled `xai` plugin registers text-to-speech through the shared `tts`
+    provider surface.
+
+    - Voices: `eve`, `ara`, `rex`, `sal`, `leo`, `una`
+    - Default voice: `eve`
+    - Formats: `mp3`, `wav`, `pcm`, `mulaw`, `alaw`
+    - Language: BCP-47 code or `auto`
+    - Speed: provider-native speed override
+    - Native Opus voice-note format is not supported
+
+    To use xAI as the default TTS provider:
+
+    ```json5
+    {
+      messages: {
+        tts: {
+          provider: "xai",
+          providers: {
+            xai: {
+              voiceId: "eve",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    <Note>
+    OpenClaw uses xAI's batch `/v1/tts` endpoint. xAI also offers streaming TTS
+    over WebSocket, but the OpenClaw speech provider contract currently expects
+    a complete audio buffer before reply delivery.
     </Note>
 
   </Accordion>
@@ -209,6 +316,12 @@ Legacy aliases still normalize to the canonical bundled ids:
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.
+    - xAI STT and Realtime voice are not registered as OpenClaw providers yet.
+      They require transcription/session contracts rather than the existing
+      batch TTS provider shape.
+    - xAI image `quality`, image `mask`, and extra native-only aspect ratios are
+      not exposed until the shared `image_generate` tool has corresponding
+      cross-provider controls.
   </Accordion>
 
   <Accordion title="Advanced notes">
@@ -228,6 +341,23 @@ Legacy aliases still normalize to the canonical bundled ids:
       [`exec`](/tools/exec).
   </Accordion>
 </AccordionGroup>
+
+## Live testing
+
+The xAI media paths are covered by unit tests and opt-in live suites. The live
+commands load secrets from your login shell, including `~/.profile`, before
+probing `XAI_API_KEY`.
+
+```bash
+pnpm test extensions/xai
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai/xai.live.test.ts
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS=xai pnpm test:live -- test/image-generation.runtime.live.test.ts
+```
+
+The provider-specific live file synthesizes normal TTS, telephony-friendly PCM
+TTS, text-to-image generation, and reference-image editing. The shared image
+live file verifies the same xAI provider through OpenClaw's runtime selection,
+fallback, normalization, and media attachment path.
 
 ## Related
 

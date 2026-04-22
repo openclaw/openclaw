@@ -31,6 +31,9 @@
       "pluginToolsMcpBridge": {
         "type": "boolean"
       },
+      "openClawToolsMcpBridge": {
+        "type": "boolean"
+      },
       "strictWindowsCmdWrapper": {
         "type": "boolean"
       },
@@ -107,6 +110,11 @@
     "pluginToolsMcpBridge": {
       "label": "Plugin Tools MCP Bridge",
       "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
+      "advanced": true
+    },
+    "openClawToolsMcpBridge": {
+      "label": "OpenClaw Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw core-tools MCP server into embedded ACP sessions so ACP agents can call selected built-in tools such as cron.",
       "advanced": true
     },
     "strictWindowsCmdWrapper": {

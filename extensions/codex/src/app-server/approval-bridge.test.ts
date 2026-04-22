@@ -106,6 +106,29 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
+  it("fails closed for unsupported native approval methods without requesting plugin approval", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "future/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "future-1",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({
+      decision: "decline",
+      reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(params.onAgentEvent).not.toHaveBeenCalled();
+  });
+
   it("maps app-server approval response families separately", () => {
     expect(
       buildApprovalResponse(
@@ -133,6 +156,10 @@ describe("Codex app-server approval bridge", () => {
     ).toEqual({
       permissions: { network: { allowHosts: ["example.com"] } },
       scope: "turn",
+    });
+    expect(buildApprovalResponse("future/requestApproval", undefined, "approved-once")).toEqual({
+      decision: "decline",
+      reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
     });
   });
 });

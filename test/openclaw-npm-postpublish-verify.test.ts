@@ -17,12 +17,8 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-pa
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
-const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-] as const;
 const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
   ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
-  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
 ] as const;
 
 describe("buildPublishedInstallScenarios", () => {
