@@ -463,6 +463,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Streaming configuration">
     OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by default, which fully supports streaming and tool calling simultaneously. No special configuration is needed.
 
+    For native `/api/chat` requests, OpenClaw also forwards thinking control directly to Ollama: `/think off` and `openclaw agent --thinking off` send top-level `think: false`, while non-`off` thinking levels send `think: true`.
+
     <Tip>
     If you need to use the OpenAI-compatible endpoint, see the "Legacy OpenAI-compatible mode" section above. Streaming and tool calling may not work simultaneously in that mode.
     </Tip>

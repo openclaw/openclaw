@@ -1,3 +1,4 @@
+import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   loadChannels,
   logoutWhatsApp,
@@ -5,7 +6,6 @@ import {
   waitWhatsAppLogin,
   type ChannelsState,
 } from "./controllers/channels.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import { loadConfig, saveConfig, type ConfigState } from "./controllers/config.ts";
 import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
