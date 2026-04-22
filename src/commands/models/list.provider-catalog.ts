@@ -6,11 +6,10 @@ import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolvePluginDiscoveryProviders,
-  runProviderCatalog,
+  runProviderStaticCatalog,
 } from "../../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProvider } from "../../plugins/providers.js";
 
-const CATALOG_DISPLAY_API_KEY = "__openclaw_catalog_display__";
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
 
@@ -65,21 +64,13 @@ export async function loadProviderCatalogModelsForList(params: {
       if (!providerFilter && SELF_HOSTED_DISCOVERY_PROVIDER_IDS.has(provider.id)) {
         continue;
       }
-      let result: Awaited<ReturnType<typeof runProviderCatalog>> | null;
+      let result: Awaited<ReturnType<typeof runProviderStaticCatalog>> | null;
       try {
-        result = await runProviderCatalog({
+        result = await runProviderStaticCatalog({
           provider,
           config: params.cfg,
           agentDir: params.agentDir,
           env,
-          resolveProviderApiKey: () => ({
-            apiKey: CATALOG_DISPLAY_API_KEY,
-          }),
-          resolveProviderAuth: () => ({
-            apiKey: CATALOG_DISPLAY_API_KEY,
-            mode: "api_key",
-            source: "env",
-          }),
         });
       } catch {
         result = null;

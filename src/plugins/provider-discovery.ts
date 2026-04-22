@@ -15,6 +15,10 @@ function resolveProviderCatalogHook(provider: ProviderPlugin) {
   return provider.catalog ?? provider.discovery;
 }
 
+function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
+  return resolveProviderCatalogHook(provider) ?? provider.staticCatalog;
+}
+
 export async function resolvePluginDiscoveryProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -23,7 +27,7 @@ export async function resolvePluginDiscoveryProviders(params: {
 }): Promise<ProviderPlugin[]> {
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
-    .filter((provider) => resolveProviderCatalogHook(provider));
+    .filter((provider) => resolveProviderCatalogOrderHook(provider));
 }
 
 export function groupPluginDiscoveryProvidersByOrder(
@@ -37,7 +41,7 @@ export function groupPluginDiscoveryProvidersByOrder(
   } as Record<ProviderDiscoveryOrder, ProviderPlugin[]>;
 
   for (const provider of providers) {
-    const order = resolveProviderCatalogHook(provider)?.order ?? "late";
+    const order = resolveProviderCatalogOrderHook(provider)?.order ?? "late";
     grouped[order].push(provider);
   }
 
@@ -116,5 +120,28 @@ export function runProviderCatalog(params: {
     env: params.env,
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
+  });
+}
+
+export function runProviderStaticCatalog(params: {
+  provider: ProviderPlugin;
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}) {
+  return params.provider.staticCatalog?.run({
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    resolveProviderApiKey: () => ({
+      apiKey: undefined,
+    }),
+    resolveProviderAuth: () => ({
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    }),
   });
 }
