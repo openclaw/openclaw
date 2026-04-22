@@ -238,8 +238,8 @@ export async function handleSessionHistoryHttpRequest(
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       req,
       auth: opts.getResolvedAuth?.() ?? opts.auth,
-      trustedProxies: cfg.gateway?.trustedProxies ?? opts.trustedProxies,
-      allowRealIpFallback: cfg.gateway?.allowRealIpFallback ?? opts.allowRealIpFallback,
+      trustedProxies: cfg.gateway?.trustedProxies,
+      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
       rateLimiter: opts.rateLimiter,
       cfg,
     });

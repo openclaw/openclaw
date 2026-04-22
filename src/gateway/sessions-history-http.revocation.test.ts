@@ -6,14 +6,19 @@ let transcriptUpdateHandler:
   | ((update: { sessionFile?: string; message?: unknown; messageId?: string }) => void)
   | undefined;
 let authRevoked = false;
+let gatewayConfig: {
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  webchat: { chatHistoryMaxChars: number };
+} = {
+  trustedProxies: ["10.0.0.1"],
+  allowRealIpFallback: false,
+  webchat: { chatHistoryMaxChars: 2000 },
+};
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({
-    gateway: {
-      trustedProxies: ["10.0.0.1"],
-      allowRealIpFallback: false,
-      webchat: { chatHistoryMaxChars: 2000 },
-    },
+    gateway: gatewayConfig,
   }),
 }));
 
@@ -42,16 +47,35 @@ vi.mock("./http-utils.js", () => ({
     cfg: { gateway: { webchat: { chatHistoryMaxChars: 2000 } } },
     requestAuth: { trustDeclaredOperatorScopes: true },
   }),
-  checkGatewayHttpRequestAuth: async () =>
-    authRevoked
-      ? {
-          ok: false as const,
-          authResult: { ok: false, reason: "trusted_proxy_user_not_allowed" },
-        }
-      : {
-          ok: true as const,
-          requestAuth: { trustDeclaredOperatorScopes: true },
-        },
+  checkGatewayHttpRequestAuth: async (params: {
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+  }) => {
+    if (authRevoked) {
+      return {
+        ok: false as const,
+        authResult: { ok: false, reason: "trusted_proxy_user_not_allowed" },
+      };
+    }
+    if (
+      gatewayConfig.trustedProxies === undefined &&
+      gatewayConfig.allowRealIpFallback === undefined
+    ) {
+      return params.trustedProxies === undefined && params.allowRealIpFallback === undefined
+        ? {
+            ok: false as const,
+            authResult: { ok: false, reason: "trusted_proxy_no_proxies_configured" },
+          }
+        : {
+            ok: true as const,
+            requestAuth: { trustDeclaredOperatorScopes: true },
+          };
+    }
+    return {
+      ok: true as const,
+      requestAuth: { trustDeclaredOperatorScopes: true },
+    };
+  },
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -139,6 +163,11 @@ class MockRes extends EventEmitter {
 afterEach(() => {
   transcriptUpdateHandler = undefined;
   authRevoked = false;
+  gatewayConfig = {
+    trustedProxies: ["10.0.0.1"],
+    allowRealIpFallback: false,
+    webchat: { chatHistoryMaxChars: 2000 },
+  };
 });
 
 describe("session history SSE auth revocation", () => {
@@ -169,6 +198,41 @@ describe("session history SSE auth revocation", () => {
     const joined = res.writes.join("");
     expect(joined).not.toContain("event: message");
     expect(joined).not.toContain("post-revocation secret");
+    expect(res.writableEnded).toBe(true);
+  });
+
+  it("rechecks SSE auth against live proxy config instead of startup fallbacks", async () => {
+    const req = new MockReq("/sessions/agent%3Amain/history");
+    const res = new MockRes();
+
+    const handled = await handleSessionHistoryHttpRequest(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      {
+        auth: { mode: "trusted-proxy" } as never,
+        trustedProxies: ["10.0.0.1"],
+        allowRealIpFallback: false,
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(transcriptUpdateHandler).toBeTypeOf("function");
+
+    gatewayConfig = {
+      webchat: { chatHistoryMaxChars: 2000 },
+    };
+
+    transcriptUpdateHandler?.({
+      sessionFile: "/tmp/session-1.jsonl",
+      message: { role: "assistant", content: [{ type: "text", text: "stale-proxy event" }] },
+      messageId: "m-2",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const joined = res.writes.join("");
+    expect(joined).not.toContain("event: message");
+    expect(joined).not.toContain("stale-proxy event");
     expect(res.writableEnded).toBe(true);
   });
 });
