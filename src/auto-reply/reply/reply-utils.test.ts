@@ -1033,6 +1033,22 @@ describe("createStreamingDirectiveAccumulator", () => {
 
     expect(result?.text).toBe("NO_REPLY: explanation");
   });
+
+  it("preserves leading indentation for plain streamed chunks without directives", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("  nested bullet");
+
+    expect(result?.text).toBe("  nested bullet");
+  });
+
+  it("preserves spacing for literal double-bracket text without reply directives", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("  [[not-a-directive]]  keep   spacing");
+
+    expect(result?.text).toBe("  [[not-a-directive]]  keep   spacing");
+  });
 });
 
 describe("extractShortModelName", () => {

@@ -613,4 +613,58 @@ describe("handleMessageEnd", () => {
       },
     });
   });
+
+  it("sanitizes leaked channel delimiters before emitting a message_end replacement update", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      state: {
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Visible answer",
+        blockReplyBreak: "text_end",
+        deltaBuffer: "",
+        blockBuffer: "",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "internal planning<channel|>Visible answer" }],
+        stopReason: "stop",
+        usage: {},
+      },
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+  });
+
+  it("marks chunked message_end drains as final delivery", () => {
+    const emitBlockChunk = vi.fn();
+    const reset = vi.fn();
+    const ctx = createMessageEndContext({
+      state: {
+        blockReplyBreak: "message_end",
+      },
+    });
+    ctx.emitBlockChunk = emitBlockChunk;
+    ctx.blockChunker = {
+      hasBuffered: () => true,
+      drain: ({ emit }: { emit: (chunk: string) => void }) => emit("chunked reply"),
+      reset,
+    } as never;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Need send." }],
+        usage: {},
+      },
+    } as never);
+
+    expect(emitBlockChunk).toHaveBeenCalledWith("chunked reply", { finalDelivery: true });
+    expect(reset).toHaveBeenCalled();
+  });
 });

@@ -65,6 +65,25 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     expect(onBlockReply.mock.calls[1]?.[0]?.text).toBe("[[");
   });
 
+  it("preserves reply directives that arrive only in legacy text_end content", () => {
+    const { emit, onBlockReply } = createBlockReplyHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit, content: "[[reply_to_current]]\nHello" });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to_current]]\nHello" }],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = onBlockReply.mock.calls[0]?.[0];
+    expect(payload?.text).toBe("Hello");
+    expect(payload?.replyToCurrent).toBe(true);
+    expect(payload?.replyToTag).toBe(true);
+  });
+
   it("streams partial replies past reply_to tags split across chunks", () => {
     const { session, emit } = createStubSessionHarness();
 

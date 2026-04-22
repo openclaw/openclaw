@@ -6,6 +6,7 @@ import {
   type ReasoningTagMode,
   type ReasoningTagTrim,
 } from "./reasoning-tags.js";
+import { extractStructuredRepeatedVisibleSuffix } from "./repeated-visible-suffix.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -523,6 +524,7 @@ export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "int
 
 type AssistantVisibleTextPipelineOptions = {
   finalTrim: ReasoningTagTrim;
+  normalizeVisibleOutput?: boolean;
   preserveDowngradedToolText?: boolean;
   preserveMinimaxToolXml?: boolean;
   reasoningMode: ReasoningTagMode;
@@ -536,18 +538,21 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
 > = {
   delivery: {
     finalTrim: "both",
+    normalizeVisibleOutput: true,
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
   },
   history: {
     finalTrim: "none",
+    normalizeVisibleOutput: false,
     reasoningMode: "strict",
     reasoningTrim: "none",
     stageOrder: "reasoning-last",
   },
   "internal-scaffolding": {
     finalTrim: "start",
+    normalizeVisibleOutput: false,
     preserveDowngradedToolText: true,
     preserveMinimaxToolXml: true,
     reasoningMode: "preserve",
@@ -569,6 +574,14 @@ function applyAssistantVisibleTextStagePipeline(
       mode: options.reasoningMode,
       trim: options.reasoningTrim,
     });
+  const trimDeliveryTextPreservingMeaningfulIndentation = (value: string) => {
+    const trimmedEnd = value.trimEnd();
+    const withoutLeadingBlankLines = trimmedEnd.replace(/^(?:[ \t]*\r?\n)+/, "");
+    if (/^(?: {2,}|\t+)/.test(withoutLeadingBlankLines)) {
+      return withoutLeadingBlankLines;
+    }
+    return trimmedEnd.trimStart();
+  };
   const applyFinalTrim = (value: string) => {
     if (options.finalTrim === "none") {
       return value;
@@ -576,7 +589,7 @@ function applyAssistantVisibleTextStagePipeline(
     if (options.finalTrim === "start") {
       return value.trimStart();
     }
-    return value.trim();
+    return trimDeliveryTextPreservingMeaningfulIndentation(value);
   };
   const stripNonReasoningStages = (value: string) => {
     let cleaned = value;
@@ -591,12 +604,14 @@ function applyAssistantVisibleTextStagePipeline(
     }
     return cleaned;
   };
+  const normalizeVisibleOutput = (value: string) =>
+    options.normalizeVisibleOutput ? extractStructuredRepeatedVisibleSuffix(value) : value;
 
   if (options.stageOrder === "reasoning-first") {
-    return applyFinalTrim(stripNonReasoningStages(stripReasoning(text)));
+    return applyFinalTrim(normalizeVisibleOutput(stripNonReasoningStages(stripReasoning(text))));
   }
 
-  return applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
+  return applyFinalTrim(normalizeVisibleOutput(stripReasoning(stripNonReasoningStages(text))));
 }
 
 export function sanitizeAssistantVisibleTextWithProfile(
@@ -619,6 +634,13 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
+}
+
+export function sanitizeAssistantVisibleTextForStreamUpdate(text: string): string {
+  return applyAssistantVisibleTextStagePipeline(text, {
+    ...ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS.delivery,
+    normalizeVisibleOutput: false,
+  });
 }
 
 /**

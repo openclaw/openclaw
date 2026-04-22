@@ -13,6 +13,10 @@ import {
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
+  sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextForStreamUpdate,
+} from "../shared/text/assistant-visible-text.js";
+import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
@@ -114,6 +118,10 @@ function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
+function trimStreamVisibleTextPreservingIndentation(text: string): string {
+  return text.trimEnd().replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
 function appendBlockReplyChunk(ctx: EmbeddedPiSubscribeContext, chunk: string) {
   if (ctx.blockChunker) {
     ctx.blockChunker.append(chunk);
@@ -129,6 +137,13 @@ function replaceBlockReplyBuffer(ctx: EmbeddedPiSubscribeContext, text: string) 
     return;
   }
   ctx.state.blockBuffer = text;
+}
+
+function replaceFinalBlockReplyBuffer(ctx: EmbeddedPiSubscribeContext, text: string) {
+  replaceBlockReplyBuffer(ctx, text);
+  ctx.state.blockState.thinking = false;
+  ctx.state.blockState.final = false;
+  ctx.state.blockState.inlineCode = createInlineCodeState();
 }
 
 function resolveAssistantTextChunk(params: {
@@ -373,9 +388,9 @@ export function handleMessageUpdate(
   if (deliveryPhase === "commentary") {
     return;
   }
-  const phaseAwareVisibleText = coerceChatContentText(
-    extractAssistantVisibleText(partialAssistant),
-  ).trim();
+  const phaseAwareVisibleText = trimStreamVisibleTextPreservingIndentation(
+    coerceChatContentText(extractAssistantVisibleText(partialAssistant)),
+  );
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
@@ -393,13 +408,13 @@ export function handleMessageUpdate(
     phaseAwareVisibleText ||
     (deliveryPhase === "final_answer"
       ? ""
-      : ctx
-          .stripBlockTags(ctx.state.deltaBuffer, {
+      : trimStreamVisibleTextPreservingIndentation(
+          ctx.stripBlockTags(ctx.state.deltaBuffer, {
             thinking: false,
             final: false,
             inlineCode: createInlineCodeState(),
-          })
-          .trim());
+          }),
+        ));
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
@@ -412,7 +427,11 @@ export function handleMessageUpdate(
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
-    const cleanedText = parsedFull.text;
+    const cleanedText =
+      evtType === "text_end"
+        ? sanitizeAssistantVisibleText(parsedFull.text)
+        : sanitizeAssistantVisibleTextForStreamUpdate(parsedFull.text);
+    const finalBufferedText = evtType === "text_end" ? sanitizeAssistantVisibleText(next) : "";
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedDelta ?? {});
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
@@ -440,9 +459,11 @@ export function handleMessageUpdate(
         appendBlockReplyChunk(ctx, blockReplyChunk);
       }
 
-      if (evtType === "text_end" && !ctx.state.lastBlockReplyText && cleanedText) {
-        replaceBlockReplyBuffer(ctx, cleanedText);
+      if (evtType === "text_end" && !ctx.state.lastBlockReplyText && finalBufferedText) {
+        replaceFinalBlockReplyBuffer(ctx, finalBufferedText);
       }
+    } else if (evtType === "text_end" && !ctx.state.lastBlockReplyText && finalBufferedText) {
+      replaceFinalBlockReplyBuffer(ctx, finalBufferedText);
     }
 
     ctx.state.lastStreamedAssistant = next;
@@ -483,7 +504,12 @@ export function handleMessageUpdate(
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    if (evtType === "text_end") {
+      ctx.blockChunker?.drain({
+        force: false,
+        emit: (text) => ctx.emitBlockChunk(text, { finalDelivery: true }),
+      });
+    }
   }
 
   if (
@@ -494,7 +520,7 @@ export function handleMessageUpdate(
   ) {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
-      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, finalDelivery: true }))
       .catch((err) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });
@@ -533,7 +559,9 @@ export function handleMessageEnd(
   });
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
+    text: sanitizeAssistantVisibleText(
+      ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
+    ),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
@@ -673,7 +701,10 @@ export function handleMessageEnd(
       text !== ctx.state.lastBlockReplyText)
   ) {
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
+      ctx.blockChunker.drain({
+        force: true,
+        emit: (chunk) => ctx.emitBlockChunk(chunk, { finalDelivery: true }),
+      });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Guard: for text_end channels, if text_end already delivered content
@@ -723,7 +754,7 @@ export function handleMessageEnd(
     ctx.state.blockReplyBreak === "message_end" &&
     ctx.params.onBlockReplyFlush
   ) {
-    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ finalDelivery: true });
     if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
       return flushBlockReplyBufferResult
         .then(() => {
