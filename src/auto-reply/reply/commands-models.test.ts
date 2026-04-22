@@ -154,6 +154,19 @@ describe("handleModelsCommand", () => {
     expect(buttons?.length).toBeGreaterThan(0);
   });
 
+  it("loads the model catalog with useCache=false so newly-added models appear without a restart (#69750)", async () => {
+    // Regression for #69750: loadModelCatalog caches at module scope for
+    // the gateway lifetime with no TTL. If the /model picker doesn't pass
+    // useCache:false it shows a stale keyboard whenever the user edits
+    // openclaw.json to add models. The fix applies to all text-surface
+    // /models commands that go through buildModelsProviderData.
+    await handleModelsCommand(buildModelsParams("/models", cfg, "telegram"), true);
+    const calls = modelCatalogMocks.loadModelCatalog.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const lastCall = calls.at(-1);
+    expect(lastCall?.[0]?.useCache).toBe(false);
+  });
+
   it("handles provider pagination all mode and unknown providers", async () => {
     const cases = [
       {

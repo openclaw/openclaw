@@ -46,7 +46,11 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  // Channel /model pickers must see newly-added models without a gateway
+  // restart. loadModelCatalog caches at module scope for the gateway
+  // lifetime with no TTL or config-change hook, so reuse would show a
+  // stale keyboard whenever the user adds models to openclaw.json. (#69750)
+  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
   const allowed = buildAllowedModelSet({
     cfg,
     catalog,
