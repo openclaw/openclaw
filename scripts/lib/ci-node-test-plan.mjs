@@ -65,8 +65,15 @@ function createAutoReplyReplySplitShards() {
     }
   }
 
+  const shardCounts = {
+    "auto-reply-reply-agent-runner": 1,
+    "auto-reply-reply-commands": 2,
+    "auto-reply-reply-dispatch": 1,
+    "auto-reply-reply-state-routing": 1,
+  };
+
   return Object.entries(groups).flatMap(([groupName, includePatterns]) => {
-    const shardCount = groupName === "auto-reply-reply-commands" ? 4 : 2;
+    const shardCount = shardCounts[groupName] ?? 1;
     return Array.from({ length: shardCount }, (_, index) => ({
       shardName: `${groupName}-${String.fromCharCode(97 + index)}`,
       configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
@@ -90,7 +97,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
       {
         shardName: "core-runtime-media-ui",
@@ -101,7 +108,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.ui.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
       {
         shardName: "core-runtime-shared",
@@ -112,7 +119,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
-        requiresDist: true,
+        requiresDist: false,
       },
     ],
   ],
@@ -176,7 +183,7 @@ const SPLIT_NODE_SHARDS = new Map([
     ],
   ],
 ]);
-const DIST_DEPENDENT_NODE_SHARD_NAMES = new Set(["core-support-boundary", "core-runtime"]);
+const DIST_DEPENDENT_NODE_SHARD_NAMES = new Set(["core-support-boundary"]);
 
 function formatNodeTestShardCheckName(shardName) {
   const normalizedShardName = shardName.startsWith("core-unit-")

@@ -198,7 +198,11 @@ export function normalizeAgentLabel(agent: {
   );
 }
 
-const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|\/)/i;
+const CONTROL_UI_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
+
+export function isRenderableControlUiAvatarUrl(value: string): boolean {
+  return CONTROL_UI_AVATAR_URL_RE.test(value);
+}
 
 export function resolveAgentAvatarUrl(
   agent: { identity?: { avatar?: string; avatarUrl?: string } },
@@ -213,11 +217,27 @@ export function resolveAgentAvatarUrl(
     if (!candidate) {
       continue;
     }
-    if (AVATAR_URL_RE.test(candidate)) {
+    if (isRenderableControlUiAvatarUrl(candidate)) {
       return candidate;
     }
   }
   return null;
+}
+
+// Chat-render variant: accept `blob:` URLs (produced locally by
+// `URL.createObjectURL` after an authenticated avatar fetch) in addition to
+// config-sanitized candidates. The config path still gates untrusted
+// http(s)/data sources through `resolveAgentAvatarUrl`.
+export function resolveChatAvatarRenderUrl(
+  candidate: string | null | undefined,
+  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const trimmed = normalizeOptionalString(candidate);
+  if (trimmed?.startsWith("blob:")) {
+    return trimmed;
+  }
+  return resolveAgentAvatarUrl(agent, agentIdentity);
 }
 
 export function agentLogoUrl(basePath: string): string {
