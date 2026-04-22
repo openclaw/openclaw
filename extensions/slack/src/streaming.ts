@@ -28,6 +28,19 @@ export type SlackStreamSession = {
   threadTs: string;
   /** True once stop() has been called. */
   stopped: boolean;
+  /**
+   * True once any Slack API call (startStream / appendStream) has succeeded.
+   * The SDK buffers appended text locally until the buffer exceeds
+   * `buffer_size` (default 256 chars); only then does it issue a network
+   * call. Until `delivered` flips, nothing has actually reached Slack.
+   */
+  delivered: boolean;
+  /**
+   * Concatenation of every `text` passed to the session. Used by the
+   * caller to fall back to a normal `chat.postMessage` when finalize fails
+   * before any append flushed the buffer.
+   */
+  pendingText: string;
 };
 
 export type StartSlackStreamParams = {
@@ -60,6 +73,27 @@ export type StopSlackStreamParams = {
   /** Optional final markdown text to append before stopping. */
   text?: string;
 };
+
+/**
+ * Thrown by {@link stopSlackStream} when Slack's `chat.stopStream` rejects
+ * with a recipient-resolution error (see
+ * {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) and no prior `append` had
+ * flushed the buffer, so no text ever reached Slack. Carries the pending
+ * text so the caller can deliver it via a normal `chat.postMessage`.
+ */
+export class SlackStreamNotDeliveredError extends Error {
+  readonly pendingText: string;
+  readonly slackCode: string;
+  constructor(pendingText: string, slackCode: string) {
+    super(
+      `slack-stream: finalize failed with ${slackCode} before any text reached Slack ` +
+        `(${pendingText.length} chars pending)`,
+    );
+    this.name = "SlackStreamNotDeliveredError";
+    this.pendingText = pendingText;
+    this.slackCode = slackCode;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Stream lifecycle
@@ -94,13 +128,22 @@ export async function startSlackStream(
     channel,
     threadTs,
     stopped: false,
+    delivered: false,
+    pendingText: "",
   };
 
-  // If initial text is provided, send it as the first append which will
-  // trigger the ChatStreamer to call chat.startStream under the hood.
   if (text) {
-    await streamer.append({ markdown_text: text });
-    logVerbose(`slack-stream: appended initial text (${text.length} chars)`);
+    session.pendingText += text;
+    // `append` returns the Slack response when it actually hits the network,
+    // null when the buffer is still under `buffer_size` (see chat-stream.js).
+    // Flip `delivered` only when Slack acknowledged.
+    const result = await streamer.append({ markdown_text: text });
+    if (result) {
+      session.delivered = true;
+    }
+    logVerbose(
+      `slack-stream: appended initial text (${text.length} chars, ${result ? "flushed" : "buffered"})`,
+    );
   }
 
   return session;
@@ -121,8 +164,12 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     return;
   }
 
-  await session.streamer.append({ markdown_text: text });
-  logVerbose(`slack-stream: appended ${text.length} chars`);
+  session.pendingText += text;
+  const result = await session.streamer.append({ markdown_text: text });
+  if (result) {
+    session.delivered = true;
+  }
+  logVerbose(`slack-stream: appended ${text.length} chars (${result ? "flushed" : "buffered"})`);
 }
 
 /**
@@ -132,10 +179,16 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  * Optionally include final text to append before stopping.
  *
  * If Slack's `chat.stopStream` responds with a known benign finalize error
- * (e.g. `user_not_found` for Slack Connect recipients - see issue #70295),
- * any text already delivered via `append()` stays visible and the session
- * is marked stopped. Other Slack API errors still propagate so the caller
- * can record them.
+ * (see {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) AND any prior `append`
+ * has already landed on Slack, the error is swallowed and the session is
+ * marked stopped - the already-delivered text stays visible.
+ *
+ * If the same benign error fires before any append flushed (e.g. short
+ * replies that never exceeded the SDK's buffer_size), this function throws
+ * a {@link SlackStreamNotDeliveredError} carrying the pending text so the
+ * caller can deliver it via `chat.postMessage`.
+ *
+ * All other errors propagate unchanged.
  */
 export async function stopSlackStream(params: StopSlackStreamParams): Promise<void> {
   const { session, text } = params;
@@ -146,6 +199,9 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
   }
 
   session.stopped = true;
+  if (text) {
+    session.pendingText += text;
+  }
 
   logVerbose(
     `slack-stream: stopping stream in ${session.channel} thread=${session.threadTs}${
@@ -155,13 +211,20 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
 
   try {
     await session.streamer.stop(text ? { markdown_text: text } : undefined);
+    session.delivered = true;
   } catch (err) {
     if (isBenignSlackFinalizeError(err)) {
-      logVerbose(
-        `slack-stream: finalize rejected by Slack (${formatSlackError(err)}); ` +
-          "appended text remains visible, treating stream as stopped",
-      );
-      return;
+      const code = extractSlackErrorCode(err) ?? "unknown";
+      if (session.delivered) {
+        logVerbose(
+          `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
+        );
+        return;
+      }
+      // No append ever flushed; the ChatStreamer's stop() runs chat.startStream
+      // internally and that call failed. Surface the pending text so the
+      // caller can post a normal message via chat.postMessage.
+      throw new SlackStreamNotDeliveredError(session.pendingText, code);
     }
     throw err;
   }
@@ -174,11 +237,12 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
 // ---------------------------------------------------------------------------
 
 /**
- * Slack API error codes that indicate `chat.stopStream` cannot finalize the
- * stream for the current recipient/team, but any `chat.appendStream` calls
- * that already landed are still visible to the user. Treat these as benign
- * at the dispatch layer so the reply is not reported as an error when text
- * did get through.
+ * Slack API error codes that indicate `chat.stopStream` (or the
+ * `chat.startStream` call the SDK issues inside `stop()` when the buffer
+ * never flushed) cannot finalize the stream for the current recipient or
+ * team. Either the caller falls back to a normal message (see
+ * {@link SlackStreamNotDeliveredError}) or, if prior appends already
+ * delivered text, the error is logged verbosely and swallowed.
  */
 const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   // Slack Connect recipients: finalize fails because the external user id
@@ -190,12 +254,12 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   "missing_recipient_user_id",
 ]);
 
-function isBenignSlackFinalizeError(err: unknown): boolean {
+export function isBenignSlackFinalizeError(err: unknown): boolean {
   const code = extractSlackErrorCode(err);
   return code !== undefined && BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code);
 }
 
-function extractSlackErrorCode(err: unknown): string | undefined {
+export function extractSlackErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
@@ -211,15 +275,4 @@ function extractSlackErrorCode(err: unknown): string | undefined {
   const message = typeof record.message === "string" ? record.message : "";
   const match = message.match(/An API error occurred:\s*([a-z_][a-z0-9_]*)/i);
   return match?.[1];
-}
-
-function formatSlackError(err: unknown): string {
-  const code = extractSlackErrorCode(err);
-  if (code) {
-    return code;
-  }
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
 }

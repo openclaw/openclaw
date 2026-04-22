@@ -37,7 +37,12 @@ import {
   resolveSlackStreamingConfig,
 } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
-import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
+import {
+  appendSlackStream,
+  SlackStreamNotDeliveredError,
+  startSlackStream,
+  stopSlackStream,
+} from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
@@ -862,17 +867,50 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // -----------------------------------------------------------------------
   // Finalize the stream if one was started
   // -----------------------------------------------------------------------
+  let streamFallbackDelivered = false;
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
     try {
       await stopSlackStream({ session: finalStream });
     } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatErrorMessage(err)}`));
+      if (err instanceof SlackStreamNotDeliveredError) {
+        // Slack rejected the stream before any text reached the recipient
+        // (common for short replies to Slack Connect users - the SDK buffers
+        // under 256 chars and the internal chat.startStream inside stop()
+        // is the first call to Slack). Fall back to a plain chat.postMessage
+        // so the reply is not lost.
+        try {
+          // Rename-bind to dodge eslint-plugin-unicorn/require-post-message-target-origin
+          // which cannot distinguish Slack chat.postMessage from window.postMessage.
+          const postChatMessage = ctx.app.client.chat.postMessage.bind(ctx.app.client.chat);
+          await postChatMessage({
+            channel: finalStream.channel,
+            thread_ts: finalStream.threadTs,
+            text: err.pendingText,
+          });
+          streamFallbackDelivered = true;
+          logVerbose(
+            `slack-stream: streamed finalize failed (${err.slackCode}); delivered ${err.pendingText.length} chars via chat.postMessage fallback`,
+          );
+        } catch (postErr) {
+          runtime.error?.(
+            danger(
+              `slack-stream: fallback chat.postMessage failed after ${err.slackCode}: ${formatErrorMessage(postErr)}`,
+            ),
+          );
+        }
+      } else {
+        runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatErrorMessage(err)}`));
+      }
     }
   }
 
   const anyReplyDelivered =
-    observedReplyDelivery || queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+    observedReplyDelivery ||
+    queuedFinal ||
+    streamFallbackDelivered ||
+    (counts.block ?? 0) > 0 ||
+    (counts.final ?? 0) > 0;
 
   if (statusReactionsEnabled) {
     if (dispatchError) {
