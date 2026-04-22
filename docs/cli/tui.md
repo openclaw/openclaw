@@ -3,6 +3,8 @@ summary: "CLI reference for `openclaw tui` (Gateway-backed or local embedded ter
 read_when:
   - You want a terminal UI for the Gateway (remote-friendly)
   - You want to pass url/token/session from scripts
+  - You want to run the TUI in local embedded mode without a Gateway
+  - You want to use openclaw chat or openclaw tui --local
 title: "tui"
 ---
 
@@ -44,6 +46,11 @@ compare it against the docs, and help repair it from the same terminal:
 
 ```bash
 openclaw chat
+```
+
+Then inside the TUI:
+
+```text
 !openclaw config file
 !openclaw docs gateway auth token secretref
 !openclaw config validate

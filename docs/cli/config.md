@@ -385,6 +385,11 @@ against the docs while you validate each change from the same terminal:
 
 ```bash
 openclaw chat
+```
+
+Then inside the TUI:
+
+```text
 !openclaw config file
 !openclaw docs gateway auth token secretref
 !openclaw config validate
