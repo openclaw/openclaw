@@ -89,6 +89,12 @@ function normalizePathPrefix(value: string): string {
   return isWindowsAbsolutePath(value) ? path.win32.resolve(value) : path.resolve(value);
 }
 
+function addPathPrefix(prefixes: Map<string, string>, prefix: string, label: string): void {
+  if (!prefixes.has(prefix)) {
+    prefixes.set(prefix, label);
+  }
+}
+
 function addPathPrefixVariants(
   prefixes: Map<string, string>,
   value: string | undefined,
@@ -98,14 +104,9 @@ function addPathPrefixVariants(
     return;
   }
   const normalized = normalizePathPrefix(value);
-  if (!prefixes.has(normalized)) {
-    prefixes.set(normalized, label);
-  }
+  addPathPrefix(prefixes, normalized, label);
   if (isWindowsAbsolutePath(normalized)) {
-    const forwardSlashPrefix = normalized.replaceAll("\\", "/");
-    if (!prefixes.has(forwardSlashPrefix)) {
-      prefixes.set(forwardSlashPrefix, label);
-    }
+    addPathPrefix(prefixes, normalized.replaceAll("\\", "/"), label);
   }
 }
 
@@ -120,9 +121,11 @@ function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionP
 }
 
 function pathCandidates(file: string): string[] {
-  return isWindowsAbsolutePath(file)
-    ? [path.win32.resolve(file), path.win32.resolve(file).replaceAll("\\", "/")]
-    : [path.resolve(file)];
+  if (!isWindowsAbsolutePath(file)) {
+    return [path.resolve(file)];
+  }
+  const resolved = path.win32.resolve(file);
+  return [resolved, resolved.replaceAll("\\", "/")];
 }
 
 function matchPathPrefix(file: string, prefix: string): string | undefined {
@@ -141,7 +144,8 @@ export function redactPathForSupport(file: string, options: SupportRedactionCont
   if (file.startsWith("$")) {
     return file;
   }
-  for (const next of pathCandidates(file)) {
+  const candidates = pathCandidates(file);
+  for (const next of candidates) {
     for (const { prefix, label } of pathRedactionPrefixes(options)) {
       const suffix = matchPathPrefix(next, prefix);
       if (suffix !== undefined) {
@@ -149,7 +153,7 @@ export function redactPathForSupport(file: string, options: SupportRedactionCont
       }
     }
   }
-  return redactSensitiveTextForSupport(pathCandidates(file)[0] ?? file);
+  return redactSensitiveTextForSupport(candidates[0] ?? file);
 }
 
 function redactKnownPathPrefixesForSupport(
