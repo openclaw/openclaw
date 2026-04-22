@@ -874,7 +874,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("deduplicates grounded same-day variants before ranking promotions", async () => {
+  it("keeps grounded same-day durable slugged notes separate before ranking promotions", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
         'Always use "Happy Together" calendar for flights and reservations.',
@@ -933,9 +933,21 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
       });
 
-      expect(ranked).toHaveLength(1);
-      expect(ranked[0]?.groundedCount).toBe(3);
-      expect(ranked[0]?.uniqueQueries).toBe(2);
+      expect(ranked).toHaveLength(2);
+      expect(ranked.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/2026-04-03-reset-summary.md",
+        "memory/2026-04-03.md",
+      ]);
+      expect(ranked.find((entry) => entry.path === "memory/2026-04-03.md")).toMatchObject({
+        groundedCount: 2,
+        uniqueQueries: 1,
+      });
+      expect(
+        ranked.find((entry) => entry.path === "memory/2026-04-03-reset-summary.md"),
+      ).toMatchObject({
+        groundedCount: 3,
+        uniqueQueries: 2,
+      });
 
       await recordShortTermRecalls({
         workspaceDir,
@@ -962,14 +974,23 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
       });
 
-      expect(rankedAfterRecall).toHaveLength(1);
-      expect(rankedAfterRecall[0]?.path).toBe("memory/2026-04-03.md");
-      expect(rankedAfterRecall[0]?.groundedCount).toBe(3);
-      expect(rankedAfterRecall[0]?.recallCount).toBe(1);
+      expect(rankedAfterRecall).toHaveLength(2);
+      expect(
+        rankedAfterRecall.find((entry) => entry.path === "memory/2026-04-03.md"),
+      ).toMatchObject({
+        groundedCount: 2,
+        recallCount: 0,
+      });
+      expect(
+        rankedAfterRecall.find((entry) => entry.path === "memory/2026-04-03-reset-summary.md"),
+      ).toMatchObject({
+        groundedCount: 3,
+        recallCount: 1,
+      });
     });
   });
 
-  it("prefers canonical same-day paths after a slugged variant was recalled first", async () => {
+  it("keeps canonical and slugged same-day durable notes separate after later canonical recalls", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
       const sluggedRelativePath = "memory/2026-04-03-reset-summary.md";
@@ -1033,21 +1054,29 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
       });
 
-      expect(ranked).toHaveLength(1);
-      expect(ranked[0]?.path).toBe("memory/2026-04-03.md");
-      expect(ranked[0]?.recallCount).toBe(3);
+      expect(ranked).toHaveLength(2);
+      expect(ranked.find((entry) => entry.path === "memory/2026-04-03.md")).toMatchObject({
+        recallCount: 2,
+      });
+      expect(
+        ranked.find((entry) => entry.path === "memory/2026-04-03-reset-summary.md"),
+      ).toMatchObject({
+        recallCount: 1,
+      });
       const entries = await readShortTermRecallEntries({
         workspaceDir,
         nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
       });
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.path).toBe("memory/2026-04-03.md");
+      expect(entries.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/2026-04-03-reset-summary.md",
+        "memory/2026-04-03.md",
+      ]);
 
       await fs.rm(sluggedPath);
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
-        candidates: ranked,
+        candidates: ranked.filter((entry) => entry.path === "memory/2026-04-03.md"),
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
@@ -1061,7 +1090,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("counts a same-day variant search result as one recall event", async () => {
+  it("records same-day durable slugged search results as separate recall events", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
 
@@ -1094,18 +1123,26 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
       });
 
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        path: "memory/2026-04-03.md",
+      expect(entries.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/2026-04-03-reset-summary.md",
+        "memory/2026-04-03.md",
+      ]);
+      expect(entries.find((entry) => entry.path === "memory/2026-04-03.md")).toMatchObject({
+        recallCount: 1,
+        totalScore: 0.88,
+        maxScore: 0.88,
+      });
+      expect(
+        entries.find((entry) => entry.path === "memory/2026-04-03-reset-summary.md"),
+      ).toMatchObject({
         recallCount: 1,
         totalScore: 0.9,
         maxScore: 0.9,
       });
-      expect(entries[0]?.queryHashes).toHaveLength(1);
     });
   });
 
-  it("keeps the best score when a lower-scored same-day variant arrives first", async () => {
+  it("keeps each same-day durable note's own score when a lower-scored slugged variant arrives first", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
 
@@ -1138,12 +1175,21 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
       });
 
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        path: "memory/2026-04-03.md",
+      expect(entries.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/2026-04-03-reset-summary.md",
+        "memory/2026-04-03.md",
+      ]);
+      expect(entries.find((entry) => entry.path === "memory/2026-04-03.md")).toMatchObject({
         recallCount: 1,
         totalScore: 0.9,
         maxScore: 0.9,
+      });
+      expect(
+        entries.find((entry) => entry.path === "memory/2026-04-03-reset-summary.md"),
+      ).toMatchObject({
+        recallCount: 1,
+        totalScore: 0.88,
+        maxScore: 0.88,
       });
     });
   });
@@ -1234,7 +1280,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("merges grounded same-day variants even when line refs shift between files", async () => {
+  it("keeps grounded same-day durable notes separate even when line refs shift between files", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Heading", "Context", snippet]);
@@ -1278,12 +1324,22 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
       });
 
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        path: "memory/2026-04-03.md",
+      expect(entries.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/2026-04-03-reset-summary.md",
+        "memory/2026-04-03.md",
+      ]);
+      expect(entries.find((entry) => entry.path === "memory/2026-04-03.md")).toMatchObject({
         startLine: 3,
         endLine: 3,
-        groundedCount: 4,
+        groundedCount: 2,
+        snippet,
+      });
+      expect(
+        entries.find((entry) => entry.path === "memory/2026-04-03-reset-summary.md"),
+      ).toMatchObject({
+        startLine: 4,
+        endLine: 4,
+        groundedCount: 2,
         snippet,
       });
     });
@@ -1374,7 +1430,7 @@ describe("short-term promotion", () => {
     expect(matchedKey).toBeNull();
   });
 
-  it("ignores legacy absolute-path same-day variants that resolve outside the current workspace", () => {
+  it("does not merge legacy absolute-path summary-style slugs with local canonical notes", () => {
     const claimHash = __testing.buildClaimHash("same snippet");
     const matchedKey = __testing.findExistingDailyVariantEntryKey({
       entries: {
@@ -1424,10 +1480,10 @@ describe("short-term promotion", () => {
       candidateEndLine: 4,
     });
 
-    expect(matchedKey).toBe("local");
+    expect(matchedKey).toBeNull();
   });
 
-  it("does not merge migrated Windows absolute-path variants from another workspace", () => {
+  it("does not merge migrated Windows absolute-path summary-style slugs with local canonical notes", () => {
     const claimHash = __testing.buildClaimHash("same snippet");
     const matchedKey = __testing.findExistingDailyVariantEntryKey({
       entries: {
@@ -1477,10 +1533,10 @@ describe("short-term promotion", () => {
       candidateEndLine: 4,
     });
 
-    expect(matchedKey).toBe("local");
+    expect(matchedKey).toBeNull();
   });
 
-  it("merges same-workspace Windows variants despite drive-letter case differences", () => {
+  it("does not merge same-workspace Windows summary-style slugs with canonical durable notes", () => {
     const claimHash = __testing.buildClaimHash("same snippet");
     const resolveSpy = vi
       .spyOn(path, "resolve")
@@ -1517,7 +1573,7 @@ describe("short-term promotion", () => {
         candidateEndLine: 4,
       });
 
-      expect(matchedKey).toBe("same");
+      expect(matchedKey).toBeNull();
     } finally {
       resolveSpy.mockRestore();
     }

@@ -1775,7 +1775,7 @@ describe("doctor.memory.dreamDiary", () => {
     }
   });
 
-  it("merges same-day canonical and dated-slug notes into one backfill entry", async () => {
+  it("keeps same-day durable summary-style slugged notes as separate backfill entries", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-merge-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-02-19.md"), "canonical\n", "utf-8");
@@ -1813,21 +1813,32 @@ describe("doctor.memory.dreamDiary", () => {
           | { entries?: Array<{ isoDay: string; sourcePath?: string; bodyLines: string[] }> }
           | undefined
       )?.entries;
-      expect(entries).toHaveLength(1);
-      expect(entries?.[0]?.isoDay).toBe("2026-02-19");
-      expect(entries?.[0]?.sourcePath).toBeUndefined();
-      expect(entries?.[0]?.bodyLines).toEqual(
-        expect.arrayContaining([
-          "What Happened",
-          "1. Canonical detail",
-          "1. Reset detail",
-          "Reflections",
-          "1. Canonical reflection",
-          "1. Reset reflection",
-        ]),
-      );
-      expect(entries?.[0]?.bodyLines.filter((line) => line === "What Happened")).toHaveLength(2);
-      expect(entries?.[0]?.bodyLines.filter((line) => line === "Reflections")).toHaveLength(2);
+      expect(entries).toEqual([
+        {
+          isoDay: "2026-02-19",
+          sourcePath: path.join(workspaceDir, "memory", "2026-02-19.md"),
+          bodyLines: [
+            "What Happened",
+            "1. Canonical detail",
+            "",
+            "Reflections",
+            "1. Canonical reflection",
+            "",
+          ],
+        },
+        {
+          isoDay: "2026-02-19",
+          sourcePath: path.join(workspaceDir, "memory", "2026-02-19-reset-summary.md"),
+          bodyLines: [
+            "What Happened",
+            "1. Reset detail",
+            "",
+            "Reflections",
+            "1. Reset reflection",
+            "",
+          ],
+        },
+      ]);
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({

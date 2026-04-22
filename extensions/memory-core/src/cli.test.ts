@@ -1759,7 +1759,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("merges same-day canonical and dated-slug files into one grounded rem backfill entry", async () => {
+  it("keeps same-day durable summary-style slugged files as separate grounded rem backfill entries", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const historyDir = path.join(workspaceDir, "history");
       await fs.mkdir(historyDir, { recursive: true });
@@ -1792,14 +1792,15 @@ describe("memory cli", () => {
 
       const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       const dreamLines = dreams.split(/\r?\n/).map((line) => line.trim());
-      expect(dreams.match(/openclaw:dreaming:backfill-entry/g)?.length).toBe(1);
+      expect(dreams.match(/openclaw:dreaming:backfill-entry/g)?.length).toBe(2);
       expect(dreams).toContain("Canonical detail.");
       expect(dreams).toContain("Reset detail.");
       expect(dreams).toContain("Canonical reflection.");
       expect(dreams).toContain("Reset reflection.");
       expect(dreamLines.filter((line) => line === "What Happened")).toHaveLength(2);
       expect(dreamLines.filter((line) => line === "Reflections")).toHaveLength(2);
-      expect(dreams).not.toContain("source=");
+      expect(dreams).toContain(`source=${path.join(historyDir, "2025-01-01.md")}`);
+      expect(dreams).toContain(`source=${path.join(historyDir, "2025-01-01-reset-summary.md")}`);
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1954,7 +1955,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("deduplicates same-day canonical and slugged grounded seeds when staging short-term memory", async () => {
+  it("keeps same-day durable summary-style slugged grounded seeds separate when staging short-term memory", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const historyDir = path.join(workspaceDir, "history");
       await fs.mkdir(historyDir, { recursive: true });
@@ -1982,11 +1983,21 @@ describe("memory cli", () => {
         stagedShortTermEntries?: number;
         replacedShortTermEntries?: number;
       }>(writeJson);
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.snippet).toContain("Happy Together");
-      expect(entries[0]?.groundedCount).toBe(3);
-      expect(entries[0]?.queryHashes).toHaveLength(2);
-      expect(payload?.stagedShortTermEntries).toBe(1);
+      expect(entries.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/2025-01-01-reset-summary.md",
+        "memory/2025-01-01.md",
+      ]);
+      expect(entries.find((entry) => entry.path === "memory/2025-01-01.md")).toMatchObject({
+        groundedCount: 3,
+      });
+      expect(
+        entries.find((entry) => entry.path === "memory/2025-01-01-reset-summary.md"),
+      ).toMatchObject({
+        groundedCount: 3,
+      });
+      expect(entries.every((entry) => entry.snippet.includes("Happy Together"))).toBe(true);
+      expect(entries.every((entry) => entry.queryHashes.length === 2)).toBe(true);
+      expect(payload?.stagedShortTermEntries).toBe(2);
       expect(payload?.replacedShortTermEntries).toBe(0);
       expect(close).toHaveBeenCalled();
     });

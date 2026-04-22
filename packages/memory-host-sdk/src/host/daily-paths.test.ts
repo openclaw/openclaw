@@ -64,7 +64,7 @@ describe("daily-paths", () => {
       "memory/2026-04-19-session-reset.md",
     );
     expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-reset-summary.md")).toBe(
-      "memory/2026-04-19",
+      "memory/2026-04-19-reset-summary.md",
     );
     expect(resolveDailyMemoryVariantMergeKey("memory/2026-04-19-workshop.md")).toBe(
       "memory/2026-04-19-workshop.md",

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { collectDreamDiaryBackfillEntries } from "./dream-diary-backfill.js";
 
 describe("collectDreamDiaryBackfillEntries", () => {
-  it("merges same-day variants and deduplicates repeated list items", () => {
+  it("keeps durable same-day slugged notes separate even when their slugs look like summaries", () => {
     const entries = collectDreamDiaryBackfillEntries({
       files: [
         {
@@ -29,22 +29,25 @@ describe("collectDreamDiaryBackfillEntries", () => {
       ],
     });
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      isoDay: "2026-04-19",
-      sourcePath: undefined,
-    });
-    expect(entries[0]?.bodyLines).toEqual(
-      expect.arrayContaining([
-        "What Happened",
-        "1. Canonical detail",
-        "1. Reset detail",
-        "Reflections",
-        "- Shared bullet",
-        "- Reset-only bullet",
-      ]),
-    );
-    expect(entries[0]?.bodyLines.filter((line) => line === "- Shared bullet")).toHaveLength(1);
+    expect(entries).toEqual([
+      {
+        isoDay: "2026-04-19",
+        sourcePath: "memory/2026-04-19.md",
+        bodyLines: ["What Happened", "1. Canonical detail", "", "Reflections", "- Shared bullet"],
+      },
+      {
+        isoDay: "2026-04-19",
+        sourcePath: "memory/2026-04-19-reset-summary.md",
+        bodyLines: [
+          "What Happened",
+          "1. Reset detail",
+          "",
+          "Reflections",
+          "- Shared bullet",
+          "- Reset-only bullet",
+        ],
+      },
+    ]);
   });
 
   it("keeps the resolved source path for single-file diary backfill entries", () => {
@@ -67,7 +70,7 @@ describe("collectDreamDiaryBackfillEntries", () => {
     ]);
   });
 
-  it("preserves repeated list items when they belong to different same-day sections", () => {
+  it("does not cross-dedupe repeated list items across separate same-day durable notes", () => {
     const entries = collectDreamDiaryBackfillEntries({
       files: [
         {
@@ -93,19 +96,17 @@ describe("collectDreamDiaryBackfillEntries", () => {
       ],
     });
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.bodyLines).toEqual([
-      "What Happened",
-      "- Shared bullet",
-      "",
-      "Reflections",
-      "- Original reflection",
-      "",
-      "What Happened",
-      "- Different detail",
-      "",
-      "Reflections",
-      "- Shared bullet",
+    expect(entries).toEqual([
+      {
+        isoDay: "2026-04-19",
+        sourcePath: "memory/2026-04-19.md",
+        bodyLines: ["What Happened", "- Shared bullet", "", "Reflections", "- Original reflection"],
+      },
+      {
+        isoDay: "2026-04-19",
+        sourcePath: "memory/2026-04-19-reset-summary.md",
+        bodyLines: ["What Happened", "- Different detail", "", "Reflections", "- Shared bullet"],
+      },
     ]);
   });
 
