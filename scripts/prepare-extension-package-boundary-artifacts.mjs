@@ -5,7 +5,10 @@ import path, { resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
-const tscBin = require.resolve("typescript/bin/tsc");
+const tsgoBin = path.join(
+  path.dirname(require.resolve("@typescript/native-preview/package.json")),
+  "bin/tsgo.js",
+);
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 
@@ -268,7 +271,7 @@ export async function main(argv = process.argv.slice(2)) {
         });
         pendingSteps.push({
           label: "plugin-sdk boundary dts",
-          args: [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"],
+          args: [tsgoBin, "-p", "tsconfig.plugin-sdk.dts.json"],
           timeoutMs: 300_000,
           stampPath: ROOT_DTS_STAMP,
         });
@@ -283,7 +286,7 @@ export async function main(argv = process.argv.slice(2)) {
       });
       pendingSteps.push({
         label: "plugin-sdk package boundary dts",
-        args: [tscBin, "-p", "packages/plugin-sdk/tsconfig.json"],
+        args: [tsgoBin, "-p", "packages/plugin-sdk/tsconfig.json"],
         timeoutMs: 300_000,
         stampPath: PACKAGE_DTS_STAMP,
       });

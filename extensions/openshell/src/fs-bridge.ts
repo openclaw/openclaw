@@ -1,12 +1,12 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { writeFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import { writeFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 

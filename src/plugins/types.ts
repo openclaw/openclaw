@@ -1084,6 +1084,14 @@ export type ProviderPlugin = {
    */
   catalog?: ProviderPluginCatalog;
   /**
+   * Offline provider catalog for display-only surfaces.
+   *
+   * Unlike `catalog`, this hook must not perform network I/O or require real
+   * credentials. Use it for bundled/static rows that can be shown before auth is
+   * configured.
+   */
+  staticCatalog?: ProviderPluginCatalog;
+  /**
    * Legacy alias for catalog.
    * Kept for compatibility with existing provider plugins.
    */
