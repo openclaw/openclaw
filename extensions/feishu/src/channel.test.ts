@@ -412,6 +412,73 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_text", chatId: "oc_group_1" });
   });
 
+  it("allows non-action value fields outside button and overflow options", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    const explicitCard = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "markdown",
+            content: "hello",
+            metadata: {
+              value: {
+                command: "help",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        card: explicitCard,
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card: explicitCard,
+      }),
+    );
+  });
+
+  it("falls back to text when card serializes to an empty object", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_text", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        card: {
+          body: undefined,
+        },
+        message: "hello",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "hello",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+    expect(result?.details).toMatchObject({ ok: true, messageId: "om_text", chatId: "oc_group_1" });
+  });
+
   it("rejects structured card actions missing context bindings", async () => {
     const structuredButUnboundCard = {
       schema: "2.0",

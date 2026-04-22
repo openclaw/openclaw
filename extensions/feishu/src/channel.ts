@@ -84,13 +84,36 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
 const FEISHU_CARD_SCAN_MAX_DEPTH = 50;
 const FEISHU_CARD_SCAN_MAX_NODES = 10_000;
 
+function isStructuredFeishuCardActionValue(actionValue: unknown): boolean {
+  if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
+    return false;
+  }
+  if (!isRecord(actionValue.c)) {
+    return false;
+  }
+  if (typeof actionValue.c.u !== "string" || !actionValue.c.u.trim()) {
+    return false;
+  }
+  if (typeof actionValue.c.h !== "string" || !actionValue.c.h.trim()) {
+    return false;
+  }
+  return Number.isFinite(actionValue.c.e);
+}
+
 function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
-  const stack: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const stack: Array<{ value: unknown; depth: number; withinOverflowOptions: boolean }> = [
+    { value: root, depth: 0, withinOverflowOptions: false },
+  ];
   const seen = new Set<object>();
   let visited = 0;
 
   while (stack.length > 0) {
-    const { value, depth } = stack.pop()!;
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+
+    const { value, depth, withinOverflowOptions } = current;
     visited += 1;
     if (visited > FEISHU_CARD_SCAN_MAX_NODES || depth > FEISHU_CARD_SCAN_MAX_DEPTH) {
       throw new Error("Feishu card payload is too large or deeply nested.");
@@ -98,7 +121,7 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
 
     if (Array.isArray(value)) {
       for (const item of value) {
-        stack.push({ value: item, depth: depth + 1 });
+        stack.push({ value: item, depth: depth + 1, withinOverflowOptions });
       }
       continue;
     }
@@ -111,40 +134,50 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
     }
     seen.add(value);
 
-    if ("value" in value && value.value !== undefined) {
-      const actionValue = value.value;
-      if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
-        return true;
-      }
-      if (!isRecord(actionValue.c)) {
-        return true;
-      }
-      if (typeof actionValue.c.u !== "string" || !actionValue.c.u.trim()) {
-        return true;
-      }
-      if (typeof actionValue.c.h !== "string" || !actionValue.c.h.trim()) {
-        return true;
-      }
-      if (!Number.isFinite(actionValue.c.e)) {
-        return true;
-      }
+    const isButtonNode = value.tag === "button";
+    const hasActionValue = (isButtonNode || withinOverflowOptions) &&
+      "value" in value &&
+      value.value !== undefined;
+    if (hasActionValue && !isStructuredFeishuCardActionValue(value.value)) {
+      return true;
     }
 
-    for (const child of Object.values(value)) {
-      stack.push({ value: child, depth: depth + 1 });
+    for (const [key, child] of Object.entries(value)) {
+      stack.push({
+        value: child,
+        depth: depth + 1,
+        withinOverflowOptions: value.tag === "overflow" && key === "options",
+      });
     }
   }
 
   return false;
 }
 
-function isValidFeishuCard(card: Record<string, unknown> | undefined): boolean {
+function normalizeFeishuCardPayload(
+  card: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
   if (!card) {
-    return false;
+    return undefined;
   }
-  // Feishu cards must have at least one key to be valid
-  // Empty objects {} are not valid and will cause 400 errors from Feishu API
-  return Object.keys(card).length > 0;
+
+  try {
+    const serialized = JSON.stringify(card);
+    if (typeof serialized !== "string") {
+      return undefined;
+    }
+    const parsed = JSON.parse(serialized) as unknown;
+    if (!isRecord(parsed) || Object.keys(parsed).length === 0) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function isValidFeishuCard(card: Record<string, unknown> | undefined): boolean {
+  return Boolean(card && Object.keys(card).length > 0);
 }
 
 const meta: ChannelMeta = {
@@ -737,12 +770,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
-            const card =
+            const rawCard =
               presentation !== undefined
                 ? buildFeishuPresentationCard({ presentation, fallbackText: text })
                 : isRecord(ctx.params.card)
                   ? ctx.params.card
                   : undefined;
+            const card = normalizeFeishuCardPayload(rawCard);
             const hasValidCard = isValidFeishuCard(card);
             if (hasValidCard && mediaUrl) {
               throw new Error(`Feishu ${ctx.action} does not support card with media.`);
@@ -832,7 +866,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu edit requires messageId.");
             }
             const text = readFirstString(ctx.params, ["text", "message"]);
-            const card = isRecord(ctx.params.card) ? ctx.params.card : undefined;
+            const rawCard = isRecord(ctx.params.card) ? ctx.params.card : undefined;
+            const card = normalizeFeishuCardPayload(rawCard);
             const hasValidCard = isValidFeishuCard(card);
             const { editMessageFeishu } = await loadFeishuChannelRuntime();
             const result = await editMessageFeishu({
