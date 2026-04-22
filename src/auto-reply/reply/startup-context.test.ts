@@ -513,7 +513,7 @@ describe("buildSessionStartupContextPrelude", () => {
     );
   });
 
-  it("falls back to local yesterday when the adjacent UTC summary exceeds the read byte limit", async () => {
+  it("keeps the adjacent UTC summary available even when it exceeds the startup read limit", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
     await fs.writeFile(
@@ -553,8 +553,8 @@ describe("buildSessionStartupContextPrelude", () => {
     });
 
     expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
-    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-10.md]");
-    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
   });
 
   it("prioritizes the UTC boundary summary ahead of fallback local days when today's local note is missing", async () => {
@@ -584,6 +584,54 @@ describe("buildSessionStartupContextPrelude", () => {
     });
 
     expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+  });
+
+  it("keeps oversized boundary summaries available for startup continuity", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-10.md"),
+      "older fallback notes".repeat(40),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-12-reset-summary.md"),
+      [
+        "# Session: 2026-04-12 00:30:00 UTC",
+        "",
+        SESSION_SUMMARY_DAILY_MEMORY_SENTINEL,
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: reset-oversized",
+        "- **Source**: cli",
+        "",
+        "## Conversation Summary",
+        "",
+        `assistant: ${"boundary continuity ".repeat(800)}`,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 2,
+              maxFileBytes: 512,
+              maxFileChars: 220,
+              maxTotalChars: 320,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 12, 0, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).toContain("reset-oversized");
     expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
   });
 
@@ -1105,8 +1153,9 @@ describe("buildSessionStartupContextPrelude", () => {
 
       expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
       expect(prelude).not.toContain("memory/2026-04-11-reset-summary.md");
-      // One read classifies the same-day variant; one read loads the only block that fit.
-      expect(readSpy).toHaveBeenCalledTimes(2);
+      // Two reads classify same-day files, one confirms the selected day is readable,
+      // and one loads the only block that fit.
+      expect(readSpy).toHaveBeenCalledTimes(4);
     } finally {
       readSpy.mockRestore();
     }

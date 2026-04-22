@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { readSessionSummaryProbePrefixFromFd } from "../../memory-host-sdk/host/daily-session-summary-io.js";
 import { selectStartupDailyMemoryPaths } from "../../memory-host-sdk/host/daily-startup-selection.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
@@ -149,20 +150,6 @@ function fitStartupMemoryBlock(params: {
   return best;
 }
 
-async function readFromFd(params: { fd: number; maxFileBytes: number }): Promise<string> {
-  const buf = Buffer.alloc(params.maxFileBytes);
-  const bytesRead = await new Promise<number>((resolve, reject) => {
-    fs.read(params.fd, buf, 0, params.maxFileBytes, 0, (error, read) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(read);
-    });
-  });
-  return buf.subarray(0, bytesRead).toString("utf-8");
-}
-
 async function closeFd(fd: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     fs.close(fd, (error) => {
@@ -190,14 +177,14 @@ async function readStartupMemoryFile(params: {
     absolutePath,
     rootPath: params.workspaceDir,
     boundaryLabel: "workspace root",
-    maxBytes: params.maxFileBytes,
   });
   if (!opened.ok) {
     params.readCache?.set(params.relativePath, null);
     return null;
   }
   try {
-    const content = await readFromFd({ fd: opened.fd, maxFileBytes: params.maxFileBytes });
+    // Keep startup reads prefix-bounded without dropping oversized continuity files outright.
+    const content = await readSessionSummaryProbePrefixFromFd(opened.fd, params.maxFileBytes);
     params.readCache?.set(params.relativePath, content);
     return content;
   } finally {

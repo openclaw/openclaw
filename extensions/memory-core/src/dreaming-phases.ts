@@ -1146,31 +1146,56 @@ async function collectDailyIngestionBatches(params: {
   ingestionDreamingDay: string;
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
+  type ListedDailyIngestionFile = {
+    fileName: string;
+    day: string;
+    canonical: boolean;
+    relativePath: string;
+    pendingIndex: number | undefined;
+  };
+
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
+  const pendingPathOrder = new Map(
+    (params.state.pendingPaths ?? []).map((relativePath, index) => [relativePath, index] as const),
+  );
   const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch((err: unknown) => {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return [] as Dirent[];
     }
     throw err;
   });
-  const files = entries
+  const files: ListedDailyIngestionFile[] = entries
     .filter((entry) => entry.isFile())
     .map((entry) => {
       const parsed = parseDailyMemoryFileName(entry.name);
       if (!parsed) {
         return null;
       }
+      const relativePath = `memory/${parsed.fileName}`;
+      const pendingIndex = pendingPathOrder.get(relativePath);
       const day = parsed.day;
-      if (!isDayWithinLookback(day, cutoffMs)) {
+      if (pendingIndex === undefined && !isDayWithinLookback(day, cutoffMs)) {
         return null;
       }
-      return { fileName: parsed.fileName, day, canonical: parsed.canonical };
+      return {
+        fileName: parsed.fileName,
+        day,
+        canonical: parsed.canonical,
+        relativePath,
+        pendingIndex,
+      };
     })
-    .filter(
-      (entry): entry is { fileName: string; day: string; canonical: boolean } => entry !== null,
-    )
+    .filter((entry): entry is ListedDailyIngestionFile => entry !== null)
     .toSorted((a, b) => {
+      const leftPending = a.pendingIndex !== undefined;
+      const rightPending = b.pendingIndex !== undefined;
+      if (leftPending !== rightPending) {
+        return leftPending ? -1 : 1;
+      }
+      if (leftPending && rightPending && a.pendingIndex !== b.pendingIndex) {
+        return (a.pendingIndex ?? 0) - (b.pendingIndex ?? 0);
+      }
       const dayCmp = b.day.localeCompare(a.day);
       if (dayCmp !== 0) {
         return dayCmp;
@@ -1187,7 +1212,7 @@ async function collectDailyIngestionBatches(params: {
   const changedCandidates: DailyIngestionCandidate[] = [];
   let trackedFileCount = 0;
   for (const file of files) {
-    const relativePath = `memory/${file.fileName}`;
+    const relativePath = file.relativePath;
     const filePath = path.join(memoryDir, file.fileName);
     const stat = await fs.stat(filePath).catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
