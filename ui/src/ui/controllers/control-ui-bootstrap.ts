@@ -4,7 +4,7 @@ import {
   type ControlUiEmbedSandboxMode,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
-import { resolveControlUiAuthHeader } from "../control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
 import { normalizeBasePath } from "../navigation.ts";
 
 export type ControlUiBootstrapState = {
@@ -35,18 +35,30 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
 
   try {
-    const authHeader = resolveControlUiAuthHeader(state);
     const resolvedUrl = new URL(url, window.location.origin);
-    const includeAuthHeader = authHeader && resolvedUrl.origin === window.location.origin;
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        ...(includeAuthHeader ? { Authorization: authHeader } : {}),
-      },
-      credentials: "same-origin",
-    });
-    if (!res.ok) {
+    const sameOrigin = resolvedUrl.origin === window.location.origin;
+    const authCandidates = sameOrigin ? resolveControlUiAuthCandidates(state) : [];
+    // If credentials are available, try them in priority order; on 401/403
+    // retry with the next candidate — recovers from a stale `settings.token`
+    // when the live session is authenticated via `password` (or vice versa).
+    // If no credentials are available, fall through with no Authorization
+    // header so bootstrap still works on auth-disabled deployments.
+    const attempts: string[] = authCandidates.length > 0 ? authCandidates : [""];
+    let res: Response | null = null;
+    for (const candidate of attempts) {
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (candidate) {
+        headers.Authorization = `Bearer ${candidate}`;
+      }
+      res = await fetch(url, { method: "GET", headers, credentials: "same-origin" });
+      if (res.ok) {
+        break;
+      }
+      if (res.status !== 401 && res.status !== 403) {
+        return;
+      }
+    }
+    if (!res || !res.ok) {
       return;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
