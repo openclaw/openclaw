@@ -167,7 +167,12 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
-import { collectAllowedToolNames } from "../tool-name-allowlist.js";
+import {
+  collectAllowedToolNames,
+  collectRegisteredToolNames,
+  PI_RESERVED_TOOL_NAMES,
+  toSessionToolAllowlist,
+} from "../tool-name-allowlist.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -1099,7 +1104,7 @@ export async function runEmbeddedAttempt(
       );
       const clientToolNameConflicts = findClientToolNameConflicts({
         tools: clientTools ?? [],
-        existingToolNames: coreBuiltinToolNames,
+        existingToolNames: [...coreBuiltinToolNames, ...PI_RESERVED_TOOL_NAMES],
       });
       if (clientToolNameConflicts.length > 0) {
         throw createClientToolNameConflictError(clientToolNameConflicts);
@@ -1121,10 +1126,17 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
-      // OpenClaw registers filtered tools through `customTools`; keep Pi's
-      // built-in tool list empty so the SDK does not re-enable defaults.
+      // Pi only accepts built-in Tool[] at session creation time. After the
+      // session registers custom tools, narrow the active tool names against
+      // the exact OpenClaw-managed registrations so client-provided names do
+      // not broaden the prompt/runtime boundary.
+      const sessionToolAllowlist = toSessionToolAllowlist(
+        collectRegisteredToolNames(allCustomTools),
+      );
 
-      ({ session } = await createEmbeddedAgentSessionWithResourceLoader({
+      const createdSession = await createEmbeddedAgentSessionWithResourceLoader<
+        Awaited<ReturnType<typeof createAgentSession>>
+      >({
         createAgentSession: async (options) =>
           await createAgentSession(options as unknown as Parameters<typeof createAgentSession>[0]),
         options: {
@@ -1140,11 +1152,13 @@ export async function runEmbeddedAttempt(
           settingsManager,
           resourceLoader,
         },
-      }));
+      });
+      session = createdSession.session;
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
+      session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
@@ -1315,10 +1329,9 @@ export async function runEmbeddedAttempt(
       }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
-      const promptCacheToolNames = collectPromptCacheToolNames([
-        ...builtInTools,
-        ...allCustomTools,
-      ] as Array<{ name?: string }>);
+      const promptCacheToolNames = collectPromptCacheToolNames(
+        allCustomTools as Array<{ name?: string }>,
+      );
       let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
 
       if (cacheTrace) {

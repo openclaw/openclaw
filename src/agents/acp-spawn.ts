@@ -13,14 +13,9 @@ import {
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import {
-  getChannelPlugin,
-  getLoadedChannelPlugin,
-  normalizeChannelId,
-} from "../channels/plugins/index.js";
-import {
-  resolveBundledChannelThreadBindingDefaultPlacement,
-  resolveBundledChannelThreadBindingInboundConversation,
-} from "../channels/plugins/thread-binding-api.js";
+  resolveChannelDefaultBindingPlacement,
+  resolveInboundConversationResolution,
+} from "../channels/conversation-resolution.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -45,8 +40,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
-import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
-import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   isSessionBindingError,
@@ -291,46 +284,6 @@ function resolvePlacementWithoutChannelPlugin(params: {
   return params.capabilities.placements.includes("child") ? "child" : "current";
 }
 
-function resolvePluginConversationRefForThreadBinding(params: {
-  channelId: string;
-  to?: string;
-  threadId?: string | number;
-  groupId?: string;
-}): { conversationId: string; parentConversationId?: string } | null {
-  const resolverParams = {
-    // Keep the live delivery target authoritative; conversationId is only a fallback hint.
-    to: params.to,
-    conversationId: params.groupId ?? params.to,
-    threadId: params.threadId,
-    isGroup: true,
-  };
-  const loadedPluginConversation = getLoadedChannelPlugin(
-    params.channelId,
-  )?.messaging?.resolveInboundConversation?.(resolverParams);
-  const bundledApiConversation =
-    loadedPluginConversation === undefined
-      ? resolveBundledChannelThreadBindingInboundConversation({
-          channelId: params.channelId,
-          ...resolverParams,
-        })
-      : undefined;
-  const resolvedConversation =
-    loadedPluginConversation ??
-    (bundledApiConversation !== undefined
-      ? bundledApiConversation
-      : getChannelPlugin(params.channelId)?.messaging?.resolveInboundConversation?.(
-          resolverParams,
-        ));
-  const conversationId = normalizeOptionalString(resolvedConversation?.conversationId);
-  if (!conversationId) {
-    return null;
-  }
-  return normalizeConversationTargetRef({
-    conversationId,
-    parentConversationId: resolvedConversation?.parentConversationId,
-  });
-}
-
 function resolveSpawnMode(params: {
   requestedMode?: SpawnAcpMode;
   threadRequested: boolean;
@@ -559,38 +512,23 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
 }
 
 function resolveConversationRefForThreadBinding(params: {
+  cfg: OpenClawConfig;
   channel?: string;
+  accountId?: string;
   to?: string;
   threadId?: string | number;
   groupId?: string;
 }): { conversationId: string; parentConversationId?: string } | null {
-  const channel = normalizeOptionalLowercaseString(params.channel);
-  const normalizedChannelId = channel ? normalizeChannelId(channel) : null;
-  const pluginResolvedConversation = normalizedChannelId
-    ? resolvePluginConversationRefForThreadBinding({
-        channelId: normalizedChannelId,
-        to: params.to,
-        threadId: params.threadId,
-        groupId: params.groupId,
-      })
-    : null;
-  if (pluginResolvedConversation) {
-    return pluginResolvedConversation;
-  }
-  const parentConversationId = resolveConversationIdFromTargets({
-    targets: [params.to],
-  });
-  const genericConversationId = resolveConversationIdFromTargets({
+  const resolution = resolveInboundConversationResolution({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    to: params.to,
     threadId: params.threadId,
-    targets: [params.to],
+    groupId: params.groupId,
+    isGroup: true,
   });
-  if (genericConversationId) {
-    return normalizeConversationTargetRef({
-      conversationId: genericConversationId,
-      parentConversationId: params.threadId != null ? parentConversationId : undefined,
-    });
-  }
-  return null;
+  return resolution?.canonical ?? null;
 }
 
 function resolveAcpSpawnChannelAccountId(params: {
@@ -669,13 +607,7 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  const loadedPluginPlacement = getLoadedChannelPlugin(policy.channel)?.conversationBindings
-    ?.defaultTopLevelPlacement;
-  const bundledApiPlacement =
-    loadedPluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(policy.channel);
-  const pluginPlacement =
-    bundledApiPlacement ??
-    getChannelPlugin(policy.channel)?.conversationBindings?.defaultTopLevelPlacement;
+  const pluginPlacement = resolveChannelDefaultBindingPlacement(policy.channel);
   const placementToUse =
     pluginPlacement ??
     resolvePlacementWithoutChannelPlugin({
@@ -688,7 +620,9 @@ function prepareAcpThreadBinding(params: {
     };
   }
   const conversationRef = resolveConversationRefForThreadBinding({
+    cfg: params.cfg,
     channel: policy.channel,
+    accountId: policy.accountId,
     to: params.to,
     threadId: params.threadId,
     groupId: params.groupId,
@@ -1031,7 +965,9 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     fallbackThreadIdRaw != null ? normalizeOptionalString(String(fallbackThreadIdRaw)) : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
   const requesterConversationRef = resolveConversationRefForThreadBinding({
+    cfg: params.cfg,
     channel: params.requester.origin?.channel,
+    accountId: params.requester.origin?.accountId,
     threadId: fallbackThreadId,
     to: params.requester.origin?.to,
   });

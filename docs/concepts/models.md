@@ -114,8 +114,8 @@ Notes:
 
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
 - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
-- `/models add` lets you add a provider/model entry from chat without editing config manually.
-- `/models add <provider> <modelId>` is the fastest path; bare `/models add` starts a provider-first guided flow where supported.
+- `/models add` is available by default and can be disabled with `commands.modelsWrite=false`.
+- When enabled, `/models add <provider> <modelId>` is the fastest path; bare `/models add` starts a provider-first guided flow where supported.
 - After `/models add`, the new model becomes available in `/models` and `/model` without restarting the gateway.
 - `/model <#>` selects from that picker.
 - `/model` persists the new session selection immediately.

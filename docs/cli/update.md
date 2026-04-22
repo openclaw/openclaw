@@ -82,6 +82,12 @@ install method aligned:
 
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
+For package-manager installs, `openclaw update` resolves the target package
+version before invoking the package manager. If the installed version exactly
+matches the target and no update-channel change needs to be persisted, the
+command exits as skipped before package install, plugin sync, completion refresh,
+or gateway restart work.
+
 ## Git checkout flow
 
 Channels:

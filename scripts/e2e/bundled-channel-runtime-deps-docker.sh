@@ -65,6 +65,7 @@ test -d "$package_root/dist/extensions/telegram"
 test -d "$package_root/dist/extensions/discord"
 test -d "$package_root/dist/extensions/slack"
 test -d "$package_root/dist/extensions/feishu"
+test -d "$package_root/dist/extensions/memory-lancedb"
 
 if [ -d "$package_root/dist/extensions/$CHANNEL/node_modules" ]; then
   echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
@@ -156,6 +157,35 @@ if (mode === "feishu") {
     },
   };
 }
+if (mode === "memory-lancedb") {
+  config.plugins = {
+    ...(config.plugins || {}),
+    enabled: true,
+    allow: [...new Set([...(config.plugins?.allow || []), "memory-lancedb"])],
+    slots: {
+      ...(config.plugins?.slots || {}),
+      memory: "memory-lancedb",
+    },
+    entries: {
+      ...(config.plugins?.entries || {}),
+      "memory-lancedb": {
+        ...(config.plugins?.entries?.["memory-lancedb"] || {}),
+        enabled: true,
+        config: {
+          ...(config.plugins?.entries?.["memory-lancedb"]?.config || {}),
+          embedding: {
+            ...(config.plugins?.entries?.["memory-lancedb"]?.config?.embedding || {}),
+            apiKey: process.env.OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: "~/.openclaw/memory/lancedb-e2e",
+          autoCapture: false,
+          autoRecall: false,
+        },
+      },
+    },
+  };
+}
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -206,6 +236,10 @@ wait_for_gateway_health() {
 
 assert_channel_status() {
   local channel="$1"
+  if [ "$channel" = "memory-lancedb" ]; then
+    echo "memory-lancedb plugin activation verified by dependency sentinel"
+    return 0
+  fi
   local out="/tmp/openclaw-channel-status-$channel.json"
   openclaw gateway call channels.status \
     --url "ws://127.0.0.1:$PORT" \
@@ -635,7 +669,6 @@ export OPENAI_API_KEY="sk-openclaw-bundled-channel-update-e2e"
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_UPDATE_PACKAGE_SPEC=""
 
-BASELINE_VERSION="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION:?missing baseline version}"
 TOKEN="bundled-channel-update-token"
 PORT="18790"
 
@@ -736,6 +769,35 @@ config.channels = {
     enabled: mode === "feishu",
   },
 };
+if (mode === "memory-lancedb") {
+  config.plugins = {
+    ...(config.plugins || {}),
+    enabled: true,
+    allow: [...new Set([...(config.plugins?.allow || []), "memory-lancedb"])],
+    slots: {
+      ...(config.plugins?.slots || {}),
+      memory: "memory-lancedb",
+    },
+    entries: {
+      ...(config.plugins?.entries || {}),
+      "memory-lancedb": {
+        ...(config.plugins?.entries?.["memory-lancedb"] || {}),
+        enabled: true,
+        config: {
+          ...(config.plugins?.entries?.["memory-lancedb"]?.config || {}),
+          embedding: {
+            ...(config.plugins?.entries?.["memory-lancedb"]?.config?.embedding || {}),
+            apiKey: process.env.OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: "~/.openclaw/memory/lancedb-update-e2e",
+          autoCapture: false,
+          autoRecall: false,
+        },
+      },
+    },
+  };
+}
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -857,8 +919,8 @@ run_update_and_capture() {
   fi
 }
 
-echo "Installing known-bad baseline $BASELINE_VERSION..."
-npm install -g "openclaw@$BASELINE_VERSION" --omit=optional --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
+echo "Installing current candidate as update baseline..."
+npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
 command -v openclaw >/dev/null
 baseline_root="$(package_root)"
 test -d "$baseline_root/dist/extensions/telegram"
@@ -871,16 +933,14 @@ set +e
 openclaw doctor --non-interactive >/tmp/openclaw-baseline-doctor.log 2>&1
 baseline_doctor_status=$?
 set -e
-if [ "$baseline_doctor_status" -eq 0 ] || ! grep -Eq "grammy|ERR_MODULE_NOT_FOUND|Cannot find module" /tmp/openclaw-baseline-doctor.log; then
-  echo "expected baseline doctor to fail on missing Telegram runtime deps" >&2
-  cat /tmp/openclaw-baseline-doctor.log >&2
-  exit 1
-fi
+echo "baseline doctor exited with $baseline_doctor_status"
+remove_runtime_dep telegram grammy
+assert_no_dep_available telegram grammy
 
 echo "Updating from baseline to current candidate; candidate doctor must repair Telegram deps..."
 run_update_and_capture telegram /tmp/openclaw-update-telegram.json
 cat /tmp/openclaw-update-telegram.json
-assert_update_ok /tmp/openclaw-update-telegram.json "$BASELINE_VERSION"
+assert_update_ok /tmp/openclaw-update-telegram.json "$candidate_version"
 assert_dep_available telegram grammy
 
 echo "Mutating installed package: remove Telegram deps, then update-mode doctor repairs them..."
@@ -920,6 +980,15 @@ cat /tmp/openclaw-update-feishu.json
 assert_update_ok /tmp/openclaw-update-feishu.json "$candidate_version"
 assert_dep_available feishu @larksuiteoapi/node-sdk
 
+echo "Mutating config to memory-lancedb and rerunning same-version update path..."
+write_config memory-lancedb
+remove_runtime_dep memory-lancedb @lancedb/lancedb
+assert_no_dep_available memory-lancedb @lancedb/lancedb
+run_update_and_capture memory-lancedb /tmp/openclaw-update-memory-lancedb.json
+cat /tmp/openclaw-update-memory-lancedb.json
+assert_update_ok /tmp/openclaw-update-memory-lancedb.json "$candidate_version"
+assert_dep_available memory-lancedb @lancedb/lancedb
+
 echo "bundled channel runtime deps Docker update E2E passed"
 EOF
   then
@@ -937,6 +1006,7 @@ if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
   run_channel_scenario discord discord-api-types
   run_channel_scenario slack @slack/web-api
   run_channel_scenario feishu @larksuiteoapi/node-sdk
+  run_channel_scenario memory-lancedb @lancedb/lancedb
 fi
 if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
   run_update_scenario
