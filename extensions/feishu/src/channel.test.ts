@@ -560,6 +560,48 @@ describe("feishuPlugin actions", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("rejects legacy command payloads in select action values", async () => {
+    const legacySelectCard = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "select_static",
+                placeholder: { tag: "plain_text", content: "Pick one" },
+                options: [
+                  {
+                    text: { tag: "plain_text", content: "Option A" },
+                    value: { command: "help" },
+                  },
+                ],
+                value: { command: "help" },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: legacySelectCard,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu card actions must use structured interaction envelopes.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("rejects non-object card action values", async () => {
     const legacyStringValueCard = {
       schema: "2.0",

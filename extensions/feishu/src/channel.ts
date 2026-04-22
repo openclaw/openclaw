@@ -101,8 +101,18 @@ function isStructuredFeishuCardActionValue(actionValue: unknown): boolean {
 }
 
 function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
-  const stack: Array<{ value: unknown; depth: number; withinOverflowOptions: boolean }> = [
-    { value: root, depth: 0, withinOverflowOptions: false },
+  const stack: Array<{
+    value: unknown;
+    depth: number;
+    withinOverflowOptions: boolean;
+    withinActionItems: boolean;
+  }> = [
+    {
+      value: root,
+      depth: 0,
+      withinOverflowOptions: false,
+      withinActionItems: false,
+    },
   ];
   const seen = new Set<object>();
   let visited = 0;
@@ -113,7 +123,7 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
       continue;
     }
 
-    const { value, depth, withinOverflowOptions } = current;
+    const { value, depth, withinOverflowOptions, withinActionItems } = current;
     visited += 1;
     if (visited > FEISHU_CARD_SCAN_MAX_NODES || depth > FEISHU_CARD_SCAN_MAX_DEPTH) {
       throw new Error("Feishu card payload is too large or deeply nested.");
@@ -121,7 +131,12 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
 
     if (Array.isArray(value)) {
       for (const item of value) {
-        stack.push({ value: item, depth: depth + 1, withinOverflowOptions });
+        stack.push({
+          value: item,
+          depth: depth + 1,
+          withinOverflowOptions,
+          withinActionItems,
+        });
       }
       continue;
     }
@@ -134,10 +149,8 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
     }
     seen.add(value);
 
-    const isButtonNode = value.tag === "button";
-    const hasActionValue = (isButtonNode || withinOverflowOptions) &&
-      "value" in value &&
-      value.value !== undefined;
+    const hasActionValue =
+      (withinActionItems || withinOverflowOptions) && "value" in value && value.value !== undefined;
     if (hasActionValue && !isStructuredFeishuCardActionValue(value.value)) {
       return true;
     }
@@ -147,6 +160,7 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
         value: child,
         depth: depth + 1,
         withinOverflowOptions: value.tag === "overflow" && key === "options",
+        withinActionItems: value.tag === "action" && key === "actions",
       });
     }
   }
@@ -161,19 +175,62 @@ function normalizeFeishuCardPayload(
     return undefined;
   }
 
-  try {
-    const serialized = JSON.stringify(card);
-    if (typeof serialized !== "string") {
-      return undefined;
-    }
-    const parsed = JSON.parse(serialized) as unknown;
-    if (!isRecord(parsed) || Object.keys(parsed).length === 0) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
+  const visited = { count: 0 };
+  const normalized = normalizeFeishuCardNode(card, 0, visited);
+  if (!isRecord(normalized) || Object.keys(normalized).length === 0) {
     return undefined;
   }
+  return normalized;
+}
+
+function normalizeFeishuCardNode(
+  value: unknown,
+  depth: number,
+  visited: { count: number },
+): unknown {
+  visited.count += 1;
+  if (visited.count > FEISHU_CARD_SCAN_MAX_NODES || depth > FEISHU_CARD_SCAN_MAX_DEPTH) {
+    throw new Error("Feishu card payload is too large or deeply nested.");
+  }
+
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const normalizedArray = value.map((item) => {
+      const normalizedItem = normalizeFeishuCardNode(item, depth + 1, visited);
+      return normalizedItem === undefined ? null : normalizedItem;
+    });
+    return normalizedArray;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return undefined;
+  }
+
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const normalizedRecord: Record<string, unknown> = {};
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if ("get" in descriptor || "set" in descriptor) {
+      return undefined;
+    }
+    const normalizedChild = normalizeFeishuCardNode(descriptor.value, depth + 1, visited);
+    if (normalizedChild !== undefined) {
+      normalizedRecord[key] = normalizedChild;
+    }
+  }
+  return normalizedRecord;
 }
 
 function isValidFeishuCard(card: Record<string, unknown> | undefined): boolean {
