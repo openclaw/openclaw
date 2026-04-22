@@ -384,6 +384,11 @@ describe("channel doctor compatibility mutations", () => {
             personal: {},
           },
         },
+        slack: {
+          accounts: {
+            team: {},
+          },
+        },
       },
     };
     const env = { OPENCLAW_HOME: "/tmp/openclaw-test-home" };
@@ -394,6 +399,12 @@ describe("channel doctor compatibility mutations", () => {
           doctor: {
             collectEmptyAllowlistExtraWarnings,
             shouldSkipDefaultEmptyGroupAllowlistWarning,
+          },
+        },
+        {
+          id: "slack",
+          doctor: {
+            collectEmptyAllowlistExtraWarnings,
           },
         },
       ],
@@ -422,13 +433,20 @@ describe("channel doctor compatibility mutations", () => {
         prefix: "channels.matrix.accounts.personal",
       }),
     ).toEqual(["channels.matrix.accounts.personal extra"]);
+    expect(
+      hooks.extraWarningsForAccount({
+        account: {},
+        channelName: "slack",
+        prefix: "channels.slack.accounts.team",
+      }),
+    ).toEqual(["channels.slack.accounts.team extra"]);
 
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
       env,
       includePersistedAuthState: false,
     });
-    expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(2);
+    expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(3);
     expect(shouldSkipDefaultEmptyGroupAllowlistWarning).toHaveBeenCalledTimes(1);
   });
 });

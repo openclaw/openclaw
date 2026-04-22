@@ -16,6 +16,11 @@ type ChannelDoctorEntry = {
   doctor: ChannelDoctorAdapter;
 };
 
+type ChannelDoctorPluginCandidate = {
+  id: string;
+  doctor?: ChannelDoctorAdapter;
+};
+
 type ChannelDoctorLookupContext = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -113,6 +118,12 @@ function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
   }
 }
 
+function listReadOnlyChannelPluginsById(
+  context: ChannelDoctorLookupContext,
+): Map<string, ChannelDoctorPluginCandidate> {
+  return new Map(safeListReadOnlyChannelPlugins(context).map((plugin) => [plugin.id, plugin]));
+}
+
 function mergeDoctorAdapters(
   adapters: Array<ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorAdapter | undefined {
@@ -162,16 +173,16 @@ function isValidChannelDoctorAdapterValue(
 function listChannelDoctorEntries(
   channelIds: readonly string[],
   context: ChannelDoctorLookupContext,
+  options: {
+    readOnlyPluginsById?: ReadonlyMap<string, ChannelDoctorPluginCandidate>;
+  } = {},
 ): ChannelDoctorEntry[] {
   if (channelIds.length === 0) {
     return [];
   }
   const selectedIds = new Set(channelIds);
-  const readOnlyPluginsById = new Map(
-    safeListReadOnlyChannelPlugins(context)
-      .filter((plugin) => selectedIds.has(plugin.id))
-      .map((plugin) => [plugin.id, plugin]),
-  );
+  const readOnlyPluginsById =
+    options.readOnlyPluginsById ?? listReadOnlyChannelPluginsById(context);
 
   const entries: ChannelDoctorEntry[] = [];
   for (const id of selectedIds) {
@@ -224,13 +235,14 @@ function shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
 export function createChannelDoctorEmptyAllowlistPolicyHooks(
   context: ChannelDoctorLookupContext,
 ): ChannelDoctorEmptyAllowlistPolicyHooks {
+  const readOnlyPluginsById = listReadOnlyChannelPluginsById(context);
   const entriesByChannel = new Map<string, ChannelDoctorEntry[]>();
   const entriesForChannel = (channelName: string) => {
     const existing = entriesByChannel.get(channelName);
     if (existing) {
       return existing;
     }
-    const entries = listChannelDoctorEntries([channelName], context);
+    const entries = listChannelDoctorEntries([channelName], context, { readOnlyPluginsById });
     entriesByChannel.set(channelName, entries);
     return entries;
   };
