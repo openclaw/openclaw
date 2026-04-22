@@ -1,4 +1,27 @@
-import * as grammy from "grammy";
+import { createRequire } from "node:module";
+
+// `grammy` is a bundled runtime dependency installed lazily at gateway startup
+// by ensureBundledPluginRuntimeDeps.  A top-level static value import causes
+// `Cannot find module 'grammy'` during `openclaw update` doctor checks because
+// the installer hasn't run yet when Node.js resolves the static import graph.
+//
+// Solution: keep `import type` (erased at compile time, zero runtime cost) for
+// type information, and use a deferred createRequire() call for the one runtime
+// value we need (API_CONSTANTS).  This way grammy is only resolved at call-time,
+// after the installer has placed it under dist/extensions/telegram/node_modules/.
+import type * as grammy from "grammy";
+
+const _require = createRequire(import.meta.url);
+
+function tryLoadGrammyApiConstants():
+  | (typeof grammy)["API_CONSTANTS"]
+  | undefined {
+  try {
+    return (_require("grammy") as typeof grammy).API_CONSTANTS;
+  } catch {
+    return undefined;
+  }
+}
 
 const FALLBACK_ALL_UPDATE_TYPES = [
   "message",
@@ -51,7 +74,9 @@ export type TelegramUpdateType =
   | (typeof grammy.API_CONSTANTS.ALL_UPDATE_TYPES)[number];
 
 export const DEFAULT_TELEGRAM_UPDATE_TYPES: ReadonlyArray<TelegramUpdateType> =
-  grammy.API_CONSTANTS?.DEFAULT_UPDATE_TYPES ?? FALLBACK_DEFAULT_UPDATE_TYPES;
+  (tryLoadGrammyApiConstants()?.DEFAULT_UPDATE_TYPES as
+    | ReadonlyArray<TelegramUpdateType>
+    | undefined) ?? FALLBACK_DEFAULT_UPDATE_TYPES;
 
 export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateType> {
   const updates = [...DEFAULT_TELEGRAM_UPDATE_TYPES] as TelegramUpdateType[];
