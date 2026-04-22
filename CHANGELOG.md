@@ -53,6 +53,8 @@ Docs: https://docs.openclaw.ai
 - fix(config): accept truncateAfterCompaction (#68395). Thanks @MonkeyLeeT
 - CLI/Claude: keep Claude CLI session bindings stable across OAuth access-token refreshes, so gateway restarts continue the same Claude conversation instead of minting a fresh one. (#70132) Thanks @obviyus.
 - QQBot: add `INTERACTION` intent (`1 << 26`) to the gateway constants and include it in the `FULL_INTENTS` mask so interaction events are received. (#70143) Thanks @cxyhhhhh.
+- Gateway/restart: preserve one-shot continuation instructions across gateway restarts so agents can resume and reply back to the original chat after reboot. (#63406) Thanks @VACInc.
+- Gateway/restart: write restart sentinel files atomically so interrupted writes cannot leave a truncated sentinel behind. (#70225) Thanks @obviyus.
 
 ## 2026.4.21
 
@@ -185,8 +187,8 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: include requested role and runtime timing on subagent failure payloads so parent agents can correlate failed or timed-out child work. (#68726) Thanks @BKF-Gitty.
 - Gateway/sessions: reject stale agent-scoped sessions after an agent is removed from config while preserving legacy default-agent main-session aliases. (#65986) Thanks @bittoby.
 - Doctor/gateway: surface pending device pairing requests, scope-upgrade approval drift, and stale device-token mismatch repair steps so `openclaw doctor --fix` no longer leaves pairing/auth setup failures unexplained. (#69210) Thanks @obviyus.
-- Cron/isolated-agent: preserve explicit `delivery.mode: "none"` message targets for isolated runs without inheriting implicit `last` routing, so agent-initiated Telegram sends keep their authored destination while bare `mode:none` jobs stay targetless. (#69153) Thanks @obviyus.
-- Cron/isolated-agent: keep `delivery.mode: "none"` account-only or thread-only configs from inheriting a stale implicit recipient, so isolated runs only resolve message routing when the job authored an explicit `to` target. (#69163) Thanks @obviyus.
+- Cron/isolated-agent: preserve explicit `delivery.mode: "none"` message targets for isolated runs without inheriting implicit `last` routing, so agent-initiated Telegram sends keep their authored destination while bare `mode:none` jobs stay targetless. (#69153) Thanks @davehappyminion and @nikilster.
+- Cron/isolated-agent: keep `delivery.mode: "none"` account-only or thread-only configs from inheriting a stale implicit recipient, so isolated runs only resolve message routing when the job authored an explicit `to` target. (#69163) Thanks @davehappyminion and @nikilster.
 - Gateway/TUI: retry session history while the local gateway is still finishing startup, so `openclaw tui` reconnects no longer fail on transient `chat.history unavailable during gateway startup` errors. (#69164) Thanks @shakkernerd.
 - BlueBubbles/reactions: fall back to `love` when an agent reacts with an emoji outside the iMessage tapback set (`love`/`like`/`dislike`/`laugh`/`emphasize`/`question`), so wider-vocabulary model reactions like `👀` still produce a visible tapback instead of failing the whole reaction request. Configured ack reactions still validate strictly via the new `normalizeBlueBubblesReactionInputStrict` path. (#64693) Thanks @zqchris.
 - BlueBubbles: prefer iMessage over SMS when both chats exist for the same handle, honor explicit `sms:` targets, and never silently downgrade iMessage-available recipients. (#61781) Thanks @rmartin.
