@@ -132,6 +132,22 @@ describe("createSlackDraftStream", () => {
     expect(stream.channelId()).toBeUndefined();
   });
 
+  it("discardPending stops late updates without deleting the visible preview", async () => {
+    const { stream, send, edit, remove } = createDraftStreamHarness();
+
+    stream.update("hello");
+    await stream.flush();
+    await stream.discardPending();
+    stream.update("late");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(edit).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("111.222");
+    expect(stream.channelId()).toBe("C123");
+  });
+
   it("clear is a no-op when no preview message exists", async () => {
     const { stream, remove } = createDraftStreamHarness();
 

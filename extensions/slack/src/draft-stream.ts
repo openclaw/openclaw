@@ -10,6 +10,8 @@ export type SlackDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   clear: () => Promise<void>;
+  discardPending: () => Promise<void>;
+  seal: () => Promise<void>;
   stop: () => void;
   forceNewMessage: () => void;
   messageId: () => string | undefined;
@@ -95,9 +97,13 @@ export function createSlackDraftStream(params: {
     loop.stop();
   };
 
-  const clear = async () => {
+  const discardPending = async () => {
     stop();
     await loop.waitForInFlight();
+  };
+
+  const clear = async () => {
+    await discardPending();
     const channelId = streamChannelId;
     const messageId = streamMessageId;
     streamChannelId = undefined;
@@ -129,6 +135,8 @@ export function createSlackDraftStream(params: {
     update: loop.update,
     flush: loop.flush,
     clear,
+    discardPending,
+    seal: discardPending,
     stop,
     forceNewMessage,
     messageId: () => streamMessageId,

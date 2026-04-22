@@ -4,6 +4,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
+import { validateLineMediaUrl } from "./outbound-media.js";
 import type { LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
@@ -248,12 +249,14 @@ export async function sendMessageLine(
 
   const mediaUrl = opts.mediaUrl?.trim();
   if (mediaUrl) {
+    await validateLineMediaUrl(mediaUrl);
     switch (opts.mediaKind) {
       case "video": {
         const previewImageUrl = opts.previewImageUrl?.trim();
         if (!previewImageUrl) {
           throw new Error("LINE video messages require previewImageUrl to reference an image URL");
         }
+        await validateLineMediaUrl(previewImageUrl);
         const trackingId = isLineUserChatId(chatId) ? opts.trackingId : undefined;
         messages.push(createVideoMessage(mediaUrl, previewImageUrl, trackingId));
         break;
@@ -264,7 +267,11 @@ export async function sendMessageLine(
       case "image":
       default:
         // Backward compatibility: keep image as default when media kind is unspecified.
-        messages.push(createImageMessage(mediaUrl, opts.previewImageUrl?.trim() || mediaUrl));
+        {
+          const previewImageUrl = opts.previewImageUrl?.trim() || mediaUrl;
+          await validateLineMediaUrl(previewImageUrl);
+          messages.push(createImageMessage(mediaUrl, previewImageUrl));
+        }
         break;
     }
   }
@@ -336,6 +343,10 @@ export async function pushImageMessage(
   previewImageUrl?: string,
   opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
+  await validateLineMediaUrl(originalContentUrl);
+  if (previewImageUrl) {
+    await validateLineMediaUrl(previewImageUrl);
+  }
   return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
     verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
   });
