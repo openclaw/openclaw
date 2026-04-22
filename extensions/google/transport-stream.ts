@@ -180,7 +180,7 @@ function normalizeToolCallId(id: string): string {
 }
 
 function sanitizeGeminiText(text: string): string {
-  return text.replace(/<(?:final|thought|reasoning)(?:\/?)>/g, "");
+  return text.replace(/<\/?(?:final|thought|reasoning)(?:\/?)>/g, "");
 }
 
 function resolveGoogleModelPath(modelId: string): string {
