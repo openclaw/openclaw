@@ -98,6 +98,18 @@ export async function runPreparedCliAgent(
       return buildCliRunResult({ output, effectiveCliSessionId });
     } catch (err) {
       if (isFailoverError(err)) {
+        const retryableSessionId = context.reusableCliSession.sessionId ?? params.cliSessionId;
+        // Check if this is a session expired error and we have a session to clear
+        if (err.reason === "session_expired" && retryableSessionId && params.sessionKey) {
+          // Clear the expired session ID from the session entry
+          // This requires access to the session store, which we don't have here
+          // We'll need to modify the caller to handle this case
+
+          // For now, retry without the session ID to create a new session
+          const output = await executePreparedCliRun(context, undefined);
+          const effectiveCliSessionId = output.sessionId;
+          return buildCliRunResult({ output, effectiveCliSessionId });
+        }
         throw err;
       }
       const message = formatErrorMessage(err);

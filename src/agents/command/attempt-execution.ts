@@ -302,12 +302,13 @@ export function runAgentAttempt(params: {
           `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
         );
 
-        params.sessionEntry = await clearCliSessionInStore({
-          provider: params.providerOverride,
-          sessionKey: params.sessionKey,
-          sessionStore: params.sessionStore,
-          storePath: params.storePath,
-        });
+        params.sessionEntry =
+          (await clearCliSessionInStore({
+            provider: params.providerOverride,
+            sessionKey: params.sessionKey,
+            sessionStore: params.sessionStore,
+            storePath: params.storePath,
+          })) ?? params.sessionEntry;
 
         return runCliWithSession(undefined).then(async (result) => {
           if (
