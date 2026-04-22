@@ -1198,7 +1198,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
           )
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        deps.logger.warn(`Config warnings:\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = materializeRuntimeConfig(validated.config, "load");
