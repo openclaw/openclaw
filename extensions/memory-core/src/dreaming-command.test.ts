@@ -4,6 +4,27 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import { describe, expect, it, vi } from "vitest";
+
+const applyDreamingMaintenance = vi.hoisted(() =>
+  vi.fn(async () => ({
+    status: "applied" as const,
+    reportId: "report-1",
+    touchedFiles: ["MEMORY.md"],
+  })),
+);
+const rollbackDreamingMaintenance = vi.hoisted(() =>
+  vi.fn(async () => ({
+    status: "rolled_back" as const,
+    reportId: "report-1",
+    touchedFiles: ["MEMORY.md"],
+  })),
+);
+
+vi.mock("./dreaming-maintenance.js", () => ({
+  applyDreamingMaintenance,
+  rollbackDreamingMaintenance,
+}));
+
 import { registerDreamingCommand } from "./dreaming-command.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -82,10 +103,11 @@ describe("memory-core /dreaming command", () => {
     const result = await command.handler(createCommandContext());
 
     expect(result.text).toContain("Usage: /dreaming status");
+    expect(result.text).toContain("Usage: /dreaming apply|rollback");
     expect(result.text).toContain("Dreaming status:");
     expect(result.text).toContain("- implementation detail: each sweep runs light -> REM -> deep.");
     expect(result.text).toContain(
-      "- deep is the only stage that writes durable entries to MEMORY.md.",
+      "- deep stages durable maintenance by default; it does not write MEMORY.md until apply.",
     );
   });
 
@@ -186,8 +208,46 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("Dreaming status:");
     expect(result.text).toContain("- enabled: off (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
+    expect(result.text).toContain("- daily signals: memory/daily-log.md");
+    expect(result.text).toContain("- maintenance: stage-only");
     expect(result.text).toContain("- promotion policy: score>=0.8, recalls>=3, uniqueQueries>=3");
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("applies staged dreaming maintenance across resolved workspaces", async () => {
+    const { command } = createHarness({
+      agents: {
+        list: [{ id: "main", workspace: "/workspace/main", default: true }],
+      },
+    });
+
+    const result = await command.handler(
+      createCommandContext("apply", {
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(applyDreamingMaintenance).toHaveBeenCalledWith({ workspaceDir: "/workspace/main" });
+    expect(result.text).toContain("Dreaming apply:");
+    expect(result.text).toContain("/workspace/main: applied (report-1)");
+  });
+
+  it("rolls back the last dreaming apply across resolved workspaces", async () => {
+    const { command } = createHarness({
+      agents: {
+        list: [{ id: "main", workspace: "/workspace/main", default: true }],
+      },
+    });
+
+    const result = await command.handler(
+      createCommandContext("rollback", {
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(rollbackDreamingMaintenance).toHaveBeenCalledWith({ workspaceDir: "/workspace/main" });
+    expect(result.text).toContain("Dreaming rollback:");
+    expect(result.text).toContain("/workspace/main: rolled_back (report-1)");
   });
 
   it("shows usage for invalid args and does not mutate config", async () => {

@@ -191,7 +191,7 @@ describe("short-term dreaming config", () => {
       pluginConfig: {},
       cfg,
     });
-    expect(resolved).toEqual({
+    expect(resolved).toMatchObject({
       enabled: false,
       cron: constants.DEFAULT_DREAMING_CRON_EXPR,
       timezone: "America/Los_Angeles",
@@ -206,6 +206,12 @@ describe("short-term dreaming config", () => {
         mode: "separate",
         separateReports: false,
       },
+    });
+    expect(resolved.dailySignalFiles).toEqual(["memory/daily-log.md"]);
+    expect(resolved.maintenance).toMatchObject({
+      enabled: true,
+      autoApply: false,
+      maxManagedEntries: 48,
     });
   });
 
@@ -230,7 +236,7 @@ describe("short-term dreaming config", () => {
         },
       },
     });
-    expect(resolved).toEqual({
+    expect(resolved).toMatchObject({
       enabled: true,
       cron: "5 1 * * *",
       timezone: "UTC",
@@ -246,6 +252,7 @@ describe("short-term dreaming config", () => {
         separateReports: false,
       },
     });
+    expect(resolved.dailySignalFiles).toEqual(["memory/daily-log.md"]);
   });
 
   it("accepts top-level frequency and numeric string thresholds", () => {
@@ -267,7 +274,7 @@ describe("short-term dreaming config", () => {
         },
       },
     });
-    expect(resolved).toEqual({
+    expect(resolved).toMatchObject({
       enabled: true,
       cron: "5 1 * * *",
       limit: 4,
@@ -302,7 +309,7 @@ describe("short-term dreaming config", () => {
         },
       },
     });
-    expect(resolved).toEqual({
+    expect(resolved).toMatchObject({
       enabled: true,
       cron: constants.DEFAULT_DREAMING_CRON_EXPR,
       limit: constants.DEFAULT_DREAMING_LIMIT,
@@ -1541,7 +1548,7 @@ describe("gateway startup reconciliation", () => {
 });
 
 describe("short-term dreaming trigger", () => {
-  it("applies promotions when the managed dreaming heartbeat event fires", async () => {
+  it("stages durable maintenance when the managed dreaming heartbeat event fires", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
@@ -1579,11 +1586,18 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-    expect(memoryText).toContain("Move backups to S3 Glacier.");
+    await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      fs.readFile(
+        path.join(workspaceDir, "memory", ".dreams", "maintenance", "staged-plan.json"),
+        "utf-8",
+      ),
+    ).resolves.toContain("Move backups to S3 Glacier.");
   });
 
-  it("applies promotions when the managed dreaming token is embedded in a reminder body", async () => {
+  it("stages durable maintenance when the managed dreaming token is embedded in a reminder body", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-composite-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
@@ -1631,8 +1645,12 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-    expect(memoryText).toContain("Move backups to S3 Glacier.");
+    await expect(
+      fs.readFile(
+        path.join(workspaceDir, "memory", ".dreams", "maintenance", "staged-plan.json"),
+        "utf-8",
+      ),
+    ).resolves.toContain("Move backups to S3 Glacier.");
   });
 
   it("keeps one-off recalls out of long-term memory under default thresholds", async () => {
@@ -1676,15 +1694,19 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
-    const memoryText = await fs
-      .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+    const stagedPlan = await fs
+      .readFile(
+        path.join(workspaceDir, "memory", ".dreams", "maintenance", "staged-plan.json"),
+        "utf-8",
+      )
       .catch((err: unknown) => {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           return "";
         }
         throw err;
       });
-    expect(memoryText).toBe("");
+    expect(stagedPlan).toContain('"noChangeReasons"');
+    expect(stagedPlan).toContain("no ranked candidates passed the current deep thresholds");
   });
 
   it("ignores non-heartbeat triggers", async () => {
@@ -1866,7 +1888,7 @@ describe("short-term dreaming trigger", () => {
       expect.stringContaining("memory-core: dreaming candidate details"),
     );
     expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("memory-core: dreaming applied details"),
+      expect.stringContaining("memory-core: dreaming staged details"),
     );
   });
 
@@ -1944,14 +1966,20 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
-    expect(await fs.readFile(path.join(alphaWorkspace, "MEMORY.md"), "utf-8")).toContain(
-      "Alpha backup note.",
-    );
-    expect(await fs.readFile(path.join(betaWorkspace, "MEMORY.md"), "utf-8")).toContain(
-      "Beta router note.",
-    );
+    await expect(
+      fs.readFile(
+        path.join(alphaWorkspace, "memory", ".dreams", "maintenance", "staged-plan.json"),
+        "utf-8",
+      ),
+    ).resolves.toContain("Alpha backup note.");
+    await expect(
+      fs.readFile(
+        path.join(betaWorkspace, "memory", ".dreams", "maintenance", "staged-plan.json"),
+        "utf-8",
+      ),
+    ).resolves.toContain("Beta router note.");
     expect(logger.info).toHaveBeenCalledWith(
-      "memory-core: dreaming promotion complete (workspaces=2, candidates=2, applied=2, failed=0).",
+      "memory-core: dreaming promotion complete (workspaces=2, candidates=2, applied=0, failed=0).",
     );
   });
 });
