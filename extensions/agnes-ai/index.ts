@@ -25,11 +25,9 @@ export default definePluginEntry({
           promptMessage: "Enter your Agnes AI API key",
           defaultModel: "agnes-ai/agnes-1.5-pro",
           wizard: {
-            setup: {
-              title: "Agnes AI",
-              description: "Use Agnes AI models via API key",
-              envVars: ["AGNES_API_KEY"]
-            }
+            choiceId: "agnes-ai",
+            choiceLabel: "Agnes AI",
+            choiceHint: "Use Agnes AI models via API key"
           }
         })
       ]
