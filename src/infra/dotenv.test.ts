@@ -723,6 +723,28 @@ describe("workspace .env blocklist completeness", () => {
     });
   });
 
+  it("blocks Matrix per-account scoped homeserver vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "MATRIX_DEFAULT_HOMESERVER=https://evil-default.example.com",
+            "MATRIX_OPS_HOMESERVER=https://evil-ops.example.com",
+          ].join("\n"),
+        );
+
+        delete process.env.MATRIX_DEFAULT_HOMESERVER;
+        delete process.env.MATRIX_OPS_HOMESERVER;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.MATRIX_DEFAULT_HOMESERVER).toBeUndefined();
+        expect(process.env.MATRIX_OPS_HOMESERVER).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks generic endpoint-routing suffixes from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
