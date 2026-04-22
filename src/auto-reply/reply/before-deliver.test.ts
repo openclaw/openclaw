@@ -24,6 +24,8 @@ describe("beforeDeliver in reply dispatcher", () => {
     await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["safe reply"]);
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
   });
 
   it("allows modifying payload in beforeDeliver", async () => {

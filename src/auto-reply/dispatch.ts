@@ -36,6 +36,19 @@ function resolveDispatcherSilentReplyContext(
   };
 }
 
+function resolveInboundReplyHookTarget(
+  finalized: FinalizedMsgContext,
+  hookCtx: ReturnType<typeof deriveInboundMessageHookContext>,
+): string {
+  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
+    return finalized.OriginatingTo;
+  }
+  if (hookCtx.isGroup) {
+    return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
+  }
+  return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
+}
+
 function buildMessageSendingBeforeDeliver(
   ctx: MsgContext | FinalizedMsgContext,
 ): ReplyDispatchBeforeDeliver | undefined {
@@ -46,6 +59,7 @@ function buildMessageSendingBeforeDeliver(
 
   const finalized = finalizeInboundContext(ctx);
   const hookCtx = deriveInboundMessageHookContext(finalized);
+  const replyTarget = resolveInboundReplyHookTarget(finalized, hookCtx);
 
   return async (payload: ReplyPayload): Promise<ReplyPayload | null> => {
     if (!payload.text) {
@@ -53,7 +67,7 @@ function buildMessageSendingBeforeDeliver(
     }
 
     const result = await hookRunner.runMessageSending(
-      { content: payload.text, to: hookCtx.to ?? "" },
+      { content: payload.text, to: replyTarget },
       toPluginMessageContext(hookCtx),
     );
 
@@ -70,6 +84,26 @@ function buildMessageSendingBeforeDeliver(
 export type DispatchInboundResult = DispatchFromConfigResult;
 export { withReplyDispatcher } from "./dispatch-dispatcher.js";
 
+function finalizeDispatchResult(
+  result: DispatchFromConfigResult,
+  dispatcher: ReplyDispatcher,
+): DispatchFromConfigResult {
+  const cancelledCounts = dispatcher.getCancelledCounts?.();
+  if (!cancelledCounts) {
+    return result;
+  }
+
+  const counts = {
+    tool: Math.max(0, result.counts.tool - cancelledCounts.tool),
+    block: Math.max(0, result.counts.block - cancelledCounts.block),
+    final: Math.max(0, result.counts.final - cancelledCounts.final),
+  };
+  return {
+    queuedFinal: result.queuedFinal && counts.final > 0,
+    counts,
+  };
+}
+
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -78,7 +112,7 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  return await withReplyDispatcher({
+  const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
       dispatchReplyFromConfig({
@@ -89,6 +123,7 @@ export async function dispatchInboundMessage(params: {
         replyResolver: params.replyResolver,
       }),
   });
+  return finalizeDispatchResult(result, params.dispatcher);
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {

@@ -175,6 +175,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const cancelledCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -233,6 +238,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         if (options.beforeDeliver) {
           deliverPayload = await options.beforeDeliver(normalized, { kind });
           if (!deliverPayload) {
+            cancelledCounts[kind] += 1;
+            queuedCounts[kind] -= 1;
             return;
           }
         }
@@ -286,6 +293,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getCancelledCounts: () => ({ ...cancelledCounts }),
     getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
   };
