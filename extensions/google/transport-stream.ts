@@ -670,9 +670,21 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
                   (isThinking && currentBlock.type !== "thinking") ||
                   (!isThinking && currentBlock.type !== "text")
                 ) {
-                  if (currentBlockIndex >= 0) {
-                    pushTextBlockEnd(stream, output, currentBlockIndex);
+                if (currentBlockIndex >= 0) {
+                  const closingBlock = output.content[currentBlockIndex];
+                  if (closingBlock?.type === "text" && sanitizerState.buffer) {
+                    const tail = sanitizerState.buffer;
+                    sanitizerState.buffer = "";
+                    closingBlock.text += tail;
+                    stream.push({
+                      type: "text_delta",
+                      contentIndex: currentBlockIndex,
+                      delta: tail,
+                      partial: output as never,
+                    });
                   }
+                  pushTextBlockEnd(stream, output, currentBlockIndex);
+                }
                   if (isThinking) {
                     output.content.push({ type: "thinking", thinking: "" });
                     currentBlockIndex = output.content.length - 1;
@@ -769,6 +781,18 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
           }
         }
         if (currentBlockIndex >= 0) {
+          const closingBlock = output.content[currentBlockIndex];
+          if (closingBlock?.type === "text" && sanitizerState.buffer) {
+            const tail = sanitizerState.buffer;
+            sanitizerState.buffer = "";
+            closingBlock.text += tail;
+            stream.push({
+              type: "text_delta",
+              contentIndex: currentBlockIndex,
+              delta: tail,
+              partial: output as never,
+            });
+          }
           pushTextBlockEnd(stream, output, currentBlockIndex);
         }
         finalizeTransportStream({ stream, output, signal: options?.signal });
