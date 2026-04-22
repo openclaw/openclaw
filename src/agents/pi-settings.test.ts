@@ -127,6 +127,41 @@ describe("applyPiCompactionSettingsFromConfig", () => {
     });
   });
 
+  it("prefers per-agent compaction reserve token settings over defaults", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 20_000,
+      getCompactionKeepRecentTokens: () => 20_000,
+      applyOverrides: vi.fn(),
+    };
+
+    const result = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      agentId: "writer",
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              keepRecentTokens: 15_000,
+            },
+          },
+          list: [
+            {
+              id: "writer",
+              compaction: {
+                keepRecentTokens: 12_000,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.compaction.keepRecentTokens).toBe(12_000);
+    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+      compaction: { keepRecentTokens: 12_000 },
+    });
+  });
+
   it("preserves current keepRecentTokens when safeguard mode leaves it unset", () => {
     const settingsManager = {
       getCompactionReserveTokens: () => 25_000,

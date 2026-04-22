@@ -117,6 +117,34 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("merges compaction config from defaults with per-agent overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            customInstructions: "Global compaction guidance.",
+            reserveTokensFloor: 20_000,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            compaction: {
+              customInstructions: "Agent-specific compaction guidance.",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toMatchObject({
+      mode: "safeguard",
+      reserveTokensFloor: 20_000,
+      customInstructions: "Agent-specific compaction guidance.",
+    });
+  });
+
   it("resolves explicit and effective model primary separately", () => {
     const cfgWithStringDefault = {
       agents: {

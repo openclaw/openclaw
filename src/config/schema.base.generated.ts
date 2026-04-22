@@ -6373,6 +6373,141 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   additionalProperties: false,
                 },
+                compaction: {
+                  type: "object",
+                  properties: {
+                    mode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "default",
+                        },
+                        {
+                          type: "string",
+                          const: "safeguard",
+                        },
+                      ],
+                    },
+                    provider: {
+                      type: "string",
+                    },
+                    reserveTokens: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    keepRecentTokens: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    reserveTokensFloor: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    maxHistoryShare: {
+                      type: "number",
+                      minimum: 0.1,
+                      maximum: 0.9,
+                    },
+                    customInstructions: {
+                      type: "string",
+                    },
+                    identifierPolicy: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "strict",
+                        },
+                        {
+                          type: "string",
+                          const: "off",
+                        },
+                        {
+                          type: "string",
+                          const: "custom",
+                        },
+                      ],
+                    },
+                    identifierInstructions: {
+                      type: "string",
+                    },
+                    recentTurnsPreserve: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 12,
+                    },
+                    qualityGuard: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        maxRetries: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    postIndexSync: {
+                      type: "string",
+                      enum: ["off", "async", "await"],
+                    },
+                    postCompactionSections: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    model: {
+                      type: "string",
+                    },
+                    timeoutSeconds: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    memoryFlush: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        softThresholdTokens: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        forceFlushTranscriptBytes: {
+                          anyOf: [
+                            {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            {
+                              type: "string",
+                            },
+                          ],
+                        },
+                        prompt: {
+                          type: "string",
+                        },
+                        systemPrompt: {
+                          type: "string",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    notifyUser: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
                 identity: {
                   type: "object",
                   properties: {

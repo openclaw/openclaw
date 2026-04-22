@@ -16,7 +16,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-function buildSafeguardFactories(cfg: OpenClawConfig) {
+function buildSafeguardFactories(cfg: OpenClawConfig, agentId?: string) {
   const sessionManager = {} as SessionManager;
   const model = {
     id: "claude-sonnet-4-20250514",
@@ -29,6 +29,7 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
     provider: "anthropic",
     modelId: "claude-sonnet-4-20250514",
     model,
+    agentId,
   });
 
   return { factories, sessionManager };
@@ -36,9 +37,14 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
 
 function expectSafeguardRuntime(
   cfg: OpenClawConfig,
-  expectedRuntime: { qualityGuardEnabled: boolean; qualityGuardMaxRetries?: number },
+  expectedRuntime: {
+    qualityGuardEnabled: boolean;
+    qualityGuardMaxRetries?: number;
+    customInstructions?: string;
+  },
+  agentId?: string,
 ) {
-  const { factories, sessionManager } = buildSafeguardFactories(cfg);
+  const { factories, sessionManager } = buildSafeguardFactories(cfg, agentId);
 
   expect(factories).toContain(compactionSafeguardExtension);
   expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject(expectedRuntime);
@@ -78,6 +84,35 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("prefers per-agent compaction custom instructions over defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            customInstructions: "Global compaction guidance.",
+          },
+        },
+        list: [
+          {
+            id: "writer",
+            compaction: {
+              customInstructions: "Keep editorial decisions and pending asks.",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    expectSafeguardRuntime(
+      cfg,
+      {
+        qualityGuardEnabled: false,
+        customInstructions: "Keep editorial decisions and pending asks.",
+      },
+      "writer",
+    );
   });
 
   it("enables cache-ttl pruning for custom anthropic-messages providers", () => {
