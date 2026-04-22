@@ -41,16 +41,6 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "defaultTo",
 ]);
 
-const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Some setup/migration paths run before the channel setup surface has been loaded.
-  telegram: ["streaming"],
-};
-
-const BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Keep top-level Telegram policy fallback intact when only auth needs seeding.
-  telegram: ["botToken", "tokenFile"],
-};
-
 type ChannelSetupPromotionSurface = {
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
@@ -59,10 +49,18 @@ type ChannelSetupPromotionSurface = {
   }) => string | undefined;
 };
 
+const BUNDLED_CHANNELS_WITHOUT_SETUP_PROMOTION_SURFACE = new Set(["whatsapp"]);
+
 function getChannelSetupPromotionSurface(
   channelKey: string,
   opts?: { loadBundledFallback?: boolean },
 ): ChannelSetupPromotionSurface | null {
+  if (
+    opts?.loadBundledFallback &&
+    BUNDLED_CHANNELS_WITHOUT_SETUP_PROMOTION_SURFACE.has(channelKey)
+  ) {
+    return getLoadedChannelPlugin(channelKey)?.setup ?? null;
+  }
   const setup =
     getLoadedChannelPlugin(channelKey)?.setup ??
     (opts?.loadBundledFallback ? getBundledChannelPlugin(channelKey)?.setup : undefined);
@@ -72,18 +70,15 @@ function getChannelSetupPromotionSurface(
   return setup as ChannelSetupPromotionSurface;
 }
 
-function isStaticSingleAccountPromotionKey(channelKey: string, key: string): boolean {
-  if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(key)) {
-    return true;
-  }
-  return BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[channelKey]?.includes(key) ?? false;
+function isStaticSingleAccountPromotionKey(key: string): boolean {
+  return COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(key);
 }
 
 export function shouldMoveSingleAccountChannelKey(params: {
   channelKey: string;
   key: string;
 }): boolean {
-  if (isStaticSingleAccountPromotionKey(params.channelKey, params.key)) {
+  if (isStaticSingleAccountPromotionKey(params.key)) {
     return true;
   }
   const contractKeys = getChannelSetupPromotionSurface(params.channelKey, {
@@ -118,7 +113,7 @@ export function resolveSingleAccountKeysToMove(params: {
   };
 
   const keysToMove = entries.filter((key) => {
-    if (isStaticSingleAccountPromotionKey(params.channelKey, key)) {
+    if (isStaticSingleAccountPromotionKey(key)) {
       return true;
     }
     return Boolean(resolveSetupSurface()?.singleAccountKeysToMove?.includes(key));
@@ -128,9 +123,7 @@ export function resolveSingleAccountKeysToMove(params: {
   }
 
   const namedAccountPromotionKeys =
-    setupSurface?.namedAccountPromotionKeys ??
-    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
-    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
+    setupSurface?.namedAccountPromotionKeys ?? resolveSetupSurface()?.namedAccountPromotionKeys;
   if (!namedAccountPromotionKeys) {
     return keysToMove;
   }

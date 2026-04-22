@@ -36,6 +36,7 @@ export type ChannelHealthPolicy = {
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
   skipStaleSocketCheck?: boolean;
+  staleSocketHealthCheckModes?: readonly string[];
 };
 
 export type ChannelRestartReason =
@@ -54,6 +55,19 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
+
+function shouldCheckStaleSocketForMode(
+  mode: string | undefined,
+  healthCheckModes: readonly string[] | undefined,
+): boolean {
+  if (healthCheckModes) {
+    const normalizedModes = new Set(
+      healthCheckModes.map((entry) => entry.trim().toLowerCase()).filter(Boolean),
+    );
+    return Boolean(mode && normalizedModes.has(mode));
+  }
+  return mode !== "webhook";
+}
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
@@ -112,14 +126,11 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  // Telegram only has reliable stale-socket liveness in explicit polling mode.
-  // Webhook accounts and malformed legacy mode values do not have a persistent
-  // outgoing socket to age-check.
   const shouldCheckStaleSocket =
     policy.skipStaleSocketCheck !== true &&
     snapshot.connected === true &&
     lastEventAt != null &&
-    (policy.channelId === "telegram" ? mode === "polling" : mode !== "webhook");
+    shouldCheckStaleSocketForMode(mode, policy.staleSocketHealthCheckModes);
   if (shouldCheckStaleSocket) {
     if (lastStartAt != null && lastEventAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);

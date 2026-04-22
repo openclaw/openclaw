@@ -57,11 +57,12 @@ GitHub may mark superseded jobs as `cancelled` when a newer push lands on the sa
 
 ## Runners
 
-| Runner                           | Jobs                                                                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `blacksmith-16vcpu-ubuntu-2404`  | `preflight`, `security-scm-fast`, `security-dependency-audit`, `security-fast`, `build-artifacts`, Linux checks, docs checks, Python skills, `android` |
-| `blacksmith-32vcpu-windows-2025` | `checks-windows`                                                                                                                                       |
-| `blacksmith-12vcpu-macos-latest` | `macos-node`, `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                  |
+| Runner                           | Jobs                                                                                                                                      |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                   | `preflight`; install-smoke preflight also uses GitHub-hosted Ubuntu so the Blacksmith matrix can queue earlier                            |
+| `blacksmith-16vcpu-ubuntu-2404`  | `security-scm-fast`, `security-dependency-audit`, `security-fast`, `build-artifacts`, Linux checks, docs checks, Python skills, `android` |
+| `blacksmith-32vcpu-windows-2025` | `checks-windows`                                                                                                                          |
+| `blacksmith-12vcpu-macos-latest` | `macos-node`, `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                     |
 
 ## Local Equivalents
 

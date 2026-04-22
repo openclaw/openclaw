@@ -125,12 +125,14 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+          const channelPluginStatus = getChannelPlugin(channelId)?.status;
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
-            skipStaleSocketCheck: getChannelPlugin(channelId)?.status?.skipStaleSocketHealthCheck,
+            skipStaleSocketCheck: channelPluginStatus?.skipStaleSocketHealthCheck,
+            staleSocketHealthCheckModes: channelPluginStatus?.staleSocketHealthCheckModes,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {

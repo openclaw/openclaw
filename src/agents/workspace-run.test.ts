@@ -83,17 +83,23 @@ describe("resolveRunWorkspaceDir", () => {
   });
 
   it("uses explicit agent id for per-agent fallback when config is unavailable", () => {
+    const env = {
+      ...process.env,
+      HOME: "/home/runner",
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
+    } satisfies NodeJS.ProcessEnv;
     const result = resolveRunWorkspaceDir({
       workspaceDir: undefined,
       sessionKey: "definitely-not-a-valid-session-key",
       agentId: "research",
       config: undefined,
+      env,
     });
 
     expect(result.agentId).toBe("research");
     expect(result.agentIdSource).toBe("explicit");
-    expect(path.isAbsolute(result.workspaceDir)).toBe(true);
-    expect(path.basename(result.workspaceDir)).toBe("workspace-research");
+    expect(result.workspaceDir).toBe(path.resolve("/tmp/openclaw-state", "workspace-research"));
   });
 
   it("throws for malformed agent session keys even when config has a default agent", () => {
