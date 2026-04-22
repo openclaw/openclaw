@@ -34,6 +34,10 @@ describe("restart sentinel", () => {
         status: "ok" as const,
         ts: Date.now(),
         sessionKey: "agent:main:mobilechat:dm:+15555550123",
+        continuation: {
+          kind: "agentTurn" as const,
+          message: "Reply with exactly: Yay! I did it!",
+        },
         stats: { mode: "git" },
       };
       const filePath = await writeRestartSentinel(payload);
@@ -41,9 +45,11 @@ describe("restart sentinel", () => {
 
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
+      expect(read?.payload.continuation).toEqual(payload.continuation);
 
       const consumed = await consumeRestartSentinel();
       expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
+      expect(consumed?.payload.continuation).toEqual(payload.continuation);
 
       const empty = await readRestartSentinel();
       expect(empty).toBeNull();
