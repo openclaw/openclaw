@@ -15005,6 +15005,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         selfChatMode: {
           type: "boolean",
         },
+        announcePresence: {
+          type: "boolean",
+        },
         allowFrom: {
           type: "array",
           items: {
@@ -15273,6 +15276,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["pairing", "allowlist", "open", "disabled"],
               },
               selfChatMode: {
+                type: "boolean",
+              },
+              announcePresence: {
                 type: "boolean",
               },
               allowFrom: {
@@ -15552,6 +15558,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       selfChatMode: {
         label: "WhatsApp Self-Phone Mode",
         help: "Same-phone setup (bot uses your personal WhatsApp number).",
+      },
+      announcePresence: {
+        label: "WhatsApp Announce Online Presence",
+        help: "Announce online presence on connect (default: false). When false, the gateway stays 'unavailable' so the phone continues receiving push notifications.",
       },
       debounceMs: {
         label: "WhatsApp Message Debounce (ms)",

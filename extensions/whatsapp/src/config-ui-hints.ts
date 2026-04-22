@@ -13,6 +13,10 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
+  announcePresence: {
+    label: "WhatsApp Announce Online Presence",
+    help: "Announce online presence on connect (default: false). When false, the gateway stays 'unavailable' so the phone continues receiving push notifications.",
+  },
   debounceMs: {
     label: "WhatsApp Message Debounce (ms)",
     help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",

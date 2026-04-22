@@ -56,6 +56,8 @@ type WhatsAppSharedConfig = {
   dmPolicy?: DmPolicy;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
+  /** Announce online presence on connect (default: false). When false, the gateway stays "unavailable" so the phone continues receiving push notifications. */
+  announcePresence?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */

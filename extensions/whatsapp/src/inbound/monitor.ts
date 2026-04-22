@@ -67,6 +67,8 @@ export type MonitorWebInboxOptions = {
   mediaMaxMb?: number;
   /** Keep the global presence unavailable so self-chat sessions do not mute phone pushes. */
   selfChatMode?: boolean;
+  /** Announce online presence on connect (default: false). When false, the gateway stays "unavailable" so the phone continues receiving push notifications. */
+  announcePresence?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
@@ -121,7 +123,7 @@ export async function attachWebInboxToSocket(
     onCloseResolve = null;
     resolver(reason);
   };
-  const presence = options.selfChatMode ? "unavailable" : "available";
+  const presence = options.announcePresence ? "available" : "unavailable";
 
   try {
     await sock.sendPresenceUpdate(presence);

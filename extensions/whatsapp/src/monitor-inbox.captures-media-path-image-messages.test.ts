@@ -86,7 +86,7 @@ describe("web monitor inbox", () => {
         fromMe: false,
       },
     ]);
-    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "unavailable");
     await listener.close();
   });
 

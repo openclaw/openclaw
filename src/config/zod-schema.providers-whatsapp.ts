@@ -60,6 +60,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       ? DmPolicySchema.optional().default("pairing")
       : DmPolicySchema.optional(),
     selfChatMode: z.boolean().optional(),
+    announcePresence: z.boolean().optional(),
     allowFrom: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),

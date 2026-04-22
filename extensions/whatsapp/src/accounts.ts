@@ -24,6 +24,7 @@ export type ResolvedWhatsAppAccount = {
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
+  announcePresence?: boolean;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
@@ -139,6 +140,7 @@ export function resolveWhatsAppAccount(params: {
     authDir,
     isLegacyAuthDir: isLegacy,
     selfChatMode: merged.selfChatMode,
+    announcePresence: merged.announcePresence,
     dmPolicy: merged.dmPolicy,
     allowFrom: merged.allowFrom,
     groupAllowFrom: merged.groupAllowFrom,
