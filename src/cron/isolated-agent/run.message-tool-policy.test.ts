@@ -455,6 +455,134 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
+  it("rewrites generic message provider to resolved channel in delivery trace", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "123" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        id: "message-tool-generic-target",
+        name: "Message Tool Generic Target",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      } as never,
+    });
+
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        resolved: { ok: true, channel: "telegram", to: "123", source: "explicit" },
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+      }),
+    );
+  });
+
+  it("preserves accountId when rewriting generic message provider to resolved channel", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+      threadId: undefined,
+      mode: "explicit",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [
+        { tool: "message", provider: "message", to: "123", accountId: "bot-a" },
+      ],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        id: "message-tool-generic-target-account",
+        name: "Message Tool Generic Target (accountId)",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
+        delivery: { mode: "announce", channel: "telegram", to: "123", accountId: "bot-a" },
+      } as never,
+    });
+
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        messageToolSentTo: [{ channel: "telegram", to: "123", accountId: "bot-a" }],
+      }),
+    );
+  });
+
+  it("does not rewrite generic message provider when accountId is missing on tool send", async () => {
+    // Regression guard: a tool send omitting accountId must NOT be attributed
+    // to a specific account-tied delivery in the trace. Spoofing protection
+    // for CronDeliveryTrace.messageToolSentTo[i].channel (CWE-284).
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+      threadId: undefined,
+      mode: "explicit",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "123" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        id: "message-tool-generic-target-account-spoof",
+        name: "Message Tool Generic Target (account spoof guard)",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
+        delivery: { mode: "announce", channel: "telegram", to: "123", accountId: "bot-a" },
+      } as never,
+    });
+
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        // Channel stays as "message" because the tool-reported target did not
+        // carry an accountId matching the resolved delivery's bot-a binding.
+        messageToolSentTo: [{ channel: "message", to: "123" }],
+      }),
+    );
+  });
+
   it("does not mark message tool delivery as matched when cron target resolution failed", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({

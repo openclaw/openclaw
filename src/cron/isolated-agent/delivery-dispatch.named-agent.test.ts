@@ -72,6 +72,25 @@ describe("matchesMessagingToolDeliveryTarget", () => {
       ),
     ).toBe(false);
   });
+  it("rejects when delivery has accountId but target omits it (spoof guard)", () => {
+    // Regression guard for CWE-284: an omitted target.accountId must NOT
+    // count as a wildcard match against an account-tied delivery.
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "message", to: "123456" },
+        { channel: "telegram", to: "123456", accountId: "bot-a" },
+      ),
+    ).toBe(false);
+  });
+
+  it("matches when delivery and target carry the same accountId", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "telegram", to: "123456", accountId: "bot-a" },
+        { channel: "telegram", to: "123456", accountId: "bot-a" },
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("resolveCronDeliveryBestEffort", () => {
