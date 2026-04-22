@@ -1557,9 +1557,10 @@ export async function runEmbeddedAttempt(
           );
         }
         cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0 || skipPromptSubmission) {
-          activeSession.agent.state.messages = limited;
-        }
+        // Always write back: an empty result from dropTrailingEmptyAssistantTurns
+        // must still replace the stale tail so the deferred prune and
+        // shouldShortCircuitForMissingUserTail see the cleaned state.
+        activeSession.agent.state.messages = limited;
 
         if (params.contextEngine) {
           try {
