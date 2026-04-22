@@ -15,10 +15,10 @@ OpenClaw generates images, videos, and music, understands inbound media (images,
 
 | Capability           | Tool             | Providers                                                                                    | What it does                                            |
 | -------------------- | ---------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Image generation     | `image_generate` | ComfyUI, fal, Google, MiniMax, OpenAI, Vydra                                                 | Creates or edits images from text prompts or references |
+| Image generation     | `image_generate` | ComfyUI, fal, Google, MiniMax, OpenAI, Vydra, xAI                                            | Creates or edits images from text prompts or references |
 | Video generation     | `video_generate` | Alibaba, BytePlus, ComfyUI, fal, Google, MiniMax, OpenAI, Qwen, Runway, Together, Vydra, xAI | Creates videos from text, images, or existing videos    |
 | Music generation     | `music_generate` | ComfyUI, Google, MiniMax                                                                     | Creates music or audio tracks from text prompts         |
-| Text-to-speech (TTS) | `tts`            | ElevenLabs, Microsoft, MiniMax, OpenAI                                                       | Converts outbound replies to spoken audio               |
+| Text-to-speech (TTS) | `tts`            | ElevenLabs, Microsoft, MiniMax, OpenAI, xAI                                                  | Converts outbound replies to spoken audio               |
 | Media understanding  | (automatic)      | Any vision/audio-capable model provider, plus CLI fallbacks                                  | Summarizes inbound images, audio, and video             |
 
 ## Provider capability matrix
@@ -41,7 +41,7 @@ This table shows which providers support which media capabilities across the pla
 | Runway     |       | Yes   |       |     |                     |                     |
 | Together   |       | Yes   |       |     |                     |                     |
 | Vydra      | Yes   | Yes   |       |     |                     |                     |
-| xAI        |       | Yes   |       |     |                     |                     |
+| xAI        | Yes   | Yes   |       | Yes |                     |                     |
 
 <Note>
 Media understanding uses any vision-capable or audio-capable model registered in your provider config. The table above highlights providers with dedicated media-understanding support; most LLM providers with multimodal models (Anthropic, Google, OpenAI, etc.) can also understand inbound media when configured as the active reply model.
@@ -50,6 +50,11 @@ Media understanding uses any vision-capable or audio-capable model registered in
 ## How async generation works
 
 Video and music generation run as background tasks because provider processing typically takes 30 seconds to several minutes. When the agent calls `video_generate` or `music_generate`, OpenClaw submits the request to the provider, returns a task ID immediately, and tracks the job in the task ledger. The agent continues responding to other messages while the job runs. When the provider finishes, OpenClaw wakes the agent so it can post the finished media back into the original channel. Image generation and TTS are synchronous and complete inline with the reply.
+
+xAI currently maps to OpenClaw's image, video, search, code-execution, and
+batch TTS surfaces. xAI STT and Realtime voice are upstream capabilities, but
+they are not registered in OpenClaw until the shared transcription and realtime
+voice contracts can represent them.
 
 ## Quick links
 

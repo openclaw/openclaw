@@ -1697,7 +1697,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expect(payload.AccountId).toBe("opie");
-    expect(payload.SessionKey).toBe("agent:opie:main");
+    expect(payload.SessionKey).toBe("agent:opie:telegram:opie:direct:999");
   });
 
   it("reloads DM routing bindings between messages without recreating the bot", async () => {
@@ -3274,6 +3274,16 @@ describe("createTelegramBot", () => {
     expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls[0]?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries command pagination callbacks after a bubbled edit failure", async () => {
@@ -3654,6 +3664,16 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls.at(-1)?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {

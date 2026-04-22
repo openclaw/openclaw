@@ -1,0 +1,3 @@
+{
+  "specs": ["@mariozechner/pi-coding-agent@0.68.1", "ws@^8.20.0", "zod@^4.3.6"]
+}

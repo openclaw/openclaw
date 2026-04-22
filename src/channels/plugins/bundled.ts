@@ -10,6 +10,10 @@ import {
   resolveBundledChannelGeneratedPath,
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
+import {
+  isBuiltBundledPluginRuntimeRoot,
+  prepareBundledPluginRuntimeRoot,
+} from "../../plugins/bundled-runtime-root.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
@@ -45,6 +49,11 @@ type BundledChannelSetupEntryRuntimeContract = {
   };
 };
 
+type BundledChannelPackageSetupFeature =
+  | "configPromotion"
+  | "legacyStateMigrations"
+  | "legacySessionSurfaces";
+
 type GeneratedBundledChannelEntry = {
   id: string;
   entry: BundledChannelEntryRuntimeContract;
@@ -57,8 +66,8 @@ type BundledChannelCacheContext = {
   setupEntryLoadInProgressIds: Set<ChannelId>;
   lazyEntriesById: Map<ChannelId, GeneratedBundledChannelEntry | null>;
   lazySetupEntriesById: Map<ChannelId, BundledChannelSetupEntryRuntimeContract | null>;
-  lazyPluginsById: Map<ChannelId, ChannelPlugin>;
-  lazySetupPluginsById: Map<ChannelId, ChannelPlugin>;
+  lazyPluginsById: Map<ChannelId, ChannelPlugin | null>;
+  lazySetupPluginsById: Map<ChannelId, ChannelPlugin | null>;
   lazySecretsById: Map<ChannelId, ChannelPlugin["secrets"] | null>;
   lazySetupSecretsById: Map<ChannelId, ChannelPlugin["secrets"] | null>;
   lazyAccountInspectorsById: Map<
@@ -171,17 +180,32 @@ function loadGeneratedBundledChannelModule(params: {
   metadata: BundledChannelPluginMetadata;
   entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"];
 }): unknown {
-  const modulePath = resolveGeneratedBundledChannelModulePath(params);
+  let modulePath = resolveGeneratedBundledChannelModulePath(params);
   if (!modulePath) {
     throw new Error(`missing generated module for bundled channel ${params.metadata.manifest.id}`);
   }
   const scanDir = resolveBundledChannelScanDir(params.rootScope);
-  const boundaryRoot = resolveBundledChannelBoundaryRoot({
+  let boundaryRoot = resolveBundledChannelBoundaryRoot({
     packageRoot: params.rootScope.packageRoot,
     ...(scanDir ? { pluginsDir: scanDir } : {}),
     metadata: params.metadata,
     modulePath,
   });
+  if (isBuiltBundledPluginRuntimeRoot(boundaryRoot)) {
+    const prepared = prepareBundledPluginRuntimeRoot({
+      pluginId: params.metadata.manifest.id,
+      pluginRoot: boundaryRoot,
+      modulePath,
+      env: process.env,
+      logInstalled: (installedSpecs) => {
+        log.debug(
+          `[channels] ${params.metadata.manifest.id} installed bundled runtime deps: ${installedSpecs.join(", ")}`,
+        );
+      },
+    });
+    modulePath = prepared.modulePath;
+    boundaryRoot = prepared.pluginRoot;
+  }
   return loadChannelPluginModule({
     modulePath,
     rootDir: boundaryRoot,
@@ -332,6 +356,16 @@ export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
 }
 
+export function hasBundledChannelPackageSetupFeature(
+  id: ChannelId,
+  feature: BundledChannelPackageSetupFeature,
+): boolean {
+  const rootScope = resolveBundledChannelRootScope();
+  return (
+    resolveBundledChannelMetadata(id, rootScope)?.packageManifest?.setupFeatures?.[feature] === true
+  );
+}
+
 function resolveBundledChannelMetadata(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
@@ -427,9 +461,8 @@ function getBundledChannelPluginForRoot(
   rootScope: BundledChannelRootScope,
   cacheContext: BundledChannelCacheContext,
 ): ChannelPlugin | undefined {
-  const cached = cacheContext.lazyPluginsById.get(id);
-  if (cached) {
-    return cached;
+  if (cacheContext.lazyPluginsById.has(id)) {
+    return cacheContext.lazyPluginsById.get(id) ?? undefined;
   }
   if (cacheContext.pluginLoadInProgressIds.has(id)) {
     return undefined;
@@ -452,6 +485,11 @@ function getBundledChannelPluginForRoot(
     };
     cacheContext.lazyPluginsById.set(id, normalizedPlugin);
     return normalizedPlugin;
+  } catch (error) {
+    const detail = formatErrorMessage(error);
+    log.warn(`[channels] failed to load bundled channel ${id}: ${detail}`);
+    cacheContext.lazyPluginsById.set(id, null);
+    return undefined;
   } finally {
     cacheContext.pluginLoadInProgressIds.delete(id);
   }
@@ -469,11 +507,18 @@ function getBundledChannelSecretsForRoot(
   if (!entry) {
     return undefined;
   }
-  const secrets =
-    entry.loadChannelSecrets?.() ??
-    getBundledChannelPluginForRoot(id, rootScope, cacheContext)?.secrets;
-  cacheContext.lazySecretsById.set(id, secrets ?? null);
-  return secrets;
+  try {
+    const secrets =
+      entry.loadChannelSecrets?.() ??
+      getBundledChannelPluginForRoot(id, rootScope, cacheContext)?.secrets;
+    cacheContext.lazySecretsById.set(id, secrets ?? null);
+    return secrets;
+  } catch (error) {
+    const detail = formatErrorMessage(error);
+    log.warn(`[channels] failed to load bundled channel secrets ${id}: ${detail}`);
+    cacheContext.lazySecretsById.set(id, null);
+    return undefined;
+  }
 }
 
 function getBundledChannelAccountInspectorForRoot(
@@ -489,9 +534,16 @@ function getBundledChannelAccountInspectorForRoot(
     cacheContext.lazyAccountInspectorsById.set(id, null);
     return undefined;
   }
-  const inspector = entry.loadChannelAccountInspector();
-  cacheContext.lazyAccountInspectorsById.set(id, inspector);
-  return inspector;
+  try {
+    const inspector = entry.loadChannelAccountInspector();
+    cacheContext.lazyAccountInspectorsById.set(id, inspector);
+    return inspector;
+  } catch (error) {
+    const detail = formatErrorMessage(error);
+    log.warn(`[channels] failed to load bundled channel account inspector ${id}: ${detail}`);
+    cacheContext.lazyAccountInspectorsById.set(id, null);
+    return undefined;
+  }
 }
 
 function getBundledChannelSetupPluginForRoot(
@@ -499,9 +551,8 @@ function getBundledChannelSetupPluginForRoot(
   rootScope: BundledChannelRootScope,
   cacheContext: BundledChannelCacheContext,
 ): ChannelPlugin | undefined {
-  const cached = cacheContext.lazySetupPluginsById.get(id);
-  if (cached) {
-    return cached;
+  if (cacheContext.lazySetupPluginsById.has(id)) {
+    return cacheContext.lazySetupPluginsById.get(id) ?? undefined;
   }
   if (cacheContext.setupPluginLoadInProgressIds.has(id)) {
     return undefined;
@@ -515,6 +566,11 @@ function getBundledChannelSetupPluginForRoot(
     const plugin = entry.loadSetupPlugin();
     cacheContext.lazySetupPluginsById.set(id, plugin);
     return plugin;
+  } catch (error) {
+    const detail = formatErrorMessage(error);
+    log.warn(`[channels] failed to load bundled channel setup ${id}: ${detail}`);
+    cacheContext.lazySetupPluginsById.set(id, null);
+    return undefined;
   } finally {
     cacheContext.setupPluginLoadInProgressIds.delete(id);
   }
@@ -532,11 +588,18 @@ function getBundledChannelSetupSecretsForRoot(
   if (!entry) {
     return undefined;
   }
-  const secrets =
-    entry.loadSetupSecrets?.() ??
-    getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext)?.secrets;
-  cacheContext.lazySetupSecretsById.set(id, secrets ?? null);
-  return secrets;
+  try {
+    const secrets =
+      entry.loadSetupSecrets?.() ??
+      getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext)?.secrets;
+    cacheContext.lazySetupSecretsById.set(id, secrets ?? null);
+    return secrets;
+  } catch (error) {
+    const detail = formatErrorMessage(error);
+    log.warn(`[channels] failed to load bundled channel setup secrets ${id}: ${detail}`);
+    cacheContext.lazySetupSecretsById.set(id, null);
+    return undefined;
+  }
 }
 
 export function listBundledChannelPlugins(): readonly ChannelPlugin[] {

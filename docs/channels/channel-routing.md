@@ -23,9 +23,15 @@ host configuration.
 
 ## Session key shapes (examples)
 
-Direct messages collapse to the agent’s **main** session:
+Most direct messages collapse to the agent’s **main** session:
 
 - `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
+
+Telegram bot direct messages are isolated per bot account and sender even when
+`session.dmScope` is `main`, so sandbox and tool policy decisions can distinguish
+channel-originated DMs from the agent main session:
+
+- `agent:<agentId>:telegram:<accountId>:direct:<senderId>`
 
 Groups and channels remain isolated per channel:
 

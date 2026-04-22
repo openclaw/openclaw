@@ -82,6 +82,10 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Verifies the first Gateway restart installs each bundled channel plugin's
     runtime dependencies on demand, and a second restart does not reinstall
     dependencies that were already activated.
+  - Also installs a known older npm baseline, enables Telegram before running
+    `openclaw update --tag <candidate>`, and verifies the candidate's
+    post-update doctor repairs bundled channel runtime dependencies without a
+    harness-side postinstall repair.
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
@@ -777,10 +781,11 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Current bundled providers covered:
   - `openai`
   - `google`
+  - `xai`
 - Optional narrowing:
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google,xai"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview,xai/grok-imagine-image"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit,xai:default-generate,xai:default-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 

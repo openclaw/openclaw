@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
@@ -136,11 +137,11 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      "on-request",
+      "never",
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
-      "workspace-write",
+      "danger-full-access",
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
       (env.OPENCLAW_CODEX_APP_SERVER_GUARDIAN === "1" ? "guardian_subagent" : "user"),
@@ -156,7 +157,7 @@ export function codexAppServerStartOptionsKey(options: CodexAppServerStartOption
     command: options.command,
     args: options.args,
     url: options.url ?? null,
-    authToken: options.authToken ? "<set>" : null,
+    authToken: hashSecretForKey(options.authToken),
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
@@ -221,6 +222,13 @@ function readNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function hashSecretForKey(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function splitShellWords(value: string): string[] {

@@ -40,7 +40,13 @@
       "aliases": [
         "teams"
       ],
-      "order": 60
+      "order": 60,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "hybrid",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": true
+      }
     },
     "install": {
       "npmSpec": "@openclaw/msteams",

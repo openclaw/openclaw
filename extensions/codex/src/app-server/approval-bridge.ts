@@ -38,6 +38,9 @@ export async function handleCodexAppServerApprovalRequest(params: {
   if (!matchesCurrentTurn(requestParams, params.threadId, params.turnId)) {
     return undefined;
   }
+  if (!isSupportedAppServerApprovalMethod(params.method)) {
+    return unsupportedApprovalResponse();
+  }
 
   const context = buildApprovalContext({
     method: params.method,
@@ -161,9 +164,7 @@ export function buildApprovalResponse(
     }
     return { permissions: {}, scope: "turn" };
   }
-  return {
-    decision: outcome === "approved-once" || outcome === "approved-session" ? "accept" : "decline",
-  };
+  return unsupportedApprovalResponse();
 }
 
 function matchesCurrentTurn(
@@ -299,6 +300,13 @@ function requestedPermissions(requestParams: JsonObject | undefined): JsonObject
   return granted;
 }
 
+function unsupportedApprovalResponse(): JsonValue {
+  return {
+    decision: "decline",
+    reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
+  };
+}
+
 function hasAvailableDecision(requestParams: JsonObject | undefined, decision: string): boolean {
   const available = requestParams?.availableDecisions;
   if (!Array.isArray(available)) {
@@ -346,6 +354,14 @@ function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
     return "plugin";
   }
   return "unknown";
+}
+
+function isSupportedAppServerApprovalMethod(method: string): boolean {
+  return (
+    method === "item/commandExecution/requestApproval" ||
+    method === "item/fileChange/requestApproval" ||
+    method === "item/permissions/requestApproval"
+  );
 }
 
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {

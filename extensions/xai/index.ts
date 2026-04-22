@@ -5,6 +5,7 @@ import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-strea
 import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
+  buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
   resolveXaiModelCompatPatch,
@@ -13,6 +14,7 @@ import {
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { buildXaiSpeechProvider } from "./speech-provider.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import { wrapXaiProviderStream } from "./stream.js";
@@ -203,6 +205,8 @@ export default defineSingleProviderPluginEntry({
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
     api.registerVideoGenerationProvider(buildXaiVideoGenerationProvider());
+    api.registerImageGenerationProvider(buildXaiImageGenerationProvider());
+    api.registerSpeechProvider(buildXaiSpeechProvider());
     api.registerTool((ctx) => createLazyCodeExecutionTool(ctx), { name: "code_execution" });
     api.registerTool((ctx) => createLazyXSearchTool(ctx), { name: "x_search" });
   },

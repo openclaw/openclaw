@@ -436,6 +436,24 @@ export async function disposeSessionMcpRuntime(sessionId: string): Promise<void>
   await getSessionMcpRuntimeManager().disposeSession(sessionId);
 }
 
+export async function retireSessionMcpRuntime(params: {
+  sessionId?: string | null;
+  reason: string;
+  onError?: (error: unknown, sessionId: string, reason: string) => void;
+}): Promise<boolean> {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (!sessionId) {
+    return false;
+  }
+  try {
+    await disposeSessionMcpRuntime(sessionId);
+    return true;
+  } catch (error) {
+    params.onError?.(error, sessionId, params.reason);
+    return false;
+  }
+}
+
 export async function disposeAllSessionMcpRuntimes(): Promise<void> {
   await getSessionMcpRuntimeManager().disposeAll();
 }

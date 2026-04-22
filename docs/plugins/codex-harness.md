@@ -17,6 +17,10 @@ discovery, native thread resume, native compaction, and app-server execution.
 OpenClaw still owns chat channels, session files, model selection, tools,
 approvals, media delivery, and the visible transcript mirror.
 
+Native Codex turns also respect the shared `before_prompt_build`,
+`before_compaction`, and `after_compaction` plugin hooks, so prompt shims and
+compaction-aware automation can stay aligned with the PI harness.
+
 The harness is off by default. It is selected only when the `codex` plugin is
 enabled and the resolved model is a `codex/*` model, or when you explicitly
 force `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex`.
@@ -263,9 +267,12 @@ By default, the plugin starts Codex locally with:
 codex app-server --listen stdio://
 ```
 
-By default, OpenClaw asks Codex to request native approvals. You can tune that
-policy further, for example by tightening it and routing reviews through the
-guardian:
+By default, OpenClaw starts local Codex harness sessions fully unchained:
+`approvalPolicy: "never"` and `sandbox: "danger-full-access"`. That matches the
+trusted local operator posture used by the Codex CLI and lets autonomous
+heartbeats use network and shell tools without waiting on an invisible native
+approval path. You can tighten that policy, for example by routing reviews
+through the guardian:
 
 ```json5
 {
@@ -320,8 +327,8 @@ Supported `appServer` fields:
 | `authToken`         | unset                                    | Bearer token for WebSocket transport.                                    |
 | `headers`           | `{}`                                     | Extra WebSocket headers.                                                 |
 | `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                              |
-| `approvalPolicy`    | `"on-request"`                           | Native Codex approval policy sent to thread start/resume/turn.           |
-| `sandbox`           | `"workspace-write"`                      | Native Codex sandbox mode sent to thread start/resume.                   |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.           |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                   |
 | `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex guardian review native approvals. |
 | `serviceTier`       | unset                                    | Optional Codex service tier, for example `"priority"`.                   |
 
@@ -457,7 +464,10 @@ When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
 history, search, `/new`, `/reset`, and future model or harness switching. The
 mirror includes the user prompt, final assistant text, and lightweight Codex
-reasoning or plan records when the app-server emits them.
+reasoning or plan records when the app-server emits them. Today, OpenClaw only
+records native compaction start and completion signals. It does not yet expose a
+human-readable compaction summary or an auditable list of which entries Codex
+kept after compaction.
 
 Media generation does not require PI. Image, video, music, PDF, TTS, and media
 understanding continue to use the matching provider/model settings such as
@@ -469,8 +479,12 @@ understanding continue to use the matching provider/model settings such as
 **Codex does not appear in `/model`:** enable `plugins.entries.codex.enabled`,
 set a `codex/*` model ref, or check whether `plugins.allow` excludes `codex`.
 
-**OpenClaw falls back to PI:** set `embeddedHarness.fallback: "none"` or
-`OPENCLAW_AGENT_HARNESS_FALLBACK=none` while testing.
+**OpenClaw uses PI instead of Codex:** if no Codex harness claims the run,
+OpenClaw may use PI as the compatibility backend. Set
+`embeddedHarness.runtime: "codex"` to force Codex selection while testing, or
+`embeddedHarness.fallback: "none"` to fail when no plugin harness matches. Once
+Codex app-server is selected, its failures surface directly without extra
+fallback config.
 
 **The app-server is rejected:** upgrade Codex so the app-server handshake
 reports version `0.118.0` or newer.
