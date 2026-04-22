@@ -78,6 +78,15 @@ describe("isTransientLlmCallError", () => {
     expect(isTransientLlmCallError(new Error("connection reset by peer"))).toBe(true);
     expect(isTransientLlmCallError(new Error("other side closed"))).toBe(true);
     expect(isTransientLlmCallError(new Error("read ECONNRESET"))).toBe(true);
+    expect(isTransientLlmCallError(new Error("premature close"))).toBe(true);
+  });
+
+  it("matches undici-style bare `terminated` message (lost cause chain)", () => {
+    // pi-ai's streaming adapter surfaces undici's mid-stream termination as
+    // the bare string "terminated" on lastAssistant.errorMessage — the
+    // underlying cause code is not preserved. We must still retry.
+    expect(isTransientLlmCallError(new Error("terminated"))).toBe(true);
+    expect(isTransientLlmCallError(new Error("stream terminated"))).toBe(true);
   });
 
   it("does not retry structured API errors (rate_limit / billing / auth / format)", () => {

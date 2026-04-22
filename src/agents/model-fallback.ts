@@ -190,8 +190,13 @@ const TRANSIENT_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 5_000];
 const TRANSIENT_NETWORK_CODE_RE =
   /^(?:ECONNRESET|ECONNABORTED|EPIPE|UND_ERR_(?:SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT))$/;
 
+// `terminated` is the literal message thrown by undici when a Node `fetch`
+// response stream is cut off mid-read — typically because the TCP connection
+// to the LLM provider was reset. Callers who check this regex on result-level
+// error state (pi-embedded-runner) have already filtered out user-initiated
+// aborts via `!attempt.aborted`, so matching the bare word here is safe.
 const TRANSIENT_NETWORK_MESSAGE_RE =
-  /\b(?:socket hang up|connection (?:reset|closed) by peer|other side closed|read ECONNRESET)\b/i;
+  /\b(?:socket hang up|connection (?:reset|closed) by peer|other side closed|read ECONNRESET|(?:stream )?terminated|premature close)\b/i;
 
 const MAX_CAUSE_CHAIN_DEPTH = 8;
 
