@@ -457,6 +457,78 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
   });
 
+  it("installs missing runtime deps for source-checkout bundled plugins", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          tokenjuice: "0.6.1",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "tokenjuice",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["tokenjuice@0.6.1"],
+      retainSpecs: ["tokenjuice@0.6.1"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        missingSpecs: ["tokenjuice@0.6.1"],
+        installSpecs: ["tokenjuice@0.6.1"],
+      },
+    ]);
+  });
+
+  it("reuses package-root runtime deps for source-checkout bundled plugins", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
+    fs.mkdirSync(path.join(packageRoot, "node_modules", "tokenjuice"), {
+      recursive: true,
+    });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          tokenjuice: "0.6.1",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "node_modules", "tokenjuice", "package.json"),
+      JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: () => {
+        throw new Error("package-root runtime deps should not reinstall for source checkout");
+      },
+      pluginId: "tokenjuice",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+  });
+
   it("skips install when staged plugin-local runtime deps are present", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");

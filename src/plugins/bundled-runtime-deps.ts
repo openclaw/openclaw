@@ -90,12 +90,13 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
-function isSourceCheckoutBundledPluginRoot(pluginRoot: string): boolean {
-  const extensionsDir = path.dirname(pluginRoot);
+function resolveSourceCheckoutBundledPluginPackageRoot(pluginRoot: string): string | null {
+  const extensionsDir = path.dirname(path.resolve(pluginRoot));
   if (path.basename(extensionsDir) !== "extensions") {
-    return false;
+    return null;
   }
-  return isSourceCheckoutRoot(path.dirname(extensionsDir));
+  const packageRoot = path.dirname(extensionsDir);
+  return isSourceCheckoutRoot(packageRoot) ? packageRoot : null;
 }
 
 function resolveSourceCheckoutDistPackageRoot(pluginRoot: string): string | null {
@@ -118,11 +119,19 @@ function resolveBundledRuntimeDependencySearchRoots(params: {
   const roots = new Set<string>([params.installRoot]);
   const pluginRoot = path.resolve(params.pluginRoot);
   const extensionsDir = path.dirname(pluginRoot);
+  if (path.basename(extensionsDir) !== "extensions") {
+    return [...roots];
+  }
+
+  const sourceCheckoutPackageRoot = resolveSourceCheckoutBundledPluginPackageRoot(pluginRoot);
+  if (sourceCheckoutPackageRoot) {
+    roots.add(extensionsDir);
+    roots.add(sourceCheckoutPackageRoot);
+    return [...roots];
+  }
+
   const buildDir = path.dirname(extensionsDir);
-  if (
-    path.basename(extensionsDir) !== "extensions" ||
-    (path.basename(buildDir) !== "dist" && path.basename(buildDir) !== "dist-runtime")
-  ) {
+  if (path.basename(buildDir) !== "dist" && path.basename(buildDir) !== "dist-runtime") {
     return [...roots];
   }
   roots.add(extensionsDir);
@@ -723,9 +732,6 @@ export function ensureBundledPluginRuntimeDeps(params: {
   retainSpecs?: readonly string[];
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
 }): BundledRuntimeDepsEnsureResult {
-  if (isSourceCheckoutBundledPluginRoot(params.pluginRoot)) {
-    return { installedSpecs: [], retainSpecs: [] };
-  }
   if (
     params.config &&
     !isBundledPluginConfiguredForRuntimeDeps({
