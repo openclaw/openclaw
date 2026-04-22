@@ -74,7 +74,6 @@ static const SectionController *section_controllers[SECTION_COUNT] = {0};
 /* ── Forward declarations ── */
 
 static GtkWidget* build_placeholder_section(AppSection section);
-static GtkWidget* build_about_section(void);
 static void refresh_shell_status_footer(void);
 static void ensure_app_css_loaded(void);
 static void destroy_all_section_controllers(void);
@@ -136,6 +135,22 @@ static GtkWidget* build_sidebar_row(AppSection section) {
     return box;
 }
 
+static GtkWidget* build_sidebar_separator_row(void) {
+    GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_start(separator, 12);
+    gtk_widget_set_margin_end(separator, 12);
+    gtk_widget_set_margin_top(separator, 6);
+    gtk_widget_set_margin_bottom(separator, 6);
+
+    GtkWidget *row = gtk_list_box_row_new();
+    gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(row), FALSE);
+    gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), FALSE);
+    gtk_widget_set_focusable(row, FALSE);
+    gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), separator);
+
+    return row;
+}
+
 static GtkWidget* build_sidebar(void) {
     GtkWidget *sidebar_shell = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
@@ -149,10 +164,25 @@ static GtkWidget* build_sidebar(void) {
     gtk_list_box_set_selection_mode(GTK_LIST_BOX(sidebar_list), GTK_SELECTION_SINGLE);
     gtk_widget_add_css_class(sidebar_list, "navigation-sidebar");
 
-    for (int i = 0; i < SECTION_COUNT; i++) {
-        if (!section_is_embedded_in_main_window((AppSection)i)) continue;
-        GtkWidget *row_content = build_sidebar_row((AppSection)i);
+    ShellSectionGroup previous_group = SHELL_SECTION_GROUP_PARITY;
+    gboolean have_previous_group = FALSE;
+    for (gsize i = 0; i < shell_sections_display_count(); i++) {
+        const ShellSectionDisplayEntry *entry = shell_sections_display_at(i);
+        if (!entry) continue;
+
+        AppSection section = entry->section;
+        if (!section_is_embedded_in_main_window(section)) continue;
+        if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) continue;
+
+        if (have_previous_group && previous_group != entry->group) {
+            GtkWidget *separator_row = build_sidebar_separator_row();
+            gtk_list_box_append(GTK_LIST_BOX(sidebar_list), separator_row);
+        }
+
+        GtkWidget *row_content = build_sidebar_row(section);
         gtk_list_box_append(GTK_LIST_BOX(sidebar_list), row_content);
+        previous_group = entry->group;
+        have_previous_group = TRUE;
     }
 
     g_signal_connect(sidebar_list, "row-activated",
@@ -367,21 +397,32 @@ static GtkWidget* build_content_stack(void) {
     gtk_stack_set_transition_type(GTK_STACK(content_stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
     gtk_stack_set_transition_duration(GTK_STACK(content_stack), 150);
 
-    for (int i = 0; i < SECTION_COUNT; i++) {
-        section_controllers[i] = shell_sections_controller((AppSection)i);
+    for (gsize i = 0; i < shell_sections_display_count(); i++) {
+        const ShellSectionDisplayEntry *entry = shell_sections_display_at(i);
+        if (!entry) continue;
+
+        AppSection section = entry->section;
+        if (!section_is_embedded_in_main_window(section)) continue;
+        if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) continue;
+
+        section_controllers[section] = shell_sections_controller(section);
     }
 
-    for (int i = 0; i < SECTION_COUNT; i++) {
-        if (!section_is_embedded_in_main_window((AppSection)i)) continue;
+    for (gsize i = 0; i < shell_sections_display_count(); i++) {
+        const ShellSectionDisplayEntry *entry = shell_sections_display_at(i);
+        if (!entry) continue;
+
+        AppSection section = entry->section;
+        if (!section_is_embedded_in_main_window(section)) continue;
+        if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) continue;
+
         GtkWidget *page;
-        if (section_controllers[i]) {
-            page = section_controllers[i]->build();
-        } else if (i == SECTION_ABOUT) {
-            page = build_about_section();
+        if (section_controllers[section]) {
+            page = section_controllers[section]->build();
         } else {
-            page = build_placeholder_section((AppSection)i);
+            page = build_placeholder_section(section);
         }
-        gtk_stack_add_named(GTK_STACK(content_stack), page, shell_sections_meta((AppSection)i)->id);
+        gtk_stack_add_named(GTK_STACK(content_stack), page, shell_sections_meta(section)->id);
     }
 
     return content_stack;
@@ -448,58 +489,6 @@ static GtkWidget* build_placeholder_section(AppSection section) {
     gtk_box_append(GTK_BOX(page), subtitle);
 
     return page;
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * About section
- * ══════════════════════════════════════════════════════════════════ */
-
-static GtkWidget* build_about_section(void) {
-    GtkWidget *scrolled = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
-                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-
-    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
-    gtk_widget_set_margin_start(page, 24);
-    gtk_widget_set_margin_end(page, 24);
-    gtk_widget_set_margin_top(page, 40);
-    gtk_widget_set_margin_bottom(page, 24);
-    gtk_widget_set_halign(page, GTK_ALIGN_CENTER);
-
-    GtkWidget *title = gtk_label_new("OpenClaw");
-    gtk_widget_add_css_class(title, "title-1");
-    gtk_box_append(GTK_BOX(page), title);
-
-    GtkWidget *subtitle = gtk_label_new("Linux Companion App");
-    gtk_widget_add_css_class(subtitle, "title-3");
-    gtk_box_append(GTK_BOX(page), subtitle);
-
-    HealthState *health = state_get_health();
-    const char *ver = (health && health->gateway_version) ? health->gateway_version : "Unknown";
-    g_autofree gchar *ver_text = g_strdup_printf("Gateway Version: %s", ver);
-    GtkWidget *version = gtk_label_new(ver_text);
-    gtk_widget_add_css_class(version, "dim-label");
-    gtk_widget_set_margin_top(version, 16);
-    gtk_box_append(GTK_BOX(page), version);
-
-    GtkWidget *docs_link = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(docs_link),
-        "<a href=\"https://docs.openclaw.ai\">Documentation</a>");
-    gtk_widget_set_margin_top(docs_link, 12);
-    gtk_box_append(GTK_BOX(page), docs_link);
-
-    GtkWidget *gh_link = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(gh_link),
-        "<a href=\"https://github.com/openclaw/openclaw\">GitHub</a>");
-    gtk_box_append(GTK_BOX(page), gh_link);
-
-    GtkWidget *copyright = gtk_label_new("Copyright \u00A9 2025 OpenClaw Contributors");
-    gtk_widget_add_css_class(copyright, "dim-label");
-    gtk_widget_set_margin_top(copyright, 24);
-    gtk_box_append(GTK_BOX(page), copyright);
-
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
-    return scrolled;
 }
 
 /* ── Auto-refresh timer ── */
@@ -663,6 +652,7 @@ void app_window_show(void) {
 
 void app_window_navigate_to(AppSection section) {
     if (section < 0 || section >= SECTION_COUNT) return;
+    if (section == SECTION_DEBUG && !shell_sections_debug_pane_enabled()) return;
 
     /* Sections that live in their own window (Chat) must not drag the
      * main window open; route them to the dedicated surface instead. */

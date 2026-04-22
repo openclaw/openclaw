@@ -63,6 +63,7 @@ sources = [
   'src/ui_model_utils.c',
   'src/config_setup_transform.c',
   'src/shell_sections.c',
+  'src/section_about.c',
   'src/section_dashboard.c',
   'src/section_general.c',
   'src/section_config.c',
@@ -159,6 +160,11 @@ test_shell_sections_exe = executable('test_shell_sections',
   ['tests/test_shell_sections.c', 'src/shell_sections.c'],
   dependencies : [glib_dep, gtk4_dep])
 test('shell_sections', test_shell_sections_exe)
+
+test_shell_sections_display_exe = executable('test_shell_sections_display',
+  ['tests/test_shell_sections_display.c', 'src/shell_sections.c'],
+  dependencies : [glib_dep, gtk4_dep])
+test('shell_sections_display', test_shell_sections_display_exe)
 
 test_onboarding_controller_exe = executable('test_onboarding_controller',
   ['tests/test_onboarding_controller.c', 'src/onboarding.c', 'src/test_seams.c'],
