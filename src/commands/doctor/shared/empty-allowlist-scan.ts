@@ -10,7 +10,6 @@ export type EmptyAllowlistAccountScanParams = {
   cfg: OpenClawConfig;
   dmPolicy?: string;
   effectiveAllowFrom?: DoctorAllowFromList;
-  env?: NodeJS.ProcessEnv;
   parent?: DoctorAccountRecord;
   prefix: string;
 };
@@ -62,7 +61,6 @@ export function scanEmptyAllowlistPolicyWarnings(
         channelName,
         cfg,
         doctorFixCommand: params.doctorFixCommand,
-        env: params.env,
         parent,
         prefix,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
@@ -74,10 +72,8 @@ export function scanEmptyAllowlistPolicyWarnings(
         ...params.extraWarningsForAccount({
           account,
           channelName,
-          cfg,
           dmPolicy,
           effectiveAllowFrom,
-          env: params.env,
           parent,
           prefix,
         }),

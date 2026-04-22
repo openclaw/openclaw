@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorEmptyAllowlistExtraWarnings,
+  collectChannelDoctorMutableAllowlistWarnings,
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
 } from "./channel-doctor.js";
@@ -95,10 +96,49 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
       includePersistedAuthState: false,
     });
-    expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalledWith("matrix");
-    expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("matrix");
-    expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalledWith("matrix");
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("matrix");
+    expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("matrix");
+    expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("matrix");
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
+  });
+
+  it("merges partial doctor adapters instead of masking runtime-only hooks", async () => {
+    const normalizeCompatibilityConfig = vi.fn(({ cfg }: { cfg: unknown }) => ({
+      config: cfg,
+      changes: ["matrix"],
+    }));
+    const collectMutableAllowlistWarnings = vi.fn(() => ["runtime warning"]);
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "matrix",
+          doctor: { normalizeCompatibilityConfig },
+        },
+      ],
+    });
+    mocks.getBundledChannelPlugin.mockImplementation((id: string) =>
+      id === "matrix"
+        ? {
+            id: "matrix",
+            doctor: { collectMutableAllowlistWarnings },
+          }
+        : undefined,
+    );
+
+    const cfg = {
+      channels: {
+        matrix: {
+          enabled: true,
+        },
+      },
+    };
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg as never)).toHaveLength(1);
+    await expect(
+      collectChannelDoctorMutableAllowlistWarnings({ cfg: cfg as never }),
+    ).resolves.toEqual(["runtime warning"]);
+    expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
+    expect(collectMutableAllowlistWarnings).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to setup doctor adapters when read-only plugins lack doctor hooks", () => {
@@ -139,7 +179,7 @@ describe("channel doctor compatibility mutations", () => {
     });
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("matrix");
     expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("matrix");
-    expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalledWith("matrix");
+    expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("matrix");
   });
 
   it("falls back to bundled runtime doctor adapters when setup adapters lack doctor hooks", () => {
@@ -230,10 +270,10 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");
   });
 
-  it("routes config through empty allowlist extra warning discovery", () => {
-    const collectEmptyAllowlistExtraWarnings = vi.fn(({ cfg }: { cfg?: unknown }) =>
-      cfg ? ["matrix extra"] : [],
-    );
+  it("uses config for empty allowlist lookup without exposing it to plugin hooks", () => {
+    const collectEmptyAllowlistExtraWarnings = vi.fn(({ prefix }: { prefix: string }) => [
+      `${prefix} extra`,
+    ]);
     const cfg = {
       channels: {
         matrix: {
@@ -257,13 +297,11 @@ describe("channel doctor compatibility mutations", () => {
       prefix: "channels.matrix",
     });
 
-    expect(result).toEqual(["matrix extra"]);
+    expect(result).toEqual(["channels.matrix extra"]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
       includePersistedAuthState: false,
     });
-    expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg }),
-    );
+    expect(collectEmptyAllowlistExtraWarnings.mock.calls[0]?.[0]).not.toHaveProperty("cfg");
   });
 
   it("reuses empty allowlist doctor entries across per-account hooks", () => {
@@ -300,8 +338,6 @@ describe("channel doctor compatibility mutations", () => {
       hooks.extraWarningsForAccount({
         account: {},
         channelName: "matrix",
-        cfg: cfg as never,
-        env,
         prefix: "channels.matrix.accounts.work",
       }),
     ).toEqual(["channels.matrix.accounts.work extra"]);
@@ -309,8 +345,6 @@ describe("channel doctor compatibility mutations", () => {
       hooks.shouldSkipDefaultEmptyGroupAllowlistWarning({
         account: {},
         channelName: "matrix",
-        cfg: cfg as never,
-        env,
         prefix: "channels.matrix.accounts.work",
       }),
     ).toBe(true);
@@ -318,8 +352,6 @@ describe("channel doctor compatibility mutations", () => {
       hooks.extraWarningsForAccount({
         account: {},
         channelName: "matrix",
-        cfg: cfg as never,
-        env,
         prefix: "channels.matrix.accounts.personal",
       }),
     ).toEqual(["channels.matrix.accounts.personal extra"]);

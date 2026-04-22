@@ -482,10 +482,8 @@ export type ChannelDoctorSequenceResult = {
 export type ChannelDoctorEmptyAllowlistAccountContext = {
   account: Record<string, unknown>;
   channelName: string;
-  cfg?: OpenClawConfig;
   dmPolicy?: string;
   effectiveAllowFrom?: Array<string | number>;
-  env?: NodeJS.ProcessEnv;
   parent?: Record<string, unknown>;
   prefix: string;
 };

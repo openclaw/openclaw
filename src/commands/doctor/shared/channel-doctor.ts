@@ -21,6 +21,10 @@ type ChannelDoctorLookupContext = {
   env?: NodeJS.ProcessEnv;
 };
 
+type ChannelDoctorEmptyAllowlistLookupParams = ChannelDoctorEmptyAllowlistAccountContext & {
+  cfg?: OpenClawConfig;
+};
+
 export type ChannelDoctorEmptyAllowlistPolicyHooks = {
   extraWarningsForAccount: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
   shouldSkipDefaultEmptyGroupAllowlistWarning: (
@@ -76,6 +80,23 @@ function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
   }
 }
 
+function mergeDoctorAdapters(
+  adapters: Array<ChannelDoctorAdapter | undefined>,
+): ChannelDoctorAdapter | undefined {
+  const merged: Record<string, unknown> = {};
+  for (const adapter of adapters) {
+    if (!adapter) {
+      continue;
+    }
+    for (const [key, value] of Object.entries(adapter)) {
+      if (value !== undefined && merged[key] === undefined) {
+        merged[key] = value;
+      }
+    }
+  }
+  return Object.keys(merged).length > 0 ? (merged as ChannelDoctorAdapter) : undefined;
+}
+
 function listChannelDoctorEntries(
   channelIds: readonly string[],
   context: ChannelDoctorLookupContext,
@@ -88,46 +109,41 @@ function listChannelDoctorEntries(
   const readOnlyPlugins = safeListReadOnlyChannelPlugins(context).filter((plugin) =>
     selectedIds.has(plugin.id),
   );
-  const readOnlyDoctorPluginIds = new Set(
-    readOnlyPlugins.filter((plugin) => plugin.doctor).map((plugin) => plugin.id),
-  );
-  const plugins = [
-    ...readOnlyPlugins.filter((plugin) => plugin.doctor),
-    ...channelIds.flatMap((id) => {
-      if (readOnlyDoctorPluginIds.has(id)) {
-        return [];
-      }
-      const loadedPlugin = safeGetLoadedChannelPlugin(id);
-      if (loadedPlugin?.doctor) {
-        return [loadedPlugin];
-      }
-      const bundledSetupPlugin = safeGetBundledChannelSetupPlugin(id);
-      if (bundledSetupPlugin?.doctor) {
-        return [bundledSetupPlugin];
-      }
-      const bundledPlugin = safeGetBundledChannelPlugin(id);
-      return bundledPlugin?.doctor ? [bundledPlugin] : [];
-    }),
-  ];
-  for (const plugin of plugins) {
-    if (!plugin.doctor) {
+  const readOnlyPluginsById = new Map(readOnlyPlugins.map((plugin) => [plugin.id, plugin]));
+
+  for (const id of selectedIds) {
+    const doctor = mergeDoctorAdapters([
+      readOnlyPluginsById.get(id)?.doctor,
+      safeGetLoadedChannelPlugin(id)?.doctor,
+      safeGetBundledChannelSetupPlugin(id)?.doctor,
+      safeGetBundledChannelPlugin(id)?.doctor,
+    ]);
+    if (!doctor) {
       continue;
     }
-    const existing = byId.get(plugin.id);
+    const existing = byId.get(id);
     if (!existing) {
-      byId.set(plugin.id, { doctor: plugin.doctor });
+      byId.set(id, { doctor });
     }
   }
   return [...byId.values()];
 }
 
+function toPluginEmptyAllowlistContext({
+  cfg: _cfg,
+  ...params
+}: ChannelDoctorEmptyAllowlistLookupParams): ChannelDoctorEmptyAllowlistAccountContext {
+  return params;
+}
+
 function collectEmptyAllowlistExtraWarningsForEntries(
   entries: readonly ChannelDoctorEntry[],
-  params: ChannelDoctorEmptyAllowlistAccountContext,
+  params: ChannelDoctorEmptyAllowlistLookupParams,
 ): string[] {
   const warnings: string[] = [];
+  const pluginParams = toPluginEmptyAllowlistContext(params);
   for (const entry of entries) {
-    const lines = entry.doctor.collectEmptyAllowlistExtraWarnings?.(params);
+    const lines = entry.doctor.collectEmptyAllowlistExtraWarnings?.(pluginParams);
     if (lines?.length) {
       warnings.push(...lines);
     }
@@ -137,10 +153,11 @@ function collectEmptyAllowlistExtraWarningsForEntries(
 
 function shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
   entries: readonly ChannelDoctorEntry[],
-  params: ChannelDoctorEmptyAllowlistAccountContext,
+  params: ChannelDoctorEmptyAllowlistLookupParams,
 ): boolean {
+  const pluginParams = toPluginEmptyAllowlistContext(params);
   return entries.some(
-    (entry) => entry.doctor.shouldSkipDefaultEmptyGroupAllowlistWarning?.(params) === true,
+    (entry) => entry.doctor.shouldSkipDefaultEmptyGroupAllowlistWarning?.(pluginParams) === true,
   );
 }
 
@@ -293,24 +310,22 @@ export async function collectChannelDoctorRepairMutations(params: {
 }
 
 export function collectChannelDoctorEmptyAllowlistExtraWarnings(
-  params: ChannelDoctorEmptyAllowlistAccountContext,
+  params: ChannelDoctorEmptyAllowlistLookupParams,
 ): string[] {
   return collectEmptyAllowlistExtraWarningsForEntries(
     listChannelDoctorEntries([params.channelName], {
       cfg: params.cfg ?? {},
-      env: params.env,
     }),
     params,
   );
 }
 
 export function shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning(
-  params: ChannelDoctorEmptyAllowlistAccountContext,
+  params: ChannelDoctorEmptyAllowlistLookupParams,
 ): boolean {
   return shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
     listChannelDoctorEntries([params.channelName], {
       cfg: params.cfg ?? {},
-      env: params.env,
     }),
     params,
   );

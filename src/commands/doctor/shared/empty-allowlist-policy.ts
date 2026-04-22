@@ -9,7 +9,6 @@ type CollectEmptyAllowlistPolicyWarningsParams = {
   channelName?: string;
   cfg?: OpenClawConfig;
   doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
   parent?: DoctorAccountRecord;
   prefix: string;
   shouldSkipDefaultEmptyGroupAllowlistWarning?: typeof shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning;
@@ -77,7 +76,6 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
       cfg: params.cfg,
       dmPolicy,
       effectiveAllowFrom,
-      env: params.env,
       parent: params.parent,
       prefix: params.prefix,
     })

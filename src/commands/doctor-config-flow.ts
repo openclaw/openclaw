@@ -8,7 +8,7 @@ import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
-import { emitDoctorNotes } from "./doctor/emit-notes.js";
+import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
@@ -171,7 +171,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (staleCleanup.changes.length === 0) {
         continue;
       }
-      note(staleCleanup.changes.join("\n"), "Doctor changes");
+      note(sanitizeDoctorNote(staleCleanup.changes.join("\n")), "Doctor changes");
       ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
         state: { cfg, candidate, pendingChanges, fixHints },
         mutation: staleCleanup,
@@ -223,7 +223,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       })
     : [];
   if (mutableAllowlistWarnings.length > 0) {
-    note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
+    note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
   const unknownStep = applyUnknownConfigKeyStep({

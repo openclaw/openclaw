@@ -35,7 +35,11 @@ describe("doctor note emission", () => {
     emitDoctorNotes({
       note,
       changeNotes: ["change \u001B[31mred\u001B[0m\nnext line"],
-      warningNotes: ["warning \u001B]8;;https://example.test\u001B\\link\u001B]8;;\u001B\\\r"],
+      warningNotes: [
+        `warning \u001B]8;;https://example.test\u001B\\link\u001B]8;;\u001B\\${String.fromCharCode(
+          0x9b,
+        )}\r`,
+      ],
     });
 
     expect(note.mock.calls).toEqual([

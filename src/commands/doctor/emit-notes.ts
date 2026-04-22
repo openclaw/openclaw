@@ -1,6 +1,6 @@
 import { sanitizeForLog } from "../../terminal/ansi.js";
 
-function sanitizeDoctorNote(note: string): string {
+export function sanitizeDoctorNote(note: string): string {
   return note
     .split("\n")
     .map((line) => sanitizeForLog(line))
