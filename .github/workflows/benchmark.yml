@@ -12,12 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
 
       - name: Install hyperfine
         run: |
@@ -27,8 +34,7 @@ jobs:
       - name: Run benchmarks
         run: |
           hyperfine --warmup 2 --export-json bench-results.json \
-            'node -e "require(\"./dist/cli.js\")" --help' \
-            || true
+            'node openclaw.mjs --help'
 
       - name: Upload benchmark results
         if: always()

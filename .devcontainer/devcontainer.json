@@ -4,12 +4,11 @@
   "features": {
     "ghcr.io/devcontainers-extra/features/zsh:2": {}
   },
-  "postCreateCommand": "npm install",
+  "postCreateCommand": "npm install -g pnpm && pnpm install",
   "customizations": {
     "vscode": {
       "extensions": [
-        "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode",
+        "oxc.oxc-vscode",
         "ms-vscode.vscode-typescript-next"
       ]
     }
