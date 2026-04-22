@@ -109,16 +109,24 @@ function fingerprintEnvValue(value: unknown): FingerprintedString {
   return fingerprintStringValue(value);
 }
 
+function normalizeJwtAudience(idAudience: unknown, accessAudience: unknown): unknown {
+  const audience = Array.isArray(idAudience)
+    ? idAudience
+    : Array.isArray(accessAudience)
+      ? accessAudience
+      : (idAudience ?? accessAudience);
+  return Array.isArray(audience)
+    ? audience
+        .map((entry) => String(entry))
+        .toSorted((left, right) => left.localeCompare(right))
+        .join("\0")
+    : audience;
+}
+
 function buildOAuthIdentityFingerprint(credential: Record<string, unknown>) {
   const accessClaims = decodeJwtPayload(credential.access);
   const idClaims = decodeJwtPayload(credential.idToken);
-  const audience =
-    Array.isArray(idClaims?.aud) || Array.isArray(accessClaims?.aud)
-      ? [...((idClaims?.aud as unknown[]) ?? (accessClaims?.aud as unknown[]) ?? [])]
-          .map((entry) => String(entry))
-          .toSorted((left, right) => left.localeCompare(right))
-          .join("\0")
-      : (idClaims?.aud ?? accessClaims?.aud);
+  const audience = normalizeJwtAudience(idClaims?.aud, accessClaims?.aud);
   const identity = {
     accountId: fingerprintNormalizedString(
       credential.accountId ?? idClaims?.account_id ?? accessClaims?.account_id,

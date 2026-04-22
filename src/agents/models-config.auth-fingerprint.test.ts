@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,10 @@ beforeEach(() => {
 async function writeJson(pathname: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(pathname), { recursive: true });
   await fs.writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function unsignedJwt(payload: Record<string, unknown>): string {
+  return `e30.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
 }
 
 async function prepareCachedEnsure(agentDir: string): Promise<{
@@ -285,6 +290,43 @@ describe("models-config auth profiles semantic fingerprint", () => {
       const second = await buildModelsJsonAuthProfilesFingerprint(agentDir);
 
       expect(second).not.toEqual(first);
+    });
+  });
+
+  it("normalizes mixed string and array OAuth audience claims without splitting strings", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const access = unsignedJwt({ aud: ["api-b", "api-a"] });
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:oauth": {
+            type: "oauth",
+            provider: "openai",
+            idToken: unsignedJwt({ aud: "id-audience" }),
+            access,
+            expires: Date.now() + 60 * 60 * 1000,
+          },
+        },
+      });
+      const mixedAudience = await buildModelsJsonAuthProfilesFingerprint(agentDir);
+
+      await writeJson(authPath, {
+        version: 1,
+        profiles: {
+          "openai:oauth": {
+            type: "oauth",
+            provider: "openai",
+            idToken: unsignedJwt({}),
+            access,
+            expires: Date.now() + 60 * 60 * 1000,
+          },
+        },
+      });
+      const accessArrayAudience = await buildModelsJsonAuthProfilesFingerprint(agentDir);
+
+      expect(mixedAudience).toEqual(accessArrayAudience);
     });
   });
 
