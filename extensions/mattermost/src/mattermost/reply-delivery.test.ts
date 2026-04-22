@@ -80,6 +80,27 @@ describe("deliverMattermostReplyPayload", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("suppresses reasoning payloads formatted as a Mattermost blockquote", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "> Reasoning:\n> _hidden_" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("does not suppress messages that mention Reasoning: mid-text", async () => {
     const sendMessage = vi.fn(async () => undefined);
     const cfg = {} satisfies OpenClawConfig;

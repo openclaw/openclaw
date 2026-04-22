@@ -1,8 +1,8 @@
 import {
   deliverTextOrMediaReply,
+  isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   getAgentScopedMediaLocalRoots,
   type OpenClawConfig,
@@ -24,19 +24,6 @@ type SendMattermostMessage = (
   },
 ) => Promise<unknown>;
 
-const REASONING_PREFIX = "reasoning:";
-
-export function shouldSuppressMattermostReasoningReply(payload: ReplyPayload): boolean {
-  if (payload.isReasoning === true) {
-    return true;
-  }
-  const text = payload.text;
-  if (typeof text !== "string") {
-    return false;
-  }
-  return normalizeLowercaseStringOrEmpty(text.trimStart()).startsWith(REASONING_PREFIX);
-}
-
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;
   cfg: OpenClawConfig;
@@ -49,7 +36,7 @@ export async function deliverMattermostReplyPayload(params: {
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
 }): Promise<void> {
-  if (shouldSuppressMattermostReasoningReply(params.payload)) {
+  if (isReasoningReplyPayload(params.payload)) {
     return;
   }
   const reply = resolveSendableOutboundReplyParts(params.payload, {

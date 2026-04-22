@@ -257,7 +257,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     const deliverFinal = vi.fn(async () => {});
 
     await deliverMattermostReplyWithDraftPreview({
-      payload: { text: "  \n Reasoning:\n_hidden_" } as never,
+      payload: { text: "  \n > Reasoning:\n> _hidden_" } as never,
       info: { kind: "final" },
       client: createMattermostClientMock(),
       draftStream,
