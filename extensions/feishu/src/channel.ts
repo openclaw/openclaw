@@ -81,28 +81,49 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
   return media.trim() ? media : undefined;
 }
 
-function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
-  return (
-    isRecord(actionValue) &&
-    actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION &&
-    (Boolean(typeof actionValue.command === "string" && actionValue.command.trim()) ||
-      Boolean(typeof actionValue.text === "string" && actionValue.text.trim()))
-  );
-}
+const FEISHU_CARD_SCAN_MAX_DEPTH = 50;
+const FEISHU_CARD_SCAN_MAX_NODES = 10_000;
 
-function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
-  if (Array.isArray(node)) {
-    return node.some((item) => containsLegacyFeishuCardCommandValue(item));
-  }
-  if (!isRecord(node)) {
-    return false;
+function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const seen = new Set<object>();
+  let visited = 0;
+
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop()!;
+    visited += 1;
+    if (visited > FEISHU_CARD_SCAN_MAX_NODES || depth > FEISHU_CARD_SCAN_MAX_DEPTH) {
+      throw new Error("Feishu card payload is too large or deeply nested.");
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        stack.push({ value: item, depth: depth + 1 });
+      }
+      continue;
+    }
+
+    if (!isRecord(value)) {
+      continue;
+    }
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+
+    if ("value" in value && value.value !== undefined) {
+      const actionValue = value.value;
+      if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
+        return true;
+      }
+    }
+
+    for (const child of Object.values(value)) {
+      stack.push({ value: child, depth: depth + 1 });
+    }
   }
 
-  if (hasLegacyFeishuCardCommandValue(node.value)) {
-    return true;
-  }
-
-  return Object.values(node).some((value) => containsLegacyFeishuCardCommandValue(value));
+  return false;
 }
 
 function isValidFeishuCard(card: Record<string, unknown> | undefined): boolean {
@@ -725,9 +746,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const sendMedia = maybeSendMedia;
             let result;
             if (hasValidCard) {
-              if (containsLegacyFeishuCardCommandValue(card)) {
+              if (containsUnstructuredFeishuCardActionValue(card)) {
                 throw new Error(
-                  "Feishu card actions that trigger text or commands must use structured interaction envelopes.",
+                  "Feishu card actions must use structured interaction envelopes.",
                 );
               }
               result = await runtime.sendCardFeishu({

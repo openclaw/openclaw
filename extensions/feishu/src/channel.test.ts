@@ -419,9 +419,72 @@ describe("feishuPlugin actions", () => {
         accountId: undefined,
         toolContext: {},
       } as never),
-    ).rejects.toThrow(
-      "Feishu card actions that trigger text or commands must use structured interaction envelopes.",
-    );
+    ).rejects.toThrow("Feishu card actions must use structured interaction envelopes.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-object card action values", async () => {
+    const legacyStringValueCard = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: "Run reset" },
+                value: "/reset",
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: legacyStringValueCard,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu card actions must use structured interaction envelopes.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects deeply nested card payloads", async () => {
+    let nested: Record<string, unknown> = { final: true };
+    for (let i = 0; i < 60; i += 1) {
+      nested = { next: nested };
+    }
+    const deeplyNestedCard = {
+      schema: "2.0",
+      body: {
+        elements: [nested],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: deeplyNestedCard,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu card payload is too large or deeply nested.");
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
