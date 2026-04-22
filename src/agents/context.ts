@@ -48,9 +48,11 @@ export function applyDiscoveredContextWindows(params: {
         : typeof model.contextWindow === "number"
           ? Math.trunc(model.contextWindow)
           : undefined;
-    const contextTokens = isClaudeOpus47Model(model.id)
-      ? ANTHROPIC_CONTEXT_1M_TOKENS
-      : discoveredContextTokens;
+    const discoveredRef = resolveProviderModelRef({ model: model.id });
+    const contextTokens =
+      discoveredRef && shouldUseAnthropicOpus47ContextWindow(discoveredRef)
+        ? ANTHROPIC_CONTEXT_1M_TOKENS
+        : discoveredContextTokens;
     if (!contextTokens || contextTokens <= 0) {
       continue;
     }
@@ -382,6 +384,16 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+function shouldUseAnthropicOpus47ContextWindow(params: {
+  provider?: string;
+  model: string;
+}): boolean {
+  const provider = params.provider ? normalizeProviderId(params.provider) : "";
+  return (
+    (provider === "anthropic" || provider === "claude-cli") && isClaudeOpus47Model(params.model)
+  );
+}
+
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
@@ -433,7 +445,7 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  if (isClaudeOpus47Model(params.model ?? ref?.model ?? "")) {
+  if (ref && shouldUseAnthropicOpus47ContextWindow(ref)) {
     return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 

@@ -70,6 +70,16 @@ describe("applyDiscoveredContextWindows", () => {
 
     expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
+
+  it("does not upgrade non-Anthropic opus 4.7 variants from discovery", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [{ id: "github-copilot/claude-opus-4.7", contextWindow: 128_000 }],
+    });
+
+    expect(cache.get("github-copilot/claude-opus-4.7")).toBe(128_000);
+  });
 });
 
 describe("applyConfiguredContextWindows", () => {
@@ -277,6 +287,17 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("does not force 1M context for non-Anthropic providers with opus 4.7 ids", () => {
+    const result = resolveContextTokensForModel({
+      provider: "github-copilot",
+      model: "claude-opus-4.7",
+      fallbackContextTokens: 128_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(128_000);
   });
 
   it("prefers per-model contextTokens config over contextWindow", () => {
