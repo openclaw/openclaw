@@ -91,11 +91,7 @@ export async function registerExecApprovalRequest(
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
-  const registrationResult = await callGatewayTool<{
-    id?: string;
-    expiresAtMs?: number;
-    decision?: string;
-  }>(
+  const registrationResult = await callGatewayTool(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
     buildExecApprovalRequestToolParams(params),

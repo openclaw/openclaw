@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
   PluginHookBeforeDispatchResult,
@@ -107,6 +107,11 @@ const ttsMocks = vi.hoisted(() => ({
   normalizeTtsAutoMode: vi.fn((value: unknown) => (typeof value === "string" ? value : undefined)),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
 }));
+const replyMediaPathMocks = vi.hoisted(() => ({
+  createReplyMediaPathNormalizer: vi.fn(
+    (_params?: unknown) => async (payload: ReplyPayload) => payload,
+  ),
+}));
 const threadInfoMocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn<
     (sessionKey: string | undefined) => {
@@ -127,6 +132,7 @@ export {
   pluginConversationBindingMocks,
   sessionBindingMocks,
   sessionStoreMocks,
+  replyMediaPathMocks,
   threadInfoMocks,
   ttsMocks,
 };
@@ -174,6 +180,8 @@ vi.mock("../../logging/diagnostic.js", () => ({
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey),
+  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
     threadInfoMocks.parseSessionThreadInfo(sessionKey),
 }));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
@@ -261,6 +269,10 @@ vi.mock("../../tts/tts.js", () => ({
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
+vi.mock("./reply-media-paths.runtime.js", () => ({
+  createReplyMediaPathNormalizer: (params: unknown) =>
+    replyMediaPathMocks.createReplyMediaPathNormalizer(params),
+}));
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ({
     autoMode: "always",
@@ -279,6 +291,7 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+  shouldAttemptTtsPayload: () => true,
 }));
 
 export const noAbortResult = { handled: false, aborted: false } as const;
@@ -308,6 +321,9 @@ export function resetPluginTtsAndThreadMocks() {
     .mockReset()
     .mockImplementation((value: unknown) => (typeof value === "string" ? value : undefined));
   ttsMocks.resolveTtsConfig.mockReset().mockReturnValue({ mode: "final" });
+  replyMediaPathMocks.createReplyMediaPathNormalizer
+    .mockReset()
+    .mockReturnValue(async (payload: ReplyPayload) => payload);
   threadInfoMocks.parseSessionThreadInfo
     .mockReset()
     .mockImplementation(parseGenericThreadSessionInfo);

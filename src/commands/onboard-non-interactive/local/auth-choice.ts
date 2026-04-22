@@ -1,5 +1,5 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
@@ -16,7 +16,7 @@ import {
   CustomApiError,
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
-} from "../../onboard-custom.js";
+} from "../../onboard-custom-config.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";

@@ -384,6 +384,135 @@ describe("memory cli", () => {
     });
   });
 
+  it("reports dreaming blocked when another explicit heartbeat agent excludes main", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "30m",
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "ops",
+            heartbeat: {
+              every: "1h",
+            },
+          },
+        ],
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--agent", "main"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+      ),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it('reports dreaming blocked when main heartbeat interval is "0m"', async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "0m",
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+      ),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("reports dreaming blocked for the configured default agent when it is not main", async () => {
+    resolveDefaultAgentId.mockReturnValue("ops");
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "0m",
+          },
+        },
+        list: [{ id: "ops", default: true }],
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--agent", "ops"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "ops". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
+      ),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
@@ -471,6 +600,50 @@ describe("memory cli", () => {
       expect(log).not.toHaveBeenCalledWith(
         expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
       );
+    });
+  });
+
+  it("repairs contaminated dreaming artifacts during status --fix", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      await fs.mkdir(sessionCorpusDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionCorpusDir, "2026-04-11.txt"),
+        [
+          "[main/dreaming-main.jsonl#L3] ordinary session line",
+          "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+        JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
+        "utf-8",
+      );
+      await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--fix"]);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("Dream repair: archived session corpus"),
+      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dream archive:"));
+      await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+        "# Dream Diary",
+      );
+      expect(close).toHaveBeenCalled();
     });
   });
 
@@ -913,13 +1086,15 @@ describe("memory cli", () => {
 
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.now();
+      const isoDay = new Date(nowMs).toISOString().slice(0, 10);
       await recordShortTermRecalls({
         workspaceDir,
         query: "weather plans",
-        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        nowMs,
         results: [
           {
-            path: "memory/2026-04-03.md",
+            path: `memory/${isoDay}.md`,
             startLine: 2,
             endLine: 3,
             score: 0.92,

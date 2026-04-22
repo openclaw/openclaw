@@ -1,6 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
+function isSpeechRequestBody(value: unknown): value is { response_format?: string } {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseRequestBody(init: RequestInit | undefined): { response_format?: string } {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected string request body");
+  }
+  const body: unknown = JSON.parse(init.body);
+  if (!isSpeechRequestBody(body)) {
+    throw new Error("expected OpenAI speech request body");
+  }
+  return body;
+}
+
+function mockSpeechFetchExpectingFormat(responseFormat: string) {
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const body = parseRequestBody(init);
+    expect(body.response_format).toBe(responseFormat);
+    return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
 describe("buildOpenAISpeechProvider", () => {
   const originalFetch = globalThis.fetch;
 
@@ -125,13 +150,7 @@ describe("buildOpenAISpeechProvider", () => {
 
   it("uses wav for Groq-compatible OpenAI TTS endpoints", async () => {
     const provider = buildOpenAISpeechProvider();
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      expect(init?.body).toBeTruthy();
-      const body = JSON.parse(String(init?.body)) as { response_format?: string };
-      expect(body.response_format).toBe("wav");
-      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    mockSpeechFetchExpectingFormat("wav");
 
     const result = await provider.synthesize({
       text: "hello",
@@ -153,13 +172,7 @@ describe("buildOpenAISpeechProvider", () => {
 
   it("honors explicit responseFormat overrides and clears voice-note compatibility when not opus", async () => {
     const provider = buildOpenAISpeechProvider();
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      expect(init?.body).toBeTruthy();
-      const body = JSON.parse(String(init?.body)) as { response_format?: string };
-      expect(body.response_format).toBe("wav");
-      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    mockSpeechFetchExpectingFormat("wav");
 
     const result = await provider.synthesize({
       text: "hello",

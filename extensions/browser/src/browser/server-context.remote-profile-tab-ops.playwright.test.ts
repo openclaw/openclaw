@@ -8,6 +8,15 @@ import {
 const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
 installRemoteProfileTestLifecycle(deps);
 
+function page(targetId: string, url = `https://${targetId.toLowerCase()}.example`) {
+  return {
+    targetId,
+    title: targetId === "T1" ? "Tab 1" : targetId,
+    url,
+    type: "page" as const,
+  };
+}
+
 describe("browser remote profile tab ops via Playwright", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -36,15 +45,16 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(opened.targetId).toBe("T2");
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T2");
     expect(createPageViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "https://browserless.example/chrome?token=abc",
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       url: "http://127.0.0.1:3000",
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
     await remote.closeTab("T1");
     expect(closePageByTargetIdViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "https://browserless.example/chrome?token=abc",
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       targetId: "T1",
+      ssrfPolicy: { allowPrivateNetwork: true },
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -90,10 +100,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
-    const responses = [
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("T1", "https://example.com")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
@@ -105,16 +112,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
-    const responses = [
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("A"), page("B")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
@@ -140,11 +138,55 @@ describe("browser remote profile tab ops via Playwright", () => {
 
     await remote.focusTab("T1");
     expect(focusPageByTargetIdViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "https://browserless.example/chrome?token=abc",
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       targetId: "T1",
+      ssrfPolicy: { allowPrivateNetwork: true },
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T1");
+  });
+
+  it("blocks remote Playwright tab operations when strict SSRF hostname allowlist rejects the cdpUrl", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
+    ]);
+    const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
+    const closePageByTargetIdViaPlaywright = vi.fn(async () => {});
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      focusPageByTargetIdViaPlaywright,
+      closePageByTargetIdViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const state = deps.makeState("remote");
+    state.resolved.ssrfPolicy = {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["browserless.example.com"],
+    };
+    state.resolved.profiles.remote = {
+      ...state.resolved.profiles.remote,
+      cdpUrl: "http://10.0.0.42:9222",
+      cdpPort: 9222,
+    };
+    const ctx = deps.createBrowserRouteContext({ getState: () => state });
+    const remote = ctx.forProfile("remote");
+
+    await expect(remote.listTabs()).rejects.toMatchObject({
+      name: "BrowserCdpEndpointBlockedError",
+      status: 400,
+    });
+    await expect(remote.focusTab("T1")).rejects.toMatchObject({
+      name: "BrowserCdpEndpointBlockedError",
+      status: 400,
+    });
+    await expect(remote.closeTab("T1")).rejects.toMatchObject({
+      name: "BrowserCdpEndpointBlockedError",
+      status: 400,
+    });
+    expect(listPagesViaPlaywright).not.toHaveBeenCalled();
+    expect(focusPageByTargetIdViaPlaywright).not.toHaveBeenCalled();
+    expect(closePageByTargetIdViaPlaywright).not.toHaveBeenCalled();
   });
 
   it("does not swallow Playwright runtime errors for remote profiles", async () => {

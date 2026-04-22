@@ -1,7 +1,7 @@
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveTimezone,
   formatUtcTimestamp,
@@ -248,20 +248,4 @@ export function formatInboundFromLabel(params: {
     return directLabel;
   }
   return `${directLabel} id:${directId}`;
-}
-
-export function formatThreadStarterEnvelope(params: {
-  channel: string;
-  author?: string;
-  timestamp?: number | Date;
-  body: string;
-  envelope?: EnvelopeFormatOptions;
-}): string {
-  return formatAgentEnvelope({
-    channel: params.channel,
-    from: params.author,
-    timestamp: params.timestamp,
-    envelope: params.envelope,
-    body: params.body,
-  });
 }

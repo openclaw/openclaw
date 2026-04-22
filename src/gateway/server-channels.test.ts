@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  type ChannelGatewayContext,
+  type ChannelId,
+  type ChannelPlugin,
+} from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -189,6 +193,68 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("consumes rejected stop tasks during manual abort", async () => {
+    const unhandledRejection = vi.fn();
+    process.on("unhandledRejection", unhandledRejection);
+    try {
+      const startAccount = vi.fn(
+        async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+          await new Promise<void>((_resolve, reject) => {
+            abortSignal.addEventListener(
+              "abort",
+              () => {
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      installTestRegistry(
+        createTestPlugin({
+          startAccount,
+        }),
+      );
+      const manager = createManager();
+
+      await manager.startChannels();
+      vi.runAllTicks();
+      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+      await Promise.resolve();
+
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandledRejection);
+    }
+  });
+
+  it("does not allow a second account task to start when stop times out", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>(() => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
+  });
+
   it("marks enabled/configured when account descriptors omit them", () => {
     installTestRegistry(
       createTestPlugin({
@@ -225,7 +291,7 @@ describe("server-channels auto restart", () => {
       ...createRuntimeChannel(),
       marker: "channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });
@@ -289,7 +355,7 @@ describe("server-channels auto restart", () => {
       marker: "lazy-channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
     const resolveChannelRuntime = vi.fn(() => channelRuntime);
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ resolveChannelRuntime });
@@ -335,16 +401,14 @@ describe("server-channels auto restart", () => {
         }),
       },
     };
-    const startAccount = vi.fn(
-      async ({ channelRuntime }: { channelRuntime?: PluginRuntime["channel"] }) => {
-        channelRuntime?.runtimeContexts.register({
-          channelId: "discord",
-          accountId: DEFAULT_ACCOUNT_ID,
-          capability: "approval.native",
-          context: { token: "tracked" },
-        });
-      },
-    );
+    const startAccount = vi.fn(async ({ channelRuntime }: ChannelGatewayContext<TestAccount>) => {
+      channelRuntime?.runtimeContexts.register({
+        channelId: "discord",
+        accountId: DEFAULT_ACCOUNT_ID,
+        capability: "approval.native",
+        context: { token: "tracked" },
+      });
+    });
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });

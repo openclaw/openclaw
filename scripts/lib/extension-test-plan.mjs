@@ -1,26 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
-import { channelTestRoots } from "../../vitest.channel-paths.mjs";
-import { isAcpxExtensionRoot } from "../../vitest.extension-acpx-paths.mjs";
-import { isBlueBubblesExtensionRoot } from "../../vitest.extension-bluebubbles-paths.mjs";
-import { isDiffsExtensionRoot } from "../../vitest.extension-diffs-paths.mjs";
-import { isFeishuExtensionRoot } from "../../vitest.extension-feishu-paths.mjs";
-import { isIrcExtensionRoot } from "../../vitest.extension-irc-paths.mjs";
-import { isMatrixExtensionRoot } from "../../vitest.extension-matrix-paths.mjs";
-import { isMattermostExtensionRoot } from "../../vitest.extension-mattermost-paths.mjs";
-import { isMemoryExtensionRoot } from "../../vitest.extension-memory-paths.mjs";
-import { isMessagingExtensionRoot } from "../../vitest.extension-messaging-paths.mjs";
-import { isMsTeamsExtensionRoot } from "../../vitest.extension-msteams-paths.mjs";
-import { isProviderExtensionRoot } from "../../vitest.extension-provider-paths.mjs";
-import { isTelegramExtensionRoot } from "../../vitest.extension-telegram-paths.mjs";
-import { isVoiceCallExtensionRoot } from "../../vitest.extension-voice-call-paths.mjs";
-import { isWhatsAppExtensionRoot } from "../../vitest.extension-whatsapp-paths.mjs";
-import { isZaloExtensionRoot } from "../../vitest.extension-zalo-paths.mjs";
+import { channelTestRoots } from "../../test/vitest/vitest.channel-paths.mjs";
+import { isAcpxExtensionRoot } from "../../test/vitest/vitest.extension-acpx-paths.mjs";
+import { isBlueBubblesExtensionRoot } from "../../test/vitest/vitest.extension-bluebubbles-paths.mjs";
+import { resolveSplitChannelExtensionShard } from "../../test/vitest/vitest.extension-channel-split-paths.mjs";
+import { isDiffsExtensionRoot } from "../../test/vitest/vitest.extension-diffs-paths.mjs";
+import { isFeishuExtensionRoot } from "../../test/vitest/vitest.extension-feishu-paths.mjs";
+import { isIrcExtensionRoot } from "../../test/vitest/vitest.extension-irc-paths.mjs";
+import { isMatrixExtensionRoot } from "../../test/vitest/vitest.extension-matrix-paths.mjs";
+import { isMattermostExtensionRoot } from "../../test/vitest/vitest.extension-mattermost-paths.mjs";
+import { isMemoryExtensionRoot } from "../../test/vitest/vitest.extension-memory-paths.mjs";
+import { isMessagingExtensionRoot } from "../../test/vitest/vitest.extension-messaging-paths.mjs";
+import { isMsTeamsExtensionRoot } from "../../test/vitest/vitest.extension-msteams-paths.mjs";
+import {
+  isProviderExtensionRoot,
+  isProviderOpenAiExtensionRoot,
+} from "../../test/vitest/vitest.extension-provider-paths.mjs";
+import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-telegram-paths.mjs";
+import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
+import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
+import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 6;
+const EXTENSION_TEST_COST_MULTIPLIERS = {
+  "test/vitest/vitest.extension-feishu.config.ts": 1.6,
+  "test/vitest/vitest.extension-msteams.config.ts": 1.6,
+  // This shared config is comparatively cheap per file, so raw file count
+  // overstates its real wall-clock cost during CI shard planning.
+  "test/vitest/vitest.extensions.config.ts": 0.45,
+};
 
 function normalizeRelative(inputPath) {
   return inputPath.split(path.sep).join("/");
@@ -51,6 +62,11 @@ function countTestFiles(rootPath) {
   }
 
   return total;
+}
+
+function estimatePlanCost(config, testFileCount) {
+  const multiplier = EXTENSION_TEST_COST_MULTIPLIERS[config] ?? 1;
+  return Math.max(1, Math.ceil(testFileCount * multiplier));
 }
 
 function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
@@ -99,6 +115,7 @@ export function resolveExtensionTestPlan(params = {}) {
 
   const roots = [relativeExtensionDir];
 
+  const splitChannelShard = resolveSplitChannelExtensionShard(relativeExtensionDir);
   const usesChannelConfig = roots.some((root) => channelTestRoots.includes(root));
   const usesAcpxConfig = roots.some((root) => isAcpxExtensionRoot(root));
   const usesDiffsConfig = roots.some((root) => isDiffsExtensionRoot(root));
@@ -114,47 +131,54 @@ export function resolveExtensionTestPlan(params = {}) {
   const usesMemoryConfig = roots.some((root) => isMemoryExtensionRoot(root));
   const usesMsTeamsConfig = roots.some((root) => isMsTeamsExtensionRoot(root));
   const usesMessagingConfig = roots.some((root) => isMessagingExtensionRoot(root));
+  const usesProviderOpenAiConfig = roots.some((root) => isProviderOpenAiExtensionRoot(root));
   const usesProviderConfig = roots.some((root) => isProviderExtensionRoot(root));
-  const config = usesChannelConfig
-    ? "vitest.extension-channels.config.ts"
-    : usesAcpxConfig
-      ? "vitest.extension-acpx.config.ts"
-      : usesDiffsConfig
-        ? "vitest.extension-diffs.config.ts"
-        : usesBlueBubblesConfig
-          ? "vitest.extension-bluebubbles.config.ts"
-          : usesFeishuConfig
-            ? "vitest.extension-feishu.config.ts"
-            : usesIrcConfig
-              ? "vitest.extension-irc.config.ts"
-              : usesMattermostConfig
-                ? "vitest.extension-mattermost.config.ts"
-                : usesMatrixConfig
-                  ? "vitest.extension-matrix.config.ts"
-                  : usesTelegramConfig
-                    ? "vitest.extension-telegram.config.ts"
-                    : usesVoiceCallConfig
-                      ? "vitest.extension-voice-call.config.ts"
-                      : usesWhatsAppConfig
-                        ? "vitest.extension-whatsapp.config.ts"
-                        : usesZaloConfig
-                          ? "vitest.extension-zalo.config.ts"
-                          : usesMemoryConfig
-                            ? "vitest.extension-memory.config.ts"
-                            : usesMsTeamsConfig
-                              ? "vitest.extension-msteams.config.ts"
-                              : usesMessagingConfig
-                                ? "vitest.extension-messaging.config.ts"
-                                : usesProviderConfig
-                                  ? "vitest.extension-providers.config.ts"
-                                  : "vitest.extensions.config.ts";
+  const config = splitChannelShard
+    ? splitChannelShard.config
+    : usesChannelConfig
+      ? "test/vitest/vitest.extension-channels.config.ts"
+      : usesAcpxConfig
+        ? "test/vitest/vitest.extension-acpx.config.ts"
+        : usesDiffsConfig
+          ? "test/vitest/vitest.extension-diffs.config.ts"
+          : usesBlueBubblesConfig
+            ? "test/vitest/vitest.extension-bluebubbles.config.ts"
+            : usesFeishuConfig
+              ? "test/vitest/vitest.extension-feishu.config.ts"
+              : usesIrcConfig
+                ? "test/vitest/vitest.extension-irc.config.ts"
+                : usesMattermostConfig
+                  ? "test/vitest/vitest.extension-mattermost.config.ts"
+                  : usesMatrixConfig
+                    ? "test/vitest/vitest.extension-matrix.config.ts"
+                    : usesTelegramConfig
+                      ? "test/vitest/vitest.extension-telegram.config.ts"
+                      : usesVoiceCallConfig
+                        ? "test/vitest/vitest.extension-voice-call.config.ts"
+                        : usesWhatsAppConfig
+                          ? "test/vitest/vitest.extension-whatsapp.config.ts"
+                          : usesZaloConfig
+                            ? "test/vitest/vitest.extension-zalo.config.ts"
+                            : usesMemoryConfig
+                              ? "test/vitest/vitest.extension-memory.config.ts"
+                              : usesMsTeamsConfig
+                                ? "test/vitest/vitest.extension-msteams.config.ts"
+                                : usesMessagingConfig
+                                  ? "test/vitest/vitest.extension-messaging.config.ts"
+                                  : usesProviderOpenAiConfig
+                                    ? "test/vitest/vitest.extension-provider-openai.config.ts"
+                                    : usesProviderConfig
+                                      ? "test/vitest/vitest.extension-providers.config.ts"
+                                      : "test/vitest/vitest.extensions.config.ts";
   const testFileCount = roots.reduce(
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,
   );
+  const estimatedCost = estimatePlanCost(config, testFileCount);
 
   return {
     config,
+    estimatedCost,
     extensionDir: relativeExtensionDir,
     extensionId,
     hasTests: testFileCount > 0,
@@ -171,21 +195,24 @@ function mergeTestPlans(plans) {
       config: plan.config,
       extensionIds: [],
       roots: [],
+      estimatedCost: 0,
       testFileCount: 0,
     };
 
     current.extensionIds.push(plan.extensionId);
     current.roots.push(...plan.roots);
+    current.estimatedCost += plan.estimatedCost;
     current.testFileCount += plan.testFileCount;
     groupsByConfig.set(plan.config, current);
   }
 
   const planGroups = [...groupsByConfig.values()]
-    .map((group) => ({
-      ...group,
-      extensionIds: group.extensionIds.toSorted((left, right) => left.localeCompare(right)),
-      roots: [...new Set(group.roots)],
-    }))
+    .map((group) =>
+      Object.assign({}, group, {
+        extensionIds: group.extensionIds.toSorted((left, right) => left.localeCompare(right)),
+        roots: [...new Set(group.roots)],
+      }),
+    )
     .toSorted((left, right) => left.config.localeCompare(right.config));
 
   return {
@@ -193,6 +220,7 @@ function mergeTestPlans(plans) {
     extensionIds: plans
       .map((plan) => plan.extensionId)
       .toSorted((left, right) => left.localeCompare(right)),
+    estimatedCost: plans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
     hasTests: plans.length > 0,
     planGroups,
     testFileCount: plans.reduce((sum, plan) => sum + plan.testFileCount, 0),
@@ -215,6 +243,9 @@ function pickLeastLoadedShard(shards) {
       return index;
     }
     const best = shards[bestIndex];
+    if (shard.estimatedCost !== best.estimatedCost) {
+      return shard.estimatedCost < best.estimatedCost ? index : bestIndex;
+    }
     if (shard.testFileCount !== best.testFileCount) {
       return shard.testFileCount < best.testFileCount ? index : bestIndex;
     }
@@ -233,6 +264,9 @@ export function createExtensionTestShards(params = {}) {
     .map((extensionId) => resolveExtensionTestPlan({ cwd, targetArg: extensionId }))
     .filter((plan) => plan.hasTests)
     .toSorted((left, right) => {
+      if (left.estimatedCost !== right.estimatedCost) {
+        return right.estimatedCost - left.estimatedCost;
+      }
       if (left.testFileCount !== right.testFileCount) {
         return right.testFileCount - left.testFileCount;
       }
@@ -241,6 +275,7 @@ export function createExtensionTestShards(params = {}) {
 
   const effectiveShardCount = Math.min(shardCount, Math.max(1, plans.length));
   const shards = Array.from({ length: effectiveShardCount }, () => ({
+    estimatedCost: 0,
     plans: [],
     testFileCount: 0,
   }));
@@ -248,14 +283,17 @@ export function createExtensionTestShards(params = {}) {
   for (const plan of plans) {
     const targetIndex = pickLeastLoadedShard(shards);
     shards[targetIndex].plans.push(plan);
+    shards[targetIndex].estimatedCost += plan.estimatedCost;
     shards[targetIndex].testFileCount += plan.testFileCount;
   }
 
   return shards
-    .map((shard, index) => ({
-      index,
-      checkName: `checks-fast-extensions-shard-${index + 1}`,
-      ...mergeTestPlans(shard.plans),
-    }))
+    .map((shard, index) =>
+      Object.assign(
+        {},
+        { index, checkName: `checks-node-extensions-shard-${index + 1}` },
+        mergeTestPlans(shard.plans),
+      ),
+    )
     .filter((shard) => shard.hasTests);
 }

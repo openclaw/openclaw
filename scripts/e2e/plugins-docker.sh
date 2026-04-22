@@ -682,6 +682,29 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
   seed_openai_provider_config "$OPENAI_API_KEY" "${OPENAI_BASE_URL:-}"
 fi
 
+workspace_dir="$HOME/.openclaw/workspace"
+mkdir -p "$workspace_dir/.openclaw"
+cat > "$workspace_dir/IDENTITY.md" <<'MD'
+# Identity
+
+- Name: Plugin E2E
+- Nature: Test assistant
+- Vibe: Concise
+- Emoji: claw
+MD
+cat > "$workspace_dir/USER.md" <<'MD'
+# User
+
+- Name: OpenClaw test harness
+- Timezone: UTC
+MD
+cat > "$workspace_dir/.openclaw/workspace-state.json" <<'JSON'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+JSON
+
 gateway_log="/tmp/openclaw-plugin-command-e2e.log"
 start_gateway "$gateway_log"
 wait_for_gateway_health
@@ -981,7 +1004,7 @@ console.log("ok");
 NODE
 
 echo "Running bundle MCP CLI-agent e2e..."
-pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
 EOF
 then
   cat "$RUN_LOG"

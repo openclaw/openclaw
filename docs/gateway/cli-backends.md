@@ -143,6 +143,8 @@ The provider id becomes the left side of your model ref:
 1. **Selects a backend** based on the provider prefix (`codex-cli/...`).
 2. **Builds a system prompt** using the same OpenClaw prompt + workspace context.
 3. **Executes the CLI** with a session id (if supported) so history stays consistent.
+   The bundled `claude-cli` backend keeps a Claude stdio process alive per
+   OpenClaw session and sends follow-up turns over stream-json stdin.
 4. **Parses output** (JSON or plain text) and returns the final text.
 5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
 
@@ -159,6 +161,14 @@ model_instructions_file="..."`). Codex does not expose a Claude-style
 `--append-system-prompt` flag, so OpenClaw writes the assembled prompt to a
 temporary file for each fresh Codex CLI session.
 
+The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
+two ways: the compact OpenClaw skills catalog in the appended system prompt, and
+a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
+only the eligible skills for that agent/session, so Claude Code's native skill
+resolver sees the same filtered set that OpenClaw would otherwise advertise in
+the prompt. Skill env/API key overrides are still applied by OpenClaw to the
+child process environment for the run.
+
 ## Sessions
 
 - If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or
@@ -171,6 +181,10 @@ temporary file for each fresh Codex CLI session.
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
+- The bundled `claude-cli` backend uses `liveSession: "claude-stdio"` so
+  follow-up turns reuse the live Claude process while it is active. If the
+  Gateway restarts or the idle process exits, OpenClaw resumes from the stored
+  Claude session id.
 
 Serialization notes:
 
@@ -213,7 +227,7 @@ The bundled OpenAI plugin also registers a default for `codex-cli`:
 
 - `command: "codex"`
 - `args: ["exec","--json","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
-- `resumeArgs: ["exec","resume","{sessionId}","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
+- `resumeArgs: ["exec","resume","{sessionId}","-c","sandbox_mode=\"workspace-write\"","--skip-git-repo-check"]`
 - `output: "jsonl"`
 - `resumeOutput: "text"`
 - `modelArg: "--model"`
@@ -254,6 +268,31 @@ CLI backend defaults are now part of the plugin surface:
 - User config in `agents.defaults.cliBackends.<id>` still overrides the plugin default.
 - Backend-specific config cleanup stays plugin-owned through the optional
   `normalizeConfig` hook.
+
+Plugins that need tiny prompt/message compatibility shims can declare
+bidirectional text transforms without replacing a provider or CLI backend:
+
+```typescript
+api.registerTextTransforms({
+  input: [
+    { from: /red basket/g, to: "blue basket" },
+    { from: /paper ticket/g, to: "digital ticket" },
+    { from: /left shelf/g, to: "right shelf" },
+  ],
+  output: [
+    { from: /blue basket/g, to: "red basket" },
+    { from: /digital ticket/g, to: "paper ticket" },
+    { from: /right shelf/g, to: "left shelf" },
+  ],
+});
+```
+
+`input` rewrites the system prompt and user prompt passed to the CLI. `output`
+rewrites streamed assistant deltas and parsed final text before OpenClaw handles
+its own control markers and channel delivery.
+
+For CLIs that emit Claude Code stream-json compatible JSONL, set
+`jsonlDialect: "claude-stream-json"` on that backend's config.
 
 ## Bundle MCP overlays
 

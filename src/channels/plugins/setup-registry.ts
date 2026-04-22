@@ -1,11 +1,13 @@
 import {
+  getActivePluginChannelRegistry,
   getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
 type CachedChannelSetupPlugins = {
   registryVersion: number;
@@ -79,6 +81,11 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
 
 export function listChannelSetupPlugins(): ChannelPlugin[] {
   return resolveCachedChannelSetupPlugins().sorted.slice();
+}
+
+export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
+  const registry = getActivePluginChannelRegistry();
+  return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
 }
 
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {

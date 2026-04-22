@@ -1,17 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSubagentsSendContext } from "./commands-subagents.test-helpers.js";
+import {
+  buildSubagentsDispatchContext,
+  subagentControlMocks,
+} from "./commands-subagents-send-steer.test-support.js";
 import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
 
-const sendControlledSubagentMessageMock = vi.hoisted(() => vi.fn());
-const steerControlledSubagentRunMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./commands-subagents-control.runtime.js", () => ({
-  sendControlledSubagentMessage: sendControlledSubagentMessageMock,
-  steerControlledSubagentRun: steerControlledSubagentRunMock,
-}));
-
 const buildContext = () =>
-  buildSubagentsSendContext({
+  buildSubagentsDispatchContext({
     handledPrefix: "/steer",
     restTokens: ["1", "check", "timer.ts", "instead"],
   });
@@ -22,7 +17,7 @@ describe("subagents steer action", () => {
   });
 
   it("formats accepted steer replies", async () => {
-    steerControlledSubagentRunMock.mockResolvedValue({
+    subagentControlMocks.steerControlledSubagentRun.mockResolvedValue({
       status: "accepted",
       runId: "run-steer-1",
     });
@@ -34,7 +29,7 @@ describe("subagents steer action", () => {
   });
 
   it("formats steer dispatch errors", async () => {
-    steerControlledSubagentRunMock.mockResolvedValue({
+    subagentControlMocks.steerControlledSubagentRun.mockResolvedValue({
       status: "error",
       error: "dispatch failed",
     });

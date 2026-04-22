@@ -3,8 +3,10 @@ import {
   appendCdpPath,
   assertCdpEndpointAllowed,
   fetchJson,
+  isDirectCdpWebSocketEndpoint,
   isLoopbackHost,
   isWebSocketUrl,
+  normalizeCdpHttpBaseForJsonEndpoints,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -27,10 +29,16 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
+    // `cdpPort` is always truthy: either the explicit cdp.port (truthy
+    // string), or the "443"/"80" default from the ternary. The guard is
+    // defensive against future parser edge cases.
+    /* c8 ignore next 3 */
     if (cdpPort) {
       ws.port = cdpPort;
     }
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
+  } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
+    ws.hostname = cdp.hostname;
   }
   if (cdp.protocol === "https:" && ws.protocol === "ws:") {
     ws.protocol = "wss:";
@@ -78,8 +86,8 @@ export async function captureScreenshot(opts: {
         contentSize?: { width?: number; height?: number };
       };
       const size = metrics?.cssContentSize ?? metrics?.contentSize;
-      const contentWidth = Number(size?.width ?? 0);
-      const contentHeight = Number(size?.height ?? 0);
+      const contentWidth = size?.width ?? 0;
+      const contentHeight = size?.height ?? 0;
       if (contentWidth > 0 && contentHeight > 0) {
         const vpResult = (await send("Runtime.evaluate", {
           expression:
@@ -91,14 +99,14 @@ export async function captureScreenshot(opts: {
           };
         };
         const v = vpResult?.result?.value;
-        const currentW = Number(v?.w ?? 0);
-        const currentH = Number(v?.h ?? 0);
+        const currentW = v?.w ?? 0;
+        const currentH = v?.h ?? 0;
         savedVp = {
           w: currentW,
           h: currentH,
-          dpr: Number(v?.dpr ?? 1),
-          sw: Number(v?.sw ?? currentW),
-          sh: Number(v?.sh ?? currentH),
+          dpr: v?.dpr ?? 1,
+          sw: v?.sw ?? currentW,
+          sh: v?.sh ?? currentH,
         };
         // mobile: false is the safe default — CDP provides no way to query
         // the active mobile flag, and inferring from navigator.maxTouchPoints
@@ -148,11 +156,7 @@ export async function captureScreenshot(opts: {
             returnByValue: true,
           })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
           const p = postResult?.result?.value;
-          if (
-            Number(p?.w) !== savedVp.w ||
-            Number(p?.h) !== savedVp.h ||
-            Number(p?.dpr) !== savedVp.dpr
-          ) {
+          if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
             await send("Emulation.setDeviceMetricsOverride", {
               width: savedVp.w,
               height: savedVp.h,
@@ -181,20 +185,43 @@ export async function createTargetViaCdp(opts: {
   });
 
   let wsUrl: string;
-  if (isWebSocketUrl(opts.cdpUrl)) {
-    // Direct WebSocket URL — skip /json/version discovery.
+  if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
+    // Handshake-ready direct WebSocket URL — skip /json/version discovery.
     await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
-    // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
-    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
-    const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
-      appendCdpPath(opts.cdpUrl, "/json/version"),
-      1500,
-    );
-    const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
-    wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
-    if (!wsUrl) {
+    // Either an HTTP(S) CDP endpoint or a bare ws/wss root. Try
+    // /json/version discovery first. For bare ws/wss URLs, fall back to
+    // using the URL itself as a direct WS endpoint when discovery is
+    // unavailable — some providers (e.g. Browserless/Browserbase) expose
+    // a direct WebSocket root without a /json/version route.
+    const discoveryUrl = isWebSocketUrl(opts.cdpUrl)
+      ? normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl)
+      : opts.cdpUrl;
+    let version: { webSocketDebuggerUrl?: string } | null = null;
+    try {
+      version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+        appendCdpPath(discoveryUrl, "/json/version"),
+        1500,
+        undefined,
+        opts.ssrfPolicy,
+      );
+    } catch (err) {
+      // Discovery failed for an HTTP/HTTPS URL — propagate immediately.
+      if (!isWebSocketUrl(opts.cdpUrl)) {
+        throw err;
+      }
+      // For bare ws/wss URLs, fall through: /json/version is unavailable
+      // so we attempt to use opts.cdpUrl as a direct WS endpoint below.
+    }
+    const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
+    if (wsUrlRaw) {
+      wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
+    } else if (isWebSocketUrl(opts.cdpUrl)) {
+      // /json/version unavailable or returned no WebSocket URL. Treat the
+      // original URL as a direct WebSocket endpoint.
+      wsUrl = opts.cdpUrl;
+    } else {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
     await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
@@ -204,7 +231,7 @@ export async function createTargetViaCdp(opts: {
     const created = (await send("Target.createTarget", { url: opts.url })) as {
       targetId?: string;
     };
-    const targetId = String(created?.targetId ?? "").trim();
+    const targetId = created?.targetId?.trim() ?? "";
     if (!targetId) {
       throw new Error("CDP Target.createTarget returned no targetId");
     }
@@ -269,6 +296,9 @@ export type AriaSnapshotNode = {
   depth: number;
 };
 
+export const AX_REF_PREFIX = "ax";
+export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
+
 export type RawAXNode = {
   nodeId?: string;
   role?: { value?: string };
@@ -317,11 +347,17 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   const stack: Array<{ id: string; depth: number }> = [{ id: root.nodeId, depth: 0 }];
   while (stack.length && out.length < limit) {
     const popped = stack.pop();
+    // `stack.pop()` only returns undefined on an empty stack, but the
+    // while guard already asserts `stack.length > 0`. Dead defensive guard.
+    /* c8 ignore next 3 */
     if (!popped) {
       break;
     }
     const { id, depth } = popped;
     const n = byId.get(id);
+    // Every id pushed onto the stack came from `children.filter(c => byId.has(c))`,
+    // so byId.get(id) is always defined here. Dead defensive guard.
+    /* c8 ignore next 3 */
     if (!n) {
       continue;
     }
@@ -329,7 +365,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     const name = axValue(n.name);
     const value = axValue(n.value);
     const description = axValue(n.description);
-    const ref = `ax${out.length + 1}`;
+    const ref = `${AX_REF_PREFIX}${out.length + 1}`;
     out.push({
       ref,
       role: role || "unknown",
@@ -343,6 +379,9 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     const children = (n.childIds ?? []).filter((c) => byId.has(c));
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
+      // `children` is a string[] from an array filter over RawAXNode.childIds,
+      // so `child` is always a defined string here. Dead defensive guard.
+      /* c8 ignore next 3 */
       if (child) {
         stack.push({ id: child, depth: depth + 1 });
       }

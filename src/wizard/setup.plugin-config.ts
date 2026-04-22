@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -14,6 +14,15 @@ export type ConfigurablePlugin = {
   /** JSON schema from the plugin manifest (used for type/enum info). */
   jsonSchema?: Record<string, unknown>;
 };
+
+type ManifestRegistryModule = typeof import("../plugins/manifest-registry.js");
+
+let manifestRegistryModulePromise: Promise<ManifestRegistryModule> | undefined;
+
+function loadManifestRegistryModule(): Promise<ManifestRegistryModule> {
+  manifestRegistryModulePromise ??= import("../plugins/manifest-registry.js");
+  return manifestRegistryModulePromise;
+}
 
 type JsonSchemaProperty = {
   type?: string;
@@ -241,8 +250,8 @@ async function promptPluginFields(params: {
     });
     const trimmed = input.trim();
     if (trimmed !== currentStr) {
-      // Try to parse as number if schema says number
-      if (schemaProp?.type === "number") {
+      // Coerce numeric text input when the schema expects a JSON number or integer.
+      if (schemaProp?.type === "number" || schemaProp?.type === "integer") {
         if (trimmed === "") {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;
@@ -289,7 +298,7 @@ export async function setupPluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
+  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -351,7 +360,7 @@ export async function configurePluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
+  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -387,6 +396,7 @@ export async function configurePluginConfig(params: {
       }),
       { value: "__skip__", label: "Back", hint: "Return to section menu" },
     ],
+    searchable: true,
   });
 
   if (selected === "__skip__") {

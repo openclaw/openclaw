@@ -18,11 +18,15 @@ vi.mock("./matrix-migration.runtime.js", async () => {
   );
   return {
     ...actual,
-    hasActionableMatrixMigration: vi.fn(() => false),
-    hasPendingMatrixMigration: vi.fn(() => false),
     maybeCreateMatrixMigrationSnapshot: vi.fn(),
     autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
     autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
+    resolveMatrixMigrationStatus: vi.fn(() => ({
+      legacyState: null,
+      legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
+      pending: false,
+      actionable: false,
+    })),
   };
 });
 
@@ -30,6 +34,23 @@ describe("matrix doctor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  function normalizeMatrixDmConfig(dm: Record<string, unknown>) {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      throw new Error("expected Matrix doctor compatibility normalizer");
+    }
+    return normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            dm,
+          },
+        },
+      } as never,
+    });
+  }
 
   it("formats state and crypto previews", () => {
     expect(
@@ -45,6 +66,7 @@ describe("matrix doctor", () => {
     ).toContain("Matrix plugin upgraded in place.");
 
     const previews = formatMatrixLegacyCryptoPreview({
+      inspectorAvailable: true,
       warnings: ["matrix warning"],
       plans: [
         {
@@ -93,7 +115,12 @@ describe("matrix doctor", () => {
 
   it("surfaces matrix sequence warnings and repair changes", async () => {
     const runtimeApi = await import("./matrix-migration.runtime.js");
-    vi.mocked(runtimeApi.hasActionableMatrixMigration).mockReturnValue(true);
+    vi.mocked(runtimeApi.resolveMatrixMigrationStatus).mockReturnValue({
+      legacyState: null,
+      legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
+      pending: true,
+      actionable: true,
+    });
     vi.mocked(runtimeApi.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
       archivePath: "/tmp/matrix-backup.tgz",
       created: true,
@@ -273,24 +300,10 @@ describe("matrix doctor", () => {
     // so they must not count toward the allowFrom population check — otherwise
     // the migration would emit policy="allowlist" with an effectively empty
     // allowlist, silently blocking all DMs.
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          matrix: {
-            dm: {
-              enabled: true,
-              policy: "trusted",
-              allowFrom: ["   ", "\t", ""],
-            },
-          },
-        },
-      } as never,
+    const result = normalizeMatrixDmConfig({
+      enabled: true,
+      policy: "trusted",
+      allowFrom: ["   ", "\t", ""],
     });
 
     const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
@@ -303,23 +316,9 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy channels.matrix.dm.policy 'trusted' without allowFrom to 'pairing'", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          matrix: {
-            dm: {
-              enabled: true,
-              policy: "trusted",
-            },
-          },
-        },
-      } as never,
+    const result = normalizeMatrixDmConfig({
+      enabled: true,
+      policy: "trusted",
     });
 
     const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;

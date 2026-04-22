@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -13,7 +14,6 @@ import type {
   ProviderExternalAuthProfile,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
-  ProviderRuntimeModel,
   ProviderSanitizeReplayHistoryContext,
   ProviderValidateReplayTurnsContext,
 } from "./types.js";
@@ -75,6 +75,7 @@ let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").preparePr
 let resetProviderRuntimeHookCacheForTest: typeof import("./provider-runtime.js").resetProviderRuntimeHookCacheForTest;
 let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
 let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
+let providerRuntimeTesting: typeof import("./provider-runtime.js").__testing;
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
 let validateProviderReplayTurnsWithPlugin: typeof import("./provider-runtime.js").validateProviderReplayTurnsWithPlugin;
 let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
@@ -137,6 +138,7 @@ function createOpenAiCatalogProviderPlugin(
       { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
       { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
       { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+      { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
       { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
       {
         provider: "openai-codex",
@@ -290,6 +292,7 @@ describe("provider-runtime", () => {
       resetProviderRuntimeHookCacheForTest,
       refreshProviderOAuthCredentialWithPlugin,
       resolveProviderRuntimePlugin,
+      __testing: providerRuntimeTesting,
       runProviderDynamicModel,
       validateProviderReplayTurnsWithPlugin,
       wrapProviderStreamFn,
@@ -338,6 +341,26 @@ describe("provider-runtime", () => {
       provider: "claude-cli",
       expectedPluginId: "anthropic",
     });
+  });
+
+  it("normalizes plugin scopes in provider hook cache keys", () => {
+    const base = {
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      providerRefs: ["demo"],
+    };
+
+    expect(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        onlyPluginIds: [" beta ", "alpha", "beta"],
+      }),
+    ).toBe(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        onlyPluginIds: ["alpha", "beta"],
+      }),
+    );
   });
 
   it("returns provider-prepared runtime auth for the matched provider", async () => {

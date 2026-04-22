@@ -1,9 +1,21 @@
 // Shared config/runtime boundary for plugins that need config loading,
 // config writes, or session-store helpers without importing src internals.
 
+import type { OpenClawConfig } from "../config/types.js";
+
+export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {
+  if (config) {
+    return config;
+  }
+  throw new Error(
+    `${context} requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.`,
+  );
+}
+
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
@@ -100,13 +112,14 @@ export {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
-  resolveSessionKey,
-  resolveStorePath,
   updateLastRoute,
   updateSessionStore,
-  type SessionResetMode,
-  type SessionScope,
-} from "../config/sessions.js";
+  resolveSessionStoreEntry,
+} from "../config/sessions/store.js";
+export { resolveSessionKey } from "../config/sessions/session-key.js";
+export { resolveStorePath } from "../config/sessions/paths.js";
+export type { SessionResetMode } from "../config/sessions/reset.js";
+export type { SessionScope } from "../config/sessions/types.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
@@ -116,7 +129,6 @@ export {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
-export { resolveSessionStoreEntry } from "../config/sessions/store.js";
 export {
   isDangerousNameMatchingEnabled,
   resolveDangerousNameMatchingEnabled,

@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { registerDaemonCli } from "./daemon-cli.js";
+import { registerDaemonCli } from "./daemon-cli/register.js";
 
 const probeGatewayStatus = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
@@ -26,7 +26,12 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   hints: [],
 }));
 const buildGatewayInstallPlan = vi.fn(
-  async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
+  async (params: {
+    port: number;
+    token?: string;
+    env?: NodeJS.ProcessEnv;
+    existingEnvironment?: Record<string, string>;
+  }) => ({
     programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
     workingDirectory: process.cwd(),
     environment: {
@@ -113,8 +118,12 @@ vi.mock("../runtime.js", async () => ({
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
-  buildGatewayInstallPlan: (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) =>
-    buildGatewayInstallPlan(params),
+  buildGatewayInstallPlan: (params: {
+    port: number;
+    token?: string;
+    env?: NodeJS.ProcessEnv;
+    existingEnvironment?: Record<string, string>;
+  }) => buildGatewayInstallPlan(params),
 }));
 
 vi.mock("./deps.js", () => ({
@@ -138,6 +147,7 @@ async function runDaemonCommand(args: string[]) {
   await daemonProgram.parseAsync(args, { from: "user" });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function parseFirstJsonRuntimeLine<T>() {
   const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
   return JSON.parse(jsonLine ?? "{}") as T;
@@ -255,6 +265,32 @@ describe("daemon-cli coverage", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.action).toBe("install");
     expect(parsed.result).toBe("installed");
+  });
+
+  it("passes the existing service environment into the install plan on forced reinstall", async () => {
+    runtimeLogs.length = 0;
+    serviceIsLoaded.mockResolvedValueOnce(true);
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
+      environment: {
+        PATH: "/custom/go/bin:/usr/bin",
+        GOPATH: "/Users/test/.local/gopath",
+        GOBIN: "/Users/test/.local/gopath/bin",
+      },
+      sourcePath: "/tmp/ai.openclaw.gateway.plist",
+    });
+
+    await runDaemonCommand(["daemon", "install", "--force", "--json"]);
+
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingEnvironment: {
+          PATH: "/custom/go/bin:/usr/bin",
+          GOPATH: "/Users/test/.local/gopath",
+          GOBIN: "/Users/test/.local/gopath/bin",
+        },
+      }),
+    );
   });
 
   it("starts and stops daemon (json output)", async () => {

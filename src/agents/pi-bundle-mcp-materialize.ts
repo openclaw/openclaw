@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -9,7 +9,6 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./pi-bundle-mcp-names.js";
-import { createSessionMcpRuntime } from "./pi-bundle-mcp-runtime.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
 function toAgentToolResult(params: {
@@ -130,8 +129,15 @@ export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
+  createRuntime?: (params: {
+    sessionId: string;
+    workspaceDir: string;
+    cfg?: OpenClawConfig;
+  }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
-  const runtime = createSessionMcpRuntime({
+  const createRuntime =
+    params.createRuntime ?? (await import("./pi-bundle-mcp-runtime.js")).createSessionMcpRuntime;
+  const runtime = createRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,

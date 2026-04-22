@@ -8,6 +8,37 @@ import {
 } from "./shared.js";
 import type { MSTeamsAttachmentLike, MSTeamsHtmlAttachmentSummary } from "./types.js";
 
+/**
+ * Extract every `<attachment id="...">` reference from the HTML attachments in
+ * the inbound activity. Returns the complete (non-sliced) list; callers that
+ * need a capped diagnostic summary can truncate after calling this helper.
+ */
+export function extractMSTeamsHtmlAttachmentIds(
+  attachments: MSTeamsAttachmentLike[] | undefined,
+): string[] {
+  const list = Array.isArray(attachments) ? attachments : [];
+  if (list.length === 0) {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const att of list) {
+    const html = extractHtmlFromAttachment(att);
+    if (!html) {
+      continue;
+    }
+    ATTACHMENT_TAG_RE.lastIndex = 0;
+    let match: RegExpExecArray | null = ATTACHMENT_TAG_RE.exec(html);
+    while (match) {
+      const id = match[1]?.trim();
+      if (id) {
+        ids.add(id);
+      }
+      match = ATTACHMENT_TAG_RE.exec(html);
+    }
+  }
+  return Array.from(ids);
+}
+
 export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsHtmlAttachmentSummary | undefined {

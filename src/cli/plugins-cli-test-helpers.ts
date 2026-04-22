@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -15,6 +15,7 @@ type ListMarketplacePluginsFn =
 type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TArgs): TResult {
   return (mock as (...args: TArgs) => TResult)(...args);
 }
@@ -187,18 +188,22 @@ vi.mock("../plugins/status.js", () => ({
     )) as (typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"],
 }));
 
-vi.mock("../plugins/slots.js", () => ({
-  applyExclusiveSlotSelection: ((
-    params: Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0],
-  ) =>
-    invokeMock<
-      [Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0]],
-      ReturnType<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>
-    >(
-      applyExclusiveSlotSelection,
-      params,
-    )) as (typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"],
-}));
+vi.mock("../plugins/slots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/slots.js")>();
+  return {
+    ...actual,
+    applyExclusiveSlotSelection: ((
+      params: Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0],
+    ) =>
+      invokeMock<
+        [Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0]],
+        ReturnType<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>
+      >(
+        applyExclusiveSlotSelection,
+        params,
+      )) as (typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"],
+  };
+});
 
 vi.mock("../plugins/uninstall.js", () => ({
   uninstallPlugin: ((
@@ -252,6 +257,8 @@ vi.mock("./prompt.js", () => ({
 vi.mock("../plugins/install.js", () => ({
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+    SECURITY_SCAN_BLOCKED: "security_scan_blocked",
+    SECURITY_SCAN_FAILED: "security_scan_failed",
   },
   installPluginFromNpmSpec: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>

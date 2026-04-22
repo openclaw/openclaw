@@ -47,6 +47,8 @@ const GENERIC_MUTABLE_SCRIPT_RUNNERS = new Set([
   "vite-node",
 ]);
 
+const OPAQUE_MUTABLE_SCRIPT_RUNNERS = new Set(["busybox", "toybox"]);
+
 const BUN_SUBCOMMANDS = new Set([
   "add",
   "audit",
@@ -221,12 +223,23 @@ function pathComponentsFromRootSync(targetPath: string): string[] {
   }
 }
 
-function isWritableByCurrentProcessSync(candidate: string): boolean {
+function isOwnedByCurrentProcessSync(candidate: string): boolean {
+  if (process.platform === "win32" || typeof process.getuid !== "function") {
+    return false;
+  }
+  try {
+    return fs.statSync(candidate).uid === process.getuid();
+  } catch {
+    return false;
+  }
+}
+
+function isMutableByCurrentProcessSync(candidate: string): boolean {
   try {
     fs.accessSync(candidate, fs.constants.W_OK);
     return true;
   } catch {
-    return false;
+    return isOwnedByCurrentProcessSync(candidate);
   }
 }
 
@@ -237,7 +250,7 @@ function hasMutableSymlinkPathComponentSync(targetPath: string): boolean {
         continue;
       }
       const parentDir = path.dirname(component);
-      if (isWritableByCurrentProcessSync(parentDir)) {
+      if (isMutableByCurrentProcessSync(parentDir)) {
         return true;
       }
     } catch {
@@ -245,6 +258,27 @@ function hasMutableSymlinkPathComponentSync(targetPath: string): boolean {
     }
   }
   return false;
+}
+
+function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
+  if (
+    isMutableByCurrentProcessSync(targetPath) ||
+    isMutableByCurrentProcessSync(path.dirname(targetPath)) ||
+    hasMutableSymlinkPathComponentSync(targetPath)
+  ) {
+    return true;
+  }
+  let realPath: string;
+  try {
+    realPath = fs.realpathSync(targetPath);
+  } catch {
+    return true;
+  }
+  return (
+    isMutableByCurrentProcessSync(realPath) ||
+    isMutableByCurrentProcessSync(path.dirname(realPath)) ||
+    hasMutableSymlinkPathComponentSync(realPath)
+  );
 }
 
 function shouldPinExecutableForApproval(params: {
@@ -283,9 +317,77 @@ function resolvesToExistingFileSync(rawOperand: string, cwd: string | undefined)
   }
 }
 
-function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseIndex: number } {
+function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
+  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+    return true;
+  }
+  if (
+    buffer.length >= 4 &&
+    (buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xce])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xce, 0xfa, 0xed, 0xfe])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xcf])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbe])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xbe, 0xba, 0xfe, 0xca])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbf])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xbf, 0xba, 0xfe, 0xca])))
+  ) {
+    return true;
+  }
+  if (buffer.length < 0x40 || !buffer.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))) {
+    return false;
+  }
+  const peOffset = buffer.readUInt32LE(0x3c);
+  return (
+    peOffset >= 0 &&
+    peOffset <= buffer.length - 4 &&
+    buffer.subarray(peOffset, peOffset + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))
+  );
+}
+
+function isLikelyScriptLikePathSync(targetPath: string): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(targetPath);
+  } catch {
+    return true;
+  }
+  if (!stat.isFile()) {
+    return true;
+  }
+  let header: Buffer;
+  try {
+    const fd = fs.openSync(targetPath, "r");
+    try {
+      header = Buffer.alloc(1024);
+      const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+      header = header.subarray(0, bytesRead);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return true;
+  }
+  if (header.length === 0) {
+    return true;
+  }
+  if (header.subarray(0, 2).equals(Buffer.from("#!"))) {
+    return true;
+  }
+  if (isKnownBinaryExecutableHeader(header)) {
+    return false;
+  }
+  return true;
+}
+
+function unwrapArgvForMutableOperand(argv: string[]): {
+  argv: string[];
+  baseIndex: number;
+  opaqueMultiplexerSeen: boolean;
+} {
   let current = argv;
   let baseIndex = 0;
+  let opaqueMultiplexerSeen = false;
   while (true) {
     const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (dispatchUnwrap.kind === "unwrapped") {
@@ -295,6 +397,9 @@ function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseInde
     }
     const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
     if (shellMultiplexerUnwrap.kind === "unwrapped") {
+      if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
+        opaqueMultiplexerSeen = true;
+      }
       baseIndex += current.length - shellMultiplexerUnwrap.argv.length;
       current = shellMultiplexerUnwrap.argv;
       continue;
@@ -305,7 +410,7 @@ function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseInde
       current = packageManagerUnwrap;
       continue;
     }
-    return { argv: current, baseIndex };
+    return { argv: current, baseIndex, opaqueMultiplexerSeen };
   }
 }
 
@@ -743,13 +848,20 @@ function hasPerlUnsafeApprovalFlag(argv: string[]): boolean {
 }
 
 function isMutableScriptRunner(executable: string): boolean {
-  return GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) || isInterpreterLikeSafeBin(executable);
+  return (
+    GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) ||
+    OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(executable) ||
+    isInterpreterLikeSafeBin(executable)
+  );
 }
 
 function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined): number | null {
   const unwrapped = unwrapArgvForMutableOperand(argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   if (!executable) {
+    return null;
+  }
+  if (unwrapped.opaqueMultiplexerSeen || OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(executable)) {
     return null;
   }
   if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
@@ -815,7 +927,17 @@ function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | unde
     return true;
   }
   const firstToken = readTrimmedArgToken(argv, 0);
-  return resolvesToExistingFileSync(firstToken, cwd);
+  if (!resolvesToExistingFileSync(firstToken, cwd)) {
+    return false;
+  }
+  if (!path.isAbsolute(firstToken)) {
+    return true;
+  }
+  const resolvedPath = path.resolve(cwd ?? process.cwd(), firstToken);
+  if (pathLooksMutableForShellPayloadSync(resolvedPath)) {
+    return true;
+  }
+  return isLikelyScriptLikePathSync(resolvedPath);
 }
 
 function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
@@ -823,13 +945,16 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   shellCommand: string | null;
   cwd: string | undefined;
 }): boolean {
+  const unwrapped = unwrapArgvForMutableOperand(params.argv);
+  if (unwrapped.opaqueMultiplexerSeen) {
+    return true;
+  }
   if (params.shellCommand !== null) {
     return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
   }
   if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
     return true;
   }
-  const unwrapped = unwrapArgvForMutableOperand(params.argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   if (!executable) {
     return false;

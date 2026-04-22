@@ -1,4 +1,4 @@
-import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -69,7 +69,7 @@ export function normalizeReplyPayload(
     if (hasLeadingSilentToken) {
       text = stripLeadingSilentToken(text, silentToken);
     }
-    if (hasLeadingSilentToken || text.includes(silentToken)) {
+    if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
       text = stripSilentToken(text, silentToken);
       if (!hasContent(text)) {
         opts.onSkip?.("silent");

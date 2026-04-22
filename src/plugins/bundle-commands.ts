@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
@@ -13,7 +13,11 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  hasExplicitPluginConfig,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 export type ClaudeBundleCommandSpec = {
@@ -169,9 +173,13 @@ export function loadEnabledClaudeBundleCommands(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
 }): ClaudeBundleCommandSpec[] {
+  if (!hasExplicitPluginConfig(params.cfg?.plugins)) {
+    return [];
+  }
   const registry = loadPluginManifestRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    cache: false,
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const commands: ClaudeBundleCommandSpec[] = [];

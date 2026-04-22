@@ -10,8 +10,8 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMatrixAccountStringValues,
   type MatrixResolvedStringField,
@@ -211,6 +211,9 @@ export function requiresExplicitMatrixDefaultAccount(
   }
   const configuredAccountIds = resolveConfiguredMatrixAccountIds(cfg, env);
   if (configuredAccountIds.length <= 1) {
+    return false;
+  }
+  if (configuredAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
     return false;
   }
   const configuredDefault = normalizeOptionalAccountId(

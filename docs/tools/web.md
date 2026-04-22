@@ -186,9 +186,14 @@ If no provider is detected, it falls back to Brave (you will get a missing-key
 error prompting you to configure one).
 
 <Note>
-  All provider key fields support SecretRef objects. In auto-detect mode,
-  OpenClaw resolves only the selected provider key -- non-selected SecretRefs
-  stay inactive.
+  All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
+  under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
+  bundled Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily providers
+  whether the provider is picked explicitly via `tools.web.search.provider` or
+  selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
+  selected provider key -- non-selected SecretRefs stay inactive, so you can
+  keep multiple providers configured without paying resolution cost for the
+  ones you are not using.
 </Note>
 
 ## Config
@@ -225,7 +230,7 @@ When you choose **Kimi** during `openclaw onboard` or
 `openclaw configure --section web`, OpenClaw can also ask for:
 
 - the Moonshot API region (`https://api.moonshot.ai/v1` or `https://api.moonshot.cn/v1`)
-- the default Kimi web-search model (defaults to `kimi-k2.5`)
+- the default Kimi web-search model (defaults to `kimi-k2.6`)
 
 For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
 same `XAI_API_KEY` fallback as Grok web search.

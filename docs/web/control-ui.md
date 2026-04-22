@@ -58,6 +58,11 @@ If the browser retries pairing with changed auth details (role/scopes/public
 key), the previous pending request is superseded and a new `requestId` is
 created. Re-run `openclaw devices list` before approval.
 
+If the browser is already paired and you change it from read access to
+write/admin access, this is treated as an approval upgrade, not a silent
+reconnect. OpenClaw keeps the old approval active, blocks the broader reconnect,
+and asks you to approve the new scope set explicitly.
+
 Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
@@ -88,7 +93,7 @@ locale picker lives in the Gateway Access card, not under Appearance.
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session model/thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`)
 - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
@@ -137,6 +142,38 @@ Cron jobs panel notes:
   - When a run is aborted, partial assistant text can still be shown in the UI
   - Gateway persists aborted partial assistant text into transcript history when buffered output exists
   - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
+
+## Hosted embeds
+
+Assistant messages can render hosted web content inline with the `[embed ...]`
+shortcode. The iframe sandbox policy is controlled by
+`gateway.controlUi.embedSandbox`:
+
+- `strict`: disables script execution inside hosted embeds
+- `scripts`: allows interactive embeds while keeping origin isolation; this is
+  the default and is usually enough for self-contained browser games/widgets
+- `trusted`: adds `allow-same-origin` on top of `allow-scripts` for same-site
+  documents that intentionally need stronger privileges
+
+Example:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      embedSandbox: "scripts",
+    },
+  },
+}
+```
+
+Use `trusted` only when the embedded document genuinely needs same-origin
+behavior. For most agent-generated games and interactive canvases, `scripts` is
+the safer choice.
+
+Absolute external `http(s)` embed URLs stay blocked by default. If you
+intentionally want `[embed url="https://..."]` to load third-party pages, set
+`gateway.controlUi.allowExternalEmbedUrls: true`.
 
 ## Tailnet access (recommended)
 
@@ -241,12 +278,34 @@ Trusted-proxy note:
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
+## Content Security Policy
+
+The Control UI ships with a tight `img-src` policy: only **same-origin** assets and `data:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
+
+What this means in practice:
+
+- Avatars and images served under relative paths (for example `/avatars/<id>`) still render.
+- Inline `data:image/...` URLs still render (useful for in-protocol payloads).
+- Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
+
+You do not need to change anything to get this behavior — it is always on and not configurable.
+
+## Avatar route auth
+
+When gateway auth is configured, the Control UI avatar endpoint requires the same gateway token as the rest of the API:
+
+- `GET /avatar/<agentId>` returns the avatar image only to authenticated callers. `GET /avatar/<agentId>?meta=1` returns the avatar metadata under the same rule.
+- Unauthenticated requests to either route are rejected (matching the sibling assistant-media route). This prevents the avatar route from leaking agent identity on hosts that are otherwise protected.
+- The Control UI itself forwards the gateway token as a bearer header when fetching avatars, and uses authenticated blob URLs so the image still renders in dashboards.
+
+If you disable gateway auth (not recommended on shared hosts), the avatar route also becomes unauthenticated, in line with the rest of the gateway.
+
 ## Building the UI
 
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build
 ```
 
 Optional absolute base (when you want fixed asset URLs):
@@ -258,7 +317,7 @@ OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
 For local development (separate dev server):
 
 ```bash
-pnpm ui:dev # auto-installs UI deps on first run
+pnpm ui:dev
 ```
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).

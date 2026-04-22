@@ -1,12 +1,12 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
-import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.js";
+import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
 
 type FlowRegistryRow = {
@@ -60,6 +60,7 @@ function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
 function parseJsonValue<T>(raw: string | null): T | undefined {
   if (!raw?.trim()) {
     return undefined;

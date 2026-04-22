@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
+import type { TwilioConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import { chunkAudio } from "../telephony-audio.js";
@@ -29,13 +29,11 @@ import {
   normalizeProviderStatus,
 } from "./shared/call-status.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import type { TwilioProviderOptions } from "./twilio.types.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
-
-type StreamSendResult = {
-  sent: boolean;
-};
+export type { TwilioProviderOptions } from "./twilio.types.js";
 
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
@@ -58,27 +56,9 @@ function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: 
     .digest("hex")}`;
 }
 
-/**
- * Twilio Voice API provider implementation.
- *
- * Uses Twilio Programmable Voice API with Media Streams for real-time
- * bidirectional audio streaming.
- *
- * @see https://www.twilio.com/docs/voice
- * @see https://www.twilio.com/docs/voice/media-streams
- */
-export interface TwilioProviderOptions {
-  /** Allow ngrok free tier compatibility mode (loopback only, less secure) */
-  allowNgrokFreeTierLoopbackBypass?: boolean;
-  /** Override public URL for signature verification */
-  publicUrl?: string;
-  /** Path for media stream WebSocket (e.g., /voice/stream) */
-  streamPath?: string;
-  /** Skip webhook signature verification (development only) */
-  skipVerification?: boolean;
-  /** Webhook security options (forwarded headers/allowlist) */
-  webhookSecurity?: WebhookSecurityConfig;
-}
+type StreamSendResult = {
+  sent: boolean;
+};
 
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;

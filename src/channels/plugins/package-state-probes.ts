@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -127,5 +127,5 @@ export function hasBundledChannelPackageState(params: {
     entry,
     metadataKey: params.metadataKey,
   });
-  return checker ? Boolean(checker({ cfg: params.cfg, env: params.env })) : false;
+  return checker ? checker({ cfg: params.cfg, env: params.env }) : false;
 }

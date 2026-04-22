@@ -1,8 +1,8 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { getMatrixRuntime } from "../../runtime.js";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
-import { withStartedActionClient } from "./client.js";
+import { withResolvedActionClient, withStartedActionClient } from "./client.js";
 import type { MatrixActionClientOpts } from "./types.js";
 
 function requireCrypto(
@@ -10,7 +10,12 @@ function requireCrypto(
   opts: MatrixActionClientOpts,
 ): NonNullable<import("../sdk.js").MatrixClient["crypto"]> {
   if (!client.crypto) {
-    const cfg = opts.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
+    if (!opts.cfg) {
+      throw new Error(
+        "Matrix verification actions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+      );
+    }
+    const cfg = requireRuntimeConfig(opts.cfg, "Matrix verification actions") as CoreConfig;
     throw new Error(formatMatrixEncryptionUnavailableError(cfg, opts.accountId));
   }
   return client.crypto;
@@ -152,7 +157,7 @@ export async function confirmMatrixVerificationReciprocateQr(
 export async function getMatrixEncryptionStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
     const recoveryKey = await crypto.getRecoveryKey();
     return {
@@ -168,7 +173,7 @@ export async function getMatrixEncryptionStatus(
 export async function getMatrixVerificationStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const status = await client.getOwnDeviceVerificationStatus();
     const payload = {
       ...status,
@@ -186,7 +191,7 @@ export async function getMatrixVerificationStatus(
 }
 
 export async function getMatrixRoomKeyBackupStatus(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(
+  return await withResolvedActionClient(
     opts,
     async (client) => await client.getRoomKeyBackupStatus(),
   );

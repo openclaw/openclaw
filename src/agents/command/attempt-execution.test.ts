@@ -6,7 +6,7 @@ import {
   createAcpVisibleTextAccumulator,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
-} from "./attempt-execution.js";
+} from "./attempt-execution.helpers.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -20,14 +20,14 @@ describe("resolveFallbackRetryPrompt", () => {
     ).toBe(originalBody);
   });
 
-  it("returns recovery prompt for fallback retry with existing session history", () => {
+  it("prepends recovery prefix to original body on fallback retry with existing session history", () => {
     expect(
       resolveFallbackRetryPrompt({
         body: originalBody,
         isFallbackRetry: true,
         sessionHasHistory: true,
       }),
-    ).toBe("Continue where you left off. The previous model attempt failed or timed out.");
+    ).toBe(`[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`);
   });
 
   it("preserves original body for fallback retry when session has no history (subagent spawn)", () => {
@@ -203,5 +203,18 @@ describe("createAcpVisibleTextAccumulator", () => {
     });
 
     expect(acc.finalize()).toBe("NO_REPLY: explanation");
+  });
+
+  it("buffers chunked NO_REPLY prefixes before emitting visible text", () => {
+    const acc = createAcpVisibleTextAccumulator();
+
+    expect(acc.consume("NO")).toBeNull();
+    expect(acc.consume("NO_")).toBeNull();
+    expect(acc.consume("NO_RE")).toBeNull();
+    expect(acc.consume("NO_REPLY")).toBeNull();
+    expect(acc.consume("Actual answer")).toEqual({
+      text: "Actual answer",
+      delta: "Actual answer",
+    });
   });
 });

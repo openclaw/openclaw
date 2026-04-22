@@ -6,6 +6,7 @@ vi.hoisted(() => {
 });
 
 import "./server-context.chrome-test-harness.js";
+import * as cdpHelpersModule from "./cdp.helpers.js";
 import * as cdpModule from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -125,7 +126,51 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "http://127.0.0.1:8080",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      ssrfPolicy: undefined,
+    });
+  });
+
+  it("can bootstrap a managed loopback tab under strict SSRF because CDP control stays local", async () => {
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "CREATED" });
+
+    let listCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      listCount += 1;
+      return {
+        ok: true,
+        json: async () =>
+          listCount === 1
+            ? []
+            : [
+                {
+                  id: "CREATED",
+                  title: "New Tab",
+                  url: "about:blank",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
+                  type: "page",
+                },
+              ],
+      } as unknown as Response;
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const selected = await openclaw.ensureTabAvailable();
+    expect(selected.targetId).toBe("CREATED");
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "about:blank",
+      ssrfPolicy: undefined,
     });
   });
 
@@ -251,5 +296,39 @@ describe("browser server-context tab selection state", () => {
       InvalidBrowserNavigationUrlError,
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the loopback CDP control policy for /json/new fallback requests", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
+    const fetchJson = vi.spyOn(cdpHelpersModule, "fetchJson");
+    fetchJson.mockRejectedValueOnce(new Error("HTTP 405")).mockResolvedValueOnce({
+      id: "NEW",
+      title: "New Tab",
+      url: "https://example.com",
+      webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
+      type: "page",
+    });
+
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const opened = await openclaw.openTab("https://example.com");
+    expect(opened.targetId).toBe("NEW");
+    expect(fetchJson).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/json/new"),
+      expect.any(Number),
+      { method: "PUT" },
+      undefined,
+    );
+    expect(fetchJson).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/json/new"),
+      expect.any(Number),
+      undefined,
+      undefined,
+    );
   });
 });

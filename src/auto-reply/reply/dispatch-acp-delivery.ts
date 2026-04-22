@@ -1,5 +1,5 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -11,7 +11,7 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
 let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
@@ -81,9 +81,6 @@ async function shouldTreatDeliveredTextAsVisible(params: {
       kind: params.kind,
       text: params.text,
     });
-  }
-  if (!params.routed) {
-    return channelId === "telegram";
   }
   return false;
 }
@@ -215,6 +212,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
+    // When delivery is suppressed (e.g. sendPolicy: "deny"), do not fire the
+    // onReplyStart callback — channels wire it to typing indicators / lifecycle
+    // notifications that should not leak outbound events while the session is
+    // under a deny policy. See #53328.
+    if (params.suppressUserDelivery) {
+      return;
+    }
     void Promise.resolve(params.onReplyStart?.()).catch((error) => {
       logVerbose(
         `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -252,6 +256,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           message,
         },
         sessionKey: params.ctx.SessionKey,
+        requesterAccountId: params.ctx.AccountId,
       });
       state.routedCounts.tool += 1;
       return true;
@@ -316,6 +321,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
         accountId: resolvedAccountId,
+        requesterSenderId: params.ctx.SenderId,
+        requesterSenderName: params.ctx.SenderName,
+        requesterSenderUsername: params.ctx.SenderUsername,
+        requesterSenderE164: params.ctx.SenderE164,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });

@@ -131,6 +131,33 @@ describe("gateway control-plane write rate limit", () => {
     expect(handlerCalls).toHaveBeenCalledTimes(4);
   });
 
+  it("blocks startup-gated methods before dispatch", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = {
+      ...buildContext(),
+      unavailableGatewayMethods: new Set(["chat.history", "models.list"]),
+    } as Parameters<typeof handleGatewayRequest>[0]["context"];
+    const client = buildClient();
+
+    const blocked = await runRequest({ method: "models.list", context, client, handler });
+
+    expect(handlerCalls).not.toHaveBeenCalled();
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        retryAfterMs: 500,
+        details: { method: "models.list" },
+      }),
+    );
+  });
+
   it("uses connId fallback when both device and client IP are unknown", () => {
     const key = resolveControlPlaneRateLimitKey({
       connect: buildConnect(),

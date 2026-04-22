@@ -1,5 +1,11 @@
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
-import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
+import {
+  assertCdpEndpointAllowed,
+  fetchJson,
+  fetchOk,
+  normalizeCdpHttpBaseForJsonEndpoints,
+} from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import { listChromeMcpTabs, openChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -7,7 +13,7 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
-  requiresInspectableBrowserNavigationRedirects,
+  requiresInspectableBrowserNavigationRedirectsForUrl,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -64,6 +70,7 @@ export function createProfileTabOps({
 }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
+  const getCdpControlPolicy = () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy);
 
   const listTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
@@ -74,7 +81,9 @@ export function createProfileTabOps({
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
-        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
+        const ssrfPolicy = getCdpControlPolicy();
+        await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
+        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl, ssrfPolicy });
         return pages.map((p) => ({
           targetId: p.targetId,
           title: p.title,
@@ -92,7 +101,7 @@ export function createProfileTabOps({
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(cdpHttpBase, "/json/list"));
+    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
@@ -124,7 +133,12 @@ export function createProfileTabOps({
     const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
-      void fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`)).catch(() => {
+      void fetchOk(
+        appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
+        undefined,
+        undefined,
+        getCdpControlPolicy(),
+      ).catch(() => {
         // best-effort cleanup only
       });
     }
@@ -169,7 +183,7 @@ export function createProfileTabOps({
       }
     }
 
-    if (requiresInspectableBrowserNavigationRedirects(state().resolved.ssrfPolicy)) {
+    if (requiresInspectableBrowserNavigationRedirectsForUrl(url, state().resolved.ssrfPolicy)) {
       throw new InvalidBrowserNavigationUrlError(
         "Navigation blocked: strict browser SSRF policy requires Playwright-backed redirect-hop inspection",
       );
@@ -178,7 +192,7 @@ export function createProfileTabOps({
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
-      ...ssrfPolicyOpts,
+      ssrfPolicy: getCdpControlPolicy(),
     })
       .then((r) => r.targetId)
       .catch(() => null);
@@ -210,11 +224,21 @@ export function createProfileTabOps({
           return endpointUrl.toString();
         })()
       : `${endpointUrl.toString()}?${encoded}`;
-    const created = await fetchJson<CdpTarget>(endpoint, CDP_JSON_NEW_TIMEOUT_MS, {
-      method: "PUT",
-    }).catch(async (err) => {
+    const created = await fetchJson<CdpTarget>(
+      endpoint,
+      CDP_JSON_NEW_TIMEOUT_MS,
+      {
+        method: "PUT",
+      },
+      getCdpControlPolicy(),
+    ).catch(async (err) => {
       if (String(err).includes("HTTP 405")) {
-        return await fetchJson<CdpTarget>(endpoint, CDP_JSON_NEW_TIMEOUT_MS);
+        return await fetchJson<CdpTarget>(
+          endpoint,
+          CDP_JSON_NEW_TIMEOUT_MS,
+          undefined,
+          getCdpControlPolicy(),
+        );
       }
       throw err;
     });

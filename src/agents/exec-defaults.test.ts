@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { resolveExecDefaults } from "./exec-defaults.js";
+import { canExecRequestNode, resolveExecDefaults } from "./exec-defaults.js";
 
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
@@ -27,7 +27,7 @@ describe("resolveExecDefaults", () => {
     ).toBe(false);
   });
 
-  it("keeps node routing available when exec host is auto", () => {
+  it("does not advertise node routing when exec host is auto and sandbox is available", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -42,6 +42,25 @@ describe("resolveExecDefaults", () => {
     ).toMatchObject({
       host: "auto",
       effectiveHost: "sandbox",
+      canRequestNode: false,
+    });
+  });
+
+  it("keeps node routing available when exec host is auto without sandbox", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: {
+          tools: {
+            exec: {
+              host: "auto",
+            },
+          },
+        },
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      host: "auto",
+      effectiveHost: "gateway",
       canRequestNode: true,
     });
   });
@@ -103,5 +122,20 @@ describe("resolveExecDefaults", () => {
       security: "deny",
       ask: "off",
     });
+  });
+
+  it("blocks node advertising in helper calls when sandbox is available", () => {
+    expect(
+      canExecRequestNode({
+        cfg: {
+          tools: {
+            exec: {
+              host: "auto",
+            },
+          },
+        },
+        sandboxAvailable: true,
+      }),
+    ).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos from text, images, or existing videos using 12 provider backends"
+summary: "Generate videos from text, images, or existing videos using 15 provider backends"
 read_when:
   - Generating videos via the agent
   - Configuring video generation providers and models
@@ -9,7 +9,7 @@ title: "Video Generation"
 
 # Video Generation
 
-OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Twelve provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
+OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Fifteen provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
 
 <Note>
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
@@ -78,21 +78,23 @@ Duplicate prevention: if a video task is already `queued` or `running` for the c
 
 ## Supported providers
 
-| Provider | Default model                   | Text | Image ref         | Video ref        | API key                                  |
-| -------- | ------------------------------- | ---- | ----------------- | ---------------- | ---------------------------------------- |
-| AIMLAPI  | `google/veo-3.1-t2v-fast`      | Yes  | No                | No               | `AIMLAPI_API_KEY`                        |
-| Alibaba  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)  | Yes (remote URL) | `MODELSTUDIO_API_KEY`                    |
-| BytePlus | `seedance-1-0-lite-t2v-250428`  | Yes  | 1 image           | No               | `BYTEPLUS_API_KEY`                       |
-| ComfyUI  | `workflow`                      | Yes  | 1 image           | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
-| fal      | `fal-ai/minimax/video-01-live`  | Yes  | 1 image           | No               | `FAL_KEY`                                |
-| Google   | `veo-3.1-fast-generate-preview` | Yes  | 1 image           | 1 video          | `GEMINI_API_KEY`                         |
-| MiniMax  | `MiniMax-Hailuo-2.3`            | Yes  | 1 image           | No               | `MINIMAX_API_KEY`                        |
-| OpenAI   | `sora-2`                        | Yes  | 1 image           | 1 video          | `OPENAI_API_KEY`                         |
-| Qwen     | `wan2.6-t2v`                    | Yes  | Yes (remote URL)  | Yes (remote URL) | `QWEN_API_KEY`                           |
-| Runway   | `gen4.5`                        | Yes  | 1 image           | 1 video          | `RUNWAYML_API_SECRET`                    |
-| Together | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image           | No               | `TOGETHER_API_KEY`                       |
-| Vydra    | `veo3`                          | Yes  | 1 image (`kling`) | No               | `VYDRA_API_KEY`                          |
-| xAI      | `grok-imagine-video`            | Yes  | 1 image           | 1 video          | `XAI_API_KEY`                            |
+| Provider              | Default model                   | Text | Image ref                                            | Video ref        | API key                                  |
+| --------------------- | ------------------------------- | ---- | ---------------------------------------------------- | ---------------- | ---------------------------------------- |
+| AIMLAPI               | `google/veo-3.1-t2v-fast`       | Yes  | No                                                   | No               | `AIMLAPI_API_KEY`                        |
+| Alibaba               | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL) | `MODELSTUDIO_API_KEY`                    |
+| BytePlus (1.0)        | `seedance-1-0-pro-250528`       | Yes  | Up to 2 images (I2V models only; first + last frame) | No               | `BYTEPLUS_API_KEY`                       |
+| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       | Yes  | Up to 2 images (first + last frame via role)         | No               | `BYTEPLUS_API_KEY`                       |
+| BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  | Yes  | Up to 9 reference images                             | Up to 3 videos   | `BYTEPLUS_API_KEY`                       |
+| ComfyUI               | `workflow`                      | Yes  | 1 image                                              | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
+| fal                   | `fal-ai/minimax/video-01-live`  | Yes  | 1 image                                              | No               | `FAL_KEY`                                |
+| Google                | `veo-3.1-fast-generate-preview` | Yes  | 1 image                                              | 1 video          | `GEMINI_API_KEY`                         |
+| MiniMax               | `MiniMax-Hailuo-2.3`            | Yes  | 1 image                                              | No               | `MINIMAX_API_KEY`                        |
+| OpenAI                | `sora-2`                        | Yes  | 1 image                                              | 1 video          | `OPENAI_API_KEY`                         |
+| Qwen                  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL) | `QWEN_API_KEY`                           |
+| Runway                | `gen4.5`                        | Yes  | 1 image                                              | 1 video          | `RUNWAYML_API_SECRET`                    |
+| Together              | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image                                              | No               | `TOGETHER_API_KEY`                       |
+| Vydra                 | `veo3`                          | Yes  | 1 image (`kling`)                                    | No               | `VYDRA_API_KEY`                          |
+| xAI                   | `grok-imagine-video`            | Yes  | 1 image                                              | 1 video          | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
@@ -106,6 +108,7 @@ and the shared live sweep.
 
 | Provider | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                                                  |
 | -------- | ---------- | -------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| AIMLAPI  | Yes        | No             | No             | `generate`; bundled support is text-to-video only                                                                                        |
 | Alibaba  | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
 | BytePlus | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
 | ComfyUI  | Yes        | Yes            | No             | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                               |
@@ -129,31 +132,49 @@ and the shared live sweep.
 
 ### Content inputs
 
-| Parameter | Type     | Description                          |
-| --------- | -------- | ------------------------------------ |
-| `image`   | string   | Single reference image (path or URL) |
-| `images`  | string[] | Multiple reference images (up to 5)  |
-| `video`   | string   | Single reference video (path or URL) |
-| `videos`  | string[] | Multiple reference videos (up to 4)  |
+| Parameter    | Type     | Description                                                                                                                            |
+| ------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `image`      | string   | Single reference image (path or URL)                                                                                                   |
+| `images`     | string[] | Multiple reference images (up to 9)                                                                                                    |
+| `imageRoles` | string[] | Optional per-position role hints parallel to the combined image list. Canonical values: `first_frame`, `last_frame`, `reference_image` |
+| `video`      | string   | Single reference video (path or URL)                                                                                                   |
+| `videos`     | string[] | Multiple reference videos (up to 4)                                                                                                    |
+| `videoRoles` | string[] | Optional per-position role hints parallel to the combined video list. Canonical value: `reference_video`                               |
+| `audioRef`   | string   | Single reference audio (path or URL). Used for e.g. background music or voice reference when the provider supports audio inputs        |
+| `audioRefs`  | string[] | Multiple reference audios (up to 3)                                                                                                    |
+| `audioRoles` | string[] | Optional per-position role hints parallel to the combined audio list. Canonical value: `reference_audio`                               |
+
+Role hints are forwarded to the provider as-is. Canonical values come from
+the `VideoGenerationAssetRole` union but providers may accept additional
+role strings. `*Roles` arrays must not have more entries than the
+corresponding reference list; off-by-one mistakes fail with a clear error.
+Use an empty string to leave a slot unset.
 
 ### Style controls
 
-| Parameter         | Type    | Description                                                              |
-| ----------------- | ------- | ------------------------------------------------------------------------ |
-| `aspectRatio`     | string  | `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`  |
-| `resolution`      | string  | `480P`, `720P`, `768P`, or `1080P`                                       |
-| `durationSeconds` | number  | Target duration in seconds (rounded to nearest provider-supported value) |
-| `size`            | string  | Size hint when the provider supports it                                  |
-| `audio`           | boolean | Enable generated audio when supported                                    |
-| `watermark`       | boolean | Toggle provider watermarking when supported                              |
+| Parameter         | Type    | Description                                                                             |
+| ----------------- | ------- | --------------------------------------------------------------------------------------- |
+| `aspectRatio`     | string  | `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`, or `adaptive`  |
+| `resolution`      | string  | `480P`, `720P`, `768P`, or `1080P`                                                      |
+| `durationSeconds` | number  | Target duration in seconds (rounded to nearest provider-supported value)                |
+| `size`            | string  | Size hint when the provider supports it                                                 |
+| `audio`           | boolean | Enable generated audio in the output when supported. Distinct from `audioRef*` (inputs) |
+| `watermark`       | boolean | Toggle provider watermarking when supported                                             |
+
+`adaptive` is a provider-specific sentinel: it is forwarded as-is to
+providers that declare `adaptive` in their capabilities (e.g. BytePlus
+Seedance uses it to auto-detect the ratio from the input image
+dimensions). Providers that do not declare it surface the value via
+`details.ignoredOverrides` in the tool result so the drop is visible.
 
 ### Advanced
 
-| Parameter  | Type   | Description                                     |
-| ---------- | ------ | ----------------------------------------------- |
-| `action`   | string | `"generate"` (default), `"status"`, or `"list"` |
-| `model`    | string | Provider/model override (e.g. `runway/gen4.5`)  |
-| `filename` | string | Output filename hint                            |
+| Parameter         | Type   | Description                                                                                                                                                                                                                                                                                                                                          |
+| ----------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `action`          | string | `"generate"` (default), `"status"`, or `"list"`                                                                                                                                                                                                                                                                                                      |
+| `model`           | string | Provider/model override (e.g. `runway/gen4.5`)                                                                                                                                                                                                                                                                                                       |
+| `filename`        | string | Output filename hint                                                                                                                                                                                                                                                                                                                                 |
+| `providerOptions` | object | Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`). Providers that declare a typed schema validate the keys and types; unknown keys or mismatches skip the candidate during fallback. Providers without a declared schema receive the options as-is. Run `video_generate action=list` to see what each provider accepts |
 
 Not all providers support all parameters. OpenClaw already normalizes duration to the closest provider-supported value, and it also remaps translated geometry hints such as size-to-aspect-ratio when a fallback provider exposes a different control surface. Truly unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
 
@@ -164,9 +185,36 @@ Reference inputs also select the runtime mode:
 - No reference media: `generate`
 - Any image reference: `imageToVideo`
 - Any video reference: `videoToVideo`
+- Reference audio inputs do not change the resolved mode; they apply on top of whatever mode the image/video references select, and only work with providers that declare `maxInputAudios`
 
 Mixed image and video references are not a stable shared capability surface.
 Prefer one reference type per request.
+
+#### Fallback and typed options
+
+Some capability checks are applied at the fallback layer rather than the
+tool boundary so that a request that exceeds the primary provider's limits
+can still run on a capable fallback:
+
+- If the active candidate declares no `maxInputAudios` (or declares it as
+  `0`), it is skipped when the request contains audio references, and the
+  next candidate is tried.
+- If the active candidate's `maxDurationSeconds` is below the requested
+  `durationSeconds` and the candidate does not declare a
+  `supportedDurationSeconds` list, it is skipped.
+- If the request contains `providerOptions` and the active candidate
+  explicitly declares a typed `providerOptions` schema, the candidate is
+  skipped when the supplied keys are not in the schema or the value types do
+  not match. Providers that have not yet declared a schema receive the
+  options as-is (backward-compatible pass-through). A provider can
+  explicitly opt out of all provider options by declaring an empty schema
+  (`capabilities.providerOptions: {}`), which causes the same skip as a
+  type mismatch.
+
+The first skip reason in a request is logged at `warn` so operators see
+when their primary provider was passed over; subsequent skips log at
+`debug` to keep long fallback chains quiet. If every candidate is skipped,
+the aggregated error includes the skip reason for each.
 
 ## Actions
 
@@ -204,21 +252,23 @@ entries.
 
 ## Provider notes
 
-| Provider | Notes                                                                                                                                                       |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AIMLAPI  | Uses `https://api.aimlapi.com/v2/video/generations`. Current bundled support is text-to-video only and defaults to `google/veo-3.1-t2v-fast`.                |
-| Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                      |
-| BytePlus | Single image reference only.                                                                                                                                |
-| ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                           |
-| fal      | Uses queue-backed flow for long-running jobs. Single image reference only.                                                                                  |
-| Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                 |
-| MiniMax  | Single image reference only.                                                                                                                                |
-| OpenAI   | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                    |
-| Qwen     | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                        |
-| Runway   | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                     |
-| Together | Single image reference only.                                                                                                                                |
-| Vydra    | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL. |
-| xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                 |
+| Provider              | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| AIMLAPI               | Uses `https://api.aimlapi.com/v2/video/generations`. Current bundled support is text-to-video only, defaults to `google/veo-3.1-t2v-fast`, and normalizes duration to the supported `4`, `6`, or `8` second values.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Alibaba               | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| BytePlus (1.0)        | Provider id `byteplus`. Models: `seedance-1-0-pro-250528` (default), `seedance-1-0-pro-t2v-250528`, `seedance-1-0-pro-fast-251015`, `seedance-1-0-lite-t2v-250428`, `seedance-1-0-lite-i2v-250428`. T2V models (`*-t2v-*`) do not accept image inputs; I2V models and general `*-pro-*` models support a single reference image (first frame). Pass the image positionally or set `role: "first_frame"`. T2V model IDs are automatically switched to the corresponding I2V variant when an image is provided. Supported `providerOptions` keys: `seed` (number), `draft` (boolean, forces 480p), `camera_fixed` (boolean).                                                                       |
+| BytePlus Seedance 1.5 | Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark) plugin. Provider id `byteplus-seedance15`. Model: `seedance-1-5-pro-251215`. Uses the unified `content[]` API. Supports at most 2 input images (first_frame + last_frame). All inputs must be remote `https://` URLs. Set `role: "first_frame"` / `"last_frame"` on each image, or pass images positionally. `aspectRatio: "adaptive"` auto-detects ratio from the input image. `audio: true` maps to `generate_audio`. `providerOptions.seed` (number) is forwarded.                                                                                                                    |
+| BytePlus Seedance 2.0 | Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark) plugin. Provider id `byteplus-seedance2`. Models: `dreamina-seedance-2-0-260128`, `dreamina-seedance-2-0-fast-260128`. Uses the unified `content[]` API. Supports up to 9 reference images, 3 reference videos, and 3 reference audios. All inputs must be remote `https://` URLs. Set `role` on each asset — supported values: `"first_frame"`, `"last_frame"`, `"reference_image"`, `"reference_video"`, `"reference_audio"`. `aspectRatio: "adaptive"` auto-detects ratio from the input image. `audio: true` maps to `generate_audio`. `providerOptions.seed` (number) is forwarded. |
+| ComfyUI               | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| fal                   | Uses queue-backed flow for long-running jobs. Single image reference only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Google                | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| MiniMax               | Single image reference only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| OpenAI                | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Qwen                  | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Runway                | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Together              | Single image reference only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Vydra                 | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| xAI                   | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## Provider capability modes
 
@@ -269,10 +319,23 @@ pnpm test:live:media video
 ```
 
 This live file loads missing provider env vars from `~/.profile`, prefers
-live/env API keys ahead of stored auth profiles by default, and runs the
-declared modes it can exercise safely with local media:
+live/env API keys ahead of stored auth profiles by default, and runs a
+release-safe smoke by default:
 
-- `generate` for every provider in the sweep
+- `generate` for every non-FAL provider in the sweep
+- one-second lobster prompt
+- per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS`
+  (`180000` by default)
+
+FAL is opt-in because provider-side queue latency can dominate release time:
+
+```bash
+pnpm test:live:media video --video-providers fal
+```
+
+Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` to also run declared transform
+modes the shared sweep can exercise safely with local media:
+
 - `imageToVideo` when `capabilities.imageToVideo.enabled`
 - `videoToVideo` when `capabilities.videoToVideo.enabled` and the provider/model
   accepts buffer-backed local video input in the shared sweep

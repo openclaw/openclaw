@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
+import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
@@ -105,6 +106,9 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return params.wsApiKey
       ? createOpenAIWebSocketStreamFn(params.wsApiKey, params.sessionId, {
           signal: params.signal,
+          managerOptions: {
+            request: getModelProviderRequestTransport(params.model),
+          },
         })
       : currentStreamFn;
   }

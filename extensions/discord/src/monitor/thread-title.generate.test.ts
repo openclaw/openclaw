@@ -23,12 +23,12 @@ beforeEach(() => {
   prepareSimpleCompletionModelForAgentMock.mockResolvedValue({
     selection: {
       provider: "anthropic",
-      modelId: "claude-opus-4-6",
+      modelId: "claude-sonnet-4-6",
       agentDir: "/tmp/openclaw-agent",
     },
     model: {
       provider: "anthropic",
-      id: "claude-opus-4-6",
+      id: "claude-sonnet-4-6",
     },
     auth: {
       apiKey: "sk-test",
@@ -128,7 +128,7 @@ describe("generateThreadTitle", () => {
       error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
       selection: {
         provider: "anthropic",
-        modelId: "claude-opus-4-6",
+        modelId: "claude-sonnet-4-6",
         agentDir: "/tmp/openclaw-agent",
       },
     } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
@@ -172,7 +172,7 @@ describe("generateThreadTitle", () => {
     ).toContain("Channel description: Deploy updates and incident notes");
     expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).toEqual(
       expect.objectContaining({
-        maxTokens: 24,
+        maxTokens: 512,
       }),
     );
     expect(

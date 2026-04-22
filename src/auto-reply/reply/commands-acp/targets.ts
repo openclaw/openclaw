@@ -19,7 +19,7 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
 
   for (const params of attempts) {
     try {
-      const resolved = await callGateway<{ key?: string }>({
+      const resolved = await callGateway({
         method: "sessions.resolve",
         params,
         timeoutMs: 8_000,

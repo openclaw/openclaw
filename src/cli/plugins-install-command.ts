@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
@@ -9,7 +9,11 @@ import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
-import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
+import {
+  PLUGIN_INSTALL_ERROR_CODE,
+  installPluginFromNpmSpec,
+  installPluginFromPath,
+} from "../plugins/install.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   installPluginFromMarketplace,
@@ -191,6 +195,17 @@ async function tryInstallHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
+function shouldExitOnForcedUnsafeInstall(params: {
+  forceUnsafeInstall: boolean;
+  code?: string;
+}): boolean {
+  return (
+    params.forceUnsafeInstall &&
+    (params.code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
+      params.code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED)
+  );
+}
+
 function isAllowedBundledRecoveryIssue(
   issue: { path?: string; message?: string },
   request: PluginInstallRequestContext,
@@ -240,7 +255,9 @@ async function loadConfigFromSnapshotForInstall(
     );
   }
   let nextConfig = snapshot.config;
-  for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config)) {
+  for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config, {
+    env: process.env,
+  })) {
     nextConfig = mutation.config;
   }
   return nextConfig;
@@ -345,6 +362,7 @@ export async function runPluginInstallCommand(params: {
   }
 
   const resolved = request.resolvedPath ?? request.normalizedSpec;
+  const forceUnsafeInstall = opts.dangerouslyForceUnsafeInstall === true;
 
   if (fs.existsSync(resolved)) {
     if (opts.link) {
@@ -352,10 +370,16 @@ export async function runPluginInstallCommand(params: {
       const merged = Array.from(new Set([...existing, resolved]));
       const probe = await installPluginFromPath({
         ...safetyOverrides,
+        mode: installMode,
         path: resolved,
         dryRun: true,
+        logger: createPluginInstallLogger(),
       });
       if (!probe.ok) {
+        if (shouldExitOnForcedUnsafeInstall({ forceUnsafeInstall, code: probe.code })) {
+          defaultRuntime.error(probe.error);
+          return defaultRuntime.exit(1);
+        }
         const hookFallback = await tryInstallHookPackFromLocalPath({
           config: cfg,
           installMode,
@@ -402,6 +426,10 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
+      if (shouldExitOnForcedUnsafeInstall({ forceUnsafeInstall, code: result.code })) {
+        defaultRuntime.error(result.error);
+        return defaultRuntime.exit(1);
+      }
       const hookFallback = await tryInstallHookPackFromLocalPath({
         config: cfg,
         installMode,
@@ -547,6 +575,10 @@ export async function runPluginInstallCommand(params: {
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {
+    if (shouldExitOnForcedUnsafeInstall({ forceUnsafeInstall, code: result.code })) {
+      defaultRuntime.error(result.error);
+      return defaultRuntime.exit(1);
+    }
     const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({
       rawSpec: raw,
       code: result.code,

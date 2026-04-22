@@ -1,4 +1,4 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -6,14 +6,10 @@ import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  applyAgentBindings,
-  describeBinding,
-  parseBindingSpecs,
-  removeAgentBindings,
-} from "./agents.bindings.js";
+import { describeBinding } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
-import { buildAgentSummaries } from "./agents.config.js";
+
+type AgentBindingsModule = typeof import("./agents.bindings.js");
 
 type AgentsBindingsListOptions = {
   agent?: string;
@@ -32,6 +28,13 @@ type AgentsUnbindOptions = {
   all?: boolean;
   json?: boolean;
 };
+
+let agentBindingsModulePromise: Promise<AgentBindingsModule> | undefined;
+
+function loadAgentBindingsModule(): Promise<AgentBindingsModule> {
+  agentBindingsModulePromise ??= import("./agents.bindings.js");
+  return agentBindingsModulePromise;
+}
 
 function resolveAgentId(
   cfg: Awaited<ReturnType<typeof requireValidConfig>>,
@@ -54,7 +57,12 @@ function hasAgent(cfg: Awaited<ReturnType<typeof requireValidConfig>>, agentId: 
   if (!cfg) {
     return false;
   }
-  return buildAgentSummaries(cfg).some((summary) => summary.id === agentId);
+  const targetAgentId = normalizeAgentId(agentId);
+  const agents = listAgentEntries(cfg);
+  if (agents.length === 0) {
+    return targetAgentId === normalizeAgentId(resolveDefaultAgentId(cfg));
+  }
+  return agents.some((agent) => normalizeAgentId(agent.id) === targetAgentId);
 }
 
 function formatBindingOwnerLine(binding: AgentRouteBinding): string {
@@ -90,13 +98,16 @@ function formatBindingConflicts(
   );
 }
 
-function resolveParsedBindingsOrExit(params: {
+async function resolveParsedBindingsOrExit(params: {
   runtime: RuntimeEnv;
   cfg: NonNullable<Awaited<ReturnType<typeof requireValidConfig>>>;
   agentId: string;
   bindValues: string[] | undefined;
   emptyMessage: string;
-}): ReturnType<typeof parseBindingSpecs> | null {
+}): Promise<{
+  bindings: AgentRouteBinding[];
+  errors: string[];
+} | null> {
   const specs = (params.bindValues ?? []).map((value) => value.trim()).filter(Boolean);
   if (specs.length === 0) {
     params.runtime.error(params.emptyMessage);
@@ -104,6 +115,7 @@ function resolveParsedBindingsOrExit(params: {
     return null;
   }
 
+  const { parseBindingSpecs } = await loadAgentBindingsModule();
   const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
   if (parsed.errors.length > 0) {
     params.runtime.error(parsed.errors.join("\n"));
@@ -217,7 +229,7 @@ export async function agentsBindCommand(
   }
   const { cfg, agentId, baseHash } = resolved;
 
-  const parsed = resolveParsedBindingsOrExit({
+  const parsed = await resolveParsedBindingsOrExit({
     runtime,
     cfg,
     agentId,
@@ -228,6 +240,7 @@ export async function agentsBindCommand(
     return;
   }
 
+  const { applyAgentBindings } = await loadAgentBindingsModule();
   const result = applyAgentBindings(cfg, parsed.bindings);
   if (result.added.length > 0 || result.updated.length > 0) {
     await replaceConfigFile({
@@ -336,7 +349,7 @@ export async function agentsUnbindCommand(
     return;
   }
 
-  const parsed = resolveParsedBindingsOrExit({
+  const parsed = await resolveParsedBindingsOrExit({
     runtime,
     cfg,
     agentId,
@@ -347,6 +360,7 @@ export async function agentsUnbindCommand(
     return;
   }
 
+  const { removeAgentBindings } = await loadAgentBindingsModule();
   const result = removeAgentBindings(cfg, parsed.bindings);
   if (result.removed.length > 0) {
     await replaceConfigFile({

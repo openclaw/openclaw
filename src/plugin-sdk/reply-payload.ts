@@ -1,14 +1,20 @@
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import { readStringValue } from "../shared/string-coerce.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 
 export type OutboundReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
   replyToId?: string;
+};
+
+export type ReasoningReplyPayload = {
+  text?: string;
+  isReasoning?: boolean;
 };
 
 export type SendableOutboundReplyParts = {
@@ -27,6 +33,33 @@ type SendPayloadAdapter = Pick<
   ChannelOutboundAdapter,
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
+
+const REASONING_PREFIX = "reasoning:";
+
+function trimLeadingMarkdownQuoteMarkers(text: string): string {
+  let candidate = text.trimStart();
+  while (candidate.startsWith(">")) {
+    candidate = candidate.replace(/^(?:>[ \t]?)+/, "").trimStart();
+  }
+  return candidate;
+}
+
+export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean {
+  if (payload.isReasoning === true) {
+    return true;
+  }
+  const text = payload.text;
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(text.trimStart());
+  if (normalized.startsWith(REASONING_PREFIX)) {
+    return true;
+  }
+  return normalizeLowercaseStringOrEmpty(trimLeadingMarkdownQuoteMarkers(text)).startsWith(
+    REASONING_PREFIX,
+  );
+}
 
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
 export function normalizeOutboundReplyPayload(

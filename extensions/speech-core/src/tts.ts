@@ -14,14 +14,15 @@ import type {
   OpenClawConfig,
   TtsAutoMode,
   TtsConfig,
-  TtsMode,
   TtsModelOverrideConfig,
   TtsProvider,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveSendableOutboundReplyParts,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -39,9 +40,10 @@ import {
   normalizeSpeechProviderId,
   normalizeTtsAutoMode,
   parseTtsDirectives,
+  type ResolvedTtsConfig,
+  type ResolvedTtsModelOverrides,
   scheduleCleanup,
   summarizeText,
-  type SpeechModelOverridePolicy,
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
   type SpeechVoiceOption,
@@ -49,27 +51,17 @@ import {
   type TtsDirectiveParseResult,
 } from "../api.js";
 
-export type { TtsDirectiveOverrides, TtsDirectiveParseResult };
+export type {
+  ResolvedTtsConfig,
+  ResolvedTtsModelOverrides,
+  TtsDirectiveOverrides,
+  TtsDirectiveParseResult,
+};
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
-
-export type ResolvedTtsConfig = {
-  auto: TtsAutoMode;
-  mode: TtsMode;
-  provider: TtsProvider;
-  providerSource: "config" | "default";
-  summaryModel?: string;
-  modelOverrides: ResolvedTtsModelOverrides;
-  providerConfigs: Record<string, SpeechProviderConfig>;
-  prefsPath?: string;
-  maxTextLength: number;
-  timeoutMs: number;
-  rawConfig?: TtsConfig;
-  sourceConfig?: OpenClawConfig;
-};
 
 type TtsUserPrefs = {
   tts?: {
@@ -80,8 +72,6 @@ type TtsUserPrefs = {
     summarize?: boolean;
   };
 };
-
-export type ResolvedTtsModelOverrides = SpeechModelOverridePolicy;
 
 export type TtsAttemptReasonCode =
   | "success"
@@ -406,7 +396,7 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
     autoMode === "inbound"
       ? "Only use TTS when the user's last message includes audio/voice."
       : autoMode === "tagged"
-        ? "Only use TTS when you include [[tts]] or [[tts:text]] tags."
+        ? "Only use TTS when you include [[tts:key=value]] directives or a [[tts:text]]...[[/tts:text]] block."
         : undefined;
   return [
     "Voice (TTS) is enabled.",
@@ -484,9 +474,11 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
     return normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider;
   }
 
-  for (const provider of sortSpeechProvidersForAutoSelection()) {
+  const effectiveCfg = config.sourceConfig;
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
     if (
       provider.isConfigured({
+        cfg: effectiveCfg,
         providerConfig: config.providerConfigs[provider.id] ?? {},
         timeoutMs: config.timeoutMs,
       })
@@ -593,10 +585,15 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
+const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
+}
+
+function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
+  const channelId = resolveChannelId(channel);
+  return channelId !== null && OPUS_CHANNELS.has(channelId);
 }
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
@@ -807,8 +804,7 @@ export async function synthesizeSpeech(params: {
   }
 
   const { config, providers } = setup;
-  const channelId = resolveChannelId(params.channel);
-  const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+  const target = supportsNativeVoiceNoteTts(params.channel) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
@@ -936,9 +932,19 @@ export async function textToSpeechTelephony(params: {
         logVerbose(`TTS telephony: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
-      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
-        typeof resolvedProvider.provider.synthesizeTelephony
-      >;
+      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony;
+      if (!synthesizeTelephony) {
+        const message = `${provider}: unsupported for telephony`;
+        errors.push(message);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: "unsupported_for_telephony",
+          error: message,
+        });
+        logVerbose(`TTS telephony: provider ${provider} skipped (${message})`);
+        continue;
+      }
       const synthesis = await synthesizeTelephony({
         text: params.text,
         cfg: params.cfg,
@@ -1040,12 +1046,14 @@ export async function maybeApplyTtsToPayload(params: {
     return params.payload;
   }
   const config = resolveTtsConfig(params.cfg);
+  const activeProvider = getTtsProvider(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
   const directives = parseTtsDirectives(text, config.modelOverrides, {
     cfg: params.cfg,
     providerConfigs: config.providerConfigs,
+    preferredProviderId: activeProvider,
   });
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
@@ -1053,9 +1061,8 @@ export async function maybeApplyTtsToPayload(params: {
 
   if (isVerbose()) {
     const effectiveProvider = directives.overrides?.provider
-      ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ??
-        getTtsProvider(config, prefsPath))
-      : getTtsProvider(config, prefsPath);
+      ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ?? activeProvider)
+      : activeProvider;
     logVerbose(
       `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
     );
@@ -1161,9 +1168,8 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    const channelId = resolveChannelId(params.channel);
     const shouldVoice =
-      channelId !== null && OPUS_CHANNELS.has(channelId) && result.voiceCompatible === true;
+      supportsNativeVoiceNoteTts(params.channel) && result.voiceCompatible === true;
     return {
       ...nextPayload,
       mediaUrl: result.audioPath,
@@ -1189,6 +1195,7 @@ export async function maybeApplyTtsToPayload(params: {
 export const _test = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
+  supportsNativeVoiceNoteTts,
   summarizeText,
   getResolvedSpeechProviderConfig,
   formatTtsProviderError,

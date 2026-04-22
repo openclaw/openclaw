@@ -169,6 +169,8 @@ export type ToolLoopDetectionConfig = {
   historySize?: number;
   /** Warning threshold before a warning-only loop classification (default: 10). */
   warningThreshold?: number;
+  /** Block repeated calls to the same unavailable tool after this many misses (default: 10). */
+  unknownToolThreshold?: number;
   /** Critical threshold for blocking repetitive loops (default: 20). */
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
@@ -550,6 +552,11 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy configuration for web_fetch. */
+      ssrfPolicy?: {
+        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
+        allowRfc2544BenchmarkRange?: boolean;
+      };
     };
   };
   media?: MediaToolsConfig;
@@ -635,9 +642,9 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Experimental tool flags. Default off unless explicitly enabled or runtime auto-enabled. */
+  /** Experimental tool flags. Default off unless explicitly enabled, except strict-agentic GPT-5 OpenAI/Codex runs may auto-enable `planTool`. */
   experimental?: {
-    /** Enable or disable the structured `update_plan` tool. OpenAI-family runs auto-enable it unless this is false. */
+    /** Enable the structured `update_plan` tool explicitly outside strict-agentic execution mode. */
     planTool?: boolean;
   };
 };

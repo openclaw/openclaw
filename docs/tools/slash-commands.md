@@ -14,7 +14,7 @@ The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
-- **Directives**: `/think`, `/fast`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
+- **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
@@ -69,6 +69,7 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.restart` (default `true`) enables `/restart` plus gateway restart tool actions.
 - `commands.ownerAllowFrom` (optional) sets the explicit owner allowlist for owner-only command/tool surfaces. This is separate from `commands.allowFrom`.
+- Per-channel `channels.<channel>.commands.enforceOwnerForCommands` (optional, default `false`) makes owner-only commands require **owner identity** to run on that surface. When `true`, the sender must either match a resolved owner candidate (for example an entry in `commands.ownerAllowFrom` or provider-native owner metadata) or hold internal `operator.admin` scope on an internal message channel. A wildcard entry in channel `allowFrom`, or an empty/unresolved owner-candidate list, is **not** sufficient — owner-only commands fail closed on that channel. Leave this off if you want owner-only commands gated only by `ownerAllowFrom` and the standard command allowlists.
 - `commands.ownerDisplay` controls how owner ids appear in the system prompt: `raw` or `hash`.
 - `commands.ownerDisplaySecret` optionally sets the HMAC secret used when `commands.ownerDisplay="hash"`.
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
@@ -90,11 +91,13 @@ Current source-of-truth:
 Built-in commands available today:
 
 - `/new [model]` starts a new session; `/reset` is the reset alias.
+- `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
 - `/compact [instructions]` compacts the session context. See [/concepts/compaction](/concepts/compaction).
 - `/stop` aborts the current run.
 - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
-- `/think <off|minimal|low|medium|high|xhigh>` sets the thinking level. Aliases: `/thinking`, `/t`.
+- `/think <level>` sets the thinking level. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
 - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
+- `/trace on|off` toggles plugin trace output for the current session.
 - `/fast [status|on|off]` shows or sets fast mode.
 - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
 - `/elevated [on|off|ask|full]` toggles elevated mode. Alias: `/elev`.
@@ -152,6 +155,7 @@ Bundled plugins can add more slash commands. Current bundled commands in this re
 - `/phone status|arm <camera|screen|writes|all> [duration]|disarm` temporarily arms high-risk phone node commands.
 - `/voice status|list [limit]|set <voiceId|name>` manages Talk voice config. On Discord, the native command name is `/talkvoice`.
 - `/card ...` sends LINE rich card presets. See [LINE](/channels/line).
+- `/codex status|models|threads|resume|compact|review|account|mcp|skills` inspects and controls the bundled Codex app-server harness. See [Codex Harness](/plugins/codex-harness).
 - QQBot-only commands:
   - `/bot-ping`
   - `/bot-version`
@@ -182,10 +186,11 @@ Notes:
 - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
+- `/trace` is narrower than `/verbose`: it only reveals plugin-owned trace/debug lines and keeps normal verbose tool chatter off.
 - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
 - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
 - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
-- `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
+- `/reasoning`, `/verbose`, and `/trace` are risky in group settings: they may reveal internal reasoning, tool output, or plugin diagnostics you did not intend to expose. Prefer leaving them off, especially in group chats.
 - `/model` persists the new session model immediately.
 - If the agent is idle, the next run uses it right away.
 - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
@@ -266,6 +271,27 @@ Notes:
 
 - Overrides apply immediately to new config reads, but do **not** write to `openclaw.json`.
 - Use `/debug reset` to clear all overrides and return to the on-disk config.
+
+## Plugin trace output
+
+`/trace` lets you toggle **session-scoped plugin trace/debug lines** without turning on full verbose mode.
+
+Examples:
+
+```text
+/trace
+/trace on
+/trace off
+```
+
+Notes:
+
+- `/trace` with no argument shows the current session trace state.
+- `/trace on` enables plugin trace lines for the current session.
+- `/trace off` disables them again.
+- Plugin trace lines can appear in `/status` and as a follow-up diagnostic message after the normal assistant reply.
+- `/trace` does not replace `/debug`; `/debug` still manages runtime-only config overrides.
+- `/trace` does not replace `/verbose`; normal verbose tool/status output still belongs to `/verbose`.
 
 ## Config updates
 

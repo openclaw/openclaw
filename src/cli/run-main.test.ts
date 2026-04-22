@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
   shouldUseRootHelpFastPath,
 } from "./run-main.js";
+
+const memoryWikiCommandAliasRegistry: PluginManifestRegistry = {
+  plugins: [
+    {
+      id: "memory-wiki",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/tmp/memory-wiki",
+      source: "bundled",
+      manifestPath: "/tmp/memory-wiki/openclaw.plugin.json",
+      commandAliases: [{ name: "wiki" }],
+    },
+  ],
+  diagnostics: [],
+};
 
 describe("rewriteUpdateFlagArgv", () => {
   it("leaves argv unchanged when --update is absent", () => {
@@ -76,7 +96,7 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
-          allow: ["telegram"],
+          allow: ["quietchat"],
         },
       }),
     ).toContain('`plugins.allow` excludes "browser"');
@@ -104,5 +124,76 @@ describe("resolveMissingPluginCommandMessage", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("explains that dreaming is a runtime slash command, not a CLI command", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {});
+    expect(message).toContain("runtime slash command");
+    expect(message).toContain("/dreaming");
+    expect(message).toContain("memory-core");
+    expect(message).toContain("openclaw memory");
+  });
+
+  it("returns the runtime command message even when plugins.allow is set", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {
+      plugins: {
+        allow: ["memory-core"],
+      },
+    });
+    expect(message).toContain("runtime slash command");
+    expect(message).not.toContain("plugins.allow");
+  });
+
+  it("points command names in plugins.allow at their parent plugin", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {
+      plugins: {
+        allow: ["dreaming"],
+      },
+    });
+    expect(message).toContain('"dreaming" is not a plugin');
+    expect(message).toContain('"memory-core"');
+    expect(message).toContain("plugins.allow");
+  });
+
+  it("explains parent plugin disablement for runtime command aliases", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: false,
+          },
+        },
+      },
+    });
+    expect(message).toContain("plugins.entries.memory-core.enabled=false");
+    expect(message).not.toContain("runtime slash command");
+  });
+
+  it("allows CLI commands when their parent plugin is in plugins.allow", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "wiki",
+      {
+        plugins: {
+          allow: ["memory-wiki"],
+        },
+      },
+      { registry: memoryWikiCommandAliasRegistry },
+    );
+    expect(message).toBeNull();
+  });
+
+  it("blocks CLI commands when parent plugin is NOT in plugins.allow", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "wiki",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      { registry: memoryWikiCommandAliasRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).toContain('"memory-wiki"');
+    expect(message).toContain("plugins.allow");
   });
 });

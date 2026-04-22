@@ -613,7 +613,8 @@ if you want a shorter or longer retry window.
 Startup also performs a conservative crypto bootstrap pass automatically.
 That pass tries to reuse the current secret storage and cross-signing identity first, and avoids resetting cross-signing unless you run an explicit bootstrap repair flow.
 
-If startup finds broken bootstrap state and `channels.matrix.password` is configured, OpenClaw can attempt a stricter repair path.
+If startup still finds broken bootstrap state, OpenClaw can attempt a guarded repair path even when `channels.matrix.password` is not configured.
+If the homeserver requires password-based UIA for that repair, OpenClaw logs a warning and keeps startup non-fatal instead of aborting the bot.
 If the current device is already owner-signed, OpenClaw preserves that identity instead of resetting it automatically.
 
 See [Matrix migration](/install/migrating-matrix) for the full upgrade flow, limits, recovery commands, and common migration messages.
@@ -883,6 +884,12 @@ Per-account override:
 
 Related docs: [Exec approvals](/tools/exec-approvals)
 
+## Slash commands
+
+Matrix slash commands (for example `/new`, `/reset`, `/model`) work directly in DMs. In rooms, OpenClaw also recognizes slash commands that are prefixed with the bot's own Matrix mention, so `@bot:server /new` triggers the command path without needing a custom mention regex. This keeps the bot responsive to room-style `@mention /command` posts that Element and similar clients emit when a user tab-completes the bot before typing the command.
+
+Authorization rules still apply: command senders must satisfy DM or room allowlist/owner policies just like plain messages.
+
 ## Multi-account
 
 ```json5
@@ -919,6 +926,7 @@ Entries without `account` stay shared across all Matrix accounts, and entries wi
 Partial shared auth defaults do not create a separate implicit default account by themselves. OpenClaw only synthesizes the top-level `default` account when that default has fresh auth (`homeserver` plus `accessToken`, or `homeserver` plus `userId` and `password`); named accounts can still stay discoverable from `homeserver` plus `userId` when cached credentials satisfy auth later.
 If Matrix already has exactly one named account, or `defaultAccount` points at an existing named account key, single-account-to-multi-account repair/setup promotion preserves that account instead of creating a fresh `accounts.default` entry. Only Matrix auth/bootstrap keys move into that promoted account; shared delivery-policy keys stay at the top level.
 Set `defaultAccount` when you want OpenClaw to prefer one named Matrix account for implicit routing, probing, and CLI operations.
+If multiple Matrix accounts are configured and one account id is `default`, OpenClaw uses that account implicitly even when `defaultAccount` is unset.
 If you configure multiple named accounts, set `defaultAccount` or pass `--account <id>` for CLI commands that rely on implicit account selection.
 Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.
 
@@ -1012,7 +1020,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `allowBots`: allow messages from other configured OpenClaw Matrix accounts (`true` or `"mentions"`).
 - `groupPolicy`: `open`, `allowlist`, or `disabled`.
 - `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
-- `groupAllowFrom`: allowlist of user IDs for room traffic. Entries should be full Matrix user IDs; unresolved names are ignored at runtime.
+- `groupAllowFrom`: allowlist of user IDs for room traffic. Full Matrix user IDs are safest; exact directory matches are resolved at startup and when the allowlist changes while the monitor is running. Unresolved names are ignored.
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`; if both are unset, the effective default is `0`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, `all`, or `batched`.
 - `markdown`: optional Markdown rendering configuration for outbound Matrix text.
@@ -1033,7 +1041,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `allowlist`. Alias entries are resolved to room IDs during invite handling; OpenClaw does not trust alias state claimed by the invited room.
 - `dm`: DM policy block (`enabled`, `policy`, `allowFrom`, `sessionScope`, `threadReplies`).
 - `dm.policy`: controls DM access after OpenClaw has joined the room and classified it as a DM. It does not change whether an invite is auto-joined.
-- `dm.allowFrom`: entries should be full Matrix user IDs unless you already resolved them through live directory lookup.
+- `dm.allowFrom`: allowlist of user IDs for DM traffic. Full Matrix user IDs are safest; exact directory matches are resolved at startup and when the allowlist changes while the monitor is running. Unresolved names are ignored.
 - `dm.sessionScope`: `per-user` (default) or `per-room`. Use `per-room` when you want each Matrix DM room to keep separate context even if the peer is the same.
 - `dm.threadReplies`: DM-only thread policy override (`off`, `inbound`, `always`). It overrides the top-level `threadReplies` setting for both reply placement and session isolation in DMs.
 - `execApprovals`: Matrix-native exec approval delivery (`enabled`, `approvers`, `target`, `agentFilter`, `sessionFilter`).

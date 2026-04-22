@@ -9,6 +9,7 @@ import {
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
+import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -185,12 +186,14 @@ export const ModelApiSchema = z.enum(MODEL_APIS);
 export const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
+    supportsPromptCacheKey: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
@@ -280,17 +283,25 @@ const ConfiguredProviderRequestProxySchema = z
   ])
   .optional();
 
+const ConfiguredProviderRequestFields = {
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  auth: ConfiguredProviderRequestAuthSchema,
+  proxy: ConfiguredProviderRequestProxySchema,
+  tls: ConfiguredProviderRequestTlsSchema,
+};
+
 const ConfiguredProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-    proxy: ConfiguredProviderRequestProxySchema,
-    tls: ConfiguredProviderRequestTlsSchema,
-  })
+  .object(ConfiguredProviderRequestFields)
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
+const ConfiguredModelProviderRequestSchema = z
+  .object({
+    ...ConfiguredProviderRequestFields,
+    allowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
 
 export const ModelDefinitionSchema = z
   .object({
@@ -305,6 +316,19 @@ export const ModelDefinitionSchema = z
         output: z.number().optional(),
         cacheRead: z.number().optional(),
         cacheWrite: z.number().optional(),
+        tieredPricing: z
+          .array(
+            z
+              .object({
+                input: z.number(),
+                output: z.number(),
+                cacheRead: z.number(),
+                cacheWrite: z.number(),
+                range: z.union([z.tuple([z.number(), z.number()]), z.tuple([z.number()])]),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),
@@ -521,6 +545,8 @@ export const CliBackendSchema = z
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
+    jsonlDialect: z.literal("claude-stream-json").optional(),
+    liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),
@@ -763,12 +789,28 @@ export const ToolsMediaSchema = z
   .object({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
+    asyncCompletion: z
+      .object({
+        directSend: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     image: ToolsMediaUnderstandingSchema.optional(),
     audio: ToolsMediaUnderstandingSchema.optional(),
     video: ToolsMediaUnderstandingSchema.optional(),
   })
   .strict()
   .optional();
+
+type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
+type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
+  ToolsMediaConfigFromSchema["asyncCompletion"],
+  MediaToolsConfig["asyncCompletion"]
+>;
+type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
+  MediaToolsConfig["asyncCompletion"],
+  ToolsMediaConfigFromSchema["asyncCompletion"]
+>;
 
 export const LinkModelSchema = z
   .object({

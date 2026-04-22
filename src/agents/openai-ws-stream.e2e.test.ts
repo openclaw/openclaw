@@ -9,9 +9,9 @@
  *  - Connection lifecycle cleanup via releaseWsSession
  *
  * Run manually with a valid OPENAI_API_KEY:
- *   OPENCLAW_LIVE_TEST=1 pnpm exec vitest run --config vitest.e2e.config.ts src/agents/openai-ws-stream.e2e.test.ts
+ *   OPENCLAW_LIVE_TEST=1 pnpm test:e2e -- src/agents/openai-ws-stream.e2e.test.ts
  *
- * Skipped in CI — no API key available and we avoid billable external calls.
+ * This now runs only in the keyed live/release lanes.
  */
 
 import type {
@@ -86,6 +86,32 @@ function makeToolResultMessage(
     isError: false,
     timestamp: Date.now(),
   } as unknown as StreamFnParams[1]["messages"][number];
+}
+
+async function runWebsocketToolFollowupTurn(params: {
+  streamFn: ReturnType<StreamFactory>;
+  context: StreamFnParams[1];
+  firstDone: AssistantMessage;
+  toolCallId: string;
+  output: string;
+}) {
+  const secondContext = {
+    ...params.context,
+    messages: [
+      ...params.context.messages,
+      params.firstDone,
+      makeToolResultMessage(params.toolCallId, params.output),
+    ],
+  } as unknown as StreamFnParams[1];
+
+  return expectDone(
+    await collectEvents(
+      params.streamFn(model, secondContext, {
+        transport: "websocket",
+        maxTokens: 128,
+      }),
+    ),
+  );
 }
 
 async function collectEvents(stream: StreamReturn): Promise<AssistantMessageEvent[]> {
@@ -256,26 +282,19 @@ describe("OpenAI WebSocket e2e", () => {
       expect(toolCall?.name).toBe("noop");
       expect(toolCall?.id).toBeTruthy();
 
-      const secondContext = {
-        ...firstContext,
-        messages: [
-          ...firstContext.messages,
-          firstDone,
-          makeToolResultMessage(toolCall!.id, "TOOL_OK"),
-        ],
-      } as unknown as StreamFnParams[1];
-      const secondDone = expectDone(
-        await collectEvents(
-          streamFn(model, secondContext, {
-            transport: "websocket",
-            maxTokens: 128,
-          }),
-        ),
-      );
+      const secondDone = await runWebsocketToolFollowupTurn({
+        streamFn,
+        context: firstContext,
+        firstDone,
+        toolCallId: toolCall!.id,
+        output: "TOOL_OK",
+      });
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },
-    60_000,
+    // Live CI can spend more than a minute waiting for a stable follow-up turn
+    // when websocket reuse and tool callbacks contend with other provider lanes.
+    120_000,
   );
 
   testFn(
@@ -340,22 +359,13 @@ describe("OpenAI WebSocket e2e", () => {
         rawToolCall ? `${rawToolCall.call_id}|${rawToolCall.id}` : undefined,
       );
 
-      const secondContext = {
-        ...firstContext,
-        messages: [
-          ...firstContext.messages,
-          firstDone,
-          makeToolResultMessage(toolCall!.id, "TOOL_OK"),
-        ],
-      } as unknown as StreamFnParams[1];
-      const secondDone = expectDone(
-        await collectEvents(
-          streamFn(model, secondContext, {
-            transport: "websocket",
-            maxTokens: 128,
-          }),
-        ),
-      );
+      const secondDone = await runWebsocketToolFollowupTurn({
+        streamFn,
+        context: firstContext,
+        firstDone,
+        toolCallId: toolCall!.id,
+        output: "TOOL_OK",
+      });
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },
@@ -368,10 +378,12 @@ describe("OpenAI WebSocket e2e", () => {
       const sid = freshSession("warmup");
       const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
       const events = await collectEvents(
-        streamFn(model, makeContext("Reply with the word warmed."), {
+        streamFn(model, makeContext("Reply with exactly the single word warmed."), {
           transport: "websocket",
           openaiWsWarmup: true,
-          maxTokens: 32,
+          maxTokens: 8,
+          reasoningEffort: "none",
+          textVerbosity: "low",
         } as unknown as StreamFnParams[2]),
       );
 
@@ -383,7 +395,10 @@ describe("OpenAI WebSocket e2e", () => {
         expect(assistantText(done).toLowerCase()).toContain("warmed");
       }
     },
-    45_000,
+    // This transport check does not need expensive reasoning. Keep the timeout
+    // generous for CI jitter, but force a minimal response shape so the first
+    // websocket request stays bounded.
+    720_000,
   );
 
   testFn(

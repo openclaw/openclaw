@@ -22,11 +22,13 @@ This doc is a “how we test” guide:
 
 Most days:
 
-- Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
+- Full gate (expected before push): `pnpm build && pnpm check && pnpm check:test-types && pnpm test`
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
 - Direct Vitest watch loop: `pnpm test:watch`
 - Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
+- Prefer targeted runs first when you are iterating on a single failure.
 - Docker-backed QA site: `pnpm qa:lab:up`
+- Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
 When you touch tests or want extra confidence:
 
@@ -37,8 +39,236 @@ When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
+  `openclaw models list --provider moonshot --json`, then run an isolated
+  `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`
+  against `moonshot/kimi-k2.6`. Verify the JSON reports Moonshot/K2.6 and the
+  assistant transcript stores normalized `usage.cost`.
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
+
+## QA-specific runners
+
+These commands sit beside the main test suites when you need QA-lab realism:
+
+- `pnpm openclaw qa suite`
+  - Runs repo-backed QA scenarios directly on the host.
+  - Runs multiple selected scenarios in parallel by default with isolated
+    gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
+    selected scenario count). Use `--concurrency <count>` to tune the worker
+    count, or `--concurrency 1` for the older serial lane.
+  - Exits non-zero when any scenario fails. Use `--allow-failures` when you
+    want artifacts without a failing exit code.
+  - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.
+    `aimock` starts a local AIMock-backed provider server for experimental
+    fixture and protocol-mock coverage without replacing the scenario-aware
+    `mock-openai` lane.
+- `pnpm openclaw qa suite --runner multipass`
+  - Runs the same QA suite inside a disposable Multipass Linux VM.
+  - Keeps the same scenario-selection behavior as `qa suite` on the host.
+  - Reuses the same provider/model selection flags as `qa suite`.
+  - Live runs forward the supported QA auth inputs that are practical for the guest:
+    env-based provider keys, the QA live provider config path, and `CODEX_HOME`
+    when present.
+  - Output dirs must stay under the repo root so the guest can write back through
+    the mounted workspace.
+  - Writes the normal QA report + summary plus Multipass logs under
+    `.artifacts/qa-e2e/...`.
+- `pnpm qa:lab:up`
+  - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm test:docker:bundled-channel-deps`
+  - Packs and installs the current OpenClaw build in Docker, starts the Gateway
+    with OpenAI configured, then enables Telegram and Discord via config edits.
+  - Verifies the first Gateway restart installs each bundled channel plugin's
+    runtime dependencies on demand, and a second restart does not reinstall
+    dependencies that were already activated.
+  - Also installs a known older npm baseline, enables Telegram before running
+    `openclaw update --tag <candidate>`, and verifies the candidate's
+    post-update doctor repairs bundled channel runtime dependencies without a
+    harness-side postinstall repair.
+- `pnpm openclaw qa aimock`
+  - Starts only the local AIMock provider server for direct protocol smoke
+    testing.
+- `pnpm openclaw qa matrix`
+  - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
+  - This QA host is repo/dev-only today. Packaged OpenClaw installs do not ship
+    `qa-lab`, so they do not expose `openclaw qa`.
+  - Repo checkouts load the bundled runner directly; no separate plugin install
+    step is needed.
+  - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
+  - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
+  - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.
+  - Writes a Matrix QA report, summary, observed-events artifact, and combined stdout/stderr output log under `.artifacts/qa-e2e/...`.
+- `pnpm openclaw qa telegram`
+  - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
+  - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
+  - Supports `--credential-source convex` for shared pooled credentials. Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` to opt into pooled leases.
+  - Exits non-zero when any scenario fails. Use `--allow-failures` when you
+    want artifacts without a failing exit code.
+  - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
+  - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
+  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
+
+Live transport lanes share one standard contract so new transports do not drift:
+
+`qa-channel` remains the broad synthetic QA suite and is not part of the live
+transport coverage matrix.
+
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
+| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+
+### Shared Telegram credentials via Convex (v1)
+
+When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`) is enabled for
+`openclaw qa telegram`, QA lab acquires an exclusive lease from a Convex-backed pool, heartbeats
+that lease while the lane is running, and releases the lease on shutdown.
+
+Reference Convex project scaffold:
+
+- `qa/convex-credential-broker/`
+
+Required env vars:
+
+- `OPENCLAW_QA_CONVEX_SITE_URL` (for example `https://your-deployment.convex.site`)
+- One secret for the selected role:
+  - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` for `maintainer`
+  - `OPENCLAW_QA_CONVEX_SECRET_CI` for `ci`
+- Credential role selection:
+  - CLI: `--credential-role maintainer|ci`
+  - Env default: `OPENCLAW_QA_CREDENTIAL_ROLE` (defaults to `ci` in CI, `maintainer` otherwise)
+
+Optional env vars:
+
+- `OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS` (default `1200000`)
+- `OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS` (default `30000`)
+- `OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS` (default `90000`)
+- `OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS` (default `15000`)
+- `OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX` (default `/qa-credentials/v1`)
+- `OPENCLAW_QA_CREDENTIAL_OWNER_ID` (optional trace id)
+- `OPENCLAW_QA_ALLOW_INSECURE_HTTP=1` allows loopback `http://` Convex URLs for local-only development.
+
+`OPENCLAW_QA_CONVEX_SITE_URL` should use `https://` in normal operation.
+
+Maintainer admin commands (pool add/remove/list) require
+`OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` specifically.
+
+CLI helpers for maintainers:
+
+```bash
+pnpm openclaw qa credentials add --kind telegram --payload-file qa/telegram-credential.json
+pnpm openclaw qa credentials list --kind telegram
+pnpm openclaw qa credentials remove --credential-id <credential-id>
+```
+
+Use `--json` for machine-readable output in scripts and CI utilities.
+
+Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`):
+
+- `POST /acquire`
+  - Request: `{ kind, ownerId, actorRole, leaseTtlMs, heartbeatIntervalMs }`
+  - Success: `{ status: "ok", credentialId, leaseToken, payload, leaseTtlMs?, heartbeatIntervalMs? }`
+  - Exhausted/retryable: `{ status: "error", code: "POOL_EXHAUSTED" | "NO_CREDENTIAL_AVAILABLE", ... }`
+- `POST /heartbeat`
+  - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken, leaseTtlMs }`
+  - Success: `{ status: "ok" }` (or empty `2xx`)
+- `POST /release`
+  - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken }`
+  - Success: `{ status: "ok" }` (or empty `2xx`)
+- `POST /admin/add` (maintainer secret only)
+  - Request: `{ kind, actorId, payload, note?, status? }`
+  - Success: `{ status: "ok", credential }`
+- `POST /admin/remove` (maintainer secret only)
+  - Request: `{ credentialId, actorId }`
+  - Success: `{ status: "ok", changed, credential }`
+  - Active lease guard: `{ status: "error", code: "LEASE_ACTIVE", ... }`
+- `POST /admin/list` (maintainer secret only)
+  - Request: `{ kind?, status?, includePayload?, limit? }`
+  - Success: `{ status: "ok", credentials, count }`
+
+Payload shape for Telegram kind:
+
+- `{ groupId: string, driverToken: string, sutToken: string }`
+- `groupId` must be a numeric Telegram chat id string.
+- `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
+
+### Adding a channel to QA
+
+Adding a channel to the markdown QA system requires exactly two things:
+
+1. A transport adapter for the channel.
+2. A scenario pack that exercises the channel contract.
+
+Do not add a new top-level QA command root when the shared `qa-lab` host can
+own the flow.
+
+`qa-lab` owns the shared host mechanics:
+
+- the `openclaw qa` command root
+- suite startup and teardown
+- worker concurrency
+- artifact writing
+- report generation
+- scenario execution
+- compatibility aliases for older `qa-channel` scenarios
+
+Runner plugins own the transport contract:
+
+- how `openclaw qa <runner>` is mounted beneath the shared `qa` root
+- how the gateway is configured for that transport
+- how readiness is checked
+- how inbound events are injected
+- how outbound messages are observed
+- how transcripts and normalized transport state are exposed
+- how transport-backed actions are executed
+- how transport-specific reset or cleanup is handled
+
+The minimum adoption bar for a new channel is:
+
+1. Keep `qa-lab` as the owner of the shared `qa` root.
+2. Implement the transport runner on the shared `qa-lab` host seam.
+3. Keep transport-specific mechanics inside the runner plugin or channel harness.
+4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command.
+   Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`.
+   Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
+5. Author or adapt markdown scenarios under the themed `qa/scenarios/` directories.
+6. Use the generic scenario helpers for new scenarios.
+7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
+
+The decision rule is strict:
+
+- If behavior can be expressed once in `qa-lab`, put it in `qa-lab`.
+- If behavior depends on one channel transport, keep it in that runner plugin or plugin harness.
+- If a scenario needs a new capability that more than one channel can use, add a generic helper instead of a channel-specific branch in `suite.ts`.
+- If a behavior is only meaningful for one transport, keep the scenario transport-specific and make that explicit in the scenario contract.
+
+Preferred generic helper names for new scenarios are:
+
+- `waitForTransportReady`
+- `waitForChannelReady`
+- `injectInboundMessage`
+- `injectOutboundMessage`
+- `waitForTransportOutboundMessage`
+- `waitForChannelOutboundMessage`
+- `waitForNoTransportOutbound`
+- `getTransportSnapshot`
+- `readTransportMessage`
+- `readTransportTranscript`
+- `formatTransportTranscript`
+- `resetTransport`
+
+Compatibility aliases remain available for existing scenarios, including:
+
+- `waitForQaChannelReady`
+- `waitForOutboundMessage`
+- `waitForNoOutbound`
+- `formatConversationTranscript`
+- `resetBus`
+
+New channel work should use the generic helper names.
+Compatibility aliases exist to avoid a flag day migration, not as the model for
+new scenario authoring.
 
 ## Test suites (what runs where)
 
@@ -62,7 +292,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
   - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
   - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
-  - Selected `plugin-sdk` and `commands` tests also route through dedicated light lanes that skip `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
+  - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include extension validation because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field.
+  - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
   - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
   - `auto-reply` now has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
 - Embedded runner note:
@@ -83,6 +314,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Each `pnpm test` shard inherits the same `threads` + `isolate: false` defaults from the shared Vitest config.
   - The shared `scripts/run-vitest.mjs` launcher now also adds `--no-maglev` for Vitest child Node processes by default to reduce V8 compile churn during big local runs. Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` if you need to compare against stock V8 behavior.
 - Fast-local iteration note:
+  - `pnpm changed:lanes` shows which architectural lanes a diff triggers.
+  - The pre-commit hook runs `pnpm check:changed --staged` after staged formatting/linting, so core-only commits do not pay extension test cost unless they touch public extension-facing contracts. Release metadata-only commits stay on the targeted version/config/root-dependency lane.
   - `pnpm test:changed` routes through scoped lanes when the changed paths map cleanly to a smaller suite.
   - `pnpm test:max` and `pnpm test:changed:max` keep the same routing behavior, just with a higher worker cap.
   - Local worker auto-scaling is intentionally conservative now and also backs off when the host load average is already high, so multiple concurrent Vitest runs do less damage by default.
@@ -294,6 +527,7 @@ Single-provider Docker recipes:
 
 ```bash
 pnpm test:docker:live-cli-backend:claude
+pnpm test:docker:live-cli-backend:claude-subscription
 pnpm test:docker:live-cli-backend:codex
 pnpm test:docker:live-cli-backend:gemini
 ```
@@ -303,6 +537,7 @@ Notes:
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
 - It resolves CLI smoke metadata from the owning extension, then installs the matching Linux CLI package (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
+- `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because Claude currently routes third-party app usage through extra-usage billing instead of normal subscription plan limits.
 - The live CLI-backend smoke now exercises the same end-to-end flow for Claude, Codex, and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
 - Claude's default smoke also patches the session from Sonnet to Opus and verifies the resumed session still remembers an earlier note.
 
@@ -361,6 +596,58 @@ Docker notes:
 - Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini` to narrow the matrix.
 - It sources `~/.profile`, stages the matching CLI auth material into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) if missing.
 - Inside Docker, the runner sets `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=$HOME/.npm-global/bin/acpx` so acpx keeps provider env vars from the sourced profile available to the child harness CLI.
+
+## Live: Codex app-server harness smoke
+
+- Goal: validate the plugin-owned Codex harness through the normal gateway
+  `agent` method:
+  - load the bundled `codex` plugin
+  - select `OPENCLAW_AGENT_RUNTIME=codex`
+  - send a first gateway agent turn to `codex/gpt-5.4`
+  - send a second turn to the same OpenClaw session and verify the app-server
+    thread can resume
+  - run `/codex status` and `/codex models` through the same gateway command
+    path
+- Test: `src/gateway/gateway-codex-harness.live.test.ts`
+- Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
+- Default model: `codex/gpt-5.4`
+- Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
+- Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
+- The smoke sets `OPENCLAW_AGENT_HARNESS_FALLBACK=none` so a broken Codex
+  harness cannot pass by silently falling back to PI.
+- Auth: `OPENAI_API_KEY` from the shell/profile, plus optional copied
+  `~/.codex/auth.json` and `~/.codex/config.toml`
+
+Local recipe:
+
+```bash
+source ~/.profile
+OPENCLAW_LIVE_CODEX_HARNESS=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=codex/gpt-5.4 \
+  pnpm test:live -- src/gateway/gateway-codex-harness.live.test.ts
+```
+
+Docker recipe:
+
+```bash
+source ~/.profile
+pnpm test:docker:live-codex-harness
+```
+
+Docker notes:
+
+- The Docker runner lives at `scripts/test-live-codex-harness-docker.sh`.
+- It sources the mounted `~/.profile`, passes `OPENAI_API_KEY`, copies Codex CLI
+  auth files when present, installs `@openai/codex` into a writable mounted npm
+  prefix, stages the source tree, then runs only the Codex-harness live test.
+- Docker enables the image and MCP/tool probes by default. Set
+  `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
+  `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` when you need a narrower debug run.
+- Docker also exports `OPENCLAW_AGENT_HARNESS_FALLBACK=none`, matching the live
+  test config so `openai-codex/*` or PI fallback cannot hide a Codex harness
+  regression.
 
 ### Recommended live recipes
 
@@ -496,7 +783,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - `google`
 - Optional narrowing:
   - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-1,google/gemini-3.1-flash-image-preview"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview"`
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
@@ -532,11 +819,13 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Harness: `pnpm test:live:media video`
 - Scope:
   - Exercises the shared bundled video-generation provider path
+  - Defaults to the release-safe smoke path: non-FAL providers, one text-to-video request per provider, one-second lobster prompt, and a per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default)
+  - Skips FAL by default because provider-side queue latency can dominate release time; pass `--video-providers fal` or `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="fal"` to run it explicitly
   - Loads provider env vars from your login shell (`~/.profile`) before probing
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
-  - Runs both declared runtime modes when available:
-    - `generate` with prompt-only input
+  - Runs only `generate` by default
+  - Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` to also run declared transform modes when available:
     - `imageToVideo` when the provider declares `capabilities.imageToVideo.enabled` and the selected provider/model accepts buffer-backed local image input in the shared sweep
     - `videoToVideo` when the provider declares `capabilities.videoToVideo.enabled` and the selected provider/model accepts buffer-backed local video input in the shared sweep
   - Current declared-but-skipped `imageToVideo` providers in the shared sweep:
@@ -553,6 +842,8 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Optional narrowing:
   - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="google,openai,runway"`
   - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,openai/sora-2,runway/gen4_aleph"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS=""` to include every provider in the default sweep, including FAL
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=60000` to reduce each provider operation cap for an aggressive smoke run
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 
@@ -590,6 +881,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
 - CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
+- Codex app-server harness smoke: `pnpm test:docker:live-codex-harness` (script: `scripts/test-live-codex-harness-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
@@ -639,6 +931,7 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- `OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1` to verify only env vars sourced from `OPENCLAW_PROFILE_FILE`, using temporary config/workspace dirs and no external CLI auth mounts
 - `OPENCLAW_DOCKER_CLI_TOOLS_DIR=...` (default: `~/.cache/openclaw/docker-cli-tools`) mounted to `/home/node/.npm-global` for cached CLI installs inside Docker
 - External CLI auth dirs/files under `$HOME` are mounted read-only under `/host-auth...`, then copied into `/home/node/...` before tests start
   - Default dirs: `.minimax`
@@ -647,6 +940,7 @@ Useful env vars:
   - Override manually with `OPENCLAW_DOCKER_AUTH_DIRS=all`, `OPENCLAW_DOCKER_AUTH_DIRS=none`, or a comma list like `OPENCLAW_DOCKER_AUTH_DIRS=.claude,.codex`
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
+- `OPENCLAW_SKIP_DOCKER_BUILD=1` to reuse an existing `openclaw:local-live` image for reruns that do not need a rebuild
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
 - `OPENCLAW_OPENWEBUI_MODEL=...` to choose the model exposed by the gateway for the Open WebUI smoke
 - `OPENCLAW_OPENWEBUI_PROMPT=...` to override the nonce-check prompt used by the Open WebUI smoke

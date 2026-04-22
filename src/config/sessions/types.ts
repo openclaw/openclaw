@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
 export type SessionScope = "per-sender" | "global";
@@ -74,6 +74,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -103,6 +104,11 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionPluginDebugEntry = {
+  pluginId: string;
+  lines: string[];
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -111,6 +117,12 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /**
+   * Base session key for heartbeat-created isolated sessions.
+   * When present, `<base>:heartbeat` is a synthetic isolated session rather than
+   * a real user/session-scoped key that merely happens to end with `:heartbeat`.
+   */
+  heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
   sessionId: string;
@@ -152,6 +164,7 @@ export type SessionEntry = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
@@ -238,8 +251,46 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /**
+   * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
+   * Each plugin owns and may overwrite only its own entry between turns.
+   */
+  pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
 };
+
+function isSessionPluginTraceLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
+}
+
+function resolveSessionPluginLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+  includeLine: (line: string) => boolean,
+): string[] {
+  return Array.isArray(entry?.pluginDebugEntries)
+    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
+        Array.isArray(pluginEntry?.lines)
+          ? pluginEntry.lines.filter(
+              (line): line is string =>
+                typeof line === "string" && line.trim().length > 0 && includeLine(line),
+            )
+          : [],
+      )
+    : [];
+}
+
+export function resolveSessionPluginStatusLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return resolveSessionPluginLines(entry, (line) => !isSessionPluginTraceLine(line));
+}
+
+export function resolveSessionPluginTraceLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return resolveSessionPluginLines(entry, isSessionPluginTraceLine);
+}
 
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
   const normalizedModel = normalizeOptionalString(entry.model);
@@ -353,11 +404,21 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveFreshSessionTotalTokens(
+export function resolveSessionTotalTokens(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return undefined;
+  }
+  return total;
+}
+
+export function resolveFreshSessionTotalTokens(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): number | undefined {
+  const total = resolveSessionTotalTokens(entry);
+  if (total === undefined) {
     return undefined;
   }
   if (entry?.totalTokensFresh === false) {

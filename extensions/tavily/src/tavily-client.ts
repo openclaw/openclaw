@@ -65,6 +65,27 @@ function resolveEndpoint(baseUrl: string, pathname: string): string {
   }
 }
 
+async function postTavilyJson(params: {
+  baseUrl: string;
+  pathname: "/extract" | "/search";
+  timeoutSeconds: number;
+  apiKey: string;
+  body: Record<string, unknown>;
+  errorLabel: string;
+}): Promise<Record<string, unknown>> {
+  return postTrustedWebToolsJson(
+    {
+      url: resolveEndpoint(params.baseUrl, params.pathname),
+      timeoutSeconds: params.timeoutSeconds,
+      apiKey: params.apiKey,
+      body: params.body,
+      errorLabel: params.errorLabel,
+      extraHeaders: { "X-Client-Source": "openclaw" },
+    },
+    async (response) => (await response.json()) as Record<string, unknown>,
+  );
+}
+
 export async function runTavilySearch(
   params: TavilySearchParams,
 ): Promise<Record<string, unknown>> {
@@ -124,26 +145,27 @@ export async function runTavilySearch(
   }
 
   const start = Date.now();
-  const payload = await postTrustedWebToolsJson(
-    {
-      url: resolveEndpoint(baseUrl, "/search"),
-      timeoutSeconds,
-      apiKey,
-      body,
-      errorLabel: "Tavily Search",
-      extraHeaders: { "X-Client-Source": "openclaw" },
-    },
-    async (response) => (await response.json()) as Record<string, unknown>,
-  );
+  const payload = await postTavilyJson({
+    baseUrl,
+    pathname: "/search",
+    timeoutSeconds,
+    apiKey,
+    body,
+    errorLabel: "Tavily Search",
+  });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
-  const results = rawResults.map((r: Record<string, unknown>) => ({
-    title: typeof r.title === "string" ? wrapWebContent(r.title, "web_search") : "",
-    url: typeof r.url === "string" ? r.url : "",
-    snippet: typeof r.content === "string" ? wrapWebContent(r.content, "web_search") : "",
-    score: typeof r.score === "number" ? r.score : undefined,
-    ...(typeof r.published_date === "string" ? { published: r.published_date } : {}),
-  }));
+  const results = rawResults.map((r: Record<string, unknown>) =>
+    Object.assign(
+      {
+        title: typeof r.title === `string` ? wrapWebContent(r.title, `web_search`) : ``,
+        url: typeof r.url === `string` ? r.url : ``,
+        snippet: typeof r.content === `string` ? wrapWebContent(r.content, `web_search`) : ``,
+        score: typeof r.score === `number` ? r.score : undefined,
+      },
+      typeof r.published_date === `string` ? { published: r.published_date } : {},
+    ),
+  );
 
   const result: Record<string, unknown> = {
     query: params.query,
@@ -214,36 +236,39 @@ export async function runTavilyExtract(
   }
 
   const start = Date.now();
-  const payload = await postTrustedWebToolsJson(
-    {
-      url: resolveEndpoint(baseUrl, "/extract"),
-      timeoutSeconds,
-      apiKey,
-      body,
-      errorLabel: "Tavily Extract",
-      extraHeaders: { "X-Client-Source": "openclaw" },
-    },
-    async (response) => (await response.json()) as Record<string, unknown>,
-  );
+  const payload = await postTavilyJson({
+    baseUrl,
+    pathname: "/extract",
+    timeoutSeconds,
+    apiKey,
+    body,
+    errorLabel: "Tavily Extract",
+  });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
-  const results = rawResults.map((r: Record<string, unknown>) => ({
-    url: typeof r.url === "string" ? r.url : "",
-    rawContent:
-      typeof r.raw_content === "string"
-        ? wrapExternalContent(r.raw_content, { source: "web_fetch", includeWarning: false })
-        : "",
-    ...(typeof r.content === "string"
-      ? { content: wrapExternalContent(r.content, { source: "web_fetch", includeWarning: false }) }
-      : {}),
-    ...(Array.isArray(r.images)
-      ? {
-          images: (r.images as string[]).map((img) =>
-            wrapExternalContent(String(img), { source: "web_fetch", includeWarning: false }),
-          ),
-        }
-      : {}),
-  }));
+  const results = rawResults.map((r: Record<string, unknown>) =>
+    Object.assign(
+      {
+        url: typeof r.url === `string` ? r.url : ``,
+        rawContent:
+          typeof r.raw_content === `string`
+            ? wrapExternalContent(r.raw_content, { source: `web_fetch`, includeWarning: false })
+            : ``,
+      },
+      typeof r.content === `string`
+        ? {
+            content: wrapExternalContent(r.content, { source: `web_fetch`, includeWarning: false }),
+          }
+        : {},
+      Array.isArray(r.images)
+        ? {
+            images: (r.images as string[]).map((img) =>
+              wrapExternalContent(img, { source: `web_fetch`, includeWarning: false }),
+            ),
+          }
+        : {},
+    ),
+  );
 
   const failedResults = Array.isArray(payload.failed_results) ? payload.failed_results : [];
 

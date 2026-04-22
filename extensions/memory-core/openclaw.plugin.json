@@ -1,6 +1,13 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "commandAliases": [
+    {
+      "name": "dreaming",
+      "kind": "runtime-slash",
+      "cliCommand": "memory"
+    }
+  ],
   "uiHints": {
     "dreaming.frequency": {
       "label": "Dreaming Frequency",

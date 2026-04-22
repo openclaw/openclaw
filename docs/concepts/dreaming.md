@@ -1,5 +1,5 @@
 ---
-title: "Dreaming (experimental)"
+title: "Dreaming"
 summary: "Background memory consolidation with light, deep, and REM phases plus a Dream Diary"
 read_when:
   - You want memory promotion to run automatically
@@ -7,7 +7,7 @@ read_when:
   - You want to tune consolidation without polluting MEMORY.md
 ---
 
-# Dreaming (experimental)
+# Dreaming
 
 Dreaming is the background memory consolidation system in `memory-core`.
 It helps OpenClaw move strong short-term signals into durable memory while
@@ -80,6 +80,9 @@ After each phase has enough material, `memory-core` runs a best-effort backgroun
 subagent turn (using the default runtime model) and appends a short diary entry.
 
 This diary is for human reading in the Dreams UI, not a promotion source.
+Dreaming-generated diary/report artifacts are excluded from short-term
+promotion. Only grounded memory snippets are eligible to promote into
+`MEMORY.md`.
 
 There is also a grounded historical backfill lane for review and recovery work:
 
@@ -212,7 +215,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 Phase policy, thresholds, and storage behavior are internal implementation
 details (not user-facing config).
 
-See [Memory configuration reference](/reference/memory-config#dreaming-experimental)
+See [Memory configuration reference](/reference/memory-config#dreaming)
 for the full key list.
 
 ## Dreams UI
@@ -226,8 +229,20 @@ When enabled, the Gateway **Dreams** tab shows:
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
 
+## Troubleshooting
+
+### Dreaming never runs (status shows blocked)
+
+The managed dreaming cron rides the default agent's heartbeat. If heartbeat is not firing for that agent, the cron enqueues a system event that nobody consumes and dreaming silently does not run. Both `openclaw memory status` and `/dreaming status` will report `blocked` in that case and name the agent whose heartbeat is the blocker.
+
+Two common causes:
+
+- Another agent declares an explicit `heartbeat:` block. When any entry in `agents.list` has its own `heartbeat` block, only those agents heartbeat — the defaults stop applying to everyone else, so the default agent can go silent. Move the heartbeat settings to `agents.defaults.heartbeat`, or add an explicit `heartbeat` block on the default agent. See [Scope and precedence](/gateway/heartbeat#scope-and-precedence).
+- `heartbeat.every` is `0`, empty, or unparseable. The cron has no interval to schedule against, so the heartbeat is effectively disabled. Set `every` to a positive duration such as `30m`. See [Defaults](/gateway/heartbeat#defaults).
+
 ## Related
 
+- [Heartbeat](/gateway/heartbeat)
 - [Memory](/concepts/memory)
 - [Memory Search](/concepts/memory-search)
 - [memory CLI](/cli/memory)

@@ -146,6 +146,7 @@ Example: two agents, only the second agent runs heartbeats.
           every: "1h",
           target: "whatsapp",
           to: "+15551234567",
+          timeoutSeconds: 45,
           prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
@@ -261,6 +262,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   outbound message is sent.
 - If `showOk`, `showAlerts`, and `useIndicator` are all disabled, the run is skipped up front as `reason=alerts-disabled`.
 - If only alert delivery is disabled, OpenClaw can still run the heartbeat, update due-task timestamps, restore the session idle timestamp, and suppress the outward alert payload.
+- If the resolved heartbeat target supports typing, OpenClaw shows typing while
+  the heartbeat run is active. This uses the same target the heartbeat would
+  send chat output to, and it is disabled by `typingMode: "never"`.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
 - Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.

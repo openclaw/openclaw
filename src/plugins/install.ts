@@ -359,6 +359,9 @@ async function installPluginDirectoryIntoExtensions(params: {
   hasDeps: boolean;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => Promise<void>;
+  afterInstall?: (
+    installedDir: string,
+  ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -404,9 +407,24 @@ async function installPluginDirectoryIntoExtensions(params: {
     hasDeps: params.hasDeps,
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
+    afterInstall: async (installedDir) => {
+      const postInstallResult = await params.afterInstall?.(installedDir);
+      if (!postInstallResult) {
+        return { ok: true as const };
+      }
+      return {
+        ok: false as const,
+        error: postInstallResult.error,
+        ...(postInstallResult.code ? { code: postInstallResult.code } : {}),
+      };
+    },
   });
   if (!installRes.ok) {
-    return installRes;
+    return {
+      ok: false,
+      error: installRes.error,
+      ...(installRes.code ? { code: installRes.code as PluginInstallErrorCode } : {}),
+    };
   }
 
   return buildDirectoryInstallResult({
@@ -752,6 +770,16 @@ async function installPluginFromPackageDir(
         }
       }
     },
+    afterInstall: async (installedDir) =>
+      await runInstallSourceScan({
+        subject: `Plugin "${pluginId}"`,
+        scan: async () =>
+          await runtime.scanInstalledPackageDependencyTree({
+            logger,
+            packageDir: installedDir,
+            pluginId,
+          }),
+      }),
   });
 }
 

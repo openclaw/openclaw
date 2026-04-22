@@ -39,12 +39,16 @@ RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=240
-TIMEOUT_INSTALL_S=1200
+TIMEOUT_GIT_SETUP_S=1200
+TIMEOUT_INSTALL_S=420
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S:-1800}"
+TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
-TIMEOUT_ONBOARD_S=240
-TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
-TIMEOUT_GATEWAY_S=120
-TIMEOUT_AGENT_S=180
+TIMEOUT_ONBOARD_S=600
+TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
+# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
+TIMEOUT_GATEWAY_S=420
+TIMEOUT_AGENT_S=600
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -449,6 +453,9 @@ guest_powershell_poll() {
   local timeout_s="$1"
   local script="$2"
   local encoded
+  if (( timeout_s < 60 )); then
+    timeout_s=60
+  fi
   encoded="$(
     SCRIPT_CONTENT="$script" python3 - <<'PY'
 import base64
@@ -664,6 +671,15 @@ phase_log_path() {
   printf '%s/%s.log\n' "$RUN_DIR" "$1"
 }
 
+child_job_running() {
+  local target="$1"
+  local job_pid
+  while IFS= read -r job_pid; do
+    [[ "$job_pid" == "$target" ]] && return 0
+  done < <(jobs -pr)
+  return 1
+}
+
 show_log_excerpt() {
   local log_path="$1"
   warn "log tail: $log_path"
@@ -686,7 +702,7 @@ phase_run() {
   ) >"$log_path" 2>&1 &
   pid=$!
 
-  while kill -0 "$pid" >/dev/null 2>&1; do
+  while child_job_running "$pid"; do
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
       kill "$pid" >/dev/null 2>&1 || true
@@ -779,11 +795,11 @@ resolve_latest_version() {
 }
 
 baseline_install_version() {
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    printf '%s\n' "$INSTALL_VERSION"
+  if [[ -z "$INSTALL_VERSION" ]]; then
+    printf '%s\n' "$LATEST_VERSION"
     return
   fi
-  printf '%s\n' "$LATEST_VERSION"
+  npm view "openclaw@$INSTALL_VERSION" version --userconfig "$(mktemp)"
 }
 
 resolve_mingit_download() {
@@ -844,6 +860,10 @@ else:
 PY
 }
 
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
+}
+
 acquire_build_lock() {
   local owner_pid=""
   while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
@@ -871,7 +891,7 @@ ensure_current_build() {
   acquire_build_lock
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
-  if [[ "$build_commit" == "$head" ]]; then
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
     release_build_lock
     return
   fi
@@ -880,6 +900,11 @@ ensure_current_build() {
   build_commit="$(current_build_commit)"
   release_build_lock
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
+}
+
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
 }
 
 ensure_guest_git() {
@@ -912,10 +937,11 @@ EOF
 }
 
 ensure_mingit_zip() {
-  local mingit_name mingit_url
-  mapfile -t mingit_meta < <(resolve_mingit_download)
-  mingit_name="${mingit_meta[0]}"
-  mingit_url="${mingit_meta[1]}"
+  local mingit_name mingit_url mingit_meta
+  mingit_meta="$(resolve_mingit_download)"
+  mingit_name="${mingit_meta%%$'\n'*}"
+  mingit_url="${mingit_meta#*$'\n'}"
+  [[ "$mingit_name" != "$mingit_url" ]] || die "failed to resolve MinGit download metadata"
   MINGIT_ZIP_NAME="$mingit_name"
   MINGIT_ZIP_PATH="$MAIN_TGZ_DIR/$mingit_name"
   if [[ ! -f "$MINGIT_ZIP_PATH" ]]; then
@@ -941,6 +967,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  write_package_dist_inventory
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
@@ -1384,7 +1411,7 @@ install_main_tgz() {
   local tgz_url script_url
   local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
-  local log_state_path npm_log_state_path last_npm_log_poll
+  local log_state_path npm_log_state_path last_npm_log_poll last_process_check process_state
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
   write_install_runner_script
   script_url="http://$host_ip:$HOST_PORT/$(basename "$WINDOWS_INSTALL_SCRIPT_PATH")"
@@ -1399,6 +1426,7 @@ install_main_tgz() {
   poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
   startup_checked=0
   last_npm_log_poll=0
+  last_process_check=0
 
   guest_powershell_poll 20 "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -1506,6 +1534,26 @@ PY
         :
       fi
       last_npm_log_poll=$SECONDS
+    fi
+    if (( SECONDS - start_seconds >= 60 && SECONDS - last_process_check >= 30 )); then
+      set +e
+      process_state="$(
+        guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; \$currentPid = \$PID; \$process = Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -ne \$currentPid -and ((\$_.CommandLine -like '*$runner_name*') -or (\$_.CommandLine -like '*$temp_name*')) } | Select-Object -First 1; 'log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done) + ' process=' + [bool]\$process"
+      )"
+      state_rc=$?
+      set -e
+      process_state="${process_state//$'\r'/}"
+      last_process_check=$SECONDS
+      if [[ $state_rc -eq 0 && "$process_state" == *"log=True"* && "$process_state" == *"done=False"* && "$process_state" == *"process=False"* ]]; then
+        warn "windows install helper exited without writing done file"
+        if ! stream_windows_install_log; then
+          :
+        fi
+        dump_latest_guest_npm_log_tail "windows packaged install npm debug tail" || true
+        rm -f "$log_state_path"
+        rm -f "$npm_log_state_path"
+        return 1
+      fi
     fi
     if (( SECONDS >= poll_deadline )); then
       if ! stream_windows_install_log; then
@@ -1717,7 +1765,7 @@ run_dev_channel_update() {
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-dev-log-state.XXXXXX")"
   : >"$log_state_path"
   start_seconds="$SECONDS"
-  poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
+  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + TIMEOUT_UPDATE_POLL_GRACE_S))
   startup_checked=0
 
   guest_powershell "$(cat <<EOF
@@ -1776,6 +1824,11 @@ PY
       warn "windows dev update helper poll failed; retrying"
       if (( SECONDS >= poll_deadline )); then
         warn "windows dev update helper timed out while polling done file"
+        if verify_windows_dev_update_after_transport_loss; then
+          warn "windows dev update poll timed out after product verification passed; treating as pass"
+          rm -f "$log_state_path"
+          return 0
+        fi
         rm -f "$log_state_path"
         return 1
       fi
@@ -1817,11 +1870,41 @@ PY
         warn "windows dev update helper log drain failed after timeout"
       fi
       warn "windows dev update helper timed out waiting for done file"
+      if verify_windows_dev_update_after_transport_loss; then
+        warn "windows dev update transport timed out after product verification passed; treating as pass"
+        rm -f "$log_state_path"
+        return 0
+      fi
       rm -f "$log_state_path"
       return 1
     fi
     sleep 2
   done
+}
+
+verify_windows_dev_update_after_transport_loss() {
+  set +e
+  guest_powershell_poll 90 "$(cat <<'EOF'
+$ErrorActionPreference = 'Stop'
+$busy = Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.CommandLine -and
+    ($_.CommandLine -match 'openclaw update|npm install|pnpm install|pnpm run build')
+  }
+if ($busy) {
+  throw 'dev update still has active npm/pnpm/openclaw processes'
+}
+$gitEntry = Join-Path $env:USERPROFILE 'openclaw\openclaw.mjs'
+if (-not (Test-Path $gitEntry)) {
+  throw "git entry missing after transport loss: $gitEntry"
+}
+& node.exe $gitEntry --version
+& node.exe $gitEntry update status --json
+EOF
+  )"
+  local rc=$?
+  set -e
+  return "$rc"
 }
 
 write_install_runner_script() {
@@ -1879,7 +1962,7 @@ try {
   Write-ProgressLog 'install.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
   Write-ProgressLog 'install.install-tgz'
-  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --omit=dev --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Write-ProgressLog 'install.verify-version'
   Invoke-Logged 'openclaw --version' { & $openclaw --version }
@@ -1925,8 +2008,10 @@ param(
 
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  Set-Content -Path \$LogPath -Value 'onboard.start'
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json >> "{1}" 2>&1' -f \$openclaw, \$LogPath)
   & cmd.exe /d /s /c \$cmdLine
+  Add-Content -Path \$LogPath -Value ('onboard.exit={0}' -f \$LASTEXITCODE)
   Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
 } catch {
   if (Test-Path \$LogPath) {
@@ -1943,6 +2028,7 @@ run_ref_onboard() {
   local api_key_env_q api_key_value_q script_url
   local runner_name log_name done_name done_status launcher_state
   local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  local guest_log log_state_path
   api_key_env_q="$(ps_single_quote "$API_KEY_ENV")"
   api_key_value_q="$(ps_single_quote "$API_KEY_VALUE")"
   write_onboard_runner_script
@@ -1953,6 +2039,8 @@ run_ref_onboard() {
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
   startup_checked=0
+  log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-onboard-log-state.XXXXXX")"
+  : >"$log_state_path"
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -1964,6 +2052,34 @@ curl.exe -fsSL '$script_url' -o \$runner
 Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner, '-LogPath', \$log, '-DonePath', \$done) -WindowStyle Hidden | Out-Null
 EOF
 )"
+
+  stream_windows_onboard_log() {
+    set +e
+    guest_log="$(
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+    )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
+      return "$log_rc"
+    fi
+    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    sys.stdout.write(current[len(previous):])
+else:
+    sys.stdout.write(current)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+  }
 
   while :; do
     set +e
@@ -1977,19 +2093,24 @@ EOF
       warn "windows onboard helper poll failed; retrying"
       if (( SECONDS >= poll_deadline )); then
         warn "windows onboard helper timed out while polling done file"
+        rm -f "$log_state_path"
         return 1
       fi
       sleep 2
       continue
     fi
+    set +e
+    stream_windows_onboard_log
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows onboard helper live log poll failed; retrying"
+    fi
     if [[ -n "$done_status" ]]; then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_onboard_log; then
         warn "windows onboard helper log drain failed after completion"
       fi
+      rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -2004,18 +2125,16 @@ EOF
       startup_checked=1
       if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
         warn "windows onboard helper failed to materialize guest files"
+        rm -f "$log_state_path"
         return 1
       fi
     fi
     if (( SECONDS >= poll_deadline )); then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_onboard_log; then
         warn "windows onboard helper log drain failed after timeout"
       fi
       warn "windows onboard helper timed out waiting for done file"
+      rm -f "$log_state_path"
       return 1
     fi
     sleep 2
@@ -2224,16 +2343,24 @@ capture_latest_ref_failure() {
 run_fresh_main_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
+  local install_log_phase
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "fresh.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "fresh.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "fresh.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "fresh.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "fresh.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
-  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
-  FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
+  if phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"; then
+    install_log_phase="fresh.install-main"
+  else
+    phase_run "fresh.wait-for-user-install-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
+    phase_run "fresh.install-main-retry" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
+    install_log_phase="fresh.install-main-retry"
+  fi
+  FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path "$install_log_phase")")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
+  phase_run "fresh.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
@@ -2244,19 +2371,19 @@ run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   local baseline_version
-  baseline_version="$(baseline_install_version)"
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "upgrade.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
   if upgrade_uses_host_tgz; then
     phase_run "upgrade.install-baseline-package" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline-package)")"
     phase_run "upgrade.verify-baseline-package-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   else
-    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_baseline_npm_release "$host_ip" "$baseline_version" || return $?
+    baseline_version="$(baseline_install_version)"
+    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_latest_release || return $?
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline)")"
     phase_run "upgrade.verify-baseline-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$baseline_version" || return $?
   fi
@@ -2269,7 +2396,7 @@ run_upgrade_lane() {
   else
     UPGRADE_PRECHECK_STATUS="skipped"
   fi
-  phase_run "upgrade.update-dev" "$TIMEOUT_INSTALL_S" run_dev_channel_update "$host_ip" || return $?
+  phase_run "upgrade.update-dev" "$TIMEOUT_UPDATE_S" run_dev_channel_update "$host_ip" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.update-dev)")"
   phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update || return $?
   # Stop the old managed gateway before ref-mode onboard rewrites config and

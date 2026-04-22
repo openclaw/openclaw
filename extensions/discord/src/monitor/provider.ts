@@ -9,6 +9,7 @@ import {
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   listNativeCommandSpecsForConfig,
@@ -95,7 +96,7 @@ export type MonitorDiscordOpts = {
   accountId?: string;
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
-  channelRuntime?: import("openclaw/plugin-sdk/channel-core").PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   historyLimit?: number;
@@ -1065,6 +1066,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const trackInboundEvent = opts.setStatus
       ? () => {
           const at = Date.now();
+          // Carbon handles gateway heartbeats internally but does not expose a
+          // stable heartbeat-ack event, so Discord app events stay app-level only.
           opts.setStatus?.({ lastEventAt: at, lastInboundAt: at });
         }
       : undefined;

@@ -81,6 +81,15 @@ export const ChatEventSchema = Type.Object(
     ]),
     message: Type.Optional(Type.Unknown()),
     errorMessage: Type.Optional(Type.String()),
+    errorKind: Type.Optional(
+      Type.Union([
+        Type.Literal("refusal"),
+        Type.Literal("timeout"),
+        Type.Literal("rate_limit"),
+        Type.Literal("context_length"),
+        Type.Literal("unknown"),
+      ]),
+    ),
     usage: Type.Optional(Type.Unknown()),
     stopReason: Type.Optional(Type.String()),
   },

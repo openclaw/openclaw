@@ -18,8 +18,14 @@ type DispatchReplyContext = Record<string, unknown> & {
   SessionKey?: string;
 };
 type DispatchReplyDispatcher = {
-  sendFinalReply: (payload: { text: string }) => unknown | Promise<unknown>;
+  sendFinalReply: (payload: { text: string }) => unknown;
 };
+type FeishuReplyDispatcherMockValue = {
+  dispatcher: DispatchReplyDispatcher;
+  replyOptions: Record<string, never>;
+  markDispatchIdle: () => unknown;
+};
+type CreateFeishuReplyDispatcherMock = Mock<(params?: unknown) => FeishuReplyDispatcherMockValue>;
 type DispatchReplyFromConfigMock = Mock<
   (params: {
     ctx: DispatchReplyContext;
@@ -27,14 +33,18 @@ type DispatchReplyFromConfigMock = Mock<
   }) => Promise<{ queuedFinal: boolean; counts: DispatchReplyCounts }>
 >;
 type WithReplyDispatcherMock = Mock<
-  (params: { run: () => unknown | Promise<unknown> }) => Promise<unknown>
+  (params: {
+    dispatcher?: DispatchReplyDispatcher;
+    onSettled?: () => unknown;
+    run: () => unknown;
+  }) => Promise<unknown>
 >;
 type FeishuLifecycleTestMocks = {
   createEventDispatcherMock: UnknownMock;
   monitorWebSocketMock: AsyncUnknownMock;
   monitorWebhookMock: AsyncUnknownMock;
   createFeishuThreadBindingManagerMock: UnknownMock;
-  createFeishuReplyDispatcherMock: UnknownMock;
+  createFeishuReplyDispatcherMock: CreateFeishuReplyDispatcherMock;
   resolveBoundConversationMock: Mock<() => BoundConversation | null>;
   touchBindingMock: UnknownMock;
   resolveAgentRouteMock: UnknownMock;
@@ -91,11 +101,25 @@ const {
   sendCardFeishuMock,
 } = feishuLifecycleTestMocks;
 
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+vi.mock("./client.js", () => {
   return {
-    ...actual,
+    FEISHU_HTTP_TIMEOUT_ENV_VAR: "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS",
+    FEISHU_HTTP_TIMEOUT_MAX_MS: 300_000,
+    FEISHU_HTTP_TIMEOUT_MS: 30_000,
+    FEISHU_USER_AGENT: "openclaw-feishu-test",
+    clearClientCache: vi.fn(),
+    createFeishuClient: vi.fn(() => {
+      throw new Error("unexpected Feishu client call in lifecycle test");
+    }),
+    createFeishuWSClient: vi.fn(async () => ({
+      close: vi.fn(),
+      start: vi.fn(),
+    })),
     createEventDispatcher: createEventDispatcherMock,
+    getFeishuClient: vi.fn(() => null),
+    getFeishuUserAgent: vi.fn(() => "openclaw-feishu-test"),
+    pluginVersion: "test",
+    setFeishuClientRuntimeForTest: vi.fn(),
   };
 });
 

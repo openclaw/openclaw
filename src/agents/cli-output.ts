@@ -1,4 +1,5 @@
 import type { CliBackendConfig } from "../config/types.js";
+import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
@@ -12,8 +13,10 @@ type CliUsage = {
 
 export type CliOutput = {
   text: string;
+  rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
+  finalPromptText?: string;
 };
 
 export type CliStreamingDelta = {
@@ -27,49 +30,17 @@ function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
+function usesClaudeStreamJsonDialect(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+}): boolean {
+  return (
+    params.backend.jsonlDialect === "claude-stream-json" || isClaudeCliProvider(params.providerId)
+  );
+}
+
 function extractJsonObjectCandidates(raw: string): string[] {
-  const candidates: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index] ?? "";
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      if (inString) {
-        escaped = true;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    if (char === "{") {
-      if (depth === 0) {
-        start = index;
-      }
-      depth += 1;
-      continue;
-    }
-    if (char === "}" && depth > 0) {
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        candidates.push(raw.slice(start, index + 1));
-        start = -1;
-      }
-    }
-  }
-
-  return candidates;
+  return extractBalancedJsonFragments(raw, { openers: ["{"] }).map((fragment) => fragment.json);
 }
 
 function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
@@ -140,18 +111,30 @@ function unwrapCliErrorText(raw: string): string {
 }
 
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
+  const readNestedCached = (key: "input_tokens_details" | "prompt_tokens_details") => {
+    const nested = raw[key];
+    if (!isRecord(nested)) {
+      return undefined;
+    }
+    return typeof nested.cached_tokens === "number" && nested.cached_tokens > 0
+      ? nested.cached_tokens
+      : undefined;
+  };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
   const totalInput = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
+  const nestedCached =
+    readNestedCached("input_tokens_details") ?? readNestedCached("prompt_tokens_details");
   const cacheRead =
     pick("cache_read_input_tokens") ??
     pick("cached_input_tokens") ??
     pick("cacheRead") ??
-    pick("cached");
+    pick("cached") ??
+    nestedCached;
   const input =
     pick("input") ??
-    (Object.hasOwn(raw, "cached") && typeof totalInput === "number"
+    ((Object.hasOwn(raw, "cached") || nestedCached !== undefined) && typeof totalInput === "number"
       ? Math.max(0, totalInput - (cacheRead ?? 0))
       : totalInput);
   const cacheWrite =
@@ -295,12 +278,13 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
 }
 
 function parseClaudeCliJsonlResult(params: {
+  backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
   sessionId?: string;
   usage?: CliUsage;
 }): CliOutput | null {
-  if (!isClaudeCliProvider(params.providerId)) {
+  if (!usesClaudeStreamJsonDialect(params)) {
     return null;
   }
   if (
@@ -320,13 +304,14 @@ function parseClaudeCliJsonlResult(params: {
 }
 
 function parseClaudeCliStreamingDelta(params: {
+  backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
   textSoFar: string;
   sessionId?: string;
   usage?: CliUsage;
 }): CliStreamingDelta | null {
-  if (!isClaudeCliProvider(params.providerId)) {
+  if (!usesClaudeStreamJsonDialect(params)) {
     return null;
   }
   if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
@@ -371,6 +356,7 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     const delta = parseClaudeCliStreamingDelta({
+      backend: params.backend,
       providerId: params.providerId,
       parsed,
       textSoFar: assistantText,
@@ -452,6 +438,7 @@ export function parseCliJsonl(
       usage = readCliUsage(parsed) ?? usage;
 
       const claudeResult = parseClaudeCliJsonlResult({
+        backend,
         providerId,
         parsed,
         sessionId,

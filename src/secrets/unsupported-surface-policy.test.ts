@@ -6,17 +6,19 @@ import {
 
 describe("unsupported SecretRef surface policy metadata", () => {
   it("exposes the canonical unsupported surface patterns", () => {
-    expect(getUnsupportedSecretRefSurfacePatterns()).toEqual([
-      "commands.ownerDisplaySecret",
-      "hooks.token",
-      "hooks.gmail.pushToken",
-      "hooks.mappings[].sessionKey",
-      "auth-profiles.oauth.*",
-      "channels.discord.threadBindings.webhookToken",
-      "channels.discord.accounts.*.threadBindings.webhookToken",
-      "channels.whatsapp.creds.json",
-      "channels.whatsapp.accounts.*.creds.json",
-    ]);
+    expect(getUnsupportedSecretRefSurfacePatterns().toSorted()).toEqual(
+      [
+        "commands.ownerDisplaySecret",
+        "hooks.token",
+        "hooks.gmail.pushToken",
+        "hooks.mappings[].sessionKey",
+        "auth-profiles.oauth.*",
+        "channels.discord.threadBindings.webhookToken",
+        "channels.discord.accounts.*.threadBindings.webhookToken",
+        "channels.whatsapp.creds.json",
+        "channels.whatsapp.accounts.*.creds.json",
+      ].toSorted(),
+    );
   });
 
   it("discovers concrete config candidates for unsupported mutable surfaces", () => {

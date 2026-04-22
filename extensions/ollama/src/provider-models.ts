@@ -1,5 +1,6 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -29,8 +30,12 @@ export type OllamaModelWithContext = OllamaTagModel & {
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
+const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
+const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
+const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
+const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
-export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
     return undefined;
@@ -40,9 +45,12 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | unde
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
+    if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
+      return undefined;
+    }
     return {
-      allowedHostnames: [parsed.hostname],
       hostnameAllowlist: [parsed.hostname],
+      allowPrivateNetwork: true,
     };
   } catch {
     return undefined;
@@ -62,20 +70,46 @@ export type OllamaModelShowInfo = {
   capabilities?: string[];
 };
 
+function buildOllamaModelShowCacheKey(
+  apiBase: string,
+  model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+): string | undefined {
+  const version = model.digest?.trim() || model.modified_at?.trim();
+  if (!version) {
+    return undefined;
+  }
+  return `${resolveOllamaApiBase(apiBase)}|${model.name}|${version}`;
+}
+
+function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
+  if (ollamaModelShowInfoCache.size >= MAX_OLLAMA_SHOW_CACHE_ENTRIES) {
+    const oldestKey = ollamaModelShowInfoCache.keys().next().value;
+    if (typeof oldestKey === "string") {
+      ollamaModelShowInfoCache.delete(oldestKey);
+    }
+  }
+  ollamaModelShowInfoCache.set(key, value);
+}
+
+function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
+  return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
+}
+
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
 ): Promise<OllamaModelShowInfo> {
+  const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
     const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/show`,
+      url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+      policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
       auditContext: "ollama-provider-models.show",
     });
     try {
@@ -117,6 +151,31 @@ export async function queryOllamaModelShowInfo(
   }
 }
 
+async function queryOllamaModelShowInfoCached(
+  apiBase: string,
+  model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+): Promise<OllamaModelShowInfo> {
+  const normalizedApiBase = resolveOllamaApiBase(apiBase);
+  const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model);
+  if (!cacheKey) {
+    return await queryOllamaModelShowInfo(normalizedApiBase, model.name);
+  }
+
+  const cached = ollamaModelShowInfoCache.get(cacheKey);
+  if (cached) {
+    return await cached;
+  }
+
+  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name).then((result) => {
+    if (!hasCachedOllamaModelShowInfo(result)) {
+      ollamaModelShowInfoCache.delete(cacheKey);
+    }
+    return result;
+  });
+  setOllamaModelShowCacheEntry(cacheKey, pending);
+  return await pending;
+}
+
 /** @deprecated Use queryOllamaModelShowInfo instead. */
 export async function queryOllamaContextWindow(
   apiBase: string,
@@ -136,12 +195,11 @@ export async function enrichOllamaModelsWithContext(
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
       batch.map(async (model) => {
-        const showInfo = await queryOllamaModelShowInfo(apiBase, model.name);
-        return {
-          ...model,
+        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model);
+        return Object.assign({}, model, {
           contextWindow: showInfo.contextWindow,
           capabilities: showInfo.capabilities,
-        };
+        });
       }),
     );
     enriched.push(...batchResults);
@@ -197,4 +255,30 @@ export async function fetchOllamaModels(
   } catch {
     return { reachable: false, models: [] };
   }
+}
+
+export async function buildOllamaProvider(
+  configuredBaseUrl?: string,
+  opts?: { quiet?: boolean },
+): Promise<ModelProviderConfig> {
+  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
+  const { reachable, models } = await fetchOllamaModels(apiBase);
+  if (!reachable && !opts?.quiet) {
+    console.warn(`Ollama could not be reached at ${apiBase}.`);
+  }
+  const discovered = await enrichOllamaModelsWithContext(
+    apiBase,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
+  return {
+    baseUrl: apiBase,
+    api: "ollama",
+    models: discovered.map((model) =>
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
+    ),
+  };
+}
+
+export function resetOllamaModelShowInfoCacheForTest(): void {
+  ollamaModelShowInfoCache.clear();
 }

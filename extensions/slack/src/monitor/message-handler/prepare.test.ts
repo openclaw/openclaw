@@ -1,40 +1,30 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/test-helpers.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
-import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+import {
+  createInboundSlackTestContext,
+  createSlackSessionStoreFixture,
+  createSlackTestAccount,
+} from "./prepare.test-helpers.js";
 
 describe("slack prepareSlackMessage inbound contract", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  function makeTmpStorePath() {
-    if (!fixtureRoot) {
-      throw new Error("fixtureRoot missing");
-    }
-    const dir = path.join(fixtureRoot, `case-${caseId++}`);
-    fs.mkdirSync(dir);
-    return { dir, storePath: path.join(dir, "sessions.json") };
-  }
+  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-");
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-thread-"));
+    storeFixture.setup();
   });
 
   afterAll(() => {
-    if (fixtureRoot) {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-      fixtureRoot = "";
-    }
+    storeFixture.cleanup();
   });
 
   const createInboundSlackCtx = createInboundSlackTestContext;
@@ -207,6 +197,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expectInboundContextContract(prepared!.ctxPayload as any);
+    expect(prepared!.ctxPayload.GroupSpace).toBe("T1");
   });
 
   it("does not enable Slack status reactions when the message timestamp is missing", async () => {
@@ -449,7 +440,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("marks first thread turn and injects thread history for a new thread session", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi
       .fn()
       .mockResolvedValueOnce({
@@ -483,14 +474,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const cfg = {
       session: { store: storePath },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
@@ -578,7 +569,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("creates thread session for top-level DM when replyToMode=all", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
         session: { store: storePath },
@@ -653,6 +644,7 @@ describe("prepareSlackMessage sender prefix", () => {
       removeAckAfterReply: false,
       logger: { info: vi.fn(), warn: vi.fn() },
       markMessageSeen: () => false,
+      releaseSeenMessage: () => {},
       shouldDropMismatchedSlackEvent: () => false,
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,
@@ -679,17 +671,120 @@ describe("prepareSlackMessage sender prefix", () => {
     });
   }
 
-  it("prefixes channel bodies with sender label", async () => {
+  it("prefixes channel bodies with sender label and annotates Slack mention tokens", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
       slashCommand: { command: "/openclaw", enabled: true },
     });
+    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" }) as any;
+
+    const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
+
+    expect(result).not.toBeNull();
+    const body = result?.ctxPayload.Body ?? "";
+    expect(body).toContain("Alice (U1): <@BOT> (Bek) hello");
+    expect(result?.ctxPayload.RawBody).toBe("<@BOT> (Bek) hello");
+  });
+
+  it("keeps raw Slack mention tokens when user lookup cannot resolve them", async () => {
+    const ctx = createSenderPrefixCtx({
+      channels: {},
+      slashCommand: { command: "/openclaw", enabled: true },
+    });
+    ctx.resolveUserName = async (id: string) =>
+      ({ name: id === "U1" ? "Alice" : undefined }) as any;
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
 
     expect(result).not.toBeNull();
     const body = result?.ctxPayload.Body ?? "";
     expect(body).toContain("Alice (U1): <@BOT> hello");
+    expect(result?.ctxPayload.RawBody).toBe("<@BOT> hello");
+  });
+
+  it("caps Slack mention username lookups per inbound message and leaves overflow mentions raw", async () => {
+    const mentionIds = Array.from(
+      { length: 22 },
+      (_, index) => `U${String(index + 1).padStart(2, "0")}`,
+    );
+    const resolveUserName = vi.fn(async (userId: string) => ({ name: `Name ${userId}` }));
+
+    const result = await resolveSlackMessageContent({
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        user: "U1",
+        text: mentionIds.map((userId) => `<@${userId}>`).join(" "),
+        ts: "1700000000.0003",
+        event_ts: "1700000000.0003",
+      } as SlackMessageEvent,
+      isThreadReply: false,
+      threadStarter: null,
+      isBotMessage: false,
+      botToken: "xoxb-test",
+      mediaMaxBytes: 1000,
+      resolveUserName,
+    });
+
+    expect(result?.rawBody).toContain("<@U01> (Name U01)");
+    expect(result?.rawBody).toContain("<@U20> (Name U20)");
+    expect(result?.rawBody).toContain("<@U21>");
+    expect(result?.rawBody).toContain("<@U22>");
+    expect(result?.rawBody).not.toContain("<@U21> (");
+    expect(result?.rawBody).not.toContain("<@U22> (");
+    expect(resolveUserName).toHaveBeenCalledTimes(20);
+    expect(resolveUserName.mock.calls.map(([userId]) => userId)).toEqual(mentionIds.slice(0, 20));
+  });
+
+  it("shares the per-message mention lookup budget across message text and attachment text", async () => {
+    const messageMentionIds = Array.from(
+      { length: 15 },
+      (_, index) => `U${String(index + 1).padStart(2, "0")}`,
+    );
+    const attachmentMentionIds = [
+      "U10",
+      ...Array.from({ length: 10 }, (_, index) => `U${String(index + 16).padStart(2, "0")}`),
+    ];
+    const resolveUserName = vi.fn(async (userId: string) => ({ name: `Name ${userId}` }));
+
+    const result = await resolveSlackMessageContent({
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        user: "U1",
+        text: messageMentionIds.map((userId) => `<@${userId}>`).join(" "),
+        attachments: [
+          {
+            is_share: true,
+            text: attachmentMentionIds.map((userId) => `<@${userId}>`).join(" "),
+          },
+        ],
+        ts: "1700000000.0004",
+        event_ts: "1700000000.0004",
+      } as SlackMessageEvent,
+      isThreadReply: false,
+      threadStarter: null,
+      isBotMessage: false,
+      botToken: "xoxb-test",
+      mediaMaxBytes: 1000,
+      resolveUserName,
+    });
+
+    expect(result?.rawBody).toContain("<@U10> (Name U10)");
+    expect(result?.rawBody).toContain("<@U20> (Name U20)");
+    expect(result?.rawBody).toContain("<@U21>");
+    expect(result?.rawBody).not.toContain("<@U21> (");
+    expect(resolveUserName).toHaveBeenCalledTimes(20);
+    expect(resolveUserName.mock.calls.map(([userId]) => userId)).toEqual([
+      ...messageMentionIds,
+      "U16",
+      "U17",
+      "U18",
+      "U19",
+      "U20",
+    ]);
   });
 
   it("detects /new as control command when prefixed with Slack mention", async () => {
@@ -713,27 +808,14 @@ describe("prepareSlackMessage sender prefix", () => {
 });
 
 describe("slack thread.requireExplicitMention", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  function makeTmpStorePath() {
-    if (!fixtureRoot) {
-      throw new Error("fixtureRoot missing");
-    }
-    const dir = path.join(fixtureRoot, `require-explicit-${caseId++}`);
-    fs.mkdirSync(dir);
-    return { dir, storePath: path.join(dir, "sessions.json") };
-  }
+  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-explicit-mention-");
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-explicit-mention-"));
+    storeFixture.setup();
   });
 
   afterAll(() => {
-    if (fixtureRoot) {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-      fixtureRoot = "";
-    }
+    storeFixture.cleanup();
   });
 
   function createCtxWithExplicitMention(requireExplicitMention: boolean) {
@@ -750,7 +832,7 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("drops thread reply without explicit mention when requireExplicitMention is true", async () => {
     const ctx = createCtxWithExplicitMention(true);
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/config-runtime"),
       "resolveStorePath",
@@ -777,7 +859,7 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("allows thread reply with explicit @mention when requireExplicitMention is true", async () => {
     const ctx = createCtxWithExplicitMention(true);
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/config-runtime"),
       "resolveStorePath",
@@ -804,7 +886,7 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("allows thread reply without explicit mention when requireExplicitMention is false (default)", async () => {
     const ctx = createCtxWithExplicitMention(false);
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/config-runtime"),
       "resolveStorePath",

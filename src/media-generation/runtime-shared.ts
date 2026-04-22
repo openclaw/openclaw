@@ -1,37 +1,50 @@
 import { listProfilesForProvider } from "../agents/auth-profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type {
+  MediaGenerationNormalizationMetadataInput,
+  MediaNormalizationEntry,
+  MediaNormalizationValue,
+} from "./normalization.types.js";
 
 export type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
+export type {
+  MediaGenerationNormalizationMetadataInput,
+  MediaNormalizationEntry,
+  MediaNormalizationValue,
+} from "./normalization.types.js";
 
-export type MediaNormalizationValue = string | number | boolean;
-
-export type MediaNormalizationEntry<TValue extends MediaNormalizationValue> = {
-  requested?: TValue;
-  applied?: TValue;
-  derivedFrom?: string;
-  supportedValues?: readonly TValue[];
-};
-
-export type MediaGenerationNormalizationMetadataInput = {
-  size?: MediaNormalizationEntry<string>;
-  aspectRatio?: MediaNormalizationEntry<string>;
-  resolution?: MediaNormalizationEntry<string>;
-  durationSeconds?: MediaNormalizationEntry<number>;
-};
+export function recordCapabilityCandidateFailure(params: {
+  attempts: FallbackAttempt[];
+  provider: string;
+  model: string;
+  error: unknown;
+}): void {
+  const described = isFailoverError(params.error) ? describeFailoverError(params.error) : undefined;
+  params.attempts.push({
+    provider: params.provider,
+    model: params.model,
+    error: described?.message ?? formatErrorMessage(params.error),
+    reason: described?.reason,
+    status: described?.status,
+    code: described?.code,
+  });
+}
 
 export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
   entry: MediaNormalizationEntry<TValue> | undefined,
@@ -208,12 +221,15 @@ function compareScores(
   return next.tertiary.localeCompare(best.tertiary) < 0;
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+function parsePositiveDimensionPair(
+  raw: string | null | undefined,
+  pattern: RegExp,
+): { width: number; height: number } | null {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
-  const match = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(trimmed);
+  const match = pattern.exec(trimmed);
   if (!match) {
     return null;
   }
@@ -222,32 +238,31 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
+  return { width, height };
+}
+
+function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (!pair) {
+    return null;
+  }
   return {
-    width,
-    height,
-    value: width / height,
+    width: pair.width,
+    height: pair.height,
+    value: pair.width / pair.height,
   };
 }
 
 function parseSizeValue(raw?: string | null): ParsedSize | null {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return null;
-  }
-  const match = /^(\d+)\s*x\s*(\d+)$/i.exec(trimmed);
-  if (!match) {
-    return null;
-  }
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
+  if (!pair) {
     return null;
   }
   return {
-    width,
-    height,
-    aspectRatio: width / height,
-    area: width * height,
+    width: pair.width,
+    height: pair.height,
+    aspectRatio: pair.width / pair.height,
+    area: pair.width * pair.height,
   };
 }
 

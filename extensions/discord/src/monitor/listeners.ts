@@ -32,6 +32,10 @@ import {
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
+import {
+  resolveDiscordChannelInfoSafe,
+  resolveDiscordChannelParentIdSafe,
+} from "./channel-access.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
@@ -445,9 +449,10 @@ async function handleDiscordReactionEvent(
     if (!channel) {
       return;
     }
-    const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
+    const channelInfo = resolveDiscordChannelInfoSafe(channel);
+    const channelName = channelInfo.name;
     const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-    const channelType = "type" in channel ? channel.type : undefined;
+    const channelType = channelInfo.type;
     const isDirectMessage = channelType === ChannelType.DM;
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel =
@@ -455,7 +460,7 @@ async function handleDiscordReactionEvent(
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
     const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => String(roleId))
+      ? data.rawMember.roles.map((roleId: string) => roleId)
       : [];
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
@@ -485,7 +490,7 @@ async function handleDiscordReactionEvent(
         return;
       }
     }
-    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    let parentId = resolveDiscordChannelParentIdSafe(channel);
     let parentName: string | undefined;
     let parentSlug = "";
     let reactionBase: { baseText: string; contextKey: string } | null = null;

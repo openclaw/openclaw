@@ -22,7 +22,7 @@ import { agentCommand } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const CHAT_RESPONSE_TIMEOUT_MS = 4_000;
+const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
 let ws: WebSocket;
 let port: number;

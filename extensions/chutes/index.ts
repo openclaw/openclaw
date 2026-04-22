@@ -13,7 +13,7 @@ import {
   applyChutesApiKeyConfig,
   applyChutesProviderConfig,
 } from "./onboard.js";
-import { buildChutesProvider } from "./provider-catalog.js";
+import { buildChutesProvider, buildStaticChutesProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "chutes";
 
@@ -24,12 +24,12 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
   const scopes = process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
   const clientId =
     process.env.CHUTES_CLIENT_ID?.trim() ||
-    String(
+    (
       await ctx.prompter.text({
         message: "Enter Chutes OAuth client id",
         placeholder: "cid_xxx",
         validate: (value: string) => (value?.trim() ? undefined : "Required"),
-      }),
+      })
     ).trim();
   const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
 
@@ -179,6 +179,12 @@ export default definePluginEntry({
             },
           };
         },
+      },
+      staticCatalog: {
+        order: "profile",
+        run: async () => ({
+          provider: buildStaticChutesProvider(),
+        }),
       },
     });
   },

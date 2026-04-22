@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
+
+let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 
 type MockManifestRegistry = {
   plugins: Array<{
@@ -54,16 +55,23 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
   })),
 );
 const resolveManifestContractOwnerPluginId = vi.hoisted(() => vi.fn<() => undefined>());
+const resolveProviderSyntheticAuthWithPlugin = vi.hoisted(() => vi.fn(() => undefined));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
   resolveManifestContractOwnerPluginId,
 }));
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderSyntheticAuthWithPlugin,
+}));
 
 describe("provider auth aliases", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadPluginManifestRegistry.mockReset();
     loadPluginManifestRegistry.mockReturnValue(createFixtureProviderRegistry());
+    resolveProviderSyntheticAuthWithPlugin.mockReset();
+    ({ createProviderAuthResolver } = await import("./models-config.providers.secrets.js"));
   });
 
   it("shares manifest env vars across aliased providers", () => {

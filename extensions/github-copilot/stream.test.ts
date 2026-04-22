@@ -40,7 +40,7 @@ describe("wrapCopilotAnthropicStream", () => {
       hasImages: true,
     });
 
-    wrapped(
+    void wrapped(
       {
         provider: "github-copilot",
         api: "anthropic-messages",
@@ -76,7 +76,7 @@ describe("wrapCopilotAnthropicStream", () => {
     const wrapped = wrapCopilotAnthropicStream(baseStreamFn);
     const options = { headers: { Existing: "1" } };
 
-    wrapped(
+    void wrapped(
       {
         provider: "github-copilot",
         api: "openai-responses",
@@ -96,7 +96,7 @@ describe("wrapCopilotAnthropicStream", () => {
       streamFn: baseStreamFn,
     } as never);
 
-    wrapped(
+    void wrapped(
       {
         provider: "github-copilot",
         api: "openai-responses",

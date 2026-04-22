@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { SandboxBackendCommandResult } from "./backend.js";
+import type {
+  SandboxBackendCommandResult,
+  SandboxFsBridgeContext,
+} from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
   buildPinnedMkdirpPlan,
@@ -10,12 +13,13 @@ import {
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
+import type { SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -24,55 +28,20 @@ type RunCommandOptions = {
   signal?: AbortSignal;
 };
 
-export type SandboxResolvedPath = {
-  hostPath?: string;
-  relativePath: string;
-  containerPath: string;
-};
+export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 
-export type SandboxFsStat = {
-  type: "file" | "directory" | "other";
-  size: number;
-  mtimeMs: number;
-};
-
-export type SandboxFsBridge = {
-  resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
-  readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
-  writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void>;
-  mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
-  remove(params: {
-    filePath: string;
-    cwd?: string;
-    recursive?: boolean;
-    force?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void>;
-  rename(params: { from: string; to: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
-  stat(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<SandboxFsStat | null>;
-};
-
-export function createSandboxFsBridge(params: { sandbox: SandboxContext }): SandboxFsBridge {
+export function createSandboxFsBridge(params: {
+  sandbox: SandboxFsBridgeContext;
+}): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox);
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
-  private readonly sandbox: SandboxContext;
+  private readonly sandbox: SandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
 
-  constructor(sandbox: SandboxContext) {
+  constructor(sandbox: SandboxFsBridgeContext) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
     const mountsByContainer = [...this.mounts].toSorted(

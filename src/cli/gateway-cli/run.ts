@@ -14,6 +14,7 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultGatewayBindMode, isContainerEnvironment } from "../../gateway/net.js";
@@ -21,6 +22,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { resolveControlUiRootSync } from "../../infra/control-ui-assets.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
@@ -97,6 +99,15 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 
+type Awaitable<T> = T | Promise<T>;
+
+/**
+ * EX_CONFIG (78) from sysexits.h — used for configuration errors so systemd
+ * (via RestartPreventExitStatus=78) stops restarting instead of entering a
+ * restart storm that can render low-resource hosts unresponsive.
+ */
+const EXIT_CONFIG_ERROR = 78;
+
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
   "token",
@@ -104,6 +115,36 @@ const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "trusted-proxy",
 ];
 const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
+
+function createGatewayCliStartupTrace() {
+  const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
+  const started = performance.now();
+  let last = started;
+  const emit = (name: string, durationMs: number, totalMs: number) => {
+    if (enabled) {
+      gatewayLog.info(
+        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`,
+      );
+    }
+  };
+  return {
+    mark(name: string) {
+      const now = performance.now();
+      emit(name, now - last, now - started);
+      last = now;
+    },
+    async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
+      const before = performance.now();
+      try {
+        return await run();
+      } finally {
+        const now = performance.now();
+        emit(name, now - before, now - started);
+        last = now;
+      }
+    },
+  };
+}
 
 function warnInlinePasswordFlag() {
   defaultRuntime.error(
@@ -133,11 +174,11 @@ function parseEnumOption<T extends string>(
   return (allowed as readonly string[]).includes(raw) ? (raw as T) : null;
 }
 
-function formatModeChoices<T extends string>(modes: readonly T[]): string {
+function formatModeChoices(modes: readonly string[]): string {
   return modes.map((mode) => `"${mode}"`).join("|");
 }
 
-function formatModeErrorList<T extends string>(modes: readonly T[]): string {
+function formatModeErrorList(modes: readonly string[]): string {
   const quoted = modes.map((mode) => `"${mode}"`);
   if (quoted.length === 0) {
     return "";
@@ -151,7 +192,7 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
 }
 
-function maybeLogPendingControlUiBuild(cfg: ReturnType<typeof loadConfig>): void {
+function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): void {
   if (cfg.gateway?.controlUi?.enabled === false) {
     return;
   }
@@ -168,7 +209,7 @@ function maybeLogPendingControlUiBuild(cfg: ReturnType<typeof loadConfig>): void
     return;
   }
   gatewayLog.info(
-    "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. Prebuild with `pnpm ui:build` for a faster first boot.",
+    "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
   );
 }
 
@@ -276,22 +317,28 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
   }
 
+  const startupTrace = createGatewayCliStartupTrace();
+
   // The heaviest part of gateway startup is loading the server module tree
   // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
   // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
-  const { startGatewayServer } = await withProgress(
-    { label: "Loading gateway modules…", indeterminate: true },
-    async () => import("../../gateway/server.js"),
+  const { startGatewayServer } = await startupTrace.measure("cli.server-import", () =>
+    withProgress(
+      { label: "Loading gateway modules…", indeterminate: true },
+      async () => import("../../gateway/server.js"),
+    ),
   );
 
   setConsoleTimestampPrefix(true);
 
   if (devMode) {
-    await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
+    await startupTrace.measure("cli.dev-config", () =>
+      ensureDevGatewayConfig({ reset: Boolean(opts.reset) }),
+    );
   }
 
   gatewayLog.info("loading configuration…");
-  const cfg = loadConfig();
+  const cfg = await startupTrace.measure("cli.config-load", () => loadConfig());
   maybeLogPendingControlUiBuild(cfg);
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
@@ -414,7 +461,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const tokenRaw = toOptionString(opts.token);
 
   gatewayLog.info("resolving authentication…");
-  const snapshot = await readConfigFileSnapshot().catch(() => null);
+  const snapshot = await startupTrace.measure("cli.config-snapshot", () =>
+    readConfigFileSnapshot().catch(() => null),
+  );
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
@@ -429,7 +478,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     for (const error of guardErrors) {
       defaultRuntime.error(error);
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
@@ -441,12 +490,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           ...(passwordRaw ? { password: passwordRaw } : {}),
         }
       : undefined;
-  const resolvedAuth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
-    authOverride,
-    env: process.env,
-    tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
-  });
+  const resolvedAuth = await startupTrace.measure("cli.auth-resolve", () =>
+    resolveGatewayAuth({
+      authConfig: cfg.gateway?.auth,
+      authOverride,
+      env: process.env,
+      tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+    }),
+  );
   const resolvedAuthMode = resolvedAuth.mode;
   const tokenValue = resolvedAuth.token;
   const passwordValue = resolvedAuth.password;
@@ -487,7 +538,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         .filter(Boolean)
         .join("\n"),
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   if (resolvedAuthMode === "none") {
@@ -517,7 +568,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         .filter(Boolean)
         .join("\n"),
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   const tailscaleOverride =
@@ -529,6 +580,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       : undefined;
 
   gatewayLog.info("starting...");
+  startupTrace.mark("cli.gateway-loop");
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,

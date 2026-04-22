@@ -8,14 +8,10 @@ import {
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
+import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
-export type RestartAttempt = {
-  ok: boolean;
-  method: "launchctl" | "systemd" | "schtasks" | "supervisor";
-  detail?: string;
-  tried?: string[];
-};
+export type { RestartAttempt } from "./restart.types.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;

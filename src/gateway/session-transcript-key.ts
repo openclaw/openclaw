@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -12,6 +13,7 @@ import {
 } from "./session-utils.js";
 
 const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
+const TRANSCRIPT_SESSION_KEY_CACHE_MAX = 256;
 
 function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -27,7 +29,7 @@ function resolveTranscriptPathForComparison(value: string | undefined): string |
 }
 
 function sessionKeyMatchesTranscriptPath(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   key: string;
   targetPath: string;
@@ -135,6 +137,16 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
           ? freshestMatch?.key
           : undefined;
     if (resolvedKey) {
+      // Evict oldest-inserted entry when cache exceeds size cap (FIFO bound).
+      if (
+        !TRANSCRIPT_SESSION_KEY_CACHE.has(targetPath) &&
+        TRANSCRIPT_SESSION_KEY_CACHE.size >= TRANSCRIPT_SESSION_KEY_CACHE_MAX
+      ) {
+        const oldest = TRANSCRIPT_SESSION_KEY_CACHE.keys().next().value;
+        if (oldest !== undefined) {
+          TRANSCRIPT_SESSION_KEY_CACHE.delete(oldest);
+        }
+      }
       TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
       return resolvedKey;
     }

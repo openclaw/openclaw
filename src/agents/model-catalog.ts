@@ -1,4 +1,6 @@
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { join } from "node:path";
+import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import {
@@ -6,21 +8,13 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type ModelInputType = "text" | "image" | "document";
-
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  input?: ModelInputType[];
-};
+export type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 
 type DiscoveredModel = {
   id: string;
@@ -31,7 +25,7 @@ type DiscoveredModel = {
   input?: ModelInputType[];
 };
 
-type PiSdkModule = typeof import("./pi-model-discovery.js");
+type PiSdkModule = typeof import("./pi-model-discovery-runtime.js");
 type PiRegistryInstance =
   | Array<DiscoveredModel>
   | {
@@ -123,7 +117,6 @@ export async function loadModelCatalog(params?: {
       const agentDir = resolveOpenClawAgentDir();
       const { shouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
-      const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       logStage("auth-storage-ready");
       const registry = instantiatePiModelRegistry(
@@ -135,18 +128,18 @@ export async function loadModelCatalog(params?: {
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
       for (const entry of entries) {
-        const id = normalizeOptionalString(String(entry?.id ?? "")) ?? "";
+        const id = normalizeOptionalString(entry?.id) ?? "";
         if (!id) {
           continue;
         }
-        const provider = normalizeOptionalString(String(entry?.provider ?? "")) ?? "";
+        const provider = normalizeOptionalString(entry?.provider) ?? "";
         if (!provider) {
           continue;
         }
         if (shouldSuppressBuiltInModel({ provider, id, config: cfg })) {
           continue;
         }
-        const name = normalizeOptionalString(String(entry?.name ?? id)) || id;
+        const name = normalizeOptionalString(entry?.name ?? id) || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow

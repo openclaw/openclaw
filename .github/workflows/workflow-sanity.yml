@@ -6,9 +6,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -89,7 +92,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check

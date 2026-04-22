@@ -5,7 +5,12 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
-import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
+import { coerceChatContentText } from "../shared/chat-content.js";
+import {
+  parseAssistantTextSignature,
+  resolveAssistantMessagePhase,
+  type AssistantPhase,
+} from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -43,31 +48,6 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
-const coerceText = (value: unknown): string => {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value == null) {
-    return "";
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value) ?? "";
-    } catch {
-      return "";
-    }
-  }
-  return "";
-};
-
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
 }
@@ -81,6 +61,38 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefi
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
+function resolveAssistantStreamItemId(params: {
+  contentIndex?: unknown;
+  message: AgentMessage | undefined;
+}): string | undefined {
+  const content = (params.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const contentIndex =
+    typeof params.contentIndex === "number" &&
+    Number.isInteger(params.contentIndex) &&
+    params.contentIndex >= 0
+      ? params.contentIndex
+      : undefined;
+  const candidateBlocks =
+    contentIndex !== undefined ? [content[contentIndex]] : content.toReversed();
+  for (const block of candidateBlocks) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      continue;
+    }
+    const signature = parseAssistantTextSignature(record.textSignature);
+    if (signature?.id) {
+      return signature.id;
+    }
+  }
+  return undefined;
+}
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -89,16 +101,76 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onReasoningEnd?.();
 }
 
+function openReasoningStream(ctx: EmbeddedPiSubscribeContext) {
+  ctx.state.reasoningStreamOpen = true;
+}
+
+function shouldSuppressDeterministicApprovalOutput(
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    "deterministicApprovalPromptPending" | "deterministicApprovalPromptSent"
+  >,
+): boolean {
+  return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
+}
+
+function appendBlockReplyChunk(ctx: EmbeddedPiSubscribeContext, chunk: string) {
+  if (ctx.blockChunker) {
+    ctx.blockChunker.append(chunk);
+    return;
+  }
+  ctx.state.blockBuffer += chunk;
+}
+
+function replaceBlockReplyBuffer(ctx: EmbeddedPiSubscribeContext, text: string) {
+  if (ctx.blockChunker) {
+    ctx.blockChunker.reset();
+    ctx.blockChunker.append(text);
+    return;
+  }
+  ctx.state.blockBuffer = text;
+}
+
+function resolveAssistantTextChunk(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  delta: string;
+  content: string;
+  accumulatedText: string;
+}): string {
+  const { evtType, delta, content, accumulatedText } = params;
+  if (evtType === "text_delta") {
+    return delta;
+  }
+  if (delta) {
+    return delta;
+  }
+  if (!content) {
+    return "";
+  }
+  // KNOWN: Some providers resend full content on `text_end`.
+  // We only append a suffix (or nothing) to keep output monotonic.
+  if (content.startsWith(accumulatedText)) {
+    return content.slice(accumulatedText.length);
+  }
+  if (accumulatedText.startsWith(content)) {
+    return "";
+  }
+  if (!accumulatedText.includes(content)) {
+    return content;
+  }
+  return "";
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
-  const text = coerceText(params.text);
+  const text = coerceChatContentText(params.text);
   const trimmed = text.trim();
   if (trimmed !== SILENT_REPLY_TOKEN) {
     return text;
   }
-  const fallback = coerceText(params.messagingToolSentTexts.at(-1)).trim();
+  const fallback = coerceChatContentText(params.messagingToolSentTexts.at(-1)).trim();
   if (!fallback) {
     return text;
   }
@@ -165,13 +237,21 @@ export function buildAssistantStreamData(params: {
   replace?: boolean;
   mediaUrls?: string[];
   mediaUrl?: string;
-}): { text: string; delta: string; replace?: true; mediaUrls?: string[] } {
+  phase?: AssistantPhase;
+}): {
+  text: string;
+  delta: string;
+  replace?: true;
+  mediaUrls?: string[];
+  phase?: AssistantPhase;
+} {
   const mediaUrls = resolveSendableOutboundReplyParts(params).mediaUrls;
   return {
     text: params.text ?? "",
     delta: params.delta ?? "",
     replace: params.replace ? true : undefined,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    phase: params.phase,
   };
 }
 
@@ -208,10 +288,10 @@ export function handleMessageUpdate(
   if (suppressVisibleAssistantOutput) {
     return;
   }
-  const suppressDeterministicApprovalOutput =
-    ctx.state.deterministicApprovalPromptPending || ctx.state.deterministicApprovalPromptSent;
+  const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
 
   const assistantEvent = evt.assistantMessageEvent;
+  const assistantPhase = resolveAssistantMessagePhase(msg);
   const assistantRecord =
     assistantEvent && typeof assistantEvent === "object"
       ? (assistantEvent as Record<string, unknown>)
@@ -220,7 +300,7 @@ export function handleMessageUpdate(
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
-      ctx.state.reasoningStreamOpen = true;
+      openReasoningStream(ctx);
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
@@ -241,7 +321,7 @@ export function handleMessageUpdate(
     }
     if (evtType === "thinking_end") {
       if (!ctx.state.reasoningStreamOpen) {
-        ctx.state.reasoningStreamOpen = true;
+        openReasoningStream(ctx);
       }
       emitReasoningEnd(ctx);
     }
@@ -265,44 +345,43 @@ export function handleMessageUpdate(
     content,
   });
 
-  let chunk = "";
-  if (evtType === "text_delta") {
-    chunk = delta;
-  } else if (evtType === "text_start" || evtType === "text_end") {
-    if (delta) {
-      chunk = delta;
-    } else if (content) {
-      // KNOWN: Some providers resend full content on `text_end`.
-      // We only append a suffix (or nothing) to keep output monotonic.
-      if (content.startsWith(ctx.state.deltaBuffer)) {
-        chunk = content.slice(ctx.state.deltaBuffer.length);
-      } else if (ctx.state.deltaBuffer.startsWith(content)) {
-        chunk = "";
-      } else if (!ctx.state.deltaBuffer.includes(content)) {
-        chunk = content;
-      }
-    }
-  }
+  const chunk = resolveAssistantTextChunk({
+    evtType,
+    delta,
+    content,
+    accumulatedText: ctx.state.deltaBuffer,
+  });
 
   const partialAssistant =
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
   const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
+  const streamItemId = resolveAssistantStreamItemId({
+    contentIndex: assistantRecord?.contentIndex,
+    message: partialAssistant,
+  });
+  if (deliveryPhase && streamItemId) {
+    const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
+    if (previousStreamItemId && previousStreamItemId !== streamItemId) {
+      void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
+      ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+      void ctx.params.onAssistantMessageStart?.();
+    }
+    ctx.state.lastAssistantStreamItemId = streamItemId;
+  }
   if (deliveryPhase === "commentary") {
     return;
   }
-  const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
+  const phaseAwareVisibleText = coerceChatContentText(
+    extractAssistantVisibleText(partialAssistant),
+  ).trim();
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
     if (!shouldUsePhaseAwareBlockReply) {
-      if (ctx.blockChunker) {
-        ctx.blockChunker.append(chunk);
-      } else {
-        ctx.state.blockBuffer += chunk;
-      }
+      appendBlockReplyChunk(ctx, chunk);
     }
   }
 
@@ -325,7 +404,7 @@ export function handleMessageUpdate(
     const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
     if (!wasThinking && ctx.state.partialBlockState.thinking) {
-      ctx.state.reasoningStreamOpen = true;
+      openReasoningStream(ctx);
     }
     // Detect when thinking block ends (</think> tag processed)
     if (wasThinking && !ctx.state.partialBlockState.thinking) {
@@ -358,20 +437,11 @@ export function handleMessageUpdate(
       }
       const blockReplyChunk = replace ? cleanedText : deltaText;
       if (blockReplyChunk) {
-        if (ctx.blockChunker) {
-          ctx.blockChunker.append(blockReplyChunk);
-        } else {
-          ctx.state.blockBuffer += blockReplyChunk;
-        }
+        appendBlockReplyChunk(ctx, blockReplyChunk);
       }
 
       if (evtType === "text_end" && !ctx.state.lastBlockReplyText && cleanedText) {
-        if (ctx.blockChunker) {
-          ctx.blockChunker.reset();
-          ctx.blockChunker.append(cleanedText);
-        } else {
-          ctx.state.blockBuffer = cleanedText;
-        }
+        replaceBlockReplyBuffer(ctx, cleanedText);
       }
     }
 
@@ -388,6 +458,7 @@ export function handleMessageUpdate(
         delta: deltaText,
         replace,
         mediaUrls,
+        phase: assistantPhase,
       });
       emitAgentEvent({
         runId: ctx.params.runId,
@@ -433,16 +504,16 @@ export function handleMessageUpdate(
 export function handleMessageEnd(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
-) {
+): void | Promise<void> {
   const msg = evt.message;
   if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
   const assistantMessage = msg;
+  const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
-  const suppressDeterministicApprovalOutput =
-    ctx.state.deterministicApprovalPromptPending || ctx.state.deterministicApprovalPromptSent;
+  const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   if (suppressVisibleAssistantOutput) {
@@ -450,8 +521,8 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceText(extractAssistantText(assistantMessage));
-  const rawVisibleText = coerceText(extractAssistantVisibleText(assistantMessage));
+  const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
+  const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
@@ -512,6 +583,7 @@ export function handleMessageEnd(
       delta: finalStreamDelta,
       replace: shouldReplaceFinalStream,
       mediaUrls,
+      phase: assistantPhase,
     });
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -659,6 +731,7 @@ export function handleMessageEnd(
           if (isPromiseLike<void>(onBlockReplyFlushResult)) {
             return onBlockReplyFlushResult;
           }
+          return undefined;
         })
         .finally(() => {
           finalizeMessageEnd();
@@ -673,4 +746,5 @@ export function handleMessageEnd(
   }
 
   finalizeMessageEnd();
+  return undefined;
 }

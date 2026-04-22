@@ -38,15 +38,14 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
     "secretref-user-supplied-credentials-matrix.json",
   );
   const matrix = JSON.parse(fs.readFileSync(matrixPath, "utf8")) as SecretRefCredentialMatrix;
-  return matrix.entries.map((entry) => ({
-    id: entry.id,
-    configFile: entry.configFile,
-    pathPattern: entry.path,
-    ...(entry.refPath ? { refPathPattern: entry.refPath } : {}),
-    secretShape: entry.secretShape,
-    expectedResolvedValue: "string",
-    ...(entry.when?.type ? { authProfileType: entry.when.type } : {}),
-  }));
+  return matrix.entries.map((entry) =>
+    Object.assign(
+      { id: entry.id, configFile: entry.configFile, pathPattern: entry.path },
+      entry.refPath ? { refPathPattern: entry.refPath } : {},
+      { secretShape: entry.secretShape, expectedResolvedValue: "string" as const },
+      entry.when?.type ? { authProfileType: entry.when.type } : {},
+    ),
+  );
 }
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
@@ -55,6 +54,8 @@ const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
+  // Doctor migrates legacy web search config into plugin-owned webSearch config.
+  "tools.web.search.apiKey",
   "tools.web.fetch.firecrawl.apiKey",
 ]);
 
@@ -427,7 +428,7 @@ async function prepareConfigCoverageSnapshot(params: {
   skipConfigCollectors?: boolean;
 }) {
   await ensureConfigCoverageRuntimeLoaded();
-  const sourceConfig = structuredClone(params.config);
+  const sourceConfig = params.config;
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
     sourceConfig,
@@ -479,7 +480,7 @@ async function prepareAuthCoverageSnapshot(params: {
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
 }) {
   await ensureAuthCoverageRuntimeLoaded();
-  const sourceConfig = structuredClone(params.config);
+  const sourceConfig = params.config;
   const context = createResolverContext({
     sourceConfig,
     env: params.env,

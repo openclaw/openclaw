@@ -250,6 +250,7 @@ function marketplaceEntrySourceToInput(source: MarketplaceEntrySource): string {
     case "url":
       return source.url;
   }
+  throw new Error("Unsupported marketplace entry source");
 }
 
 function parseMarketplaceManifest(

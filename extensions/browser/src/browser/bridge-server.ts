@@ -13,6 +13,7 @@ import {
   type ProfileContext,
 } from "./server-context.js";
 import {
+  hasVerifiedBrowserAuth,
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
@@ -76,8 +77,19 @@ export async function startBrowserBridgeServer(params: {
   const app = express();
   installBrowserCommonMiddleware(app);
 
+  const authToken = normalizeOptionalString(params.authToken);
+  const authPassword = normalizeOptionalString(params.authPassword);
+  if (!authToken && !authPassword) {
+    throw new Error("bridge server requires auth (authToken/authPassword missing)");
+  }
+  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
+
   if (params.resolveSandboxNoVncToken) {
     app.get("/sandbox/novnc", (req, res) => {
+      if (!hasVerifiedBrowserAuth(req)) {
+        res.status(401).send("Unauthorized");
+        return;
+      }
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
@@ -95,13 +107,6 @@ export async function startBrowserBridgeServer(params: {
       res.type("html").status(200).send(buildNoVncBootstrapHtml(resolved));
     });
   }
-
-  const authToken = normalizeOptionalString(params.authToken);
-  const authPassword = normalizeOptionalString(params.authPassword);
-  if (!authToken && !authPassword) {
-    throw new Error("bridge server requires auth (authToken/authPassword missing)");
-  }
-  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
 
   const state: BrowserServerState = {
     server: null as unknown as Server,

@@ -97,7 +97,7 @@ export async function executeNodeHostCommand(
     );
   }
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
-  const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+  const prepareRaw = await callGatewayTool(
     "node.invoke",
     { timeoutMs: 15_000 },
     {
@@ -370,15 +370,7 @@ export async function executeNodeHostCommand(
         }
 
         try {
-          const raw = await callGatewayTool<{
-            payload?: {
-              stdout?: string;
-              stderr?: string;
-              error?: string | null;
-              exitCode?: number | null;
-              timedOut?: boolean;
-            };
-          }>(
+          const raw = await callGatewayTool(
             "node.invoke",
             { timeoutMs: invokeTimeoutMs },
             buildInvokeParams(approvedByAsk, approvalDecision, approvalId, true),

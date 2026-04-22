@@ -1,7 +1,7 @@
-import type { SecretInputMode } from "../commands/onboard-types.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import type { SecretInputMode } from "../commands/onboard-types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
   type SecretInput,
@@ -161,15 +161,8 @@ async function hasImplicitProviderAuth(
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
-  const search = config.tools?.web?.search;
   const entry = resolveSearchProviderEntry(config, provider);
-  const configuredValue = entry?.getConfiguredCredentialValue?.(config);
-  return (
-    configuredValue ??
-    (entry?.id === "brave"
-      ? entry.getCredentialValue(search as Record<string, unknown> | undefined)
-      : undefined)
-  );
+  return entry?.getConfiguredCredentialValue?.(config);
 }
 
 export function resolveExistingKey(
@@ -433,6 +426,7 @@ export async function runSearchSetupFlow(
       },
     ],
     initialValue: defaultProvider,
+    searchable: true,
   });
 
   if (choice === "__skip__") {

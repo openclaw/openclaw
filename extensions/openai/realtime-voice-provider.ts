@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -9,6 +15,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import WebSocket from "ws";
 import {
   asFiniteNumber,
+  captureOpenAIRealtimeWsClose,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
@@ -125,6 +132,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
+  private readonly flowId = randomUUID();
 
   constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {}
 
@@ -214,7 +222,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private async doConnect(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const { url, headers } = this.resolveConnectionParams();
-      this.ws = new WebSocket(url, { headers });
+      const debugProxy = resolveDebugProxySettings();
+      const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
+      this.ws = new WebSocket(url, {
+        headers,
+        ...(proxyAgent ? { agent: proxyAgent } : {}),
+      });
 
       const connectTimeout = setTimeout(() => {
         reject(new Error("OpenAI realtime connection timeout"));
@@ -224,6 +237,16 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         clearTimeout(connectTimeout);
         this.connected = true;
         this.reconnectAttempts = 0;
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-open",
+          flowId: this.flowId,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
+        });
         this.sendSessionUpdate();
         for (const chunk of this.pendingAudio.splice(0)) {
           this.sendAudio(chunk);
@@ -233,6 +256,17 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       this.ws.on("message", (data: Buffer) => {
+        captureWsEvent({
+          url,
+          direction: "inbound",
+          kind: "ws-frame",
+          flowId: this.flowId,
+          payload: data,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
+        });
         try {
           this.handleEvent(JSON.parse(data.toString()) as RealtimeEvent);
         } catch (error) {
@@ -241,6 +275,17 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       this.ws.on("error", (error) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "error",
+          flowId: this.flowId,
+          errorText: error instanceof Error ? error.message : String(error),
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
+        });
         if (!this.connected) {
           clearTimeout(connectTimeout);
           reject(error);
@@ -248,7 +293,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
       });
 
-      this.ws.on("close", () => {
+      this.ws.on("close", (code, reasonBuffer) => {
+        captureOpenAIRealtimeWsClose({
+          url,
+          flowId: this.flowId,
+          capability: "realtime-voice",
+          code,
+          reasonBuffer,
+        });
         this.connected = false;
         if (this.intentionallyClosed) {
           this.config.onClose?.("completed");
@@ -475,7 +527,19 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private sendEvent(event: unknown): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(event));
+      const payload = JSON.stringify(event);
+      captureWsEvent({
+        url: this.resolveConnectionParams().url,
+        direction: "outbound",
+        kind: "ws-frame",
+        flowId: this.flowId,
+        payload,
+        meta: {
+          provider: "openai",
+          capability: "realtime-voice",
+        },
+      });
+      this.ws.send(payload);
     }
   }
 }

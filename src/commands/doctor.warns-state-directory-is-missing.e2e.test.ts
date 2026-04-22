@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDoctorRuntime,
   ensureAuthProfileStore,
@@ -104,6 +104,43 @@ describe("doctor command", () => {
     );
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
+  });
+
+  it("routes browser readiness through health contributions and degrades gracefully when browser facade is unavailable", async () => {
+    const loadBundledPluginPublicSurfaceModuleSync = vi.fn(() => {
+      throw new Error("missing browser doctor facade");
+    });
+    vi.doMock("../plugin-sdk/facade-loader.js", () => ({
+      loadBundledPluginPublicSurfaceModuleSync,
+    }));
+    doctorCommand = await loadDoctorCommandForTest({
+      unmockModules: [
+        "../flows/doctor-health-contributions.js",
+        "./doctor-browser.js",
+        "./doctor-state-integrity.js",
+      ],
+    });
+
+    mockDoctorConfigSnapshot({
+      config: {
+        browser: {
+          defaultProfile: "user",
+        },
+      },
+    });
+
+    await runDoctorNonInteractive();
+
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "browser",
+      artifactBasename: "browser-doctor.js",
+    });
+    const browserFallbackNote = terminalNoteMock.mock.calls.find(
+      ([message, title]) =>
+        title === "Browser" && String(message).includes("Browser health check is unavailable"),
+    );
+    expect(browserFallbackNote).toBeTruthy();
+    expect(String(browserFallbackNote?.[0])).toContain("missing browser doctor facade");
   });
 
   it("warns about opencode provider overrides", async () => {

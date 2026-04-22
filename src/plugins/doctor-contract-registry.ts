@@ -7,7 +7,8 @@ import { asNullableRecord } from "../shared/record-coerce.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { resolvePluginCacheInputs } from "./roots.js";
+import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
+import { resolvePluginCacheInputs, type PluginSourceRoots } from "./roots.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
@@ -35,8 +36,13 @@ type PluginDoctorContractEntry = {
   normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
 };
 
+type PluginManifestRegistryRecord = ReturnType<
+  typeof loadPluginManifestRegistry
+>["plugins"][number];
+
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const doctorContractCache = new Map<string, PluginDoctorContractEntry[]>();
+const doctorContractRecordCache = new Map<string, Map<string, PluginDoctorContractEntry | null>>();
 
 function getJiti(modulePath: string) {
   return getCachedPluginJitiLoader({
@@ -46,20 +52,44 @@ function getJiti(modulePath: string) {
   });
 }
 
+function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
+  const nativeModule = tryNativeRequireJavaScriptModule(modulePath);
+  if (nativeModule.ok) {
+    return nativeModule.moduleExport as PluginDoctorContractModule;
+  }
+  return getJiti(modulePath)(modulePath) as PluginDoctorContractModule;
+}
+
 function buildDoctorContractCacheKey(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): string {
+  return JSON.stringify({
+    ...resolveDoctorContractBaseCachePayload(params),
+    pluginIds: [...(params.pluginIds ?? [])].toSorted(),
+  });
+}
+
+function buildDoctorContractBaseCacheKey(params: {
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  return JSON.stringify(resolveDoctorContractBaseCachePayload(params));
+}
+
+function resolveDoctorContractBaseCachePayload(params: {
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): {
+  roots: PluginSourceRoots;
+  loadPaths: string[];
+} {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return JSON.stringify({
-    roots,
-    loadPaths,
-    pluginIds: [...(params.pluginIds ?? [])].toSorted(),
-  });
+  return { roots, loadPaths };
 }
 
 function resolveContractApiPath(rootDir: string): string | null {
@@ -140,12 +170,106 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   return [...ids].toSorted();
 }
 
+export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
+  raw: unknown;
+  touchedPaths: ReadonlyArray<ReadonlyArray<string>>;
+}): string[] {
+  const root = asNullableRecord(params.raw);
+  if (!root) {
+    return [];
+  }
+
+  const ids = new Set<string>();
+  for (const touchedPath of params.touchedPaths) {
+    const [first, second, third] = touchedPath;
+    if (first === "channels") {
+      if (!second) {
+        return collectRelevantDoctorPluginIds(params.raw);
+      }
+      if (second !== "defaults") {
+        ids.add(second);
+      }
+      continue;
+    }
+    if (first === "plugins") {
+      if (second !== "entries" || !third) {
+        return collectRelevantDoctorPluginIds(params.raw);
+      }
+      ids.add(third);
+      continue;
+    }
+    if (first === "talk" && hasLegacyElevenLabsTalkFields(root)) {
+      ids.add("elevenlabs");
+    }
+  }
+
+  return [...ids].toSorted();
+}
+
+function getDoctorContractRecordCache(
+  baseCacheKey: string,
+): Map<string, PluginDoctorContractEntry | null> {
+  let cache = doctorContractRecordCache.get(baseCacheKey);
+  if (!cache) {
+    cache = new Map();
+    doctorContractRecordCache.set(baseCacheKey, cache);
+  }
+  return cache;
+}
+
+function loadPluginDoctorContractEntry(
+  record: PluginManifestRegistryRecord,
+  baseCacheKey: string,
+): PluginDoctorContractEntry | null {
+  const cache = getDoctorContractRecordCache(baseCacheKey);
+  const cached = cache.get(record.id);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const contractSource = resolveContractApiPath(record.rootDir);
+  if (!contractSource) {
+    cache.set(record.id, null);
+    return null;
+  }
+  let mod: PluginDoctorContractModule;
+  try {
+    mod = loadPluginDoctorContractModule(contractSource);
+  } catch {
+    cache.set(record.id, null);
+    return null;
+  }
+  const rules = coerceLegacyConfigRules(
+    (mod as { default?: PluginDoctorContractModule }).default?.legacyConfigRules ??
+      mod.legacyConfigRules,
+  );
+  const normalizeCompatibilityConfig = coerceNormalizeCompatibilityConfig(
+    mod.normalizeCompatibilityConfig ??
+      (mod as { default?: PluginDoctorContractModule }).default?.normalizeCompatibilityConfig,
+  );
+  if (rules.length === 0 && !normalizeCompatibilityConfig) {
+    cache.set(record.id, null);
+    return null;
+  }
+  const entry = {
+    pluginId: record.id,
+    rules,
+    normalizeCompatibilityConfig,
+  };
+  cache.set(record.id, entry);
+  return entry;
+}
+
 function resolvePluginDoctorContracts(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginDoctorContractEntry[] {
   const env = params?.env ?? process.env;
+  const baseCacheKey = buildDoctorContractBaseCacheKey({
+    workspaceDir: params?.workspaceDir,
+    env,
+  });
   const cacheKey = buildDoctorContractCacheKey({
     workspaceDir: params?.workspaceDir,
     env,
@@ -185,32 +309,10 @@ function resolvePluginDoctorContracts(params?: {
     ) {
       continue;
     }
-    const contractSource = resolveContractApiPath(record.rootDir);
-    if (!contractSource) {
-      continue;
+    const entry = loadPluginDoctorContractEntry(record, baseCacheKey);
+    if (entry) {
+      entries.push(entry);
     }
-    let mod: PluginDoctorContractModule;
-    try {
-      mod = getJiti(contractSource)(contractSource) as PluginDoctorContractModule;
-    } catch {
-      continue;
-    }
-    const rules = coerceLegacyConfigRules(
-      (mod as { default?: PluginDoctorContractModule }).default?.legacyConfigRules ??
-        mod.legacyConfigRules,
-    );
-    const normalizeCompatibilityConfig = coerceNormalizeCompatibilityConfig(
-      mod.normalizeCompatibilityConfig ??
-        (mod as { default?: PluginDoctorContractModule }).default?.normalizeCompatibilityConfig,
-    );
-    if (rules.length === 0 && !normalizeCompatibilityConfig) {
-      continue;
-    }
-    entries.push({
-      pluginId: record.id,
-      rules,
-      normalizeCompatibilityConfig,
-    });
   }
 
   doctorContractCache.set(cacheKey, entries);
@@ -219,6 +321,7 @@ function resolvePluginDoctorContracts(params?: {
 
 export function clearPluginDoctorContractRegistryCache(): void {
   doctorContractCache.clear();
+  doctorContractRecordCache.clear();
   jitiLoaders.clear();
 }
 

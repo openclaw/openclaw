@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
@@ -12,7 +12,12 @@ import {
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+export {
+  resetBaileysMocks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+  setRuntimeConfigSourceSnapshotMock,
+} from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyExport = any;
@@ -38,7 +43,23 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 
-export const TEST_NET_IP = "203.0.113.10";
+export const TEST_NET_IP = "93.184.216.34";
+
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn(async () => ({
+      ev: {
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+      ws: { close: vi.fn() },
+      user: { id: "123@s.whatsapp.net" },
+    })),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -148,19 +169,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
-      const ssrf = await import("../../../src/infra/net/ssrf.js");
-      resolvePinnedHostnameSpy = vi
-        .spyOn(ssrf, "resolvePinnedHostname")
-        .mockImplementation(async (hostname) => {
-          // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
-          const addresses = [TEST_NET_IP];
-          return {
-            hostname: normalized,
-            addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-          };
-        });
+      resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }
   });
 
@@ -175,16 +184,27 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 
 export function createWebListenerFactoryCapture(): AnyExport {
   let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+  let capturedOptions:
+    | {
+        onMessage: (msg: WebInboundMessage) => Promise<void>;
+        debounceMs?: number;
+        selfChatMode?: boolean;
+      }
+    | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
+    debounceMs?: number;
+    selfChatMode?: boolean;
   }) => {
     capturedOnMessage = opts.onMessage;
+    capturedOptions = opts;
     return { close: vi.fn() };
   };
 
   return {
     listenerFactory,
     getOnMessage: () => capturedOnMessage,
+    getLastOptions: () => capturedOptions,
   };
 }
 

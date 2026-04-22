@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -37,6 +39,7 @@ vi.mock("../../config/config.js", async () => {
 });
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: mocks.getChannelPlugin,
   getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
@@ -153,6 +156,22 @@ async function runPollWithClient(
   return { respond };
 }
 
+async function runMessageActionRequest(
+  params: Record<string, unknown>,
+  client?: { connect?: { scopes?: string[] } } | null,
+) {
+  const respond = vi.fn();
+  await sendHandlers["message.action"]({
+    params: params as never,
+    respond,
+    context: makeContext(),
+    req: { type: "req", id: "1", method: "message.action" },
+    client: (client ?? null) as never,
+    isWebchatConnect: () => false,
+  });
+  return { respond };
+}
+
 function expectDeliverySessionMirror(params: { agentId: string; sessionKey: string }) {
   expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -222,6 +241,36 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ messageId: "m-media" }),
       undefined,
       expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("passes outbound session context for gateway media sends", async () => {
+    mockDeliverySuccess("m-whatsapp-media");
+
+    await runSend({
+      to: "+15551234567",
+      message: "caption",
+      mediaUrl: "file:///tmp/workspace/photo.png",
+      channel: "whatsapp",
+      agentId: "work",
+      idempotencyKey: "idem-whatsapp-media",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        payloads: [
+          {
+            text: "caption",
+            mediaUrl: "file:///tmp/workspace/photo.png",
+            mediaUrls: undefined,
+          },
+        ],
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:whatsapp:resolved",
+        }),
+      }),
     );
   });
 
@@ -768,6 +817,135 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
+    mockDeliverySuccess("m-thread-derived");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:c1",
+      peer: { kind: "channel", id: "c1" },
+      chatType: "channel",
+      from: "slack:channel:C1",
+      to: "channel:C1",
+      threadId: "1710000000.9999",
+    });
+
+    await runSend({
+      to: "channel:C1",
+      message: "threaded",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:c1",
+      idempotencyKey: "idem-thread-derived",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+          baseSessionKey: "agent:main:slack:channel:c1",
+          threadId: "1710000000.9999",
+        }),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+        }),
+      }),
+    );
+  });
+
+  it("preserves the provided session when Slack derives a thread for a different base session", async () => {
+    mockDeliverySuccess("m-thread-mismatch");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:slack:channel:c2:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:c2",
+      peer: { kind: "channel", id: "c2" },
+      chatType: "channel",
+      from: "slack:channel:C2",
+      to: "channel:C2",
+      threadId: "1710000000.9999",
+    });
+
+    await runSend({
+      to: "channel:C2",
+      message: "threaded",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:c1",
+      threadId: "1710000000.9999",
+      idempotencyKey: "idem-thread-mismatch",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+        session: expect.objectContaining({
+          key: "agent:main:slack:channel:c1",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1",
+        }),
+      }),
+    );
+  });
+
+  it("preserves derived thread delivery for existing thread-scoped Slack session keys", async () => {
+    mockDeliverySuccess("m-thread-session");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+      baseSessionKey: "agent:main:slack:channel:c1",
+      peer: { kind: "channel", id: "c1" },
+      chatType: "channel",
+      from: "slack:channel:C1",
+      to: "channel:C1",
+      threadId: "1710000000.9999",
+    });
+
+    await runSend({
+      to: "channel:C1",
+      message: "threaded",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+      idempotencyKey: "idem-thread-session",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+        session: expect.objectContaining({
+          key: "agent:main:slack:channel:c1:thread:1710000000.9999",
+        }),
+      }),
+    );
+  });
+
+  it("preserves numeric derived thread ids for non-Slack channels", async () => {
+    mockDeliverySuccess("m-topic-derived");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:telegram:group:-100123:thread:77",
+      baseSessionKey: "agent:main:telegram:group:-100123",
+      peer: { kind: "group", id: "-100123" },
+      chatType: "group",
+      from: "telegram:group:-100123",
+      to: "channel:-100123",
+      threadId: 77,
+    });
+
+    await runSend({
+      to: "-100123:topic:77",
+      message: "topic message",
+      channel: "telegram",
+      idempotencyKey: "idem-topic-derived",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: 77,
+      }),
+    );
+  });
+
   it("returns invalid request when outbound target resolution fails", async () => {
     mocks.resolveOutboundTarget.mockReturnValue({
       ok: false,
@@ -826,5 +1004,171 @@ describe("gateway send mirroring", () => {
       undefined,
       expect.objectContaining({ channel: "slack" }),
     );
+  });
+
+  it("dispatches message actions through the gateway for plugin-owned channels", async () => {
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async ({ params, requesterSenderId, toolContext }) =>
+          jsonResult({
+            ok: true,
+            messageId: params.messageId,
+            requesterSenderId,
+            currentMessageId: toolContext?.currentMessageId,
+            currentGraphChannelId: toolContext?.currentGraphChannelId,
+            replyToMode: toolContext?.replyToMode,
+            hasRepliedRef: toolContext?.hasRepliedRef?.value,
+            skipCrossContextDecoration: toolContext?.skipCrossContextDecoration,
+          }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: reactPlugin,
+        },
+      ]),
+      "send-test-message-action",
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "whatsapp",
+      action: "react",
+      params: {
+        chatJid: "+15551234567",
+        messageId: "wamid.1",
+        emoji: "✅",
+      },
+      requesterSenderId: "trusted-user",
+      toolContext: {
+        currentGraphChannelId: "graph:team/chan",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "wamid.1",
+        replyToMode: "first",
+        hasRepliedRef: { value: true },
+        skipCrossContextDecoration: true,
+      },
+      idempotencyKey: "idem-message-action",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        messageId: "wamid.1",
+        requesterSenderId: "trusted-user",
+        currentMessageId: "wamid.1",
+        currentGraphChannelId: "graph:team/chan",
+        replyToMode: "first",
+        hasRepliedRef: true,
+        skipCrossContextDecoration: true,
+      },
+      undefined,
+      { channel: "whatsapp" },
+    );
+  });
+
+  it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {
+    const capture = { senderIsOwner: undefined as boolean | undefined };
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp owner-derivation test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async ({ senderIsOwner }) => {
+          capture.senderIsOwner = senderIsOwner;
+          return jsonResult({ ok: true });
+        },
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+
+    // Narrowly-scoped caller (e.g. gateway-forwarding least-privilege path
+    // that only requests operator.write): wire senderIsOwner=true must be
+    // forced to false so a non-admin scoped caller cannot unlock owner-only
+    // channel actions.
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
+      "send-test-owner-derive-non-admin",
+    );
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { chatJid: "+15551234567", messageId: "wamid.x", emoji: "✅" },
+        senderIsOwner: true,
+        idempotencyKey: "idem-owner-derive-non-admin",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+    expect(capture.senderIsOwner).toBe(false);
+
+    // Full operator (admin-scoped): the trusted runtime is allowed to
+    // forward the real channel-sender ownership bit. Wire true → true.
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
+      "send-test-owner-derive-admin-true",
+    );
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { chatJid: "+15551234567", messageId: "wamid.y", emoji: "✅" },
+        senderIsOwner: true,
+        idempotencyKey: "idem-owner-derive-admin-true",
+      },
+      { connect: { scopes: ["operator.admin"] } },
+    );
+    expect(capture.senderIsOwner).toBe(true);
+
+    // Full operator forwarding a non-owner sender: wire false → false
+    // (admin scope does not inflate ownership on its own).
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
+      "send-test-owner-derive-admin-false",
+    );
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { chatJid: "+15551234567", messageId: "wamid.z", emoji: "✅" },
+        senderIsOwner: false,
+        idempotencyKey: "idem-owner-derive-admin-false",
+      },
+      { connect: { scopes: ["operator.admin"] } },
+    );
+    expect(capture.senderIsOwner).toBe(false);
   });
 });

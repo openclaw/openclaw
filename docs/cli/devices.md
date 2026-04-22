@@ -21,8 +21,9 @@ openclaw devices list
 openclaw devices list --json
 ```
 
-Pending request output includes the requested role and scopes so approvals can
-be reviewed before you approve.
+Pending request output shows the requested access next to the device's current
+approved access when the device is already paired. This makes scope/role
+upgrades explicit instead of looking like the pairing was lost.
 
 ### `openclaw devices remove <deviceId>`
 
@@ -49,13 +50,21 @@ openclaw devices clear --yes --pending --json
 
 ### `openclaw devices approve [requestId] [--latest]`
 
-Approve a pending device pairing request. If `requestId` is omitted, OpenClaw
-automatically approves the most recent pending request.
+Approve a pending device pairing request by exact `requestId`. If `requestId`
+is omitted or `--latest` is passed, OpenClaw only prints the selected pending
+request and exits; rerun approval with the exact request ID after verifying
+the details.
 
 Note: if a device retries pairing with changed auth details (role/scopes/public
 key), OpenClaw supersedes the previous pending entry and issues a new
 `requestId`. Run `openclaw devices list` right before approval to use the
 current ID.
+
+If the device is already paired and asks for broader scopes or a broader role,
+OpenClaw keeps the existing approval in place and creates a new pending upgrade
+request. Review the `Requested` vs `Approved` columns in `openclaw devices list`
+or use `openclaw devices approve --latest` to preview the exact upgrade before
+approving it.
 
 ```
 openclaw devices approve
@@ -126,7 +135,7 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
   `operator.admin`.
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
-- `devices approve` picks the newest pending request automatically when you omit `requestId` or pass `--latest`.
+- `devices approve` requires an explicit request ID before minting tokens; omitting `requestId` or passing `--latest` only previews the newest pending request.
 
 ## Token drift recovery checklist
 

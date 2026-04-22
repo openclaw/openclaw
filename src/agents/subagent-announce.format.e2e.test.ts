@@ -16,7 +16,8 @@ import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import * as piEmbedded from "./pi-embedded.js";
+import * as piEmbedded from "./pi-embedded-runner/runs.js";
+import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -202,6 +203,7 @@ describe("subagent announce formatting", () => {
   });
 
   afterAll(() => {
+    subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
@@ -242,6 +244,11 @@ describe("subagent announce formatting", () => {
         return {};
       }
       return {};
+    });
+    subagentAnnounceDeliveryTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
@@ -1249,6 +1256,69 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.threadId).toBeUndefined();
   });
 
+  it("preserves Slack thread routing for bound completion delivery", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-slack-thread-bound",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-slack-thread-bound",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "slack:acct-1:C123:thread",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "slack",
+                  accountId: "acct-1",
+                  conversationId: "1710000000.000100",
+                  parentConversationId: "C123",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-slack-thread-bound",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "1710000000.000100",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("slack");
+    expect(call?.params?.to).toBe("channel:C123");
+    expect(call?.params?.threadId).toBe("1710000000.000100");
+  });
+
   it("routes manual completion announce agent delivery for telegram forum topics", async () => {
     sendSpy.mockClear();
     agentSpy.mockClear();
@@ -1632,7 +1702,7 @@ describe("subagent announce formatting", () => {
     expect(new Set(idempotencyKeys).size).toBe(2);
   });
 
-  it("prefers direct delivery first for completion-mode and then queues on direct failure", async () => {
+  it("falls back to queued follow-up delivery when an active completion wake cannot be injected", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1659,14 +1729,10 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(2);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
       method: "agent",
       params: { sessionKey: "agent:main:main", channel: "whatsapp", to: "+1555", deliver: true },
-    });
-    expect(agentSpy.mock.calls[1]?.[0]).toMatchObject({
-      method: "agent",
-      params: { sessionKey: "agent:main:main" },
     });
   });
 

@@ -1,4 +1,4 @@
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
   ADMIN_SCOPE,
@@ -66,6 +66,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.rename",
   ],
   [READ_SCOPE]: [
+    "assistant.media.get",
     "health",
     "doctor.memory.status",
     "doctor.memory.dreamDiary",
@@ -76,7 +77,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "usage.cost",
     "tts.status",
     "tts.providers",
+    "commands.list",
     "models.list",
+    "models.authStatus",
     "tools.catalog",
     "tools.effective",
     "agents.list",
@@ -114,6 +117,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.files.get",
   ],
   [WRITE_SCOPE]: [
+    "message.action",
     "send",
     "poll",
     "agent",
@@ -137,10 +141,13 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "doctor.memory.backfillDreamDiary",
     "doctor.memory.resetDreamDiary",
     "doctor.memory.resetGroundedShortTerm",
+    "doctor.memory.repairDreamingArtifacts",
+    "doctor.memory.dedupeDreamDiary",
     "push.test",
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "channels.start",
     "channels.logout",
     "agents.create",
     "agents.update",
@@ -184,7 +191,7 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
+  const pluginScope = getPluginRegistryState()?.activeRegistry?.gatewayMethodScopes?.[method];
   if (pluginScope) {
     return pluginScope;
   }

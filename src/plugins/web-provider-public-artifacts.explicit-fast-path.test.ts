@@ -14,10 +14,11 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   };
 });
 
+import { resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts as resolveExplicitRuntimeWebSearchProviders } from "./web-provider-public-artifacts.explicit.js";
 import {
-  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
-} from "./web-provider-public-artifacts.explicit.js";
+  resolveBundledWebFetchProvidersFromPublicArtifacts,
+  resolveBundledWebSearchProvidersFromPublicArtifacts,
+} from "./web-provider-public-artifacts.js";
 
 describe("web provider public artifacts explicit fast path", () => {
   beforeEach(() => {
@@ -25,7 +26,8 @@ describe("web provider public artifacts explicit fast path", () => {
   });
 
   it("resolves bundled web search providers by explicit plugin id without manifest scans", () => {
-    const provider = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+    const provider = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      bundledAllowlistCompat: true,
       onlyPluginIds: ["brave"],
     })?.[0];
 
@@ -34,8 +36,19 @@ describe("web provider public artifacts explicit fast path", () => {
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("resolves bundled runtime web search providers by explicit plugin id", () => {
+    const provider = resolveExplicitRuntimeWebSearchProviders({
+      onlyPluginIds: ["google"],
+    })?.[0];
+
+    expect(provider?.pluginId).toBe("google");
+    expect(provider?.createTool({ config: {} as never })).not.toBeNull();
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("resolves bundled web fetch providers by explicit plugin id without manifest scans", () => {
-    const provider = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
+    const provider = resolveBundledWebFetchProvidersFromPublicArtifacts({
+      bundledAllowlistCompat: true,
       onlyPluginIds: ["firecrawl"],
     })?.[0];
 

@@ -44,6 +44,7 @@ Scope intent:
 - `plugins.entries.aimlapi.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.brave.config.webSearch.apiKey`
+- `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`

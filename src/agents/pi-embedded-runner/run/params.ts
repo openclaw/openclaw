@@ -1,29 +1,21 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import type { enqueueCommand } from "../../../process/command-queue.js";
+import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
-import type { AgentStreamParams } from "../../command/types.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
-import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import type {
+  BlockReplyChunking,
+  ToolResultFormat,
+} from "../../pi-embedded-subscribe.shared-types.js";
 import type { SkillSnapshot } from "../../skills.js";
-
-// Simplified tool definition for client-provided tools (OpenResponses hosted tools)
-export type ClientToolDefinition = {
-  type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-    /** Strict argument enforcement (Responses API). Propagated from the request. */
-    strict?: boolean;
-  };
-};
+export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
@@ -38,7 +30,7 @@ export type RunEmbeddedPiAgentParams = {
   trigger?: EmbeddedRunTrigger;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
-  /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
+  /** Delivery target for topic/thread routing. */
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;
@@ -48,8 +40,12 @@ export type RunEmbeddedPiAgentParams = {
   groupChannel?: string | null;
   /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
   groupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  memberRoleIds?: string[];
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
+  isCanonicalWorkspace?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -70,6 +66,8 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Keep the message tool available even when a narrow profile would omit it. */
+  forceMessageTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   sessionFile: string;
@@ -124,7 +122,7 @@ export type RunEmbeddedPiAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;
-  enqueue?: typeof enqueueCommand;
+  enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;

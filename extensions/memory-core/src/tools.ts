@@ -3,10 +3,12 @@ import {
   jsonResult,
   readNumberParam,
   readStringParam,
-  type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type {
+  MemorySearchResult,
+  MemorySearchRuntimeDebug,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
@@ -69,6 +71,40 @@ function queueShortTermRecallTracking(params: {
   }).catch(() => {
     // Recall tracking is best-effort and must never block memory recall.
   });
+}
+
+function normalizeActiveMemoryQmdSearchMode(
+  value: unknown,
+): "inherit" | "search" | "vsearch" | "query" {
+  return value === "inherit" || value === "search" || value === "vsearch" || value === "query"
+    ? value
+    : "search";
+}
+
+function isActiveMemorySessionKey(sessionKey?: string): boolean {
+  return typeof sessionKey === "string" && sessionKey.includes(":active-memory:");
+}
+
+function resolveActiveMemoryQmdSearchModeOverride(
+  cfg: OpenClawConfig,
+  sessionKey?: string,
+): "search" | "vsearch" | "query" | undefined {
+  if (!isActiveMemorySessionKey(sessionKey)) {
+    return undefined;
+  }
+  const entry = cfg.plugins?.entries?.["active-memory"];
+  const entryRecord =
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? (entry as { config?: unknown })
+      : undefined;
+  const pluginConfig =
+    entryRecord?.config &&
+    typeof entryRecord.config === "object" &&
+    !Array.isArray(entryRecord.config)
+      ? (entryRecord.config as { qmd?: { searchMode?: unknown } })
+      : undefined;
+  const searchMode = normalizeActiveMemoryQmdSearchMode(pluginConfig?.qmd?.searchMode);
+  return searchMode === "inherit" ? undefined : searchMode;
 }
 
 async function getSupplementMemoryReadResult(params: {
@@ -144,7 +180,7 @@ async function executeMemoryReadResult<T>(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+}) {
   return createMemoryTool({
     options,
     label: "Memory Search",
@@ -176,17 +212,39 @@ export function createMemorySearchTool(options: {
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
+          const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
-          let surfacedMemoryResults: Array<MemorySearchResult & { corpus: "memory" }> = [];
+          let surfacedMemoryResults: Array<
+            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
+          > = [];
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
           let searchMode: string | undefined;
+          let searchDebug:
+            | {
+                backend: string;
+                configuredMode?: string;
+                effectiveMode?: string;
+                fallback?: string;
+                searchMs: number;
+                hits: number;
+              }
+            | undefined;
           if (shouldQueryMemory && memory && !("error" in memory)) {
+            const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+            const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
+              cfg,
+              options.agentSessionKey,
+            );
             rawResults = await memory.manager.search(query, {
               maxResults,
               minScore,
               sessionKey: options.agentSessionKey,
+              qmdSearchModeOverride,
+              onDebug: (debug) => {
+                runtimeDebug.push(debug);
+              },
             });
             const status = memory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
@@ -213,7 +271,19 @@ export function createMemorySearchTool(options: {
             provider = status.provider;
             model = status.model;
             fallback = status.fallback;
-            searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+            const latestDebug = runtimeDebug.at(-1);
+            searchMode = latestDebug?.effectiveMode;
+            searchDebug = {
+              backend: status.backend,
+              configuredMode: latestDebug?.configuredMode,
+              effectiveMode:
+                status.backend === "qmd"
+                  ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                  : "n/a",
+              fallback: latestDebug?.fallback,
+              searchMs: Math.max(0, Date.now() - searchStartedAt),
+              hits: rawResults.length,
+            };
           }
           const supplementResults = shouldQuerySupplements
             ? await searchMemoryCorpusSupplements({
@@ -238,6 +308,7 @@ export function createMemorySearchTool(options: {
             fallback,
             citations: citationsMode,
             mode: searchMode,
+            debug: searchDebug,
           });
         } catch (err) {
           const message = formatErrorMessage(err);
@@ -250,13 +321,13 @@ export function createMemorySearchTool(options: {
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+}) {
   return createMemoryTool({
     options,
     label: "Memory Get",
     name: "memory_get",
     description:
-      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; `corpus=wiki` reads from registered compiled-wiki supplements. Use after search to pull only the needed lines and keep context small.",
+      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
     parameters: MemoryGetSchema,
     execute:
       ({ cfg, agentId }) =>

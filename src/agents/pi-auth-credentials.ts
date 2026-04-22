@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type PiApiKeyCredential = { type: "api_key"; key: string };
 export type PiOAuthCredential = {
@@ -57,7 +57,7 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
 export function resolvePiCredentialMapFromStore(store: AuthProfileStore): PiCredentialMap {
   const credentials: PiCredentialMap = {};
   for (const credential of Object.values(store.profiles)) {
-    const provider = normalizeProviderId(String(credential.provider ?? ""));
+    const provider = normalizeProviderId(credential.provider ?? "");
     if (!provider || credentials[provider]) {
       continue;
     }

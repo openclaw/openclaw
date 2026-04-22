@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { matrixApprovalCapability, matrixNativeApprovalAdapter } from "./approval-native.js";
+import { matrixApprovalCapability } from "./approval-native.js";
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>>,
@@ -22,7 +22,7 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-describe("matrix native approval adapter", () => {
+describe("matrix approval capability", () => {
   it("describes the correct Matrix exec-approval setup path", () => {
     const text = matrixApprovalCapability.describeExecApprovalSetup?.({
       channel: "matrix",
@@ -46,7 +46,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("describes native matrix approval delivery capabilities", () => {
-    const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+    const capabilities = matrixApprovalCapability.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -74,7 +74,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("resolves origin targets from matrix turn source", async () => {
-    const target = await matrixNativeApprovalAdapter.native?.resolveOriginTarget?.({
+    const target = await matrixApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -100,7 +100,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("resolves approver dm targets", async () => {
-    const targets = await matrixNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+    const targets = await matrixApprovalCapability.native?.resolveApproverDmTargets?.({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -117,34 +117,8 @@ describe("matrix native approval adapter", () => {
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
   });
 
-  it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
-    const target = await matrixNativeApprovalAdapter.native?.resolveOriginTarget?.({
-      cfg: buildConfig({
-        dm: { allowFrom: ["@owner:example.org"] },
-      }),
-      accountId: "default",
-      approvalKind: "plugin",
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin Approval Required",
-          description: "Allow plugin access",
-          pluginId: "git-tools",
-          sessionKey: "agent:main:matrix:channel:!ops:example.org:thread:$root",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(target).toEqual({
-      to: "room:!ops:example.org",
-      threadId: "$root",
-    });
-  });
-
   it("suppresses same-channel plugin forwarding when Matrix native delivery is available", () => {
-    const shouldSuppress = matrixNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+    const shouldSuppress = matrixApprovalCapability.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {
       throw new Error("delivery suppression helper unavailable");
     }
@@ -178,7 +152,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("preserves room-id case when matching Matrix origin targets", async () => {
-    const target = await matrixNativeApprovalAdapter.native?.resolveOriginTarget?.({
+    const target = await matrixApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -300,7 +274,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("enables matrix-native plugin approval delivery when DM approvers are configured", () => {
-    const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+    const capabilities = matrixApprovalCapability.native?.describeDeliveryCapabilities({
       cfg: buildConfig({
         dm: { allowFrom: ["@owner:example.org"] },
       }),
@@ -328,7 +302,7 @@ describe("matrix native approval adapter", () => {
   });
 
   it("keeps matrix-native plugin approval delivery disabled without DM approvers", () => {
-    const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+    const capabilities = matrixApprovalCapability.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "plugin",

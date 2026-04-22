@@ -15,6 +15,7 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "auth",
   "client_secret",
   "refresh_token",
+  "signature",
 ]);
 
 export function isSensitiveUrlQueryParamName(name: string): boolean {
@@ -23,6 +24,9 @@ export function isSensitiveUrlQueryParamName(name: string): boolean {
 
 export function isSensitiveUrlConfigPath(path: string): boolean {
   if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
+    return true;
+  }
+  if (path.endsWith(".cdpUrl")) {
     return true;
   }
   if (path.endsWith(".request.proxy.url")) {

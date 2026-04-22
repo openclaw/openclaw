@@ -6,6 +6,7 @@ import {
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
+  isReasoningReplyPayload,
   isNumericTargetId,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
@@ -13,6 +14,22 @@ import {
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
+
+describe("isReasoningReplyPayload", () => {
+  it.each([
+    { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
+    { name: "prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Reasoning:\n> _hidden_" }, expected: true },
+    {
+      name: "mid-message mention",
+      payload: { text: "Intro\nReasoning: visible discussion" },
+      expected: false,
+    },
+    { name: "missing text", payload: {}, expected: false },
+  ])("$name", ({ payload, expected }) => {
+    expect(isReasoningReplyPayload(payload)).toBe(expected);
+  });
+});
 
 describe("sendPayloadWithChunkedTextAndMedia", () => {
   it("returns empty result when payload has no text and no media", async () => {

@@ -11,11 +11,132 @@ const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
+let setupRegistryTesting: typeof import("./setup-registry.js").__testing;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
+let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
+let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
+}
+
+function writeSetupApiStub(pluginRoot: string): void {
+  fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+}
+
+function mockSinglePlugin(plugin: {
+  id: string;
+  rootDir: string;
+  setup?: unknown;
+  configContracts?: unknown;
+}) {
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [plugin],
+    diagnostics: [],
+  });
+}
+
+function mockVoiceCallConfigMigrationRegistration(registerResult?: () => Promise<void>) {
+  const pluginRoot = makeTempDir();
+  writeSetupApiStub(pluginRoot);
+  mockSinglePlugin({ id: "voice-call", rootDir: pluginRoot });
+  mocks.createJiti.mockImplementation(() => {
+    return () => ({
+      default: {
+        register(api: {
+          registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
+        }) {
+          api.registerConfigMigration((config) => ({ config, changes: ["voice-call"] }));
+          return registerResult?.();
+        },
+      },
+    });
+  });
+}
+
+function mockOpenAiCliBackendRegistration(params: {
+  requiresRuntime?: boolean;
+  registerResult?: () => Promise<void>;
+}) {
+  const pluginRoot = makeTempDir();
+  writeSetupApiStub(pluginRoot);
+  mockSinglePlugin({
+    id: "openai",
+    rootDir: pluginRoot,
+    setup: {
+      cliBackends: ["codex-cli"],
+      ...(params.requiresRuntime ? { requiresRuntime: true } : {}),
+    },
+  });
+  mocks.createJiti.mockImplementation(() => {
+    return () => ({
+      default: {
+        register(api: {
+          registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+        }) {
+          api.registerCliBackend({
+            id: "codex-cli",
+            config: { command: "codex" },
+          });
+          return params.registerResult?.();
+        },
+      },
+    });
+  });
+}
+
+function mockDuplicateSetupClaims(params: {
+  duplicatePluginId: boolean;
+  kind: "cliBackend" | "provider";
+}) {
+  const bundledRoot = makeTempDir();
+  const workspaceRoot = makeTempDir();
+  writeSetupApiStub(bundledRoot);
+  writeSetupApiStub(workspaceRoot);
+  const setup =
+    params.kind === "provider"
+      ? {
+          bundled: { providers: [{ id: "openai" }] },
+          workspace: { providers: [{ id: "OpenAI" }] },
+        }
+      : {
+          bundled: { cliBackends: ["codex-cli"] },
+          workspace: { cliBackends: ["CODEX-CLI"] },
+        };
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled",
+        rootDir: bundledRoot,
+        setup: setup.bundled,
+      },
+      {
+        id: params.duplicatePluginId ? "openai" : "workspace-shadow",
+        origin: "workspace",
+        rootDir: workspaceRoot,
+        setup: setup.workspace,
+      },
+    ],
+    diagnostics: [],
+  });
+}
+
+async function expectNoUnhandledRejection(run: () => void | Promise<void>): Promise<void> {
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    await run();
+    await Promise.resolve();
+    await Promise.resolve();
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+  expect(unhandledRejections).toEqual([]);
 }
 
 afterEach(() => {
@@ -26,8 +147,14 @@ describe("setup-registry getJiti", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
-    ({ clearPluginSetupRegistryCache, resolvePluginSetupRegistry, runPluginSetupConfigMigrations } =
-      await import("./setup-registry.js"));
+    ({
+      __testing: setupRegistryTesting,
+      clearPluginSetupRegistryCache,
+      resolvePluginSetupRegistry,
+      resolvePluginSetupProvider,
+      resolvePluginSetupCliBackend,
+      runPluginSetupConfigMigrations,
+    } = await import("./setup-registry.js"));
     clearPluginSetupRegistryCache();
   });
 
@@ -157,23 +284,7 @@ describe("setup-registry getJiti", () => {
   });
 
   it("still loads explicitly configured plugin entries without manifest trigger metadata", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "voice-call", rootDir: pluginRoot }],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(() => {
-      return () => ({
-        default: {
-          register(api: {
-            registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
-          }) {
-            api.registerConfigMigration((config) => ({ config, changes: ["voice-call"] }));
-          },
-        },
-      });
-    });
+    mockVoiceCallConfigMigrationRegistration();
 
     const result = runPluginSetupConfigMigrations({
       config: {
@@ -192,5 +303,295 @@ describe("setup-registry getJiti", () => {
 
     expect(result.changes).toEqual(["voice-call"]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers setup provider descriptors over top-level provider ids", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "amazon-bedrock",
+          rootDir: pluginRoot,
+          providers: ["legacy-bedrock"],
+          setup: {
+            providers: [{ id: "amazon-bedrock" }],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+          }) {
+            api.registerProvider({
+              id: "amazon-bedrock",
+              label: "Amazon Bedrock",
+              auth: [],
+            });
+          },
+        },
+      });
+    });
+
+    expect(resolvePluginSetupProvider({ provider: "amazon-bedrock", env: {} })).toEqual(
+      expect.objectContaining({
+        id: "amazon-bedrock",
+        label: "Amazon Bedrock",
+      }),
+    );
+    expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+  });
+
+  it("resolves setup cli backends from descriptors without loading every setup-api", () => {
+    const openaiRoot = makeTempDir();
+    const anthropicRoot = makeTempDir();
+    fs.writeFileSync(path.join(openaiRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(path.join(anthropicRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: openaiRoot,
+          cliBackends: ["legacy-openai-cli"],
+          setup: {
+            cliBackends: ["codex-cli"],
+            requiresRuntime: true,
+          },
+        },
+        {
+          id: "anthropic",
+          rootDir: anthropicRoot,
+          cliBackends: ["claude-cli"],
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation((modulePath: string) => {
+      return () => ({
+        default: {
+          register(api: {
+            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+          }) {
+            api.registerCliBackend(
+              modulePath.includes(openaiRoot)
+                ? { id: "codex-cli", config: { command: "codex" } }
+                : { id: "claude-cli", config: { command: "claude" } },
+            );
+          },
+        },
+      });
+    });
+
+    const first = resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} });
+    const second = resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} });
+
+    expect(first).toEqual({
+      pluginId: "openai",
+      backend: {
+        id: "codex-cli",
+        config: {
+          command: "codex",
+        },
+      },
+    });
+    expect(second).toEqual(first);
+    expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(openaiRoot, "setup-api.js"));
+  });
+
+  it("keeps synchronously registered cli backends even when register returns a promise", () => {
+    mockOpenAiCliBackendRegistration({
+      requiresRuntime: true,
+      registerResult: () => Promise.resolve(),
+    });
+
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual({
+      pluginId: "openai",
+      backend: {
+        id: "codex-cli",
+        config: {
+          command: "codex",
+        },
+      },
+    });
+  });
+
+  it("swallows rejected async setup provider registration returns", async () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+          }) {
+            api.registerProvider({
+              id: "openai",
+              label: "OpenAI",
+              auth: [],
+            });
+            return Promise.reject(new Error("async provider register failed"));
+          },
+        },
+      });
+    });
+
+    await expectNoUnhandledRejection(() => {
+      expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toEqual(
+        expect.objectContaining({
+          id: "openai",
+          label: "OpenAI",
+        }),
+      );
+    });
+  });
+
+  it("swallows rejected async setup cli backend registration returns", async () => {
+    mockOpenAiCliBackendRegistration({
+      registerResult: () => Promise.reject(new Error("async cli backend register failed")),
+    });
+
+    await expectNoUnhandledRejection(() => {
+      expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual({
+        pluginId: "openai",
+        backend: {
+          id: "codex-cli",
+          config: {
+            command: "codex",
+          },
+        },
+      });
+    });
+  });
+
+  it("swallows rejected async setup registry registration returns", async () => {
+    mockVoiceCallConfigMigrationRegistration(() =>
+      Promise.reject(new Error("async setup registry register failed")),
+    );
+
+    await expectNoUnhandledRejection(() => {
+      expect(resolvePluginSetupRegistry({ env: {} }).configMigrations).toHaveLength(1);
+    });
+  });
+
+  it("fails closed when multiple plugins claim the same setup provider id", () => {
+    mockDuplicateSetupClaims({
+      duplicatePluginId: false,
+      kind: "provider",
+    });
+
+    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when duplicate plugin ids shadow the same setup provider id", () => {
+    mockDuplicateSetupClaims({
+      duplicatePluginId: true,
+      kind: "provider",
+    });
+
+    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when multiple plugins claim the same setup cli backend id", () => {
+    mockDuplicateSetupClaims({
+      duplicatePluginId: false,
+      kind: "cliBackend",
+    });
+
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when duplicate plugin ids shadow the same setup cli backend id", () => {
+    mockDuplicateSetupClaims({
+      duplicatePluginId: true,
+      kind: "cliBackend",
+    });
+
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("bounds setup lookup caches with least-recently-used eviction", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    setupRegistryTesting.setMaxSetupLookupCacheEntriesForTest(1);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }, { id: "anthropic" }],
+            cliBackends: ["codex-cli", "claude-cli"],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const loadSetupModule = vi.fn(() => ({
+      default: {
+        register(api: {
+          registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+          registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+        }) {
+          api.registerProvider({ id: "openai", label: "OpenAI", auth: [] });
+          api.registerProvider({ id: "anthropic", label: "Anthropic", auth: [] });
+          api.registerCliBackend({ id: "codex-cli", config: { command: "codex" } });
+          api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
+        },
+      },
+    }));
+    mocks.createJiti.mockImplementation(() => loadSetupModule);
+
+    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
+    expect(resolvePluginSetupProvider({ provider: "anthropic", env: {} })?.id).toBe("anthropic");
+    expect(setupRegistryTesting.getCacheSizes().setupProvider).toBe(1);
+    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
+
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
+      "codex-cli",
+    );
+    expect(resolvePluginSetupCliBackend({ backend: "claude-cli", env: {} })?.backend.id).toBe(
+      "claude-cli",
+    );
+    expect(setupRegistryTesting.getCacheSizes().setupCliBackend).toBe(1);
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
+      "codex-cli",
+    );
+
+    resolvePluginSetupRegistry({
+      env: {},
+      pluginIds: ["openai"],
+    });
+    resolvePluginSetupRegistry({
+      env: {},
+      pluginIds: ["anthropic"],
+    });
+    expect(setupRegistryTesting.getCacheSizes().setupRegistry).toBe(1);
+    expect(loadSetupModule).toHaveBeenCalledTimes(7);
   });
 });

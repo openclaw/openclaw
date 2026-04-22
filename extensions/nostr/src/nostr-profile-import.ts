@@ -7,7 +7,7 @@
 
 import { SimplePool, verifyEvent, type Event } from "nostr-tools";
 import type { NostrProfile } from "./config-schema.js";
-import { validateUrlSafety } from "./nostr-profile-http.js";
+import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
 
 // ============================================================================

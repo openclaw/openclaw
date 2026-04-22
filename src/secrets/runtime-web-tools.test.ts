@@ -41,10 +41,12 @@ const {
   ),
   resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => buildTestWebFetchProviders()),
 }));
-const { resolveManifestContractPluginIdsByCompatibilityRuntimePathMock } = vi.hoisted(() => ({
+const {
+  resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
+  resolveManifestContractOwnerPluginIdMock,
+  runtimeManifestActual,
+} = vi.hoisted(() => ({
   resolveManifestContractPluginIdsByCompatibilityRuntimePathMock: vi.fn(() => ["brave"]),
-}));
-const { resolveManifestContractOwnerPluginIdMock, runtimeManifestActual } = vi.hoisted(() => ({
   resolveManifestContractOwnerPluginIdMock: vi.fn(),
   runtimeManifestActual: {
     resolveManifestContractOwnerPluginId: undefined as
@@ -84,17 +86,6 @@ vi.mock("./runtime-web-tools-public-artifacts.runtime.js", () => ({
     resolveBundledWebFetchProvidersFromPublicArtifactsMock,
 }));
 
-vi.mock("../plugins/manifest-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
-    "../plugins/manifest-registry.js",
-  );
-  return {
-    ...actual,
-    resolveManifestContractPluginIdsByCompatibilityRuntimePath:
-      resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
-  };
-});
-
 vi.mock("./runtime-web-tools-manifest.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-web-tools-manifest.runtime.js")>(
     "./runtime-web-tools-manifest.runtime.js",
@@ -107,6 +98,8 @@ vi.mock("./runtime-web-tools-manifest.runtime.js", async () => {
   return {
     ...actual,
     resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
+    resolveManifestContractPluginIdsByCompatibilityRuntimePath:
+      resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
   };
 });
 
@@ -899,7 +892,37 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("limits legacy top-level web search apiKey auto-detect to compatibility owners", async () => {
+  it("uses single plugin-scoped web search config as a bundled provider hint", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GOOGLE_PROVIDER_REF: "google-provider-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["google"],
+    });
+    expect(resolveManifestContractOwnerPluginIdMock).not.toHaveBeenCalled();
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-detect from legacy top-level web search apiKey", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -915,18 +938,9 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(metadata.search.selectedProvider).toBe("brave");
-    expect(resolveManifestContractPluginIdsByCompatibilityRuntimePathMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contract: "webSearchProviders",
-        path: "tools.web.search.apiKey",
-        origin: "bundled",
-      }),
-    );
-    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
-      onlyPluginIds: ["brave"],
-    });
-    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(metadata.search.selectedProvider).toBe("duckduckgo");
+    expect(resolveManifestContractPluginIdsByCompatibilityRuntimePathMock).not.toHaveBeenCalled();
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -1028,10 +1042,6 @@ describe("runtime web tools resolution", () => {
 
     expect(context.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "plugins.entries.brave.config.webSearch.apiKey",
-        }),
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
           path: "plugins.entries.google.config.webSearch.apiKey",

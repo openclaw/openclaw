@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
+const waitForFast = <T>(callback: () => T | Promise<T>) =>
+  vi.waitFor(callback, { timeout: 1_000, interval: 1 });
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -44,10 +46,8 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("../config/config.js", () => {
   return {
-    ...actual,
     loadConfig: mocks.loadConfig,
   };
 });
@@ -141,6 +141,7 @@ describe("subagent registry seam flow", () => {
     mod.__testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
@@ -164,13 +165,13 @@ describe("subagent registry seam flow", () => {
       runId: "run-1",
       childSessionKey: "agent:main:subagent:child",
       requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: " discord ", accountId: " acct-1 " },
+      requesterOrigin: { channel: " quietchat ", accountId: " acct-1 " },
       requesterDisplayKey: "main",
       task: "finish the task",
       cleanup: "delete",
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     });
 
@@ -186,11 +187,16 @@ describe("subagent registry seam flow", () => {
         childSessionKey: "agent:main:subagent:child",
         childRunId: "run-1",
         requesterSessionKey: "agent:main:main",
-        requesterOrigin: { channel: "discord", accountId: "acct-1" },
+        requesterOrigin: { channel: "quietchat", accountId: "acct-1" },
         task: "finish the task",
         cleanup: "delete",
         roundOneReply: "final completion reply",
-        outcome: { status: "ok" },
+        outcome: {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          elapsedMs: 111,
+        },
       }),
     );
 
@@ -294,10 +300,10 @@ describe("subagent registry seam flow", () => {
     await Promise.resolve();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
         childSessionKey: "agent:main:subagent:child",
         reason: "deleted",
@@ -346,7 +352,7 @@ describe("subagent registry seam flow", () => {
       cleanup: "keep",
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         mod
           .listSubagentRunsForRequester("agent:main:main")
@@ -360,7 +366,7 @@ describe("subagent registry seam flow", () => {
         childRunId: "run-child-finished",
       }),
     );
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
         childSessionKey: "agent:main:subagent:parent",
         reason: "deleted",
@@ -384,7 +390,7 @@ describe("subagent registry seam flow", () => {
       childSessionKey: "agent:main:subagent:killed",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      requesterOrigin: { channel: "discord", accountId: "acct-1" },
+      requesterOrigin: { channel: "quietchat", accountId: "acct-1" },
       task: "kill after init",
       cleanup: "keep",
       workspaceDir: "/tmp/killed-workspace",
@@ -396,7 +402,18 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(updated).toBe(1);
-    await vi.waitFor(() => {
+    const killedRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-killed-init");
+    const killedAt = Date.parse("2026-03-24T12:00:00Z");
+    expect(killedRun?.outcome).toEqual({
+      status: "error",
+      error: "manual kill",
+      startedAt: killedAt,
+      endedAt: killedAt,
+      elapsedMs: 0,
+    });
+    await waitForFast(() => {
       expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: {
           agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
@@ -445,7 +462,7 @@ describe("subagent registry seam flow", () => {
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-killed-delete"),
     ).toBeUndefined();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
         childSessionKey: "agent:main:subagent:killed-delete",
         reason: "deleted",
@@ -479,7 +496,7 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(updated).toBe(1);
-    await vi.waitFor(async () => {
+    await waitForFast(async () => {
       await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -514,10 +531,10 @@ describe("subagent registry seam flow", () => {
 
     mod.releaseSubagentRun("run-release-delete");
 
-    await vi.waitFor(async () => {
+    await waitForFast(async () => {
       await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
         childSessionKey: "agent:main:subagent:release-delete",
         reason: "released",
@@ -548,7 +565,7 @@ describe("subagent registry seam flow", () => {
 
     mod.releaseSubagentRun("run-release-context-engine");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
         childSessionKey: "agent:main:session:child",
         reason: "released",

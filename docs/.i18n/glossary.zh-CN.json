@@ -60,6 +60,14 @@
     "target": "Feishu"
   },
   {
+    "source": "WeChat",
+    "target": "微信"
+  },
+  {
+    "source": "Weixin",
+    "target": "微信"
+  },
+  {
     "source": "Mattermost",
     "target": "Mattermost"
   },
@@ -82,6 +90,10 @@
   {
     "source": "Diffs",
     "target": "Diffs"
+  },
+  {
+    "source": "Dreaming",
+    "target": "Dreaming"
   },
   {
     "source": "Capability Cookbook",
@@ -182,6 +194,10 @@
   {
     "source": "Doctor",
     "target": "Doctor"
+  },
+  {
+    "source": "Config",
+    "target": "配置"
   },
   {
     "source": "Memory Wiki",
@@ -362,5 +378,17 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "/gateway/configuration#strict-validation",
+    "target": "/gateway/configuration#strict-validation"
+  },
+  {
+    "source": "/gateway/configuration#config-hot-reload",
+    "target": "/gateway/configuration#config-hot-reload"
+  },
+  {
+    "source": "/cli/config",
+    "target": "/cli/config"
   }
 ]

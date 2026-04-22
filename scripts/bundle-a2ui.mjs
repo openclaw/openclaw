@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,12 +12,12 @@ const hashFile = path.join(rootDir, "src", "canvas-host", "a2ui", ".bundle.hash"
 const outputFile = path.join(rootDir, "src", "canvas-host", "a2ui", "a2ui.bundle.js");
 const a2uiRendererDir = path.join(rootDir, "vendor", "a2ui", "renderers", "lit");
 const a2uiAppDir = path.join(rootDir, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI");
-const inputPaths = [
-  path.join(rootDir, "package.json"),
-  path.join(rootDir, "pnpm-lock.yaml"),
-  a2uiRendererDir,
-  a2uiAppDir,
-];
+const uiPackageFile = path.join(rootDir, "ui", "package.json");
+const repoInputPaths = [uiPackageFile, a2uiRendererDir, a2uiAppDir];
+const ignoredBundleHashInputPrefixes = ["vendor/a2ui/renderers/lit/dist"];
+const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
+  normalizePath(path.relative(rootDir, inputPath)),
+);
 
 function fail(message) {
   console.error(message);
@@ -35,7 +35,62 @@ async function pathExists(targetPath) {
   }
 }
 
+function normalizePath(filePath) {
+  return filePath.split(path.sep).join("/");
+}
+
+export function isBundleHashInputPath(filePath, repoRoot = rootDir) {
+  const relativePath = normalizePath(path.relative(repoRoot, filePath));
+  return !ignoredBundleHashInputPrefixes.some(
+    (ignoredPath) => relativePath === ignoredPath || relativePath.startsWith(`${ignoredPath}/`),
+  );
+}
+
+export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
+  return [
+    path.join(repoRoot, "node_modules", "rolldown", "bin", "cli.mjs"),
+    path.join(repoRoot, "node_modules", ".pnpm", "node_modules", "rolldown", "bin", "cli.mjs"),
+    path.join(
+      repoRoot,
+      "node_modules",
+      ".pnpm",
+      "rolldown@1.0.0-rc.12",
+      "node_modules",
+      "rolldown",
+      "bin",
+      "cli.mjs",
+    ),
+  ];
+}
+
+export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
+  return [
+    path.join(repoRoot, "ui", "package.json"),
+    path.join(repoRoot, "vendor", "a2ui", "renderers", "lit"),
+    path.join(repoRoot, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI"),
+  ];
+}
+
+export function getBundleHashInputPaths(repoRoot = rootDir) {
+  return getBundleHashRepoInputPaths(repoRoot);
+}
+
+export function compareNormalizedPaths(left, right) {
+  const normalizedLeft = normalizePath(left);
+  const normalizedRight = normalizePath(right);
+  if (normalizedLeft < normalizedRight) {
+    return -1;
+  }
+  if (normalizedLeft > normalizedRight) {
+    return 1;
+  }
+  return 0;
+}
+
 async function walkFiles(entryPath, files) {
+  if (!isBundleHashInputPath(entryPath)) {
+    return;
+  }
   const stat = await fs.stat(entryPath);
   if (!stat.isDirectory()) {
     files.push(entryPath);
@@ -47,16 +102,32 @@ async function walkFiles(entryPath, files) {
   }
 }
 
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join("/");
+function listTrackedInputFiles() {
+  const result = spawnSync("git", ["ls-files", "--", ...relativeRepoInputPaths], {
+    cwd: rootDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  const trackedFiles = result.stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((filePath) => path.join(rootDir, filePath))
+    .filter((filePath) => isBundleHashInputPath(filePath));
+  return trackedFiles;
 }
 
 async function computeHash() {
-  const files = [];
-  for (const inputPath of inputPaths) {
-    await walkFiles(inputPath, files);
+  let files = listTrackedInputFiles();
+  if (!files) {
+    files = [];
+    for (const inputPath of getBundleHashRepoInputPaths(rootDir)) {
+      await walkFiles(inputPath, files);
+    }
   }
-  files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+  files = [...new Set(files)].toSorted(compareNormalizedPaths);
 
   const hash = createHash("sha256");
   for (const filePath of files) {
@@ -121,21 +192,9 @@ async function main() {
     }
   }
 
-  runPnpm(["-s", "exec", "tsc", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
+  runPnpm(["-s", "exec", "tsgo", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
 
-  const localRolldownCliCandidates = [
-    path.join(rootDir, "node_modules", ".pnpm", "node_modules", "rolldown", "bin", "cli.mjs"),
-    path.join(
-      rootDir,
-      "node_modules",
-      ".pnpm",
-      "rolldown@1.0.0-rc.9",
-      "node_modules",
-      "rolldown",
-      "bin",
-      "cli.mjs",
-    ),
-  ];
+  const localRolldownCliCandidates = getLocalRolldownCliCandidates(rootDir);
   const localRolldownCli = (
     await Promise.all(
       localRolldownCliCandidates.map(async (candidate) =>
@@ -151,12 +210,14 @@ async function main() {
       path.join(a2uiAppDir, "rolldown.config.mjs"),
     ]);
   } else {
-    runPnpm(["-s", "dlx", "rolldown", "-c", path.join(a2uiAppDir, "rolldown.config.mjs")]);
+    runPnpm(["-s", "exec", "rolldown", "-c", path.join(a2uiAppDir, "rolldown.config.mjs")]);
   }
 
   await fs.writeFile(hashFile, `${currentHash}\n`, "utf8");
 }
 
-await main().catch((error) => {
-  fail(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main().catch((error) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
+}

@@ -206,6 +206,26 @@ describe("msteams attachment helpers", () => {
       const urls = buildMSTeamsGraphMessageUrls(params);
       expect(urls[0]).toContain(expectedPath);
     });
+
+    it("uses resolved Graph chat ID for personal DMs instead of Bot Framework a: ID", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "personal",
+        conversationId: "19:real-graph-chat-id@unq.gbl.spaces",
+        messageId: "msg-1",
+      });
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("/chats/19%3Areal-graph-chat-id%40unq.gbl.spaces/messages/msg-1");
+    });
+
+    it("still builds URLs when a: conversation ID is passed (caller did not resolve)", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "personal",
+        conversationId: "a:1dRsHCobZ1AxURzY",
+        messageId: "msg-1",
+      });
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("/chats/a%3A1dRsHCobZ1AxURzY/messages/msg-1");
+    });
   });
 
   describe("buildMSTeamsMediaPayload", () => {

@@ -3,35 +3,28 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
+import {
+  QA_FRONTIER_CHARACTER_EVAL_MODELS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODELS,
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
+} from "./providers/live-frontier/character-eval.js";
 import { type QaThinkingLevel } from "./qa-gateway-config.js";
-import { runQaSuite, type QaSuiteResult } from "./suite.js";
+import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
+import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
-const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
-  "openai/gpt-5.4",
-  "openai/gpt-5.2",
-  "openai/gpt-5",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-sonnet-4-6",
-  "zai/glm-5.1",
-  "moonshot/kimi-k2.5",
-  "google/gemini-3.1-pro-preview",
-]);
+const DEFAULT_CHARACTER_EVAL_MODELS = QA_FRONTIER_CHARACTER_EVAL_MODELS;
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
 const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
 const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
-  Object.freeze({
-    "openai/gpt-5.4": "xhigh",
-    "openai/gpt-5.2": "xhigh",
-    "openai/gpt-5": "xhigh",
-  });
-const DEFAULT_JUDGE_MODELS = Object.freeze(["openai/gpt-5.4", "anthropic/claude-opus-4-6"]);
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL;
+const DEFAULT_JUDGE_MODELS = QA_FRONTIER_CHARACTER_JUDGE_MODELS;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
+const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
 const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
-  Object.freeze({
-    "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: true },
-    "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
-  });
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS;
 
 type QaCharacterRunStatus = "pass" | "fail";
 
@@ -81,6 +74,7 @@ export type QaCharacterEvalJudgeResult = {
   thinkingDefault: QaThinkingLevel;
   fastMode: boolean;
   blindModels: boolean;
+  timeoutMs: number;
   durationMs: number;
   rankings: QaCharacterEvalJudgment[];
   error?: string;
@@ -213,12 +207,16 @@ async function mapWithConcurrency<T, U>(
 }
 
 function extractTranscript(result: QaSuiteResult) {
-  const details = result.scenarios.flatMap((scenario) =>
-    scenario.steps
-      .map((step) => step.details)
-      .filter((detail): detail is string => Boolean(detail)),
-  );
-  return details.toSorted((left, right) => right.length - left.length)[0] ?? result.report;
+  let longestDetail: string | undefined;
+  for (const scenario of result.scenarios) {
+    for (const step of scenario.steps) {
+      const detail = step.details;
+      if (detail && (!longestDetail || detail.length > longestDetail.length)) {
+        longestDetail = detail;
+      }
+    }
+  }
+  return longestDetail ?? result.report;
 }
 
 function collectTranscriptStats(transcript: string) {
@@ -231,6 +229,9 @@ function collectTranscriptStats(transcript: string) {
 }
 
 function detectTranscriptFailure(transcript: string): string | undefined {
+  if (extractQaVisibleReplyLeakText(transcript)) {
+    return "internal harness/meta text leaked into transcript";
+  }
   const checks: Array<[RegExp, string]> = [
     [/\bmodel `[^`]+` is not supported\b/i, "model unsupported error leaked into transcript"],
     [/\binsufficient account balance\b/i, "account balance error leaked into transcript"],
@@ -449,6 +450,7 @@ function renderCharacterEvalReport(params: {
   for (const judgment of params.judgments) {
     lines.push(`### ${judgment.model}`, "");
     lines.push(`- Duration: ${formatDuration(judgment.durationMs)}`, "");
+    lines.push(`- Timeout: ${formatDuration(judgment.timeoutMs)}`, "");
     if (judgment.rankings.length > 0) {
       for (const ranking of judgment.rankings) {
         lines.push(
@@ -515,7 +517,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 
-  const runSuite = params.runSuite ?? runQaSuite;
+  const runSuite = params.runSuite ?? runQaSuiteFromRuntime;
   const candidateConcurrency = normalizeConcurrency(
     params.candidateConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
@@ -616,7 +618,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     params.judgeConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
   );
-  const judgeTimeoutMs = params.judgeTimeoutMs ?? 180_000;
+  const judgeTimeoutMs = params.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
   logCharacterEvalProgress(
     params.progress,
     `judges start judges=${judgeModels.length} judgeConcurrency=${judgeConcurrency} timeout=${formatDuration(judgeTimeoutMs)} labels=${params.judgeBlindModels === true ? "blind" : "visible"}`,
@@ -653,10 +655,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           timeoutMs: judgeTimeoutMs,
         });
         rankings = parseJudgeReply(rawReply, new Set(judgePrompt.labelToModel.keys())).map(
-          (ranking) => ({
-            ...ranking,
-            model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
-          }),
+          (ranking) =>
+            Object.assign({}, ranking, {
+              model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
+            }),
         );
       } catch (error) {
         judgeError = formatErrorMessage(error);
@@ -667,6 +669,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         thinkingDefault: judgeOptions.thinkingDefault,
         fastMode: judgeOptions.fastMode,
         blindModels: params.judgeBlindModels === true,
+        timeoutMs: judgeTimeoutMs,
         durationMs: Date.now() - judgeStartedAt,
         rankings,
         ...(judgeError ? { error: judgeError } : {}),

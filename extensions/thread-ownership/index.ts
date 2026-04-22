@@ -13,6 +13,7 @@ type ThreadOwnershipConfig = {
 };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type ThreadOwnershipMessageSendingResult = { cancel: true } | undefined;
 
 // In-memory set of {channel}:{thread} keys where this agent was @-mentioned.
 // Entries expire after 5 minutes.
@@ -30,8 +31,8 @@ function cleanExpiredMentions(): void {
 
 function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: string } {
   const list = Array.isArray(config.agents?.list)
-    ? config.agents.list.filter((entry): entry is AgentEntry =>
-        Boolean(entry && typeof entry === "object"),
+    ? config.agents.list.filter(
+        (entry): entry is AgentEntry => entry !== null && typeof entry === "object",
       )
     : [];
   const selected = list.find((entry) => entry.default === true) ?? list[0];
@@ -86,23 +87,23 @@ export default definePluginEntry({
       }
     });
 
-    api.on("message_sending", async (event, ctx) => {
+    api.on("message_sending", async (event, ctx): Promise<ThreadOwnershipMessageSendingResult> => {
       if (ctx.channelId !== "slack") {
-        return;
+        return undefined;
       }
 
       const threadTs = (event.metadata?.threadTs as string) ?? "";
       const channelId = (event.metadata?.channelId as string) ?? event.to;
       if (!threadTs) {
-        return;
+        return undefined;
       }
       if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) {
-        return;
+        return undefined;
       }
 
       cleanExpiredMentions();
       if (mentionedThreads.has(`${channelId}:${threadTs}`)) {
-        return;
+        return undefined;
       }
 
       try {
@@ -122,7 +123,7 @@ export default definePluginEntry({
 
         try {
           if (resp.ok) {
-            return;
+            return undefined;
           }
           if (resp.status === 409) {
             const body = (await resp.json()) as { owner?: string };
@@ -140,6 +141,7 @@ export default definePluginEntry({
           `thread-ownership: ownership check failed (${String(err)}), allowing send`,
         );
       }
+      return undefined;
     });
   },
 });

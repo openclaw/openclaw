@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
@@ -82,7 +82,7 @@ export async function isRequesterSpawnedSessionVisible(params: {
     return true;
   }
   try {
-    const resolved = await sessionsResolutionDeps.callGateway<{ key?: string }>({
+    const resolved = await sessionsResolutionDeps.callGateway({
       method: "sessions.resolve",
       params: {
         key: params.targetSessionKey,
@@ -231,7 +231,7 @@ async function callGatewayResolveSessionId(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<string> {
-  const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
+  const result = await sessionsResolutionDeps.callGateway({
     method: "sessions.resolve",
     params: buildSessionIdResolveParams(params),
   });
@@ -288,7 +288,7 @@ async function resolveSessionKeyFromKey(params: {
 }): Promise<SessionReferenceResolution | null> {
   try {
     // Try key-based resolution first so non-standard keys keep working.
-    const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
+    const result = await sessionsResolutionDeps.callGateway({
       method: "sessions.resolve",
       params: {
         key: params.key,
