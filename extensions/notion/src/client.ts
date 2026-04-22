@@ -152,7 +152,7 @@ export class NotionApiClient {
     this.notionClient = new Client({
       auth: config.token,
       baseUrl: normalizeClientBaseUrl(config.baseUrl),
-      notionVersion: NOTION_API_VERSION, // Explicitly set to 2026-03-11 (SDK default is 2025-09-03)
+      notionVersion: NOTION_API_VERSION, // Use 2026-03-11 for data source model support
     });
   }
 
