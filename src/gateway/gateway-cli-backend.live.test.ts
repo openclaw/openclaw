@@ -24,12 +24,14 @@ import {
   shouldRunCliMcpProbe,
   snapshotCliBackendLiveEnv,
   type SystemPromptReport,
-  verifyCliCronMcpLoopbackPreflight,
-  verifyCliCronMcpProbe,
-  verifyCliBackendImageProbe,
   withClaudeMcpConfigOverrides,
   connectTestGatewayClient,
 } from "./gateway-cli-backend.live-helpers.js";
+import {
+  verifyCliBackendImageProbe,
+  verifyCliCronMcpLoopbackPreflight,
+  verifyCliCronMcpProbe,
+} from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 

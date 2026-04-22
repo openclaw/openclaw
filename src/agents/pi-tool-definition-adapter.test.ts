@@ -203,6 +203,15 @@ describe("client tool name conflict checks", () => {
     ).toEqual(["Weather", "weather"]);
   });
 
+  it("detects collisions with reserved Pi built-in tool names", () => {
+    expect(
+      findClientToolNameConflicts({
+        tools: [makeClientTool("Bash"), makeClientTool("grep")],
+        existingToolNames: ["bash", "edit", "find", "grep", "ls", "read", "write"],
+      }),
+    ).toEqual(["Bash", "grep"]);
+  });
+
   it("wraps conflict errors with a stable prefix", () => {
     const err = createClientToolNameConflictError(["exec", "Web_Search"]);
     expect(err.message).toBe(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} exec, Web_Search`);

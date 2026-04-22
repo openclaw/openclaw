@@ -23,6 +23,8 @@ export type RunCliAgentParams = {
   timeoutMs: number;
   runId: string;
   extraSystemPrompt?: string;
+  /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
+  extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
@@ -44,6 +46,7 @@ export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
   env?: Record<string, string>;
 };
 
@@ -54,6 +57,7 @@ export type CliReusableSession = {
 
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
+  effectiveAuthProfileId?: string;
   started: number;
   workspaceDir: string;
   backendResolved: ResolvedCliBackend;
@@ -66,5 +70,6 @@ export type PreparedCliRunContext = {
   bootstrapPromptWarningLines: string[];
   heartbeatPrompt?: string;
   authEpoch?: string;
+  authEpochVersion: number;
   extraSystemPromptHash?: string;
 };

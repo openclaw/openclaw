@@ -9,8 +9,8 @@ function resolveMockOverrides<TModule extends object>(
   return typeof factory === "function" ? factory(actual) : factory;
 }
 
-function resolveDefaultBase<TModule extends object>(actual: TModule): Record<string, unknown> {
-  const defaultExport = (actual as TModule & { default?: unknown }).default;
+function resolveDefaultBase(actual: object): Record<string, unknown> {
+  const defaultExport = (actual as { default?: unknown }).default;
   if (defaultExport && typeof defaultExport === "object") {
     return defaultExport as Record<string, unknown>;
   }
@@ -40,4 +40,20 @@ export async function mockNodeBuiltinModule<TModule extends object>(
       ...overrides,
     },
   } as TModule;
+}
+
+export async function mockNodeChildProcessSpawnSync(
+  spawnSync: (...args: unknown[]) => unknown,
+): Promise<typeof import("node:child_process")> {
+  return mockNodeBuiltinModule(() => import("node:child_process"), {
+    spawnSync: (...args: unknown[]) => spawnSync(...args),
+  } as Partial<typeof import("node:child_process")>);
+}
+
+export async function mockNodeChildProcessExecFile(
+  execFile: typeof import("node:child_process").execFile,
+): Promise<typeof import("node:child_process")> {
+  return mockNodeBuiltinModule(() => import("node:child_process"), {
+    execFile,
+  } as Partial<typeof import("node:child_process")>);
 }

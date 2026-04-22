@@ -1,12 +1,18 @@
-import {
-  createWebSearchProviderContractFields,
-  type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import { createExaWebSearchProviderBase } from "./exa-web-search-provider.shared.js";
 
-const EXA_CREDENTIAL_PATH = "plugins.entries.exa.config.webSearch.apiKey";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
 const EXA_FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
 const EXA_MAX_SEARCH_COUNT = 100;
+
+type ExaWebSearchRuntime = typeof import("./exa-web-search-provider.runtime.js");
+
+let exaWebSearchRuntimePromise: Promise<ExaWebSearchRuntime> | undefined;
+
+function loadExaWebSearchRuntime(): Promise<ExaWebSearchRuntime> {
+  exaWebSearchRuntimePromise ??= import("./exa-web-search-provider.runtime.js");
+  return exaWebSearchRuntimePromise;
+}
 
 const ExaSearchSchema = {
   type: "object",
@@ -59,30 +65,13 @@ const ExaSearchSchema = {
 
 export function createExaWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: "exa",
-    label: "Exa Search",
-    hint: "Neural + keyword search with date filters and content extraction",
-    onboardingScopes: ["text-inference"],
-    credentialLabel: "Exa API key",
-    envVars: ["EXA_API_KEY"],
-    placeholder: "exa-...",
-    signupUrl: "https://exa.ai/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 65,
-    credentialPath: EXA_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: EXA_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "exa" },
-      configuredCredential: { pluginId: "exa" },
-      selectionPluginId: "exa",
-    }),
+    ...createExaWebSearchProviderBase(),
     createTool: (ctx) => ({
       description:
         "Search the web using Exa AI. Supports neural or keyword search, publication date filters, and optional highlights or text extraction.",
       parameters: ExaSearchSchema,
       execute: async (args) => {
-        const { executeExaWebSearchProviderTool } =
-          await import("./exa-web-search-provider.runtime.js");
+        const { executeExaWebSearchProviderTool } = await loadExaWebSearchRuntime();
         return await executeExaWebSearchProviderTool(ctx, args);
       },
     }),

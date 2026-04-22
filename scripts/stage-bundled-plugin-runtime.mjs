@@ -111,12 +111,17 @@ function ensureOpenClawExtensionAlias(params) {
       "./plugin-sdk/*": "./plugin-sdk/*.js",
     },
   });
-  ensureSymlink(
-    relativeSymlinkTarget(pluginSdkDir, pluginSdkAliasPath),
-    pluginSdkAliasPath,
-    symlinkType(),
-    pluginSdkDir,
-  );
+  removePathIfExists(pluginSdkAliasPath);
+  fs.mkdirSync(pluginSdkAliasPath, { recursive: true });
+  for (const dirent of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
+    if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
+      continue;
+    }
+    writeRuntimeModuleWrapper(
+      path.join(pluginSdkDir, dirent.name),
+      path.join(pluginSdkAliasPath, dirent.name),
+    );
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
@@ -135,15 +140,35 @@ function shouldCopyRuntimeFile(sourcePath) {
   );
 }
 
+function hasDefaultExport(sourcePath) {
+  const text = fs.readFileSync(sourcePath, "utf8");
+  return /\bexport\s+default\b/u.test(text) || /\bas\s+default\b/u.test(text);
+}
+
 function writeRuntimeModuleWrapper(sourcePath, targetPath) {
   const specifier = relativeSymlinkTarget(sourcePath, targetPath).replace(/\\/g, "/");
   const normalizedSpecifier = specifier.startsWith(".") ? specifier : `./${specifier}`;
+  const defaultForwarder = hasDefaultExport(sourcePath)
+    ? [
+        `import defaultModule from ${JSON.stringify(normalizedSpecifier)};`,
+        `let defaultExport = defaultModule;`,
+        `for (let index = 0; index < 4 && defaultExport && typeof defaultExport === "object" && "default" in defaultExport; index += 1) {`,
+        `  defaultExport = defaultExport.default;`,
+        `}`,
+      ]
+    : [
+        `import * as module from ${JSON.stringify(normalizedSpecifier)};`,
+        `let defaultExport = "default" in module ? module.default : module;`,
+        `for (let index = 0; index < 4 && defaultExport && typeof defaultExport === "object" && "default" in defaultExport; index += 1) {`,
+        `  defaultExport = defaultExport.default;`,
+        `}`,
+      ];
   fs.writeFileSync(
     targetPath,
     [
       `export * from ${JSON.stringify(normalizedSpecifier)};`,
-      `import * as module from ${JSON.stringify(normalizedSpecifier)};`,
-      "export default module.default;",
+      ...defaultForwarder,
+      "export { defaultExport as default };",
       "",
     ].join("\n"),
     "utf8",
