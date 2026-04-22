@@ -5,6 +5,10 @@ import { streamAnthropic } from "@mariozechner/pi-ai/anthropic";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 
+function requiresDefaultSampling(modelId: string): boolean {
+  return modelId.includes("claude-opus-4-7");
+}
+
 function mergeHeaders(
   ...headerSources: Array<Record<string, string> | undefined>
 ): Record<string, string> {
@@ -23,7 +27,7 @@ function buildMantleAnthropicBaseOptions(
   apiKey: string,
 ) {
   return {
-    temperature: options?.temperature,
+    temperature: requiresDefaultSampling(model.id) ? undefined : options?.temperature,
     maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32_000),
     signal: options?.signal,
     apiKey,
@@ -77,7 +81,7 @@ export function createMantleAnthropicStreamFn(): StreamFn {
       ),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
-    if (!options?.reasoning) {
+    if (!options?.reasoning || requiresDefaultSampling(model.id)) {
       return streamAnthropic(model as Model<"anthropic-messages">, context, {
         ...base,
         client,

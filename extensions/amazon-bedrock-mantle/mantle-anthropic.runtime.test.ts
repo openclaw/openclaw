@@ -28,7 +28,7 @@ function createTestModel(): Model<Api> {
     headers: {
       "X-Test": "model-header",
     },
-    reasoning: true,
+    reasoning: false,
     input: ["text", "image"],
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: 1_000_000,
