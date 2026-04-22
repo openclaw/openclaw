@@ -1058,7 +1058,7 @@ export async function runHeartbeatOnce(opts: {
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return { status: "ran", reason: "context-hit-empty", durationMs: Date.now() - startedAt };
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
@@ -1095,7 +1095,7 @@ export async function runHeartbeatOnce(opts: {
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return { status: "ran", reason: "context-hit-token", durationMs: Date.now() - startedAt };
     }
 
     const mediaUrls = resolveSendableOutboundReplyParts(replyPayload).mediaUrls;

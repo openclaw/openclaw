@@ -251,3 +251,72 @@ describe("isCronSystemEvent", () => {
     },
   );
 });
+
+describe("disk persistence", () => {
+  const tmp = await import("node:fs/promises");
+  const path = await import("node:path");
+  const os = await import("node:os");
+
+  let tmpPath: string;
+
+  beforeEach(async () => {
+    resetSystemEventsForTest();
+    tmpPath = path.join(await os.tempDir(), `openclaw-test-events-${Date.now()}.jsonl`);
+    const { setPendingEventsPath } = await importSystemEventsModule(String(Date.now()));
+    setPendingEventsPath(tmpPath);
+  });
+
+  afterEach(async () => {
+    resetSystemEventsForTest();
+    try {
+      await tmp.unlink(tmpPath);
+    } catch {}
+  });
+
+  it("writes enqueued events to disk", async () => {
+    const key = "agent:main:disk-test-1";
+    enqueueSystemEvent("Dreaming cron triggered", {
+      sessionKey: key,
+      contextKey: "cron:dream-123",
+    });
+    // Give the async disk write a moment to complete
+    await new Promise((r) => setTimeout(r, 50));
+    const content = await tmp.readFile(tmpPath, "utf-8");
+    expect(content).toContain("Dreaming cron triggered");
+  });
+
+  it("recovers pending events from disk on getOrCreateSessionQueue", async () => {
+    const key = "agent:main:disk-test-2";
+    enqueueSystemEvent("Pending reminder", {
+      sessionKey: key,
+      contextKey: "cron:remind-456",
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    // Simulate restart: clear in-memory queue
+    resetSystemEventsForTest();
+    // Re-create the session queue (this triggers _loadDiskQueue)
+    const { getOrCreateSessionQueue, peekSystemEvents } = await importSystemEventsModule(
+      String(Date.now() + 1),
+    );
+    setPendingEventsPath(tmpPath);
+    getOrCreateSessionQueue(key);
+    expect(peekSystemEvents(key)).toContain("Pending reminder");
+  });
+
+  it("does not consume events from other sessions during recovery", async () => {
+    const keyA = "agent:main:disk-test-session-a";
+    const keyB = "agent:main:disk-test-session-b";
+    enqueueSystemEvent("Event for A", { sessionKey: keyA, contextKey: "cron:a" });
+    enqueueSystemEvent("Event for B", { sessionKey: keyB, contextKey: "cron:b" });
+    await new Promise((r) => setTimeout(r, 50));
+    // Clear and re-import
+    resetSystemEventsForTest();
+    const { getOrCreateSessionQueue, peekSystemEvents } = await importSystemEventsModule(
+      String(Date.now() + 2),
+    );
+    setPendingEventsPath(tmpPath);
+    getOrCreateSessionQueue(keyA);
+    expect(peekSystemEvents(keyA)).toContain("Event for A");
+    expect(peekSystemEvents(keyB)).toEqual([]);
+  });
+});
