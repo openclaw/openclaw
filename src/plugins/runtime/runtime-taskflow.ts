@@ -220,6 +220,60 @@ function syncLinkedDurableJobResume(params: {
   }
 }
 
+function syncLinkedDurableJobTerminal(params: {
+  ownerKey: string;
+  flowId: string;
+  flowStatus: Extract<TaskFlowRecord["status"], "succeeded" | "failed">;
+  currentStep?: string | null;
+  summary?: string | null;
+  updatedAt?: number;
+}): void {
+  const job = getDurableJobByTaskFlowIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.ownerKey,
+  });
+  if (!job) {
+    return;
+  }
+
+  if (
+    job.status === "completed" ||
+    job.status === "blocked" ||
+    job.status === "cancelled" ||
+    job.status === "superseded"
+  ) {
+    return;
+  }
+
+  const jobs = createRuntimeJobs().bindSession({
+    sessionKey: params.ownerKey,
+  });
+  const to = params.flowStatus === "succeeded" ? "completed" : "blocked";
+  const reason =
+    params.flowStatus === "succeeded" ? "Linked TaskFlow finished" : "Linked TaskFlow failed";
+
+  jobs.transition({
+    jobId: job.jobId,
+    expectedRevision: job.audit.revision,
+    from: job.status,
+    to,
+    reason,
+    at: params.updatedAt,
+    wake: {
+      status: "cleared",
+      detail:
+        params.flowStatus === "succeeded"
+          ? "TaskFlow reached a successful terminal state."
+          : "TaskFlow reached a failed terminal state.",
+    },
+    patch: {
+      currentStep: params.currentStep,
+      nextWakeAt: null,
+      summary: params.flowStatus === "failed" ? (params.summary ?? null) : null,
+    },
+  });
+}
+
 function createBoundTaskFlowRuntime(params: {
   sessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
@@ -358,7 +412,7 @@ function createBoundTaskFlowRuntime(params: {
           ...(flow.current ? { current: flow.current } : {}),
         };
       }
-      return mapFlowUpdateResult(
+      const result = mapFlowUpdateResult(
         finishFlow({
           flowId: flow.flow.flowId,
           expectedRevision: input.expectedRevision,
@@ -367,6 +421,16 @@ function createBoundTaskFlowRuntime(params: {
           endedAt: input.endedAt,
         }),
       );
+      if (result.applied && result.flow.status === "succeeded") {
+        syncLinkedDurableJobTerminal({
+          ownerKey,
+          flowId: result.flow.flowId,
+          flowStatus: result.flow.status,
+          currentStep: result.flow.currentStep,
+          updatedAt: result.flow.updatedAt,
+        });
+      }
+      return result;
     },
     fail: (input) => {
       const flow = resolveManagedFlowForOwner({
@@ -380,7 +444,7 @@ function createBoundTaskFlowRuntime(params: {
           ...(flow.current ? { current: flow.current } : {}),
         };
       }
-      return mapFlowUpdateResult(
+      const result = mapFlowUpdateResult(
         failFlow({
           flowId: flow.flow.flowId,
           expectedRevision: input.expectedRevision,
@@ -391,6 +455,17 @@ function createBoundTaskFlowRuntime(params: {
           endedAt: input.endedAt,
         }),
       );
+      if (result.applied && result.flow.status === "failed") {
+        syncLinkedDurableJobTerminal({
+          ownerKey,
+          flowId: result.flow.flowId,
+          flowStatus: result.flow.status,
+          currentStep: result.flow.currentStep,
+          summary: result.flow.blockedSummary,
+          updatedAt: result.flow.updatedAt,
+        });
+      }
+      return result;
     },
     requestCancel: (input) => {
       const flow = resolveManagedFlowForOwner({

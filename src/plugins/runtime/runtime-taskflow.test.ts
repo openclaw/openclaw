@@ -298,4 +298,147 @@ describe("runtime TaskFlow", () => {
       }),
     ]);
   });
+
+  it("syncs an attached durable job to completed when a managed flow finishes", () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Finish linked TaskFlow",
+      goal: "Mirror TaskFlow completion into durable jobs",
+      status: "running",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      currentStep: "triage",
+      nextWakeAt: 500,
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Finish after work completes",
+      currentStep: "triage",
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+    if (!attached.applied) {
+      throw new Error("expected TaskFlow attachment to succeed");
+    }
+
+    const finished = taskFlow.finish({
+      flowId: createdFlow.flowId,
+      expectedRevision: createdFlow.revision,
+      updatedAt: 75,
+      endedAt: 80,
+    });
+
+    expect(finished).toMatchObject({
+      applied: true,
+      flow: expect.objectContaining({
+        status: "succeeded",
+        endedAt: 80,
+      }),
+    });
+
+    expect(jobs.get(createdJob.jobId)).toMatchObject({
+      status: "completed",
+      nextWakeAt: undefined,
+      summary: undefined,
+      backing: expect.objectContaining({ taskFlowId: createdFlow.flowId }),
+    });
+    expect(jobs.history(createdJob.jobId)).toEqual([
+      expect.objectContaining({
+        from: "running",
+        to: "completed",
+        reason: "Linked TaskFlow finished",
+        disposition: {
+          kind: "clear_wake_only",
+          wake: { status: "cleared", detail: "TaskFlow reached a successful terminal state." },
+        },
+      }),
+    ]);
+  });
+
+  it("syncs an attached durable job to blocked when a managed flow fails", () => {
+    const taskFlowRuntime = createRuntimeTaskFlow();
+    const jobsRuntime = createRuntimeJobs();
+    const taskFlow = taskFlowRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const jobs = jobsRuntime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const createdJob = jobs.create({
+      title: "Fail linked TaskFlow",
+      goal: "Mirror TaskFlow failure into durable jobs",
+      status: "waiting",
+      stopCondition: { kind: "manual" },
+      notifyPolicy: { kind: "state_changes" },
+      currentStep: "await_review",
+      nextWakeAt: 500,
+      summary: "Waiting on review",
+    });
+    const createdFlow = taskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Fail after review",
+      currentStep: "await_review",
+    });
+
+    const attached = jobs.attachTaskFlow({
+      jobId: createdJob.jobId,
+      flowId: createdFlow.flowId,
+      expectedRevision: createdJob.audit.revision,
+      updatedAt: 25,
+    });
+    expect(attached).toMatchObject({ applied: true });
+    if (!attached.applied) {
+      throw new Error("expected TaskFlow attachment to succeed");
+    }
+
+    const failed = taskFlow.fail({
+      flowId: createdFlow.flowId,
+      expectedRevision: createdFlow.revision,
+      blockedSummary: "Reviewer denied the change.",
+      updatedAt: 90,
+      endedAt: 95,
+    });
+
+    expect(failed).toMatchObject({
+      applied: true,
+      flow: expect.objectContaining({
+        status: "failed",
+        blockedSummary: "Reviewer denied the change.",
+        endedAt: 95,
+      }),
+    });
+
+    expect(jobs.get(createdJob.jobId)).toMatchObject({
+      status: "blocked",
+      nextWakeAt: undefined,
+      summary: "Reviewer denied the change.",
+      backing: expect.objectContaining({ taskFlowId: createdFlow.flowId }),
+    });
+    expect(jobs.history(createdJob.jobId)).toEqual([
+      expect.objectContaining({
+        from: "waiting",
+        to: "blocked",
+        reason: "Linked TaskFlow failed",
+        disposition: {
+          kind: "clear_wake_only",
+          wake: { status: "cleared", detail: "TaskFlow reached a failed terminal state." },
+        },
+      }),
+    ]);
+  });
 });
