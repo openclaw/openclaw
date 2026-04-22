@@ -256,7 +256,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     });
   }
   if (!resolved) {
-    return null;
+    return nextConfig === params.config ? null : { config: nextConfig, retrySelection: true };
   }
   if (nextConfig === params.config && enabledConfig !== params.config) {
     nextConfig = enabledConfig;

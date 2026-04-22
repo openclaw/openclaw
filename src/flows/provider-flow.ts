@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import {
   resolveProviderModelPickerEntries,
@@ -75,7 +76,11 @@ function resolveInstallCatalogProviderSetupFlowContributions(params?: {
     ...params,
     includeUntrustedWorkspacePlugins: false,
   })
-    .filter((entry) => includesProviderFlowScope(entry.onboardingScopes, scope))
+    .filter(
+      (entry) =>
+        includesProviderFlowScope(entry.onboardingScopes, scope) &&
+        enablePluginInConfig(params?.config ?? {}, entry.pluginId).enabled,
+    )
     .map((entry) => {
       const groupId = entry.groupId ?? entry.providerId;
       const groupLabel = entry.groupLabel ?? entry.label;

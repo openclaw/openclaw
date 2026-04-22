@@ -445,4 +445,83 @@ describe("ensureOnboardingPluginInstalled", () => {
       expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
     });
   });
+
+  it("rejects local install paths when relative resolution looks cross-drive", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-cross-drive-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(pluginDir, { recursive: true });
+      const realWorkspaceDir = await fs.realpath(workspaceDir);
+      execFileSync.mockImplementation((command: string, args: string[]) => {
+        expect(command).toBe("git");
+        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
+          throw new Error("unexpected git call");
+        }
+        const request = args.slice(3).join(" ");
+        if (request === "--is-inside-work-tree") {
+          return "true\n";
+        }
+        if (request === "--path-format=absolute --show-toplevel") {
+          return `${realWorkspaceDir}\n`;
+        }
+        if (request === "--path-format=absolute --git-common-dir") {
+          return `${path.join(realWorkspaceDir, ".git")}\n`;
+        }
+        throw new Error(`unexpected git args: ${request}`);
+      });
+
+      const originalRelative = path.relative;
+      const originalIsAbsolute = path.isAbsolute;
+      const relativeSpy = vi.spyOn(path, "relative").mockImplementation((from, to) => {
+        if (
+          typeof from === "string" &&
+          typeof to === "string" &&
+          from === realWorkspaceDir &&
+          to === path.join(realWorkspaceDir, "plugins", "demo")
+        ) {
+          return "D:\\evil";
+        }
+        return originalRelative(from, to);
+      });
+      const isAbsoluteSpy = vi.spyOn(path, "isAbsolute").mockImplementation((value) => {
+        if (value === "D:\\evil") {
+          return true;
+        }
+        return originalIsAbsolute(value);
+      });
+
+      try {
+        let captured:
+          | {
+              options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+            }
+          | undefined;
+
+        await ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Plugin",
+            install: {
+              localPath: "plugins/demo",
+            },
+          },
+          prompter: {
+            select: vi.fn(async (input) => {
+              captured = input;
+              return "skip";
+            }),
+          } as never,
+          runtime: {} as never,
+          workspaceDir,
+        });
+
+        expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
+      } finally {
+        relativeSpy.mockRestore();
+        isAbsoluteSpy.mockRestore();
+      }
+    });
+  });
 });

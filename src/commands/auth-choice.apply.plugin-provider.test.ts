@@ -361,6 +361,52 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result).toEqual({ config: {}, retrySelection: true });
   });
 
+  it("preserves install config when the chosen provider still cannot resolve after install", async () => {
+    resolveProviderInstallCatalogEntry.mockReturnValue({
+      pluginId: "local-provider-plugin",
+      providerId: LOCAL_PROVIDER_ID,
+      methodId: LOCAL_AUTH_METHOD_ID,
+      choiceId: LOCAL_PROVIDER_ID,
+      choiceLabel: LOCAL_PROVIDER_LABEL,
+      label: LOCAL_PROVIDER_LABEL,
+      origin: "bundled",
+      install: {
+        npmSpec: "@openclaw/local-provider",
+      },
+    });
+    ensureOnboardingPluginInstalled.mockResolvedValue({
+      cfg: {
+        plugins: {
+          entries: {
+            "local-provider-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      installed: true,
+      pluginId: "local-provider-plugin",
+      status: "installed",
+    });
+    resolveProviderPluginChoice.mockReturnValue(null);
+
+    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(clearPluginDiscoveryCache).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      config: {
+        plugins: {
+          entries: {
+            "local-provider-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      retrySelection: true,
+    });
+  });
+
   it("merges provider config patches and emits provider notes", async () => {
     applyAuthProfileConfig.mockImplementation(((
       config: {

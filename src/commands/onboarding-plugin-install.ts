@@ -65,7 +65,10 @@ function resolveGitOutputDirectory(root: string, output: string | null): string 
 
 function isWithinBaseDirectory(baseDir: string, targetPath: string): boolean {
   const relative = path.relative(baseDir, targetPath);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
+  );
 }
 
 function hasTrustedGitWorkspace(root: string): boolean {

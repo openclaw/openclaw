@@ -125,6 +125,33 @@ describe("provider flow install catalog contributions", () => {
     ]);
   });
 
+  it("hides install-catalog choices that cannot be enabled", () => {
+    resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "blocked-provider",
+        providerId: "blocked-provider",
+        methodId: "api-key",
+        choiceId: "blocked-provider-api-key",
+        choiceLabel: "Blocked Provider API key",
+        label: "Blocked Provider",
+        origin: "global",
+        install: {
+          npmSpec: "@vendor/blocked-provider",
+        },
+      },
+    ]);
+
+    expect(
+      resolveProviderSetupFlowContributions({
+        config: {
+          plugins: {
+            enabled: false,
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("prefers runtime setup contributions over duplicate install-catalog entries", () => {
     resolveProviderWizardOptions.mockReturnValue([
       {
