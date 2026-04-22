@@ -53,7 +53,7 @@ describe("sessionsCommand", () => {
 
   it("shows placeholder rows when tokens are missing", async () => {
     const store = writeStore({
-      "discord:group:demo": {
+      "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         thinkingLevel: "high",
@@ -65,7 +65,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    const row = logs.find((line) => line.includes("discord:group:demo")) ?? "";
+    const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toContain("unknown/32k (?%)");
     expect(row).toContain("think:high");
     expect(row).toContain("5m ago");
@@ -82,7 +82,7 @@ describe("sessionsCommand", () => {
         totalTokensFresh: true,
         model: "pi:opus",
       },
-      "discord:group:demo": {
+      "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         inputTokens: 20,
@@ -99,11 +99,34 @@ describe("sessionsCommand", () => {
       }>;
     }>(sessionsCommand, store);
     const main = payload.sessions?.find((row) => row.key === "main");
-    const group = payload.sessions?.find((row) => row.key === "discord:group:demo");
+    const group = payload.sessions?.find((row) => row.key === "quietchat:group:demo");
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("shows preserved stale totals in JSON output", async () => {
+    const store = writeStore({
+      main: {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 10 * 60_000,
+        totalTokens: 2000,
+        totalTokensFresh: false,
+        model: "pi:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        totalTokens: number | null;
+        totalTokensFresh: boolean;
+      }>;
+    }>(sessionsCommand, store);
+    const main = payload.sessions?.find((row) => row.key === "main");
+    expect(main?.totalTokens).toBe(2000);
+    expect(main?.totalTokensFresh).toBe(false);
   });
 
   it("applies --active filtering in JSON output", async () => {

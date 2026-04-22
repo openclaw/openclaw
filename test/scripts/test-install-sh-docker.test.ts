@@ -53,6 +53,13 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
     expect(script).toContain("install smoke cannot verify pack budget");
   });
+
+  it("writes the package dist inventory before packing ignore-scripts tarballs", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).toContain("quiet_npm pack --ignore-scripts");
+  });
 });
 
 describe("install-sh smoke runner", () => {
@@ -63,7 +70,7 @@ describe("install-sh smoke runner", () => {
       'HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"',
     );
     expect(script).toContain(
-      'INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-300}"',
+      'INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-900}"',
     );
     expect(script).toContain("run_with_heartbeat");
     expect(script).toContain("npm_install_global");

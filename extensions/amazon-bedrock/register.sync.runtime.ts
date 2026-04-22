@@ -14,6 +14,7 @@ import {
   resolveBedrockConfigApiKey,
   resolveImplicitBedrockProvider,
 } from "./api.js";
+import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type GuardrailConfig = {
   guardrailIdentifier: string;
@@ -77,6 +78,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const pluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
   const guardrail = pluginConfig.guardrail;
+
+  api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
   const baseWrapStreamFn = ({ modelId, streamFn }: { modelId: string; streamFn?: StreamFn }) =>
     isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn);
@@ -188,7 +191,16 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       }
       return undefined;
     },
-    resolveDefaultThinkingLevel: ({ modelId }) =>
-      claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(claude46ModelRe.test(modelId.trim()) ? [{ id: "adaptive" as const }] : []),
+      ],
+      defaultLevel: claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
+    }),
   });
 }

@@ -28,6 +28,17 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
+function mockGeneratedPngResponse() {
+  postJsonRequestMock.mockResolvedValue({
+    response: {
+      json: async () => ({
+        data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+      }),
+    },
+    release: vi.fn(async () => {}),
+  });
+}
+
 describe("openai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
@@ -37,20 +48,23 @@ describe("openai image generation provider", () => {
     vi.unstubAllEnvs();
   });
 
+  it("advertises the current OpenAI image model and 2K/4K size hints", () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    expect(provider.defaultModel).toBe("gpt-image-2");
+    expect(provider.models).toEqual(["gpt-image-2"]);
+    expect(provider.capabilities.geometry?.sizes).toEqual(
+      expect.arrayContaining(["2048x2048", "3840x2160", "2160x3840"]),
+    );
+  });
+
   it("does not auto-allow local baseUrl overrides for image requests", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Draw a QA lighthouse",
       cfg: {
         models: {
@@ -78,20 +92,40 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
-  it("allows loopback image requests for the synthetic mock-openai provider", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
+  it("forwards generation count and custom size overrides", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Create two landscape campaign variants",
+      cfg: {},
+      count: 2,
+      size: "3840x2160",
     });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/generations",
+        body: {
+          model: "gpt-image-2",
+          prompt: "Create two landscape campaign variants",
+          n: 2,
+          size: "3840x2160",
+        },
+      }),
+    );
+    expect(result.images).toHaveLength(1);
+  });
+
+  it("allows loopback image requests for the synthetic mock-openai provider", async () => {
+    mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "mock-openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Draw a QA lighthouse",
       cfg: {
         models: {
@@ -120,20 +154,13 @@ describe("openai image generation provider", () => {
   });
 
   it("allows loopback image requests for openai only inside the QA harness envelope", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockGeneratedPngResponse();
     vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Draw a QA lighthouse",
       cfg: {
         models: {
@@ -160,27 +187,27 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
-  it("uses JSON image_url edits for input-image requests", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+  it("forwards edit count, custom size, and multiple input images", async () => {
+    mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "openai",
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Change only the background to pale blue",
       cfg: {},
+      count: 2,
+      size: "1024x1536",
       inputImages: [
         {
           buffer: Buffer.from("png-bytes"),
           mimeType: "image/png",
           fileName: "reference.png",
+        },
+        {
+          buffer: Buffer.from("jpeg-bytes"),
+          mimeType: "image/jpeg",
+          fileName: "style.jpg",
         },
       ],
     });
@@ -189,11 +216,16 @@ describe("openai image generation provider", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/edits",
         body: expect.objectContaining({
-          model: "gpt-image-1",
+          model: "gpt-image-2",
           prompt: "Change only the background to pale blue",
+          n: 2,
+          size: "1024x1536",
           images: [
             {
               image_url: "data:image/png;base64,cG5nLWJ5dGVz",
+            },
+            {
+              image_url: "data:image/jpeg;base64,anBlZy1ieXRlcw==",
             },
           ],
         }),

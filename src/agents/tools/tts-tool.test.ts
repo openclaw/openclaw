@@ -35,10 +35,24 @@ describe("createTtsTool", () => {
         provider: "test",
         media: {
           mediaUrl: "/tmp/reply.opus",
+          trustedLocalMedia: true,
           audioAsVoice: true,
         },
       },
     });
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
+  });
+
+  it("throws when synthesis fails so the agent records a tool error", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: false,
+      error: "TTS conversion failed: openai: not configured",
+    });
+
+    const tool = createTtsTool();
+
+    await expect(tool.execute("call-1", { text: "hello" })).rejects.toThrow(
+      "TTS conversion failed: openai: not configured",
+    );
   });
 });

@@ -362,6 +362,157 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.existsSync(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"))).toBe(true);
   });
 
+  it("skips missing optional runtime deps when copying the installed closure", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        optionalDependencies: { missingOptional: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0", "optionalDependencies": { "native-extra": "1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 1;\n", "utf8");
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: () => {
+        installCount += 1;
+      },
+    });
+
+    expect(installCount).toBe(0);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 1;\n");
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "missingOptional"))).toBe(false);
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "direct", "node_modules", "native-extra")),
+    ).toBe(false);
+  });
+
+  it("prunes staged test cargo from copied runtime dependencies", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(path.join(directDir, "test"), { recursive: true });
+    fs.mkdirSync(path.join(directDir, "__snapshots__"), { recursive: true });
+    fs.mkdirSync(path.join(directDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'runtime';\n", "utf8");
+    fs.writeFileSync(
+      path.join(directDir, "test", "index.test.js"),
+      "module.exports = 'remove';\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(directDir, "__snapshots__", "index.test.ts.snap"),
+      "snapshot\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(directDir, "src", "runtime.spec.js"),
+      "module.exports = 'remove';\n",
+      "utf8",
+    );
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'runtime';\n");
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "direct", "test", "index.test.js")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(
+        path.join(pluginDir, "node_modules", "direct", "__snapshots__", "index.test.ts.snap"),
+      ),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "direct", "src", "runtime.spec.js")),
+    ).toBe(false);
+  });
+
+  it("preserves nested runtime dependencies named test or tests", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const nestedTestDir = path.join(directDir, "node_modules", "test");
+    const scopedTestsDir = path.join(directDir, "node_modules", "@scope", "tests");
+    fs.mkdirSync(nestedTestDir, { recursive: true });
+    fs.mkdirSync(scopedTestsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0", "dependencies": { "test": "^1.0.0", "@scope/tests": "^1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(
+      path.join(nestedTestDir, "package.json"),
+      '{ "name": "test", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(nestedTestDir, "index.js"), "module.exports = 'test';\n", "utf8");
+    fs.writeFileSync(
+      path.join(scopedTestsDir, "package.json"),
+      '{ "name": "@scope/tests", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(scopedTestsDir, "index.js"),
+      "module.exports = 'scoped-tests';\n",
+      "utf8",
+    );
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(
+        path.join(pluginDir, "node_modules", "direct", "node_modules", "test", "index.js"),
+        "utf8",
+      ),
+    ).toBe("module.exports = 'test';\n");
+    expect(
+      fs.readFileSync(
+        path.join(
+          pluginDir,
+          "node_modules",
+          "direct",
+          "node_modules",
+          "@scope",
+          "tests",
+          "index.js",
+        ),
+        "utf8",
+      ),
+    ).toBe("module.exports = 'scoped-tests';\n");
+  });
+
   it("stages hoisted transitive runtime deps from the root node_modules", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

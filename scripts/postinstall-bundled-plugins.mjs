@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// Runs after install to restore bundled extension runtime deps.
-// Installed builds can lazy-load bundled plugin code through root dist chunks,
-// so runtime dependencies declared in dist/extensions/*/package.json must also
-// resolve from the package root node_modules. Source checkouts resolve bundled
-// plugin deps from the workspace root, so stale plugin-local node_modules must
-// not linger under extensions/* and shadow the root graph.
+// Runs after install to keep packaged dist safe and compatible.
+// Bundled extension runtime dependencies are extension-owned. Do not install
+// every bundled extension dependency during core package install unless the
+// legacy eager-install escape hatch is explicitly enabled; `openclaw doctor
+// --fix` owns the repair path for extensions that are actually used.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -12,6 +11,7 @@ import {
   closeSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -32,7 +32,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const LEGACY_UPDATE_COMPAT_SIDECARS = [
+  {
+    path: "dist/extensions/qa-channel/runtime-api.js",
+    removedPrefix: "dist/extensions/qa-channel/",
+    content:
+      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
+  },
+  {
+    path: "dist/extensions/qa-lab/runtime-api.js",
+    removedPrefix: "dist/extensions/qa-lab/",
+    content:
+      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
+  },
+];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -296,6 +311,29 @@ export function pruneInstalledPackageDist(params = {}) {
   return removed;
 }
 
+export function restoreLegacyUpdaterCompatSidecars(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const writeFile = params.writeFileSync ?? writeFileSync;
+  const makeDirectory = params.mkdirSync ?? mkdirSync;
+  const log = params.log ?? console;
+  const restored = [];
+
+  for (const sidecar of LEGACY_UPDATE_COMPAT_SIDECARS) {
+    // Older npm updater builds verify these exact sidecars after npm has
+    // already replaced the package, so generate them independently of prune
+    // results.
+    const sidecarPath = join(packageRoot, sidecar.path);
+    makeDirectory(dirname(sidecarPath), { recursive: true });
+    writeFile(sidecarPath, sidecar.content, "utf8");
+    restored.push(sidecar.path);
+  }
+
+  if (restored.length > 0) {
+    log.log(`[postinstall] restored legacy updater compat sidecars: ${restored.join(", ")}`);
+  }
+  return restored;
+}
+
 function dependencySentinelPath(depName) {
   return join("node_modules", ...depName.split("/"), "package.json");
 }
@@ -411,10 +449,11 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
   }
 
   return [...deps.values()]
-    .map((dep) => ({
-      ...dep,
-      pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
-    }))
+    .map((dep) =>
+      Object.assign({}, dep, {
+        pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
+      }),
+    )
     .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -424,6 +463,23 @@ export function createNestedNpmInstallEnv(env = process.env) {
   delete nextEnv.npm_config_location;
   delete nextEnv.npm_config_prefix;
   return nextEnv;
+}
+
+export function createBundledRuntimeDependencyInstallEnv(env = process.env) {
+  return {
+    ...createNestedNpmInstallEnv(env),
+    npm_config_legacy_peer_deps: "true",
+    npm_config_package_lock: "false",
+    npm_config_save: "false",
+  };
+}
+
+export function createBundledRuntimeDependencyInstallArgs(missingSpecs) {
+  return ["install", "--ignore-scripts", ...missingSpecs];
+}
+
+function shouldEagerInstallBundledPluginDeps(env = process.env) {
+  return env?.[EAGER_BUNDLED_PLUGIN_DEPS_ENV]?.trim() === "1";
 }
 
 export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
@@ -622,8 +678,8 @@ function shouldRunBundledPluginPostinstall(params) {
 
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
-  const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const extensionsDir = params.extensionsDir ?? join(packageRoot, "dist", "extensions");
   const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
@@ -650,12 +706,19 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
-  pruneInstalledPackageDist({
+  const prunedDistFiles = pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,
     readFileSync: params.readFileSync,
     readdirSync: params.readdirSync,
     rmSync: params.rmSync,
+    log,
+  });
+  restoreLegacyUpdaterCompatSidecars({
+    packageRoot,
+    removedFiles: prunedDistFiles,
+    mkdirSync: params.mkdirSync,
+    writeFileSync: params.writeFileSync,
     log,
   });
   if (
@@ -666,6 +729,16 @@ export function runBundledPluginPostinstall(params = {}) {
       existsSync: pathExists,
     })
   ) {
+    return;
+  }
+  if (!shouldEagerInstallBundledPluginDeps(env)) {
+    applyBundledPluginRuntimeHotfixes({
+      packageRoot,
+      existsSync: pathExists,
+      readFileSync: params.readFileSync,
+      writeFileSync: params.writeFileSync,
+      log,
+    });
     return;
   }
   const runtimeDeps =
@@ -696,28 +769,21 @@ export function runBundledPluginPostinstall(params = {}) {
   }
 
   try {
-    const nestedEnv = createNestedNpmInstallEnv(env);
+    const installEnv = createBundledRuntimeDependencyInstallEnv(env);
     const npmRunner =
       params.npmRunner ??
       resolveNpmRunner({
-        env: nestedEnv,
+        env: installEnv,
         execPath: params.execPath,
         existsSync: pathExists,
         platform: params.platform,
         comSpec: params.comSpec,
-        npmArgs: [
-          "install",
-          "--omit=dev",
-          "--no-save",
-          "--package-lock=false",
-          "--legacy-peer-deps",
-          ...missingSpecs,
-        ],
+        npmArgs: createBundledRuntimeDependencyInstallArgs(missingSpecs),
       });
     const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,
       encoding: "utf8",
-      env: npmRunner.env ?? nestedEnv,
+      env: npmRunner.env ?? installEnv,
       stdio: "pipe",
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
@@ -741,6 +807,20 @@ export function runBundledPluginPostinstall(params = {}) {
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+export function isDirectPostinstallInvocation(params = {}) {
+  const entryPath = params.entryPath ?? process.argv[1];
+  if (!entryPath) {
+    return false;
+  }
+  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  try {
+    return resolveRealPath(entryPath) === resolveRealPath(modulePath);
+  } catch {
+    return pathToFileURL(entryPath).href === pathToFileURL(modulePath).href;
+  }
+}
+
+if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
 }
