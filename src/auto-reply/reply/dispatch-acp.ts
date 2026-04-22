@@ -438,7 +438,7 @@ export async function tryDispatchAcpReply(params: {
         sessionKey: canonicalSessionKey,
         delivery,
         inboundAudio: params.inboundAudio,
-        accountId: params.ctx.AccountId,
+        accountId: effectiveDispatchAccountId,
         sessionTtsAuto: params.sessionTtsAuto,
         ttsChannel: params.ttsChannel,
         shouldEmitResolvedIdentityNotice,
