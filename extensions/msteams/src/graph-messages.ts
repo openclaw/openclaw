@@ -543,8 +543,9 @@ export async function searchMessagesMSTeams(
           const raw = msg.body?.content ?? "";
           // Teams bodies default to HTML — strip tags so queries match the
           // rendered text rather than raw markup (e.g. "bold" would otherwise
-          // match "<b>old").
-          const text = msg.body?.contentType === "html" ? stripHtmlFromTeamsMessage(raw) : raw;
+          // match "<b>old"). Only skip stripping for explicit plain-text bodies;
+          // missing contentType falls through to the HTML-safe path.
+          const text = msg.body?.contentType === "text" ? raw : stripHtmlFromTeamsMessage(raw);
           return text.toLowerCase().includes(needle);
         });
 

@@ -267,6 +267,28 @@ describe("searchMessagesMSTeams", () => {
     expect(result.messages[0].id).toBe("msg-1");
   });
 
+  it("leaves bodies with contentType 'text' untouched (no HTML-strip)", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: { content: "plain <b>text</b> literal", contentType: "text" },
+          from: { user: { id: "u1", displayName: "Alice" } },
+          createdDateTime: "2026-03-25T10:00:00Z",
+        },
+      ],
+    });
+
+    // With contentType "text", the angle brackets are literal characters.
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "<b>",
+    });
+
+    expect(result.messages).toHaveLength(1);
+  });
+
   it("preserves @mention display names in HTML content for matching", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
