@@ -198,6 +198,8 @@ vi.mock("../../plugins/runtime.js", () => {
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (channelId: string) =>
     hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  getLoadedChannelPlugin: (channelId: string) =>
+    hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
   normalizeChannelId: (raw?: string | null) => {
     const normalized = raw?.trim().toLowerCase();
     return normalized || null;
@@ -292,8 +294,8 @@ function buildSessionCommandParams(
     CommandBody: commandBody,
     CommandSource: "text",
     CommandAuthorized: true,
-    Provider: "whatsapp",
-    Surface: "whatsapp",
+    Provider: "quietchat",
+    Surface: "quietchat",
     From: "+1222",
     To: "+1222",
     SenderId: "user-1",

@@ -272,6 +272,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
             text: buildPluginBindingResolvedText(resolved),
           },
           {
+            cfg: params.ctx.cfg,
             accountId: params.ctx.accountId,
           },
         );
@@ -464,6 +465,7 @@ async function dispatchDiscordComponentEvent(params: {
     SenderTag: senderTag,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
+    MemberRoleIds: interactionCtx.memberRoleIds,
     GroupSystemPrompt: interactionCtx.isDirectMessage ? undefined : groupSystemPrompt,
     GroupSpace: guildInfo?.id ?? guildInfo?.slug ?? interactionCtx.rawGuildId ?? undefined,
     OwnerAllowFrom: ownerAllowFrom,

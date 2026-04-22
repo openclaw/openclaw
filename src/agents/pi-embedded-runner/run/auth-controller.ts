@@ -115,6 +115,31 @@ export function createEmbeddedRunAuthController(params: {
 
   const nextRuntimeAuthGeneration = () => (params.getRuntimeAuthState()?.generation ?? 0) + 1;
 
+  const prepareRuntimeAuthForModel = async (prepareParams: {
+    runtimeModel: Model<Api>;
+    apiKey: string;
+    authMode: string;
+    profileId?: string;
+  }) =>
+    prepareProviderRuntimeAuth({
+      provider: prepareParams.runtimeModel.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      context: {
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        provider: prepareParams.runtimeModel.provider,
+        modelId: params.getModelId(),
+        model: prepareParams.runtimeModel,
+        apiKey: prepareParams.apiKey,
+        authMode: prepareParams.authMode,
+        profileId: prepareParams.profileId,
+      },
+    });
+
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
     if (!runtimeAuthState?.refreshTimer) {
@@ -152,23 +177,11 @@ export function createEmbeddedRunAuthController(params: {
       }
       const runtimeModel = params.getRuntimeModel();
       params.log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
-      const preparedAuth = await prepareProviderRuntimeAuth({
-        provider: runtimeModel.provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        context: {
-          config: params.config,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          env: process.env,
-          provider: runtimeModel.provider,
-          modelId: params.getModelId(),
-          model: runtimeModel,
-          apiKey: sourceApiKey,
-          authMode: currentRuntimeAuthState?.authMode ?? "unknown",
-          profileId: currentRuntimeAuthState?.profileId,
-        },
+      const preparedAuth = await prepareRuntimeAuthForModel({
+        runtimeModel,
+        apiKey: sourceApiKey,
+        authMode: currentRuntimeAuthState?.authMode ?? "unknown",
+        profileId: currentRuntimeAuthState?.profileId,
       });
       if (!preparedAuth?.apiKey) {
         throw new Error(
@@ -355,28 +368,60 @@ export function createEmbeddedRunAuthController(params: {
           `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
         );
       }
+      // AWS SDK auth via IMDS / instance role / ECS task role: no explicit API
+      // key is available but the SDK default credential chain can resolve
+      // credentials at runtime.  We must still call setRuntimeApiKey so that
+      // pi's authStorage considers the provider authenticated.  Try
+      // prepareProviderRuntimeAuth first (it can sign requests and return a
+      // short-lived token); fall back to a sentinel value when the provider
+      // plugin does not implement runtime auth preparation.
+      const runtimeModel = params.getRuntimeModel();
+      const AWS_SDK_AUTH_SENTINEL = "__aws_sdk_auth__";
+      try {
+        const preparedAuth = await prepareRuntimeAuthForModel({
+          runtimeModel,
+          apiKey: AWS_SDK_AUTH_SENTINEL,
+          authMode: apiKeyInfo.mode,
+          profileId: apiKeyInfo.profileId,
+        });
+        applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
+        if (preparedAuth?.apiKey) {
+          clearRuntimeAuthRefreshTimer();
+          params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+          params.setRuntimeAuthState({
+            generation: nextRuntimeAuthGeneration(),
+            sourceApiKey: AWS_SDK_AUTH_SENTINEL,
+            authMode: apiKeyInfo.mode,
+            profileId: resolvedProfileId,
+            expiresAt: preparedAuth.expiresAt,
+          });
+          if (preparedAuth.expiresAt) {
+            scheduleRuntimeAuthRefresh();
+          }
+          params.setLastProfileId(resolvedProfileId);
+          return;
+        }
+      } catch (error) {
+        params.log.warn(
+          `prepareProviderRuntimeAuth failed for ${runtimeModel.provider}, falling back to sentinel: ${formatErrorMessage(error)}`,
+        );
+      }
+      // No runtime auth plugin resolved a real credential.  Inject the
+      // sentinel so pi's hasConfiguredAuth() passes and the AWS SDK default
+      // credential chain handles actual request signing.
+      clearRuntimeAuthRefreshTimer();
+      params.authStorage.setRuntimeApiKey(runtimeModel.provider, AWS_SDK_AUTH_SENTINEL);
+      params.setRuntimeAuthState(null);
       params.setLastProfileId(resolvedProfileId);
       return;
     }
     let runtimeAuthHandled = false;
     const runtimeModel = params.getRuntimeModel();
-    const preparedAuth = await prepareProviderRuntimeAuth({
-      provider: runtimeModel.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      context: {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        provider: runtimeModel.provider,
-        modelId: params.getModelId(),
-        model: runtimeModel,
-        apiKey: apiKeyInfo.apiKey,
-        authMode: apiKeyInfo.mode,
-        profileId: apiKeyInfo.profileId,
-      },
+    const preparedAuth = await prepareRuntimeAuthForModel({
+      runtimeModel,
+      apiKey: apiKeyInfo.apiKey,
+      authMode: apiKeyInfo.mode,
+      profileId: apiKeyInfo.profileId,
     });
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {
