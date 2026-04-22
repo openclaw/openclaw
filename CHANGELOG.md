@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex harness: rotate the shared app-server websocket client when the configured bearer token changes, so auth-token refreshes reconnect with the new `Authorization` header instead of reusing a stale socket. (#70328) Thanks @Lucenx9.
 - Config/models: merge provider-scoped model allowlist updates and protect model/provider map writes from accidental full replacement, adding `config set --merge` for additive updates and `--replace` for intentional clobbers. Fixes #65920, #68392, and #68653.
 - Agents/Pi auth: preserve AWS SDK-authenticated Bedrock runs for IMDS and task-role setups, clear stale refresh timers on sentinel fallback, and log unexpected runtime-auth prep failures instead of silently leaving the provider unauthenticated. Thanks @wirjo.
 - Config/gateway: recover configs accidentally prefixed with non-JSON output during gateway startup or `openclaw doctor --fix`, preserving the clobbered file as a backup while leaving normal config reads read-only.

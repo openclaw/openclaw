@@ -48,10 +48,10 @@ export async function getSharedCodexAppServerClient(options?: {
       client.addCloseHandler(clearSharedClientIfCurrent);
       try {
         await client.initialize();
-      return client;
-    } catch (error) {
-      // Startup failures happen before callers own the shared client, so close
-      // the child here instead of leaving a rejected daemon attached to stdio.
+        return client;
+      } catch (error) {
+        // Startup failures happen before callers own the shared client, so close
+        // the child here instead of leaving a rejected daemon attached to stdio.
         client.close();
         throw error;
       }

@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -16,6 +17,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
 }));
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
+let clearSharedCodexAppServerClient: typeof import("./shared-client.js").clearSharedCodexAppServerClient;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
 
 async function sendInitializeResult(
@@ -36,7 +38,8 @@ async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness
 describe("shared Codex app-server client", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
-    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.js"));
+    ({ clearSharedCodexAppServerClient, resetSharedCodexAppServerClientForTests } =
+      await import("./shared-client.js"));
   });
 
   afterEach(() => {
@@ -187,4 +190,77 @@ describe("shared Codex app-server client", () => {
 
     expect(second.process.kill).not.toHaveBeenCalled();
   });
+
+  it("uses a fresh websocket Authorization header after shared-client token rotation", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    const authHeaders: Array<string | undefined> = [];
+    server.on("connection", (socket, request) => {
+      authHeaders.push(request.headers.authorization);
+      socket.on("message", (data) => {
+        const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
+        if (message.method === "initialize") {
+          socket.send(
+            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.118.0" } }),
+          );
+          return;
+        }
+        if (message.method === "model/list") {
+          socket.send(JSON.stringify({ id: message.id, result: { data: [] } }));
+        }
+      });
+    });
+
+    try {
+      await new Promise<void>((resolve) => server.once("listening", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected websocket test server port");
+      }
+      const url = `ws://127.0.0.1:${address.port}`;
+
+      await expect(
+        listCodexAppServerModels({
+          timeoutMs: 1000,
+          startOptions: {
+            transport: "websocket",
+            command: "codex",
+            args: [],
+            url,
+            authToken: "tok-first",
+            headers: {},
+          },
+        }),
+      ).resolves.toEqual({ models: [] });
+      await expect(
+        listCodexAppServerModels({
+          timeoutMs: 1000,
+          startOptions: {
+            transport: "websocket",
+            command: "codex",
+            args: [],
+            url,
+            authToken: "tok-second",
+            headers: {},
+          },
+        }),
+      ).resolves.toEqual({ models: [] });
+
+      expect(authHeaders).toEqual(["Bearer tok-first", "Bearer tok-second"]);
+    } finally {
+      clearSharedCodexAppServerClient();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
 });
+
+function rawDataToText(data: RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(data)).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
