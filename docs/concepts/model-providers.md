@@ -173,7 +173,7 @@ Current bundled examples:
   normalization (`input` / `output` and `prompt` / `completion` families), the
   shared `openai-responses-defaults` stream family for native OpenAI/Codex
   wrappers, provider-family metadata, bundled image-generation provider
-  registration for `gpt-image-1`, and bundled video-generation provider
+  registration for `gpt-image-2`, and bundled video-generation provider
   registration for `sora-2`
 - `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
   native Gemini replay validation, bootstrap replay sanitation, tagged
