@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
@@ -6,7 +7,9 @@ import { shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning } from "./chan
 type CollectEmptyAllowlistPolicyWarningsParams = {
   account: DoctorAccountRecord;
   channelName?: string;
+  cfg?: OpenClawConfig;
   doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
   parent?: DoctorAccountRecord;
   prefix: string;
 };
@@ -67,8 +70,10 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
     shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning({
       account: params.account,
       channelName: params.channelName,
+      cfg: params.cfg,
       dmPolicy,
       effectiveAllowFrom,
+      env: params.env,
       parent: params.parent,
       prefix: params.prefix,
     })

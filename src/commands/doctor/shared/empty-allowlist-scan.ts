@@ -6,14 +6,17 @@ import { asObjectRecord } from "./object.js";
 export type EmptyAllowlistAccountScanParams = {
   account: DoctorAccountRecord;
   channelName: string;
+  cfg: OpenClawConfig;
   dmPolicy?: string;
   effectiveAllowFrom?: DoctorAllowFromList;
+  env?: NodeJS.ProcessEnv;
   parent?: DoctorAccountRecord;
   prefix: string;
 };
 
 type ScanEmptyAllowlistPolicyWarningsParams = {
   doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
   extraWarningsForAccount?: (params: EmptyAllowlistAccountScanParams) => string[];
 };
 
@@ -53,7 +56,9 @@ export function scanEmptyAllowlistPolicyWarnings(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
         account,
         channelName,
+        cfg,
         doctorFixCommand: params.doctorFixCommand,
+        env: params.env,
         parent,
         prefix,
       }),
@@ -63,8 +68,10 @@ export function scanEmptyAllowlistPolicyWarnings(
         ...params.extraWarningsForAccount({
           account,
           channelName,
+          cfg,
           dmPolicy,
           effectiveAllowFrom,
+          env: params.env,
           parent,
           prefix,
         }),

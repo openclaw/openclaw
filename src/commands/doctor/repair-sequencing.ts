@@ -18,6 +18,7 @@ import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<{
   state: DoctorConfigMutationState;
   changeNotes: string[];
@@ -26,6 +27,7 @@ export async function runDoctorRepairSequence(params: {
   let state = params.state;
   const changeNotes: string[] = [];
   const warningNotes: string[] = [];
+  const env = params.env ?? process.env;
   const sanitizeLines = (lines: string[]) => lines.map((line) => sanitizeForLog(line)).join("\n");
 
   const applyMutation = (mutation: {
@@ -49,16 +51,18 @@ export async function runDoctorRepairSequence(params: {
   for (const mutation of await collectChannelDoctorRepairMutations({
     cfg: state.candidate,
     doctorFixCommand: params.doctorFixCommand,
+    env,
   })) {
     applyMutation(mutation);
   }
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
-  applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, process.env));
-  applyMutation(maybeRepairStalePluginConfig(state.candidate, process.env));
+  applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
+  applyMutation(maybeRepairStalePluginConfig(state.candidate, env));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,
+    env,
     extraWarningsForAccount: collectChannelDoctorEmptyAllowlistExtraWarnings,
   });
   if (emptyAllowlistWarnings.length > 0) {
