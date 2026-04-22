@@ -129,7 +129,26 @@ export function resolveAgentConfig(
     heartbeat: entry.heartbeat,
     compaction:
       typeof entry.compaction === "object" && entry.compaction
-        ? { ...agentDefaults?.compaction, ...entry.compaction }
+        ? {
+            ...agentDefaults?.compaction,
+            ...entry.compaction,
+            qualityGuard:
+              typeof agentDefaults?.compaction?.qualityGuard === "object" ||
+              typeof entry.compaction.qualityGuard === "object"
+                ? {
+                    ...agentDefaults?.compaction?.qualityGuard,
+                    ...entry.compaction.qualityGuard,
+                  }
+                : undefined,
+            memoryFlush:
+              typeof agentDefaults?.compaction?.memoryFlush === "object" ||
+              typeof entry.compaction.memoryFlush === "object"
+                ? {
+                    ...agentDefaults?.compaction?.memoryFlush,
+                    ...entry.compaction.memoryFlush,
+                  }
+                : undefined,
+          }
         : agentDefaults?.compaction,
     identity: entry.identity,
     groupChat: entry.groupChat,
