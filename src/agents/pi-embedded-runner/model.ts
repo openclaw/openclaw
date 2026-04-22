@@ -357,6 +357,10 @@ function applyConfiguredProviderOverrides(params: {
       input: normalizedInput,
       cost: configuredModel?.cost ?? discoveredModel.cost,
       contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+      contextWindowIsLiteralDefault:
+        configuredModel?.contextWindow !== undefined
+          ? false
+          : discoveredModel.contextWindowIsLiteralDefault,
       contextTokens: configuredModel?.contextTokens ?? discoveredModel.contextTokens,
       maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
       headers: requestConfig.headers,
@@ -390,6 +394,35 @@ function resolveExplicitModelWithRegistry(params: {
     provider,
     modelId,
   });
+  const discoveredModel = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
+  // When both an inline model and a discovered model exist, layer the inline
+  // model's explicit fields on top of the discovered model. This preserves
+  // discovery-layer provenance (e.g. contextWindowIsLiteralDefault) for fields
+  // the inline model does not explicitly override.
+  if (inlineMatch?.api && discoveredModel) {
+    const layered: Model<Api> = {
+      ...discoveredModel,
+      ...inlineMatch,
+      // Preserve discovery provenance for contextWindow unless the inline model
+      // explicitly overrides it.
+      contextWindowIsLiteralDefault:
+        inlineMatch.contextWindow !== undefined
+          ? false
+          : discoveredModel.contextWindowIsLiteralDefault,
+    };
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: layered,
+        runtimeHooks,
+      }),
+    };
+  }
+
   if (inlineMatch?.api) {
     return {
       kind: "resolved",
@@ -402,9 +435,8 @@ function resolveExplicitModelWithRegistry(params: {
       }),
     };
   }
-  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
-  if (model) {
+  if (discoveredModel) {
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
@@ -413,7 +445,7 @@ function resolveExplicitModelWithRegistry(params: {
         agentDir,
         model: applyConfiguredProviderOverrides({
           provider,
-          discoveredModel: model,
+          discoveredModel,
           providerConfig,
           modelId,
           cfg,

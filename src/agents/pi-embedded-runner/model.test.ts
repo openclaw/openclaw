@@ -1538,4 +1538,145 @@ describe("resolveModel", () => {
       baseUrl: "https://api.x.ai/v1",
     });
   });
+
+  // -------------------------------------------------------------------------
+  // contextWindowIsLiteralDefault provenance
+  // -------------------------------------------------------------------------
+
+  it("clears contextWindowIsLiteralDefault when user explicitly sets contextWindow on a discovered model", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "bedrock",
+      modelId: "mistral.mistral-large-3-675b-instruct",
+      templateModel: {
+        id: "mistral.mistral-large-3-675b-instruct",
+        name: "Mistral Large 3.0",
+        provider: "bedrock",
+        api: "bedrock-converse-stream" as const,
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        reasoning: false,
+        input: ["text"] as const,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_000,
+        contextWindowIsLiteralDefault: true,
+        maxTokens: 32_000,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          bedrock: {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            api: "bedrock-converse-stream",
+            models: [{ id: "mistral.mistral-large-3-675b-instruct", contextWindow: 128_000 }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "bedrock",
+      "mistral.mistral-large-3-675b-instruct",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      contextWindow: 128_000,
+      contextWindowIsLiteralDefault: false,
+    });
+  });
+
+  it("preserves contextWindowIsLiteralDefault when user does not override contextWindow", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "bedrock",
+      modelId: "mistral.mistral-large-3-675b-instruct",
+      templateModel: {
+        id: "mistral.mistral-large-3-675b-instruct",
+        name: "Mistral Large 3.0",
+        provider: "bedrock",
+        api: "bedrock-converse-stream" as const,
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        reasoning: false,
+        input: ["text"] as const,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_000,
+        contextWindowIsLiteralDefault: true,
+        maxTokens: 32_000,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          bedrock: {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            api: "bedrock-converse-stream",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "bedrock",
+      "mistral.mistral-large-3-675b-instruct",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      contextWindow: 32_000,
+      contextWindowIsLiteralDefault: true,
+    });
+  });
+
+  it("layers inline model fields over discovered model, preserving provenance for unset fields", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "bedrock",
+      modelId: "mistral.mistral-large-3-675b-instruct",
+      templateModel: {
+        id: "mistral.mistral-large-3-675b-instruct",
+        name: "Mistral Large 3.0",
+        provider: "bedrock",
+        api: "bedrock-converse-stream" as const,
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        reasoning: false,
+        input: ["text"] as const,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_000,
+        contextWindowIsLiteralDefault: true,
+        maxTokens: 4096,
+      },
+    });
+
+    // User provides inline model with only maxTokens override (no contextWindow)
+    const cfg = {
+      models: {
+        providers: {
+          bedrock: {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            api: "bedrock-converse-stream",
+            models: [{ id: "mistral.mistral-large-3-675b-instruct", maxTokens: 8192 }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "bedrock",
+      "mistral.mistral-large-3-675b-instruct",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    // Inline model's maxTokens overrides, but contextWindow and provenance are preserved from discovered model
+    expect(result.model).toMatchObject({
+      contextWindow: 32_000,
+      contextWindowIsLiteralDefault: true,
+      maxTokens: 8192,
+    });
+  });
 });

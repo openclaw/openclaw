@@ -17,12 +17,15 @@ describe("buildInlineProviderModels", () => {
         provider: "alpha",
         baseUrl: "http://alpha.local",
         api: undefined,
+        // buildInlineProviderModels sets contextWindowIsLiteralDefault=false when contextWindow is defined
+        contextWindowIsLiteralDefault: false,
       },
       {
         ...makeModel("beta-model"),
         provider: "beta",
         baseUrl: "http://beta.local",
         api: undefined,
+        contextWindowIsLiteralDefault: false,
       },
     ]);
   });

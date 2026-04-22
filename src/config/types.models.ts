@@ -76,6 +76,12 @@ export type ModelDefinitionConfig = {
   };
   contextWindow: number;
   /**
+   * True if contextWindow is set to the discovery layer's literal
+   * fallback value (e.g. 32000), and neither the API nor user config
+   * specified this value.
+   */
+  contextWindowIsLiteralDefault?: boolean;
+  /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while letting configs
    * prefer a smaller practical window.

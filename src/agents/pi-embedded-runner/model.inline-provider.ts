@@ -162,6 +162,12 @@ export function buildInlineProviderModels(
           provider: trimmed,
           baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
           api: requestConfig.api ?? model.api,
+          // Only set when explicitly provided in the model config. User-provided
+          // contextWindow means it is not the discovery-layer literal default.
+          contextWindowIsLiteralDefault:
+            "contextWindow" in model && model.contextWindow !== undefined
+              ? false
+              : undefined,
           headers: requestConfig.headers,
         },
         providerRequest,

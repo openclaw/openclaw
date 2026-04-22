@@ -111,7 +111,23 @@ describe("bedrock discovery", () => {
       config: { defaultContextWindow: 64000, defaultMaxTokens: 8192 },
       clientFactory,
     });
-    expect(models[0]).toMatchObject({ contextWindow: 64000, maxTokens: 8192 });
+    expect(models[0]).toMatchObject({
+      contextWindow: 64000,
+      maxTokens: 8192,
+      contextWindowIsLiteralDefault: false,
+    });
+  });
+
+  it("flags contextWindowIsLiteralDefault=true when no defaultContextWindow config is set", async () => {
+    mockSingleActiveSummary();
+
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      config: { defaultContextWindow: undefined, defaultMaxTokens: undefined },
+      clientFactory,
+    });
+    // Uses the hardcoded fallback (32000) with the provenance flag set
+    expect(models[0]).toMatchObject({ contextWindow: 32000, contextWindowIsLiteralDefault: true });
   });
 
   it("caches results when refreshInterval is enabled", async () => {
@@ -253,6 +269,7 @@ describe("bedrock discovery", () => {
       name: "US Anthropic Claude Sonnet 4.6",
       input: ["text", "image"],
       contextWindow: 32000,
+      contextWindowIsLiteralDefault: true,
       maxTokens: 4096,
     });
     expect(euProfile).toMatchObject({ input: ["text", "image"] });

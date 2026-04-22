@@ -193,6 +193,34 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("returns source=default when modelContextWindowIsLiteralDefault is true", () => {
+    const info = resolveContextWindowInfo({
+      cfg: undefined,
+      provider: "bedrock",
+      modelId: "mistral.mistral-large-3-675b-instruct",
+      modelContextWindow: 32_000,
+      modelContextWindowIsLiteralDefault: true,
+      defaultTokens: 200_000,
+    });
+    // Value is preserved but provenance is "default" (hardcoded fallback)
+    expect(info.source).toBe("default");
+    expect(info.tokens).toBe(32_000);
+  });
+
+  it("returns source=model when modelContextWindowIsLiteralDefault is false", () => {
+    const info = resolveContextWindowInfo({
+      cfg: undefined,
+      provider: "bedrock",
+      modelId: "mistral.mistral-large-3-675b-instruct",
+      modelContextWindow: 32_000,
+      modelContextWindowIsLiteralDefault: false,
+      defaultTokens: 200_000,
+    });
+    // Explicitly user-configured value — provenance is "model"
+    expect(info.source).toBe("model");
+    expect(info.tokens).toBe(32_000);
+  });
+
   it("allows overriding thresholds", () => {
     const info = { tokens: 10_000, source: "model" as const };
     const guard = evaluateContextWindowGuard({
