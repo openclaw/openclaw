@@ -71,7 +71,8 @@ import {
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
+import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -585,7 +586,7 @@ export async function runAgentTurnWithFallback(params: {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+  replyMediaContext?: ReplyMediaContext;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -602,9 +603,9 @@ export async function runAgentTurnWithFallback(params: {
         };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const normalizeReplyMediaPaths =
-    params.normalizeMediaPaths ??
-    createReplyMediaPathNormalizer({
+  const replyMediaContext =
+    params.replyMediaContext ??
+    createReplyMediaContext({
       cfg: runtimeConfig,
       sessionKey: params.sessionKey,
       workspaceDir: params.followupRun.run.workspaceDir,
@@ -838,7 +839,7 @@ export async function runAgentTurnWithFallback(params: {
             currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
-            normalizeMediaPaths: normalizeReplyMediaPaths,
+            normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,

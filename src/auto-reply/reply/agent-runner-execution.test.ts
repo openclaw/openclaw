@@ -118,6 +118,9 @@ vi.mock("./reply-delivery.js", () => ({
 }));
 
 vi.mock("./reply-media-paths.runtime.js", () => ({
+  createReplyMediaContext: () => ({
+    normalizePayload: (payload: unknown) => payload,
+  }),
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
