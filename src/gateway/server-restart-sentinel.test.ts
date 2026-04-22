@@ -313,6 +313,45 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.failDelivery).toHaveBeenCalledWith("queue-1", "transport still not ready");
   });
 
+  it("still dispatches continuation after restart notice retries are exhausted", async () => {
+    vi.useFakeTimers();
+    mocks.deliverOutboundPayloads.mockRejectedValue(new Error("transport still not ready"));
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
+    await Promise.resolve();
+    await Promise.resolve();
+    for (let attempt = 1; attempt < 45; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    await wakePromise;
+
+    expect(mocks.failDelivery).toHaveBeenCalledWith("queue-1", "transport still not ready");
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routeSessionKey: "agent:main:main",
+        ctxPayload: expect.objectContaining({
+          Body: "continue",
+        }),
+      }),
+    );
+  });
+
   it("prefers top-level sentinel threadId for wake routing context", async () => {
     // Legacy or malformed sentinel JSON can still carry a nested threadId.
     mocks.consumeRestartSentinel.mockResolvedValue({
@@ -326,7 +365,7 @@ describe("scheduleRestartSentinelWake", () => {
         } as never,
         threadId: "fresh-thread",
       },
-    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -488,6 +527,79 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.deliverOutboundPayloads).toHaveBeenLastCalledWith(
       expect.objectContaining({
         payloads: [{ text: "done" }],
+      }),
+    );
+  });
+
+  it("preserves non-synthetic reply transport ids from continuation payloads", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
+      await params.deliver({
+        text: "done",
+        replyToId: "provider-reply-id",
+      });
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: "done",
+            replyToId: "provider-reply-id",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("dispatches agentTurn continuation from session delivery context when sentinel routing is empty", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.deliveryContextFromSession.mockReturnValue({
+      channel: "telegram",
+      to: "telegram:200482621",
+      accountId: "default",
+    });
+    mocks.resolveOutboundTarget.mockReturnValue({
+      ok: true as const,
+      to: "telegram:200482621",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "default",
+        ctxPayload: expect.objectContaining({
+          Body: "continue",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:200482621",
+        }),
       }),
     );
   });
