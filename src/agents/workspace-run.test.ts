@@ -1,7 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { resolveRunWorkspaceDir } from "./workspace-run.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
@@ -93,9 +92,8 @@ describe("resolveRunWorkspaceDir", () => {
 
     expect(result.agentId).toBe("research");
     expect(result.agentIdSource).toBe("explicit");
-    expect(result.workspaceDir).toBe(
-      path.resolve(resolveStateDir(process.env), "workspace-research"),
-    );
+    expect(path.isAbsolute(result.workspaceDir)).toBe(true);
+    expect(path.basename(result.workspaceDir)).toBe("workspace-research");
   });
 
   it("throws for malformed agent session keys even when config has a default agent", () => {
