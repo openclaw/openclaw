@@ -1649,9 +1649,17 @@ async function processMessageAfterDedupe(
             privateApiEnabled && typeof payload.replyToId === "string"
               ? payload.replyToId.trim()
               : "";
-          // Resolve short ID (e.g., "5") to full UUID
+          // Resolve short ID (e.g., "5") to full UUID, scoped to the chat
+          // this deliver path is already routing for (cross-chat guard).
           const replyToMessageGuid = rawReplyToId
-            ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
+            ? resolveBlueBubblesMessageId(rawReplyToId, {
+                requireKnownShortId: true,
+                chatContext: {
+                  chatGuid: chatGuidForActions ?? chatGuid,
+                  chatIdentifier,
+                  chatId,
+                },
+              })
             : "";
           const mediaList = resolveOutboundMediaUrls(payload);
           if (mediaList.length > 0) {
