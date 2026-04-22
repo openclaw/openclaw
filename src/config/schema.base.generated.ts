@@ -2734,6 +2734,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           "azure-openai-responses",
                         ],
                       },
+                      baseUrl: {
+                        type: "string",
+                        minLength: 1,
+                      },
                       reasoning: {
                         type: "boolean",
                       },
@@ -27671,6 +27675,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
+    },
+    "models.providers.*.models[].baseUrl": {
+      tags: ["models", "url-secret"],
     },
     "agents.list[].memorySearch.remote.baseUrl": {
       tags: ["advanced", "url-secret"],
