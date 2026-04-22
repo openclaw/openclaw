@@ -32,9 +32,9 @@ vi.mock("../plugins/installs.js", () => ({
   buildNpmResolutionInstallFields,
 }));
 
-const resolveGitHeadPath = vi.hoisted(() => vi.fn<(root: string) => string | null>(() => null));
-vi.mock("../infra/git-root.js", () => ({
-  resolveGitHeadPath,
+const execFileSync = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({
+  execFileSync,
 }));
 
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
@@ -47,7 +47,9 @@ import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js"
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveGitHeadPath.mockReturnValue(null);
+    execFileSync.mockImplementation(() => {
+      throw new Error("not a git worktree");
+    });
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
   });
 
@@ -185,15 +187,26 @@ describe("ensureOnboardingPluginInstalled", () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-gitdir-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
-      const gitDir = path.join(workspaceDir, ".actual-git");
       await fs.mkdir(pluginDir, { recursive: true });
-      await fs.mkdir(path.join(gitDir, "objects"), { recursive: true });
-      await fs.mkdir(path.join(gitDir, "refs"), { recursive: true });
-      await fs.writeFile(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n", "utf8");
-      await fs.writeFile(path.join(workspaceDir, ".git"), "gitdir: .actual-git\n", "utf8");
-      resolveGitHeadPath.mockImplementation((root: string) =>
-        root === workspaceDir ? path.join(gitDir, "HEAD") : null,
-      );
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      const realWorkspaceDir = await fs.realpath(workspaceDir);
+      execFileSync.mockImplementation((command: string, args: string[]) => {
+        expect(command).toBe("git");
+        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
+          throw new Error("unexpected git call");
+        }
+        const request = args.slice(3).join(" ");
+        if (request === "--is-inside-work-tree") {
+          return "true\n";
+        }
+        if (request === "--path-format=absolute --show-toplevel") {
+          return `${realWorkspaceDir}\n`;
+        }
+        if (request === "--path-format=absolute --git-common-dir") {
+          return `${path.join(realWorkspaceDir, ".git")}\n`;
+        }
+        throw new Error(`unexpected git args: ${request}`);
+      });
 
       let captured:
         | {
@@ -223,6 +236,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         workspaceDir,
       });
 
+      const realPluginDir = await fs.realpath(pluginDir);
       expect(captured).toBeDefined();
       expect(captured?.message).toBe("Install Demo Plugin\\n plugin?");
       expect(captured?.options).toEqual([
@@ -230,7 +244,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         {
           value: "local",
           label: "Use local plugin path",
-          hint: path.join(workspaceDir, "plugins", "demo"),
+          hint: realPluginDir,
         },
         { value: "skip", label: "Skip for now" },
       ]);
@@ -244,17 +258,27 @@ describe("ensureOnboardingPluginInstalled", () => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       const commonGitDir = path.join(temp, "repo.git");
-      const worktreeGitDir = path.join(commonGitDir, "worktrees", "workspace");
       await fs.mkdir(pluginDir, { recursive: true });
-      await fs.mkdir(path.join(commonGitDir, "objects"), { recursive: true });
-      await fs.mkdir(path.join(commonGitDir, "refs"), { recursive: true });
-      await fs.mkdir(worktreeGitDir, { recursive: true });
-      await fs.writeFile(path.join(worktreeGitDir, "HEAD"), "ref: refs/heads/main\n", "utf8");
-      await fs.writeFile(path.join(worktreeGitDir, "commondir"), "../..\n", "utf8");
-      await fs.writeFile(path.join(workspaceDir, ".git"), `gitdir: ${worktreeGitDir}\n`, "utf8");
-      resolveGitHeadPath.mockImplementation((root: string) =>
-        root === workspaceDir ? path.join(worktreeGitDir, "HEAD") : null,
-      );
+      await fs.mkdir(commonGitDir, { recursive: true });
+      const realWorkspaceDir = await fs.realpath(workspaceDir);
+      const realCommonGitDir = await fs.realpath(commonGitDir);
+      execFileSync.mockImplementation((command: string, args: string[]) => {
+        expect(command).toBe("git");
+        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
+          throw new Error("unexpected git call");
+        }
+        const request = args.slice(3).join(" ");
+        if (request === "--is-inside-work-tree") {
+          return "true\n";
+        }
+        if (request === "--path-format=absolute --show-toplevel") {
+          return `${realWorkspaceDir}\n`;
+        }
+        if (request === "--path-format=absolute --git-common-dir") {
+          return `${realCommonGitDir}\n`;
+        }
+        throw new Error(`unexpected git args: ${request}`);
+      });
 
       let captured:
         | {
@@ -283,11 +307,12 @@ describe("ensureOnboardingPluginInstalled", () => {
         workspaceDir,
       });
 
+      const realPluginDir = await fs.realpath(pluginDir);
       expect(captured?.options).toEqual([
         {
           value: "local",
           label: "Use local plugin path",
-          hint: path.join(workspaceDir, "plugins", "demo"),
+          hint: realPluginDir,
         },
         { value: "skip", label: "Skip for now" },
       ]);
@@ -299,22 +324,105 @@ describe("ensureOnboardingPluginInstalled", () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-cwd-git-" }, async (temp) => {
       const repoDir = path.join(temp, "repo");
       const workspaceDir = path.join(temp, "workspace");
-      const pluginDir = path.join(temp, "demo-plugin");
+      const pluginDir = path.join(repoDir, "demo-plugin");
       await fs.mkdir(path.join(repoDir, ".git"), { recursive: true });
-      await fs.mkdir(path.join(repoDir, ".git", "objects"), { recursive: true });
-      await fs.mkdir(path.join(repoDir, ".git", "refs"), { recursive: true });
-      await fs.writeFile(path.join(repoDir, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
       await fs.mkdir(pluginDir, { recursive: true });
       await fs.mkdir(workspaceDir, { recursive: true });
-      resolveGitHeadPath.mockImplementation((root: string) =>
-        root === process.cwd() ? path.join(repoDir, ".git", "HEAD") : null,
-      );
+      const realRepoDir = await fs.realpath(repoDir);
+      execFileSync.mockImplementation((command: string, args: string[]) => {
+        expect(command).toBe("git");
+        const root = args[1];
+        if (args[2] !== "rev-parse") {
+          throw new Error("unexpected git call");
+        }
+        const request = args.slice(3).join(" ");
+        if (root !== realRepoDir) {
+          throw new Error("not a git worktree");
+        }
+        if (request === "--is-inside-work-tree") {
+          return "true\n";
+        }
+        if (request === "--path-format=absolute --show-toplevel") {
+          return `${realRepoDir}\n`;
+        }
+        if (request === "--path-format=absolute --git-common-dir") {
+          return `${path.join(realRepoDir, ".git")}\n`;
+        }
+        throw new Error(`unexpected git args: ${request}`);
+      });
 
       let captured:
         | {
             options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
           }
         | undefined;
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoDir);
+      try {
+        await ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Plugin",
+            install: {
+              localPath: pluginDir,
+            },
+          },
+          prompter: {
+            select: vi.fn(async (input) => {
+              captured = input;
+              return "skip";
+            }),
+          } as never,
+          runtime: {} as never,
+          workspaceDir,
+        });
+      } finally {
+        cwdSpy.mockRestore();
+      }
+
+      const realPluginDir = await fs.realpath(pluginDir);
+      expect(captured?.options).toEqual([
+        {
+          value: "local",
+          label: "Use local plugin path",
+          hint: realPluginDir,
+        },
+        { value: "skip", label: "Skip for now" },
+      ]);
+    });
+  });
+
+  it("rejects local install paths outside the trusted workspace roots", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-outside-root-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(temp, "external-plugin");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(pluginDir, { recursive: true });
+      const realWorkspaceDir = await fs.realpath(workspaceDir);
+      execFileSync.mockImplementation((command: string, args: string[]) => {
+        expect(command).toBe("git");
+        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
+          throw new Error("unexpected git call");
+        }
+        const request = args.slice(3).join(" ");
+        if (request === "--is-inside-work-tree") {
+          return "true\n";
+        }
+        if (request === "--path-format=absolute --show-toplevel") {
+          return `${realWorkspaceDir}\n`;
+        }
+        if (request === "--path-format=absolute --git-common-dir") {
+          return `${path.join(realWorkspaceDir, ".git")}\n`;
+        }
+        throw new Error(`unexpected git args: ${request}`);
+      });
+
+      let captured:
+        | {
+            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+          }
+        | undefined;
+
       await ensureOnboardingPluginInstalled({
         cfg: {},
         entry: {
@@ -334,14 +442,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         workspaceDir,
       });
 
-      expect(captured?.options).toEqual([
-        {
-          value: "local",
-          label: "Use local plugin path",
-          hint: pluginDir,
-        },
-        { value: "skip", label: "Skip for now" },
-      ]);
+      expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
     });
   });
 });

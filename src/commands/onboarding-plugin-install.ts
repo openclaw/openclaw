@@ -1,8 +1,8 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGitHeadPath } from "../infra/git-root.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
@@ -35,29 +35,57 @@ export type OnboardingPluginInstallResult = {
   status: OnboardingPluginInstallStatus;
 };
 
-function hasGitHead(gitDir: string): boolean {
-  return fs.existsSync(path.join(gitDir, "HEAD"));
-}
-
-function hasGitObjectStore(gitDir: string): boolean {
-  return fs.existsSync(path.join(gitDir, "objects")) && fs.existsSync(path.join(gitDir, "refs"));
-}
-
-function looksLikeGitDir(gitDir: string): boolean {
-  return hasGitHead(gitDir) && hasGitObjectStore(gitDir);
-}
-
-function resolveGitCommonDir(gitDir: string): string | null {
-  const commondirPath = path.join(gitDir, "commondir");
+function resolveRealDirectory(dir: string): string | null {
   try {
-    const raw = fs.readFileSync(commondirPath, "utf8").trim();
-    if (!raw) {
-      return null;
-    }
-    return path.resolve(gitDir, raw);
+    const resolved = fs.realpathSync(dir);
+    return fs.statSync(resolved).isDirectory() ? resolved : null;
   } catch {
     return null;
   }
+}
+
+function resolveGitRevParse(root: string, args: string[]): string | null {
+  try {
+    const output = execFileSync("git", ["-C", root, "rev-parse", ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return output || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveGitOutputDirectory(root: string, output: string | null): string | null {
+  if (!output) {
+    return null;
+  }
+  return resolveRealDirectory(path.isAbsolute(output) ? output : path.resolve(root, output));
+}
+
+function isWithinBaseDirectory(baseDir: string, targetPath: string): boolean {
+  const relative = path.relative(baseDir, targetPath);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
+}
+
+function hasTrustedGitWorkspace(root: string): boolean {
+  const realRoot = resolveRealDirectory(root);
+  if (!realRoot) {
+    return false;
+  }
+  const isInsideWorkTree = resolveGitRevParse(realRoot, ["--is-inside-work-tree"]);
+  if (isInsideWorkTree !== "true") {
+    return false;
+  }
+  const gitTopLevel = resolveGitOutputDirectory(
+    realRoot,
+    resolveGitRevParse(realRoot, ["--path-format=absolute", "--show-toplevel"]),
+  );
+  const gitCommonDir = resolveGitOutputDirectory(
+    realRoot,
+    resolveGitRevParse(realRoot, ["--path-format=absolute", "--git-common-dir"]),
+  );
+  return gitTopLevel !== null && gitCommonDir !== null;
 }
 
 function hasGitWorkspace(workspaceDir?: string): boolean {
@@ -65,21 +93,7 @@ function hasGitWorkspace(workspaceDir?: string): boolean {
   if (workspaceDir && workspaceDir !== process.cwd()) {
     roots.push(workspaceDir);
   }
-  for (const root of roots) {
-    const headPath = resolveGitHeadPath(root);
-    if (!headPath) {
-      continue;
-    }
-    const gitDir = path.dirname(headPath);
-    if (looksLikeGitDir(gitDir)) {
-      return true;
-    }
-    const commonDir = resolveGitCommonDir(gitDir);
-    if (commonDir && hasGitHead(gitDir) && hasGitObjectStore(commonDir)) {
-      return true;
-    }
-  }
-  return false;
+  return roots.some((root) => hasTrustedGitWorkspace(root));
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
@@ -110,13 +124,33 @@ function resolveLocalPath(params: {
     return null;
   }
   const candidates = new Set<string>();
-  candidates.add(path.resolve(process.cwd(), raw));
+  const bases = [process.cwd()];
   if (params.workspaceDir && params.workspaceDir !== process.cwd()) {
-    candidates.add(path.resolve(params.workspaceDir, raw));
+    bases.push(params.workspaceDir);
+  }
+  for (const base of bases) {
+    const realBase = resolveRealDirectory(base);
+    if (!realBase) {
+      continue;
+    }
+    candidates.add(path.resolve(realBase, raw));
   }
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
+    try {
+      const resolved = fs.realpathSync(candidate);
+      if (
+        !bases.some((base) => {
+          const realBase = resolveRealDirectory(base);
+          return realBase ? isWithinBaseDirectory(realBase, resolved) : false;
+        })
+      ) {
+        continue;
+      }
+      if (fs.statSync(resolved).isDirectory()) {
+        return resolved;
+      }
+    } catch {
+      continue;
     }
   }
   return null;

@@ -93,18 +93,20 @@ function resolvePreferredInstallsByPluginId(
     env: params.env,
   }).candidates) {
     const idHint = candidate.idHint.trim();
-    if (
-      candidate.origin === "workspace" &&
-      params.includeUntrustedWorkspacePlugins === false &&
-      idHint &&
-      !resolveEffectiveEnableState({
-        id: idHint,
-        origin: candidate.origin,
-        config: normalizedConfig,
-        rootConfig: params.config,
-      }).enabled
-    ) {
-      continue;
+    if (candidate.origin === "workspace" && params.includeUntrustedWorkspacePlugins === false) {
+      if (!idHint) {
+        continue;
+      }
+      if (
+        !resolveEffectiveEnableState({
+          id: idHint,
+          origin: candidate.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).enabled
+      ) {
+        continue;
+      }
     }
     const manifest = resolvePluginManifest(candidate.rootDir, candidate.origin !== "bundled");
     if (!manifest) {

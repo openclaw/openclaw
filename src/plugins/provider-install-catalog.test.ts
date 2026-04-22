@@ -251,4 +251,31 @@ describe("provider install catalog", () => {
     ).toEqual([]);
     expect(loadPluginManifest).not.toHaveBeenCalled();
   });
+
+  it("skips untrusted workspace candidates without id hints before manifest load", () => {
+    discoverOpenClawPlugins.mockReturnValue({
+      candidates: [
+        {
+          idHint: "",
+          origin: "workspace",
+          rootDir: "/repo/extensions/demo-provider",
+          source: "/repo/extensions/demo-provider/index.ts",
+          workspaceDir: "/repo",
+          packageName: "@vendor/demo-provider",
+          packageDir: "/repo/extensions/demo-provider",
+          packageManifest: {
+            install: {
+              npmSpec: "@vendor/demo-provider",
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveProviderInstallCatalogEntries({ includeUntrustedWorkspacePlugins: false }),
+    ).toEqual([]);
+    expect(loadPluginManifest).not.toHaveBeenCalled();
+  });
 });
