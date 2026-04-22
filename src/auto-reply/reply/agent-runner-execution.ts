@@ -833,6 +833,7 @@ export async function runAgentTurnWithFallback(params: {
       // notice) and the onBlockReply field share the same instance.  This
       // ensures replyToId threading (replyToMode=all|first) is applied to
       // compaction notices just like every other block reply.
+      const replyOperation = params.replyOperation;
       const blockReplyHandler = params.opts?.onBlockReply
         ? createBlockReplyDeliveryHandler({
             onBlockReply: params.opts.onBlockReply,
@@ -844,6 +845,10 @@ export async function runAgentTurnWithFallback(params: {
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
+            // Drop late block replies from a superseded run (user /stop or
+            // new-message takeover). When the captured generation no longer
+            // matches, this op is stale and its output must not land in chat.
+            isRunCurrent: replyOperation ? () => replyOperation.isCurrent() : undefined,
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
