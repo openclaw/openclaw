@@ -161,6 +161,21 @@ export async function sendMessageWhatsApp(
   }
 }
 
+export async function sendTypingWhatsApp(
+  to: string,
+  options: {
+    cfg?: OpenClawConfig;
+    accountId?: string;
+  } = {},
+): Promise<void> {
+  const cfg = options.cfg ?? loadConfig();
+  const { listener: active } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  await active.sendComposingTo(to);
+}
+
 export async function sendReactionWhatsApp(
   chatJid: string,
   messageId: string,

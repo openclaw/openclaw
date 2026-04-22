@@ -31,9 +31,16 @@ shared `message` tool in core. Your plugin owns:
 - **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
 - **Threading** — how replies are threaded
+- **Heartbeat typing** — optional typing/busy signals for heartbeat delivery targets
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
+
+If your channel supports typing indicators outside inbound replies, expose
+`heartbeat.sendTyping(...)` on the channel plugin. Core calls it with the
+resolved heartbeat delivery target before the heartbeat model run starts and
+uses the shared typing keepalive/cleanup lifecycle. Add `heartbeat.clearTyping(...)`
+when the platform needs an explicit stop signal.
 
 If your channel adds message-tool params that carry media sources, expose those
 param names through `describeMessageTool(...).mediaSourceParams`. Core uses
