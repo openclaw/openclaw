@@ -1,11 +1,15 @@
 /**
  * Kudosity v2 API client.
  *
- * Thin wrapper around fetch for the Kudosity REST API.
- * No external dependencies — uses the native Node.js fetch API.
+ * Thin wrapper around `fetchWithSsrFGuard` from the OpenClaw SDK so every
+ * outbound Kudosity request goes through the repo's pinned-DNS / SSRF guard
+ * rather than raw `fetch`. The guard enforces `lint:tmp:no-raw-channel-fetch`
+ * policy across `extensions/**`.
  *
  * API Reference: https://developers.kudosity.com/reference
  */
+
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const BASE_URL = "https://api.transmitmessage.com";
 
@@ -95,17 +99,45 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 /**
+ * Make a guarded Kudosity API request and always release the pinned
+ * dispatcher when the caller is done reading the body.
+ */
+async function kudosityRequest<T>(params: {
+  url: string;
+  apiKey: string;
+  init?: Omit<RequestInit, "headers">;
+  auditContext: string;
+}): Promise<T> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    init: {
+      ...params.init,
+      headers: buildHeaders(params.apiKey),
+    },
+    auditContext: params.auditContext,
+  });
+  try {
+    return await handleResponse<T>(response);
+  } finally {
+    await release();
+  }
+}
+
+/**
  * Send an SMS message via the Kudosity v2 API.
  *
  * @see https://developers.kudosity.com/reference/post_v2-sms
  */
 export async function sendSMS(config: KudosityConfig, params: SendSMSParams): Promise<SMSResponse> {
-  const response = await fetch(`${BASE_URL}/v2/sms`, {
-    method: "POST",
-    headers: buildHeaders(config.apiKey),
-    body: JSON.stringify(params),
+  return kudosityRequest<SMSResponse>({
+    url: `${BASE_URL}/v2/sms`,
+    apiKey: config.apiKey,
+    init: {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+    auditContext: "kudosity-sms-send",
   });
-  return handleResponse<SMSResponse>(response);
 }
 
 /**
@@ -114,11 +146,12 @@ export async function sendSMS(config: KudosityConfig, params: SendSMSParams): Pr
  * @see https://developers.kudosity.com/reference/get_v2-sms-id
  */
 export async function getSMS(config: KudosityConfig, smsId: string): Promise<SMSResponse> {
-  const response = await fetch(`${BASE_URL}/v2/sms/${encodeURIComponent(smsId)}`, {
-    method: "GET",
-    headers: buildHeaders(config.apiKey),
+  return kudosityRequest<SMSResponse>({
+    url: `${BASE_URL}/v2/sms/${encodeURIComponent(smsId)}`,
+    apiKey: config.apiKey,
+    init: { method: "GET" },
+    auditContext: "kudosity-sms-get",
   });
-  return handleResponse<SMSResponse>(response);
 }
 
 /**
@@ -130,12 +163,15 @@ export async function createWebhook(
   config: KudosityConfig,
   params: WebhookCreateParams,
 ): Promise<WebhookResponse> {
-  const response = await fetch(`${BASE_URL}/v2/webhook`, {
-    method: "POST",
-    headers: buildHeaders(config.apiKey),
-    body: JSON.stringify(params),
+  return kudosityRequest<WebhookResponse>({
+    url: `${BASE_URL}/v2/webhook`,
+    apiKey: config.apiKey,
+    init: {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+    auditContext: "kudosity-sms-webhook-create",
   });
-  return handleResponse<WebhookResponse>(response);
 }
 
 /**
@@ -144,11 +180,19 @@ export async function createWebhook(
  */
 export async function validateApiKey(config: KudosityConfig): Promise<boolean> {
   try {
-    const response = await fetch(`${BASE_URL}/v2/sms?limit=1`, {
-      method: "GET",
-      headers: buildHeaders(config.apiKey),
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${BASE_URL}/v2/sms?limit=1`,
+      init: {
+        method: "GET",
+        headers: buildHeaders(config.apiKey),
+      },
+      auditContext: "kudosity-sms-validate-api-key",
     });
-    return response.ok;
+    try {
+      return response.ok;
+    } finally {
+      await release();
+    }
   } catch {
     return false;
   }

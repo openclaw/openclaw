@@ -36,11 +36,11 @@ function getChannelSection(cfg: OpenClawConfig): KudositySmsChannelConfig {
 }
 
 function getApiKey(cfg: OpenClawConfig): string {
-  return String(getChannelSection(cfg).apiKey ?? process.env.KUDOSITY_API_KEY ?? "").trim();
+  return (getChannelSection(cfg).apiKey ?? process.env.KUDOSITY_API_KEY ?? "").trim();
 }
 
 function getSender(cfg: OpenClawConfig): string {
-  return String(getChannelSection(cfg).sender ?? process.env.KUDOSITY_SENDER ?? "").trim();
+  return (getChannelSection(cfg).sender ?? process.env.KUDOSITY_SENDER ?? "").trim();
 }
 
 function isKudositySmsConfigured(cfg: OpenClawConfig): boolean {
@@ -58,7 +58,7 @@ const SETUP_HELP_LINES = [
 const E164_RE = /^\+?[1-9]\d{6,14}$/;
 
 function cleanSender(value: string): string {
-  return String(value ?? "").replace(/[\s\-()]/g, "");
+  return value.replace(/[\s\-()]/g, "");
 }
 
 export const kudositySmsSetupWizard: ChannelSetupWizard = {
@@ -102,11 +102,13 @@ export const kudositySmsSetupWizard: ChannelSetupWizard = {
     });
 
     if (apiKeyInput === undefined || apiKeyInput === null) {
-      // User cancelled — leave config unchanged.
-      return;
+      // User cancelled — return the existing cfg unchanged so finalize has a
+      // consistent return shape (the framework treats the returned `cfg` as the
+      // next cfg and falls through for an absent `credentialValues`).
+      return { cfg };
     }
 
-    const apiKey = String(apiKeyInput).trim();
+    const apiKey = apiKeyInput.trim();
 
     // Step 2: validate API key against the Kudosity API
     await prompter.note("Validating API key...", "Validation");
@@ -119,7 +121,7 @@ export const kudositySmsSetupWizard: ChannelSetupWizard = {
           "Get a key at https://kudosity.com -> Settings -> API Keys",
         "Validation Failed",
       );
-      return;
+      return { cfg };
     }
 
     await prompter.note("API key is valid.", "Validation");
@@ -143,10 +145,10 @@ export const kudositySmsSetupWizard: ChannelSetupWizard = {
     });
 
     if (senderInput === undefined || senderInput === null) {
-      return;
+      return { cfg };
     }
 
-    const sender = cleanSender(String(senderInput));
+    const sender = cleanSender(senderInput);
 
     // Step 4: persist
     const prev = cfg as ConfigWithChannels;

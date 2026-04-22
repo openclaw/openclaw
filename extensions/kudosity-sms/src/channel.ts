@@ -95,8 +95,8 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
   resolveAccount(cfg, _accountId) {
     const channels = (cfg as { channels?: Record<string, unknown> }).channels;
     const section = (channels?.[CHANNEL_KEY] ?? {}) as KudositySmsChannelSection;
-    const apiKey = String(section.apiKey ?? process.env.KUDOSITY_API_KEY ?? "").trim();
-    const sender = String(section.sender ?? process.env.KUDOSITY_SENDER ?? "").trim();
+    const apiKey = (section.apiKey ?? process.env.KUDOSITY_API_KEY ?? "").trim();
+    const sender = (section.sender ?? process.env.KUDOSITY_SENDER ?? "").trim();
     const enabled = section.enabled;
     return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, enabled };
   },
