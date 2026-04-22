@@ -12,6 +12,19 @@ describe("resolveQaNodeExecPath", () => {
     ).resolves.toBe("/opt/homebrew/bin/node");
   });
 
+  it("reuses nodejs as a valid current Node executable", async () => {
+    await expect(
+      resolveQaNodeExecPath({
+        execPath: "/usr/bin/nodejs",
+        platform: "linux",
+        versions: { ...process.versions, bun: undefined },
+        execFileImpl: async () => {
+          throw new Error("should not search PATH");
+        },
+      }),
+    ).resolves.toBe("/usr/bin/nodejs");
+  });
+
   it("resolves node from PATH when the parent runtime is bun", async () => {
     await expect(
       resolveQaNodeExecPath({

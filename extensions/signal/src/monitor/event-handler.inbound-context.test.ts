@@ -1,6 +1,6 @@
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
 vi.useRealTimers();
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
@@ -139,11 +139,26 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
+    expect(sendTypingMock).toHaveBeenCalledWith(
+      "+15550001111",
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
+    );
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",
       1700000000000,
-      expect.any(Object),
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
     );
   });
 

@@ -1,8 +1,12 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  fetchBlueBubblesMessageAttachments,
+  sendBlueBubblesAttachment,
+} from "./attachments.js";
 import { fetchBlueBubblesServerInfo, getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import {
   BLUE_BUBBLES_PRIVATE_API_STATUS,
@@ -10,53 +14,27 @@ import {
   mockBlueBubblesPrivateApiStatus,
   mockBlueBubblesPrivateApiStatusOnce,
 } from "./test-harness.js";
+import {
+  createBlueBubblesFetchRemoteMediaMock,
+  createBlueBubblesRuntimeStub,
+} from "./test-helpers.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
 const mockFetch = vi.fn();
 const fetchServerInfoMock = vi.mocked(fetchBlueBubblesServerInfo);
-const fetchRemoteMediaMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchFn = params.fetchImpl ?? fetch;
-    const res = await fetchFn(params.url);
-    if (!res.ok) {
-      const text = await res.text().catch(() => "unknown");
-      throw new Error(
-        `Failed to fetch media from ${params.url}: HTTP ${res.status}; body: ${text}`,
-      );
-    }
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
-      const error = new Error(`payload exceeds maxBytes ${params.maxBytes}`) as Error & {
-        code?: string;
-      };
-      error.code = "max_bytes";
-      throw error;
-    }
-    return {
-      buffer,
-      contentType: res.headers.get("content-type") ?? undefined,
-      fileName: undefined,
-    };
+const fetchRemoteMediaMock = createBlueBubblesFetchRemoteMediaMock({
+  createHttpError: async ({ response, url }) => {
+    const text = await response.text().catch(() => "unknown");
+    return new Error(`Failed to fetch media from ${url}: HTTP ${response.status}; body: ${text}`);
   },
-);
+});
 
 installBlueBubblesFetchTestHooks({
   mockFetch,
   privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
 });
 
-const runtimeStub = {
-  channel: {
-    media: {
-      fetchRemoteMedia:
-        fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-    },
-  },
-} as unknown as PluginRuntime;
+const runtimeStub = createBlueBubblesRuntimeStub(fetchRemoteMediaMock);
 
 describe("downloadBlueBubblesAttachment", () => {
   beforeEach(() => {
@@ -337,8 +315,12 @@ describe("downloadBlueBubblesAttachment", () => {
       },
     });
 
+    // Default-deny policy via the guard, NOT unguarded fetch. Aisle #68234
+    // flagged the previous `undefined` fallback as a real SSRF bypass because
+    // `blueBubblesFetchWithTimeout` treats `undefined` as "skip the SSRF
+    // guard entirely", exactly when the user asked us to block private nets.
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({});
   });
 
   it("allowlists public serverUrl hostname when allowPrivateNetwork is not set", async () => {
@@ -767,5 +749,88 @@ describe("sendBlueBubblesAttachment", () => {
         opts: { serverUrl: "http://localhost:1234", password: "test" },
       }),
     ).rejects.toThrow("chatGuid not found");
+  });
+});
+
+describe("fetchBlueBubblesMessageAttachments", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it("returns attachments from the BB API response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: {
+            attachments: [
+              {
+                guid: "att-1",
+                mimeType: "image/jpeg",
+                transferName: "photo.jpg",
+                totalBytes: 1024,
+              },
+              {
+                guid: "att-2",
+                mime_type: "image/png",
+                transfer_name: "screenshot.png",
+                total_bytes: 2048,
+              },
+            ],
+          },
+        }),
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toHaveLength(2);
+    expect(result[0].guid).toBe("att-1");
+    expect(result[0].mimeType).toBe("image/jpeg");
+    expect(result[1].guid).toBe("att-2");
+    expect(result[1].mimeType).toBe("image/png");
+  });
+
+  it("returns empty array on non-ok HTTP response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array when data has no attachments", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: {} }),
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("includes entries without a guid (downstream download handles filtering)", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: {
+            attachments: [{ mimeType: "image/jpeg" }, { guid: "att-valid", mimeType: "image/png" }],
+          },
+        }),
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toHaveLength(2);
+    expect(result[0].guid).toBeUndefined();
+    expect(result[1].guid).toBe("att-valid");
   });
 });

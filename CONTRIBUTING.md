@@ -6,7 +6,7 @@ Welcome to the lobster tank! 🦞
 
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
-- **Discord:** https://discord.gg/qkhbAGHRBT
+- **Discord:** https://discord.gg/clawd
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
@@ -59,7 +59,7 @@ Welcome to the lobster tank! 🦞
 - **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
   - GitHub [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
 
-- **Josh Lehman** - Compaction, Tlon/Urbit subsystem
+- **Josh Lehman** - Compaction, Context Engine
   - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
 
 - **Radek Sienkiewicz** - Docs, Control UI

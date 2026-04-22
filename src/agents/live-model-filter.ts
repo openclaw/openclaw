@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ModelRef = {
@@ -8,6 +10,7 @@ export type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-4-7",
   "anthropic/claude-opus-4-6",
   "anthropic/claude-sonnet-4-6",
   "google/gemini-3.1-pro-preview",
@@ -19,11 +22,13 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4-1-fast-non-reasoning",
   "zai/glm-4.7",
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "minimax-portal/minimax-m2.7",
 ] as const;
 
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
+const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli", "openai-codex"]);
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
@@ -94,6 +99,45 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
     return false;
   }
   return isHighSignalClaudeModelId(id);
+}
+
+export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
+  provider?: string | null;
+  useExplicitModels: boolean;
+  providerFilter?: ReadonlySet<string> | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const provider = normalizeProviderId(params.provider ?? "");
+  if (!provider || params.useExplicitModels) {
+    return false;
+  }
+  if (!DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(provider)) {
+    return false;
+  }
+  const ownerCache = new Map<string, readonly string[]>();
+  for (const filterEntry of params.providerFilter ?? []) {
+    const requestedProvider = normalizeProviderId(filterEntry);
+    if (requestedProvider === provider) {
+      return false;
+    }
+    if (
+      requestedProvider &&
+      liveProvidersShareOwningPlugin(requestedProvider, provider, {
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        ownerCache,
+      })
+    ) {
+      return false;
+    }
+    if (requestedProvider && DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(requestedProvider)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function toCanonicalHighSignalLiveModelKey(ref: ModelRef): string | null {

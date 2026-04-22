@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -27,6 +27,7 @@ import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import { discoverBundledPluginRuntimeDeps } from "./postinstall-bundled-plugins.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -57,7 +58,13 @@ const requiredPathGroups = [
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
 ];
+const legacyUpdateCompatPackPaths = new Set([
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+]);
 const forbiddenPrefixes = [
   "dist-runtime/",
   "dist/OpenClaw.app/",
@@ -198,6 +205,53 @@ function resolveGlobalRoot(prefixDir: string, cwd: string): string {
   }).trim();
 }
 
+export function createPackedBundledPluginPostinstallEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+    OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
+  };
+}
+
+function runPackedBundledPluginPostinstall(packageRoot: string): void {
+  execFileSync(process.execPath, [join(packageRoot, "scripts/postinstall-bundled-plugins.mjs")], {
+    cwd: packageRoot,
+    stdio: "inherit",
+    env: createPackedBundledPluginPostinstallEnv(),
+  });
+}
+
+export function collectInstalledBundledPluginRuntimeDepErrors(packageRoot: string): string[] {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  if (!existsSync(extensionsDir)) {
+    return [];
+  }
+  const runtimeDeps = discoverBundledPluginRuntimeDeps({ extensionsDir });
+  return runtimeDeps
+    .filter((dep) => !existsSync(join(packageRoot, dep.sentinelPath)))
+    .map((dep) => {
+      const owners = dep.pluginIds.length > 0 ? dep.pluginIds.join(", ") : "unknown";
+      return `bundled plugin runtime dependency '${dep.name}@${dep.version}' (owners: ${owners}) is missing at ${dep.sentinelPath}.`;
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function assertInstalledBundledPluginRuntimeDepsResolved(packageRoot: string): void {
+  const errors = collectInstalledBundledPluginRuntimeDepErrors(packageRoot);
+  if (errors.length === 0) {
+    return;
+  }
+  console.error("release-check: packed install is missing bundled plugin runtime dependencies:");
+  for (const error of errors) {
+    console.error(`  - ${error}`);
+  }
+  throw new Error(
+    "release-check: bundled plugin runtime dependencies were not installed after packed postinstall.",
+  );
+}
+
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
@@ -210,6 +264,8 @@ function runPackedBundledChannelEntrySmoke(): void {
     installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    runPackedBundledPluginPostinstall(packageRoot);
+    assertInstalledBundledPluginRuntimeDepsResolved(packageRoot);
     execFileSync(
       process.execPath,
       [
@@ -274,7 +330,9 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
-        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) || /node_modules\//.test(path),
+        !legacyUpdateCompatPackPaths.has(path) &&
+        (forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+          /node_modules\//.test(path)),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -286,6 +344,9 @@ export function collectForbiddenPackContentPaths(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   return [...paths]
     .filter((packedPath) => {
+      if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
+        return false;
+      }
       if (!forbiddenPrivateQaContentScanPrefixes.some((prefix) => packedPath.startsWith(prefix))) {
         return false;
       }

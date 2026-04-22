@@ -5,6 +5,7 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
+import { coerceChatContentText } from "../../shared/chat-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -102,6 +103,11 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
   if (!raw) {
     return undefined;
   }
+
+  if (isCloudflareOrHtmlErrorPage(raw)) {
+    return undefined;
+  }
+
   const lower = normalizeLowercaseStringOrEmpty(raw);
 
   if (
@@ -295,33 +301,8 @@ function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
   return false;
 }
 
-function coerceText(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value == null) {
-    return "";
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value) ?? "";
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
 function stripFinalTagsFromText(text: unknown): string {
-  const normalized = coerceText(text);
+  const normalized = coerceChatContentText(text);
   if (!normalized) {
     return normalized;
   }
@@ -373,7 +354,7 @@ export function isLikelyHttpErrorText(raw: string): boolean {
 }
 
 export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
-  const raw = coerceText(text);
+  const raw = coerceChatContentText(text);
   if (!raw) {
     return raw;
   }

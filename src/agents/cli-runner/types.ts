@@ -44,6 +44,7 @@ export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
   env?: Record<string, string>;
 };
 
@@ -54,6 +55,7 @@ export type CliReusableSession = {
 
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
+  effectiveAuthProfileId?: string;
   started: number;
   workspaceDir: string;
   backendResolved: ResolvedCliBackend;

@@ -17,14 +17,48 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
-import type { DiscordComponentMessageSpec } from "./components.js";
-import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
+import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
+import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
-import { sendDiscordComponentMessage } from "./send.components.js";
-import { sendMessageDiscord, sendPollDiscord, sendWebhookMessageDiscord } from "./send.js";
-import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+
+type DiscordSendRuntime = typeof import("./send.js");
+type DiscordSendFn = DiscordSendRuntime["sendMessageDiscord"];
+type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
+type DiscordSharedInteractiveModule = typeof import("./shared-interactive.js");
+type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
+
+let discordSendRuntimePromise: Promise<DiscordSendRuntime> | undefined;
+let discordComponentSendPromise: Promise<DiscordComponentSendFn> | undefined;
+let discordSharedInteractivePromise: Promise<DiscordSharedInteractiveModule> | undefined;
+let discordThreadBindingsPromise: Promise<DiscordThreadBindingsModule> | undefined;
+
+async function loadDiscordSendRuntime(): Promise<DiscordSendRuntime> {
+  discordSendRuntimePromise ??= import("./send.js");
+  return await discordSendRuntimePromise;
+}
+
+async function sendDiscordComponentMessageLazy(
+  ...args: Parameters<DiscordComponentSendFn>
+): ReturnType<DiscordComponentSendFn> {
+  discordComponentSendPromise ??= import("./send.components.js").then(
+    (module) => module.sendDiscordComponentMessage,
+  );
+  return await (
+    await discordComponentSendPromise
+  )(...args);
+}
+
+function loadDiscordSharedInteractive(): Promise<DiscordSharedInteractiveModule> {
+  discordSharedInteractivePromise ??= import("./shared-interactive.js");
+  return discordSharedInteractivePromise;
+}
+
+function loadDiscordThreadBindings(): Promise<DiscordThreadBindingsModule> {
+  discordThreadBindingsPromise ??= import("./monitor/thread-bindings.js");
+  return discordThreadBindingsPromise;
+}
 
 function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
   const channelData = payload.channelData;
@@ -79,7 +113,7 @@ function resolveDiscordWebhookIdentity(params: {
 }
 
 async function maybeSendDiscordWebhookText(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   text: string;
   threadId?: string | number | null;
   accountId?: string | null;
@@ -93,6 +127,7 @@ async function maybeSendDiscordWebhookText(params: {
   if (!threadId) {
     return null;
   }
+  const { getThreadBindingManager } = await loadDiscordThreadBindings();
   const manager = getThreadBindingManager(params.accountId ?? undefined);
   if (!manager) {
     return null;
@@ -105,6 +140,7 @@ async function maybeSendDiscordWebhookText(params: {
     identity: params.identity,
     binding,
   });
+  const { sendWebhookMessageDiscord } = await loadDiscordSendRuntime();
   const result = await sendWebhookMessageDiscord(params.text, {
     webhookId: binding.webhookId,
     webhookToken: binding.webhookToken,
@@ -124,6 +160,31 @@ export const discordOutbound: ChannelOutboundAdapter = {
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+  },
+  renderPresentation: async ({ payload, presentation }) => {
+    const componentSpec = (await loadDiscordSharedInteractive()).buildDiscordPresentationComponents(
+      presentation,
+    );
+    if (!componentSpec) {
+      return null;
+    }
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        discord: {
+          ...(payload.channelData?.discord as Record<string, unknown> | undefined),
+          presentationComponents: componentSpec,
+        },
+      },
+    };
+  },
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) => {
     const payload = normalizeDiscordApprovalPayload({
@@ -131,10 +192,16 @@ export const discordOutbound: ChannelOutboundAdapter = {
       text: ctx.payload.text ?? "",
     });
     const discordData = payload.channelData?.discord as
-      | { components?: DiscordComponentMessageSpec }
+      | { components?: unknown; presentationComponents?: DiscordComponentMessageSpec }
       | undefined;
     const rawComponentSpec =
-      discordData?.components ?? buildDiscordInteractiveComponents(payload.interactive);
+      discordData?.presentationComponents ??
+      readDiscordComponentSpec(discordData?.components) ??
+      (payload.interactive
+        ? (await loadDiscordSharedInteractive()).buildDiscordInteractiveComponents(
+            payload.interactive,
+          )
+        : undefined);
     const componentSpec = rawComponentSpec
       ? rawComponentSpec.text
         ? rawComponentSpec
@@ -154,7 +221,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
       });
     }
     const send =
-      resolveOutboundSendDep<typeof sendMessageDiscord>(ctx.deps, "discord") ?? sendMessageDiscord;
+      resolveOutboundSendDep<DiscordSendFn>(ctx.deps, "discord") ??
+      (await loadDiscordSendRuntime()).sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId });
     const mediaUrls = resolvePayloadMediaUrls(payload);
     const result = await sendPayloadMediaSequenceOrFallback({
@@ -162,7 +230,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       mediaUrls,
       fallbackResult: { messageId: "", channelId: target },
       sendNoMedia: async () =>
-        await sendDiscordComponentMessage(target, componentSpec, {
+        await sendDiscordComponentMessageLazy(target, componentSpec, {
           replyTo: ctx.replyToId ?? undefined,
           accountId: ctx.accountId ?? undefined,
           silent: ctx.silent ?? undefined,
@@ -170,7 +238,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         }),
       send: async ({ text, mediaUrl, isFirst }) => {
         if (isFirst) {
-          return await sendDiscordComponentMessage(target, componentSpec, {
+          return await sendDiscordComponentMessageLazy(target, componentSpec, {
             mediaUrl,
             mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
@@ -213,7 +281,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
         }
       }
       const send =
-        resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
+        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
+        (await loadDiscordSendRuntime()).sendMessageDiscord;
       return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
         verbose: false,
         replyTo: replyToId ?? undefined,
@@ -236,7 +305,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
       silent,
     }) => {
       const send =
-        resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
+        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
+        (await loadDiscordSendRuntime()).sendMessageDiscord;
       return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
         verbose: false,
         mediaUrl,
@@ -249,7 +319,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
       });
     },
     sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
-      await sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
+      await (
+        await loadDiscordSendRuntime()
+      ).sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
         cfg,

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
@@ -9,6 +10,11 @@ import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+// Keep the historical one-line-per-message export shape for normal turns, but
+// wrap pathological long messages so downstream indexers never ingest a single
+// toxic line. Wrapped continuation lines still map back to the same JSONL line.
+// This limit applies to content only; the role label adds up to 11 chars.
+const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 
 export type SessionFileEntry = {
   path: string;
@@ -182,10 +188,9 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
-export function extractSessionText(content: unknown): string | null {
+function collectRawSessionText(content: unknown): string | null {
   if (typeof content === "string") {
-    const normalized = normalizeSessionText(content);
-    return normalized ? normalized : null;
+    return content;
   }
   if (!Array.isArray(content)) {
     return null;
@@ -196,18 +201,103 @@ export function extractSessionText(content: unknown): string | null {
       continue;
     }
     const record = block as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") {
-      continue;
-    }
-    const normalized = normalizeSessionText(record.text);
-    if (normalized) {
-      parts.push(normalized);
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push(record.text);
     }
   }
-  if (parts.length === 0) {
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function splitLongSessionLine(
+  text: string,
+  maxChars: number = SESSION_EXPORT_CONTENT_WRAP_CHARS,
+): string[] {
+  const normalized = text.trim();
+  if (!normalized) {
+    return [];
+  }
+  if (normalized.length <= maxChars) {
+    return [normalized];
+  }
+
+  const segments: string[] = [];
+  let cursor = 0;
+  while (cursor < normalized.length) {
+    const remaining = normalized.length - cursor;
+    if (remaining <= maxChars) {
+      segments.push(normalized.slice(cursor).trim());
+      break;
+    }
+
+    const limit = cursor + maxChars;
+    let splitAt = limit;
+    for (let index = limit; index > cursor; index -= 1) {
+      if (normalized[index] === " ") {
+        splitAt = index;
+        break;
+      }
+    }
+    if (
+      splitAt < normalized.length &&
+      splitAt > cursor &&
+      isHighSurrogate(normalized.charCodeAt(splitAt - 1)) &&
+      isLowSurrogate(normalized.charCodeAt(splitAt))
+    ) {
+      splitAt -= 1;
+    }
+    segments.push(normalized.slice(cursor, splitAt).trim());
+    cursor = splitAt;
+    while (cursor < normalized.length && normalized[cursor] === " ") {
+      cursor += 1;
+    }
+  }
+
+  return segments.filter(Boolean);
+}
+
+function renderSessionExportLines(label: string, text: string): string[] {
+  return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
+}
+
+/**
+ * Strip OpenClaw-injected inbound metadata envelopes from a raw text block.
+ *
+ * User-role messages arriving from external channels (Telegram, Discord,
+ * Slack, …) are stored with a multi-line prefix containing Conversation info,
+ * Sender info, and other AI-facing metadata blocks. These envelopes must be
+ * removed BEFORE normalization, because `stripInboundMetadata` relies on
+ * newline structure and fenced `json` code fences to locate sentinels; once
+ * `normalizeSessionText` collapses newlines into spaces, stripping is
+ * impossible.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/63921
+ */
+function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
+  if (role !== "user") {
+    return text;
+  }
+  return stripInboundMetadata(text);
+}
+
+export function extractSessionText(
+  content: unknown,
+  role: "user" | "assistant" = "assistant",
+): string | null {
+  const rawText = collectRawSessionText(content);
+  if (rawText === null) {
     return null;
   }
-  return parts.join(" ");
+  const stripped = stripInboundMetadataForUserRole(rawText, role);
+  const normalized = normalizeSessionText(stripped);
+  return normalized ? normalized : null;
 }
 
 function parseSessionTimestampMs(
@@ -275,7 +365,7 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const text = extractSessionText(message.content);
+      const text = extractSessionText(message.content, message.role);
       if (!text) {
         continue;
       }
@@ -284,14 +374,14 @@ export async function buildSessionEntry(
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
-      collected.push(`${label}: ${safe}`);
-      lineMap.push(jsonlIdx + 1);
-      messageTimestampsMs.push(
-        parseSessionTimestampMs(
-          record as { timestamp?: unknown },
-          message as { timestamp?: unknown },
-        ),
+      const renderedLines = renderSessionExportLines(label, safe);
+      const timestampMs = parseSessionTimestampMs(
+        record as { timestamp?: unknown },
+        message as { timestamp?: unknown },
       );
+      collected.push(...renderedLines);
+      lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
+      messageTimestampsMs.push(...renderedLines.map(() => timestampMs));
     }
     const content = collected.join("\n");
     return {
