@@ -48,6 +48,12 @@ describe("diagnostic support export", () => {
 
   it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
+    const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const fakeJwt = [
+      "eyJhbGciOiJIUzI1NiIs",
+      "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4i",
+      "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+    ].join(".");
     const privateChat = "private user said diagnose my bank transfer";
     const webhookBody = "raw webhook body with message contents";
     const credentialUrl =
@@ -122,7 +128,7 @@ describe("diagnostic support export", () => {
           subsystem: "gateway",
           component: "gateway/server",
           channel: "telegram",
-          msg: `gateway websocket listening at ${credentialUrl}`,
+          msg: `gateway websocket listening at ${credentialUrl} Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ== ${fakeAwsKey} ${fakeJwt} Cookie: sid=secret`,
           hostname: "support-host",
           message: privateChat,
           body: webhookBody,
@@ -237,9 +243,15 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain("short-token");
     expect(combined).not.toContain(tempDir);
     expect(combined).not.toContain("cron/jobs.json");
+    expect(combined).not.toContain(os.hostname());
+    expect(combined).not.toContain("QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+    expect(combined).not.toContain("sid=secret");
+    expect(combined).not.toContain(fakeAwsKey);
+    expect(combined).not.toContain(fakeJwt);
     expect(combined).toContain("payload.large");
     expect(combined).toContain("gateway.http.json");
     expect(combined).toContain("$OPENCLAW_STATE_DIR");
+    expect(combined).toContain("<redacted-hostname>");
     expect(combined).toContain("gateway-status.json");
     expect(combined).toContain("gateway-health.json");
     expect(combined).toContain("Attach this zip to the bug report");
@@ -252,6 +264,10 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain(
       "wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
     );
+    expect(sanitizedLogs).toContain("Basic <redacted>");
+    expect(sanitizedLogs).toContain("Cookie: <redacted>");
+    expect(sanitizedLogs).toContain("<redacted-aws-key>");
+    expect(sanitizedLogs).toContain("<redacted-jwt>");
     expect(sanitizedLogs).toContain('"module":"matrix-auto-reply"');
     expect(sanitizedLogs).toContain('"subsystem":"gateway/channels/matrix"');
     expect(sanitizedLogs).toContain('"logger":"gateway-runtime"');
@@ -350,11 +366,21 @@ describe("diagnostic support export", () => {
   });
 
   it("redacts support text identifiers without hiding useful URL hosts", () => {
+    const fakeAwsKey = ["ASIA", "IOSFODNN7EXAMPLE"].join("");
+    const fakeJwt = [
+      "eyJhbGciOiJIUzI1NiIs",
+      "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4i",
+      "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+    ].join(".");
     const cases = [
       [
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
         "connect wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
       ],
+      ["auth Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==", "auth Basic <redacted>"],
+      ["Cookie: sid=secret; theme=light", "Cookie: <redacted>"],
+      [`aws ${fakeAwsKey}`, "aws <redacted-aws-key>"],
+      [`jwt ${fakeJwt}`, "jwt <redacted-jwt>"],
       ["email alice@example.com", "email <redacted-email>"],
       ["matrix @support-user:matrix.example.com", "matrix <redacted-matrix-user>"],
       ["room !support-room:matrix.example.com", "room <redacted-matrix-room>"],

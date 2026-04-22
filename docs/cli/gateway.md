@@ -135,7 +135,7 @@ Options:
 Notes:
 
 - The recorder is active by default. Set `diagnostics.enabled: false` only when you need to disable Gateway diagnostic heartbeat collection.
-- Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and session ids. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, or secret values.
+- Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and redacted session summaries. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, secret values, hostnames, or raw session ids.
 - On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
 
 ### `gateway diagnostics export`

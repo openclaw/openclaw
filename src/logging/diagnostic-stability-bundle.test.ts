@@ -81,6 +81,9 @@ describe("diagnostic stability bundles", () => {
         name: "Error",
         code: "ERR_TEST",
       },
+      host: {
+        hostname: "<redacted-hostname>",
+      },
       snapshot: {
         count: 2,
       },
@@ -94,6 +97,7 @@ describe("diagnostic stability bundles", () => {
     expect(raw).not.toContain("chat-secret");
     expect(raw).not.toContain("message body");
     expect(raw).not.toContain("contains secret message");
+    expect(raw).not.toContain(os.hostname());
   });
 
   it("skips empty recorder snapshots by default", () => {

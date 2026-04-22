@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { resolveStateDir } from "../config/paths.js";
@@ -17,6 +16,7 @@ export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
+const REDACTED_HOSTNAME = "<redacted-hostname>";
 
 export type DiagnosticStabilityBundle = {
   version: typeof DIAGNOSTIC_STABILITY_BUNDLE_VERSION;
@@ -294,7 +294,7 @@ export function writeDiagnosticStabilityBundleSync(
         uptimeMs: Math.round(process.uptime() * 1000),
       },
       host: {
-        hostname: os.hostname(),
+        hostname: REDACTED_HOSTNAME,
       },
       ...(error ? { error } : {}),
       snapshot,
