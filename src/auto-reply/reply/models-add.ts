@@ -23,9 +23,10 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../../agents/self-hosted-provider-defaults.js";
 import {
+  ConfigMutationConflictError,
   readConfigFileSnapshot,
+  replaceConfigFile,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -62,6 +63,23 @@ type AddModelOutcome = {
 };
 
 const log = createSubsystemLogger("models-add");
+
+function sanitizeUrlForLogs(raw: string | undefined): string | undefined {
+  const trimmed = normalizeOptionalString(raw);
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const url = new URL(trimmed);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "[invalid_url]";
+  }
+}
 
 function buildDefaultModelDefinition(modelId: string): ModelDefinitionConfig {
   return {
@@ -201,7 +219,7 @@ const MODEL_ADD_ADAPTERS: Record<string, ModelAddAdapter> = {
         };
       } catch (error) {
         log.warn("lmstudio model metadata detection failed; using defaults", {
-          baseUrl: providerConfig.baseUrl,
+          baseUrl: sanitizeUrlForLogs(providerConfig.baseUrl),
           modelId,
           error: formatErrorMessage(error),
         });
@@ -498,7 +516,20 @@ export async function addModelToConfig(params: {
     };
   }
 
-  await writeConfigFile(validated.config);
+  try {
+    await replaceConfigFile({
+      nextConfig: validated.config,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    });
+  } catch (error) {
+    if (error instanceof ConfigMutationConflictError) {
+      return {
+        ok: false,
+        error: "Config changed while /models add was running. Retry the command.",
+      };
+    }
+    throw error;
+  }
   return {
     ok: true,
     result: {

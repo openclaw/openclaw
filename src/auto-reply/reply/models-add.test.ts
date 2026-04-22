@@ -3,9 +3,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { addModelToConfig, listAddableProviders, validateAddProvider } from "./models-add.js";
 
 const configMocks = vi.hoisted(() => ({
+  ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
+    readonly currentHash: string | null;
+
+    constructor(message: string, params: { currentHash: string | null }) {
+      super(message);
+      this.name = "ConfigMutationConflictError";
+      this.currentHash = params.currentHash;
+    }
+  },
   readConfigFileSnapshot: vi.fn(),
+  replaceConfigFile: vi.fn(),
   validateConfigObjectWithPlugins: vi.fn(),
-  writeConfigFile: vi.fn(),
 }));
 
 const ollamaMocks = vi.hoisted(() => ({
@@ -21,9 +30,10 @@ const lmstudioFetchMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
+  ConfigMutationConflictError: configMocks.ConfigMutationConflictError,
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+  replaceConfigFile: configMocks.replaceConfigFile,
   validateConfigObjectWithPlugins: configMocks.validateConfigObjectWithPlugins,
-  writeConfigFile: configMocks.writeConfigFile,
 }));
 
 vi.mock("../../../extensions/ollama/api.js", async (importOriginal) => {
@@ -48,8 +58,8 @@ vi.mock("../../../extensions/lmstudio/runtime-api.js", async () => {
 describe("models-add", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
+    configMocks.replaceConfigFile.mockReset();
     configMocks.validateConfigObjectWithPlugins.mockReset();
-    configMocks.writeConfigFile.mockReset();
     ollamaMocks.queryOllamaModelShowInfo.mockReset();
     ollamaMocks.queryOllamaModelShowInfo.mockResolvedValue({});
     lmstudioRuntimeMocks.resolveLmstudioRequestContext.mockReset();
@@ -144,8 +154,8 @@ describe("models-add", () => {
     }
     expect(result.result.existed).toBe(false);
     expect(result.result.allowlistAdded).toBe(true);
-    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    expect(configMocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+    const written = configMocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig as OpenClawConfig;
     expect(written.models?.providers?.ollama?.models).toEqual([
       expect.objectContaining({
         id: "glm-5.1:cloud",
@@ -199,7 +209,7 @@ describe("models-add", () => {
     if (!result.ok) {
       return;
     }
-    const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    const written = configMocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig as OpenClawConfig;
     expect(written.models?.providers?.Ollama?.models).toEqual([
       expect.objectContaining({
         id: "glm-5.1:cloud",
@@ -256,7 +266,7 @@ describe("models-add", () => {
         warnings: ["Model metadata could not be auto-detected; saved with default capabilities."],
       },
     });
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("bootstraps lmstudio provider config when missing", async () => {
@@ -297,7 +307,7 @@ describe("models-add", () => {
     });
 
     expect(result.ok).toBe(true);
-    const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    const written = configMocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig as OpenClawConfig;
     expect(written.models?.providers?.lmstudio?.baseUrl).toBe("http://localhost:1234/v1");
     expect(written.models?.providers?.lmstudio?.api).toBe("openai-completions");
     expect(written.models?.providers?.lmstudio?.models).toEqual([
@@ -426,5 +436,48 @@ describe("models-add", () => {
     );
     expect(result.result.warnings.join(" ")).not.toContain("ECONNREFUSED");
     expect(result.result.warnings.join(" ")).not.toContain("127.0.0.1");
+  });
+
+  it("returns a retryable error when the config changes before replace", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      parsed: cfg,
+      hash: "base-hash",
+    });
+    ollamaMocks.queryOllamaModelShowInfo.mockResolvedValue({
+      contextWindow: 202752,
+      capabilities: ["thinking"],
+    });
+    configMocks.validateConfigObjectWithPlugins.mockImplementation((config: OpenClawConfig) => ({
+      ok: true,
+      config,
+    }));
+    configMocks.replaceConfigFile.mockRejectedValue(
+      new configMocks.ConfigMutationConflictError("config changed since last load", {
+        currentHash: "new-hash",
+      }),
+    );
+
+    const result = await addModelToConfig({
+      cfg,
+      provider: "ollama",
+      modelId: "glm-5.1:cloud",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Config changed while /models add was running. Retry the command.",
+    });
   });
 });
