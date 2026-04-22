@@ -72,13 +72,8 @@ describe("matchesMessagingToolDeliveryTarget", () => {
       ),
     ).toBe(false);
   });
+
   it("matches when delivery has accountId and target omits it (tool fills accountId at exec)", () => {
-    // message-tool resolves accountId from the agent's bound account at
-    // execution time (message-tool.ts: `accountId ?? agentAccountId`), so
-    // an absent target.accountId is equivalent to the delivery's bound
-    // account. Rejecting this case caused duplicate sends for account-bound
-    // cron jobs (codex review on PR #69940). CWE-284 spoofing is still
-    // prevented by the "accountIds differ" case above.
     expect(
       matchesMessagingToolDeliveryTarget(
         { provider: "message", to: "123456" },

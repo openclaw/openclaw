@@ -536,12 +536,6 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("rewrites generic message provider when tool send omits accountId (tool fills at exec)", async () => {
-    // message-tool resolves accountId from the agent's bound account at exec
-    // time (message-tool.ts: `accountId ?? agentAccountId`), so a tool call
-    // that omits accountId is the common path for account-bound cron jobs.
-    // The trace rewrite must still happen here, otherwise cron's
-    // delivery-suppression flag is lost and dispatchCronDelivery would
-    // double-send for account-bound jobs (codex review on PR #69940).
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
@@ -585,8 +579,6 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("does not rewrite generic message provider when tool names a different accountId (spoof guard)", async () => {
-    // CWE-284: a tool that explicitly sets a foreign accountId must not be
-    // attributed to this account-bound delivery in the trace.
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
@@ -626,8 +618,6 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(result.delivery).toEqual(
       expect.objectContaining({
-        // Channel stays as "message" because the tool named bot-b, which does
-        // not match the resolved delivery's bot-a binding.
         messageToolSentTo: [{ channel: "message", to: "123", accountId: "bot-b" }],
       }),
     );

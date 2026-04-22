@@ -156,11 +156,6 @@ function normalizeMessagingToolTarget(
   if (!channel) {
     return undefined;
   }
-  // Rewrite the generic "message" provider to the resolved channel in the
-  // trace when the tool send actually matches the resolved cron delivery
-  // target. This makes `intended.channel === messageToolSentTo[i].channel`
-  // diffable for the happy path, while genuine unmatched generic sends keep
-  // the literal "message" provider so audits can still flag them.
   const traceChannel =
     channel === "message" &&
     resolvedDelivery.ok &&

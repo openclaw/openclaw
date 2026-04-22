@@ -80,11 +80,6 @@ export function matchesMessagingToolDeliveryTarget(
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
-  // CWE-284: when the tool-reported target explicitly names a different
-  // accountId than the account-bound delivery, reject so attribution cannot
-  // be spoofed to another bot identity. An omitted target.accountId is
-  // legitimate — message-tool fills accountId from the agent's bound account
-  // at exec time, which equals delivery.accountId for account-bound jobs.
   if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
