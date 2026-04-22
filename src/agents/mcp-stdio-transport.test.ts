@@ -78,4 +78,46 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("close", 0);
     await closing;
   });
+
+  it("does not kill the process tree when graceful stdio close exits", async () => {
+    vi.useFakeTimers();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const closing = transport.close();
+    child.exitCode = 0;
+    child.emit("close", 0);
+    await closing;
+
+    expect(killProcessTreeMock).not.toHaveBeenCalled();
+  });
+
+  it("sends and receives JSON-RPC messages over stdio", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const onmessage = vi.fn();
+    Object.assign(transport, { onmessage });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    await transport.send({ jsonrpc: "2.0", id: 1, method: "ping" });
+    expect(child.stdin.read()?.toString()).toBe('{"jsonrpc":"2.0","id":1,"method":"ping"}\n');
+
+    child.stdout.write('{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n');
+    expect(onmessage).toHaveBeenCalledWith({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true },
+    });
+  });
 });

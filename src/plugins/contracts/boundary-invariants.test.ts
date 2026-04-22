@@ -51,6 +51,10 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     'resolvePluginConfigObject(api.runtime.config.loadConfig(), "active-memory")',
     "api.runtime.config.loadConfig()",
   ],
+  "extensions/diffs/src/plugin.ts": [
+    'resolvePluginConfigObject(currentConfig, "diffs")',
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
   "extensions/memory-core/src/dreaming.ts": [
     'params.reason === "runtime"',
     "resolveMemoryCorePluginConfig(startupCfg)",
@@ -66,7 +70,8 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   ],
   "extensions/thread-ownership/index.ts": [
     'resolvePluginConfigObject(currentConfig, "thread-ownership")',
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    'typeof api.runtime.config?.loadConfig === "function"',
+    "api.runtime.config.loadConfig() ?? api.config",
   ],
 } as const satisfies Record<string, readonly string[]>;
 

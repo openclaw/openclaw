@@ -290,6 +290,10 @@ describe("scoped vitest configs", () => {
     expect(defaultAutoReplyReplyConfig.test?.include).toEqual(["reply/**/*.test.ts"]);
   });
 
+  it("keeps the broad agents lane on shared file parallelism", () => {
+    expect(defaultAgentsConfig.test?.fileParallelism).toBe(true);
+  });
+
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
     expect(normalizeConfigPaths(defaultPluginSdkLightConfig.test?.setupFiles)).toEqual([
       "test/setup.ts",

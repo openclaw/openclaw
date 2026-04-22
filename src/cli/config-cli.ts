@@ -108,6 +108,25 @@ function isIndexSegment(raw: string): boolean {
   return /^[0-9]+$/.test(raw);
 }
 
+function parseBracketPathSegment(raw: string, fullPath: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`Invalid path (empty "[]"): ${fullPath}`);
+  }
+  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
+    try {
+      const parsed = JSON5.parse(trimmed) as unknown;
+      if (typeof parsed === "string" && parsed.trim()) {
+        return parsed;
+      }
+    } catch (err) {
+      throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`, { cause: err });
+    }
+    throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`);
+  }
+  return trimmed;
+}
+
 function parsePath(raw: string): PathSegment[] {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -147,7 +166,7 @@ function parsePath(raw: string): PathSegment[] {
       if (!inside) {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
-      parts.push(inside);
+      parts.push(parseBracketPathSegment(inside, raw));
       i = close + 1;
       continue;
     }
