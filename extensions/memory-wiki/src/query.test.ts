@@ -340,6 +340,40 @@ describe("searchMemoryWiki", () => {
     });
   });
 
+  it("forwards agentSessionKey to shared memory search", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 2,
+          score: 1,
+          snippet: "session key test",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      agentSessionKey: "agent:secondary:thread",
+      query: "session",
+    });
+
+    expect(manager.search).toHaveBeenCalledWith("session", {
+      maxResults: expect.any(Number),
+      sessionKey: "agent:secondary:thread",
+    });
+  });
+
   it("allows per-call corpus overrides without changing config defaults", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
