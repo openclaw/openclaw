@@ -97,6 +97,13 @@ function listCandidateSkillDirs(dir: string): string[] {
   const skillDirs: string[] = [];
   const visited = new Set<string>();
 
+  let rootRealPath: string;
+  try {
+    rootRealPath = fs.realpathSync(dir);
+  } catch {
+    return [];
+  }
+
   const walk = (currentDir: string) => {
     let entries: fs.Dirent[];
     try {
@@ -130,6 +137,9 @@ function listCandidateSkillDirs(dir: string): string[] {
         continue;
       }
       if (visited.has(realPath)) {
+        continue;
+      }
+      if (!realPath.startsWith(rootRealPath + path.sep) && realPath !== rootRealPath) {
         continue;
       }
       visited.add(realPath);
