@@ -480,10 +480,19 @@ export async function initSessionState(params: {
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      const isUserOverride = entry.authProfileOverrideSource === "user";
-      if (isUserOverride) {
+      // Gate model/provider and auth-profile carry-overs independently, matching
+      // the canonical pattern in src/gateway/session-reset-service.ts.
+      // `modelOverrideSource` is newer than the field pair; older persisted
+      // sessions can still carry user-selected overrides without the source
+      // field set, so treat an absent source as legacy user state.
+      const preserveLegacyUserModelOverride =
+        entry.modelOverrideSource === "user" ||
+        (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
+      if (preserveLegacyUserModelOverride && entry.modelOverride) {
         persistedModelOverride = entry.modelOverride;
         persistedProviderOverride = entry.providerOverride;
+      }
+      if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
         persistedAuthProfileOverride = entry.authProfileOverride;
         persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
         persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;

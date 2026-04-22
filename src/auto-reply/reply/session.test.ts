@@ -1740,9 +1740,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const storePath = await createStorePath("openclaw-reset-model-auth-auto-");
     const sessionKey = "agent:main:telegram:dm:auto-model-auth";
     const existingSessionId = "existing-session-model-auth-auto";
+    // Mirrors the failover-selection shape written by agent-runner-execution.ts:
+    // both the model pair and the auth profile are marked as auto-selected, so
+    // neither should survive a user-issued /new or /reset.
     const overrides = {
       providerOverride: "openrouter",
       modelOverride: "google/gemini-2.5-flash",
+      modelOverrideSource: "auto",
       authProfileOverride: "auto-profile",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 3,
@@ -1791,6 +1795,73 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
       expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
       expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBeUndefined();
+    }
+  });
+
+  it("preserves user-pinned model override across /new and /reset even when auth profile is auto-selected", async () => {
+    // Regression guard for the mixed-source case flagged by Codex/Greptile:
+    // model/provider overrides are tracked by `modelOverrideSource` (set to
+    // "user" by applyModelOverrideToSessionEntry when the user runs /model),
+    // which is independent of `authProfileOverrideSource`. An auto-selected
+    // auth profile must not drop the user-pinned model pair on reset.
+    const storePath = await createStorePath("openclaw-reset-user-model-auto-auth-");
+    const sessionKey = "agent:main:telegram:dm:user-model-auto-auth";
+    const existingSessionId = "existing-session-user-model-auto-auth";
+    const overrides = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-5",
+      modelOverrideSource: "user",
+      authProfileOverride: "auto-profile",
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 1,
+    } as const;
+    const cases = [
+      {
+        name: "new preserves user model override and drops auto auth profile",
+        body: "/new",
+      },
+      {
+        name: "reset preserves user model override and drops auto auth profile",
+        body: "/reset",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-model-auto-auth",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.providerOverride, testCase.name).toBe(overrides.providerOverride);
+      expect(result.sessionEntry.modelOverride, testCase.name).toBe(overrides.modelOverride);
       expect(result.sessionEntry.authProfileOverride, testCase.name).toBeUndefined();
       expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBeUndefined();
       expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBeUndefined();
