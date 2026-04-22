@@ -39,7 +39,12 @@ import {
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "../../infra/update-global.js";
-import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  runGatewayUpdate,
+  type UpdateRunResult,
+  type UpdateStepProgress,
+  type UpdateStepResult,
+} from "../../infra/update-runner.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -405,6 +410,16 @@ async function runPackageInstallUpdate(params: {
         stdoutTail: null,
       });
     }
+    const stagingStep = await runBundledPluginStagingStep({
+      packageRoot: verifiedPackageRoot,
+      manager,
+      timeoutMs: params.timeoutMs,
+      progress: params.progress,
+    });
+    if (stagingStep) {
+      steps.push(stagingStep);
+    }
+
     const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
     if (entryPath) {
       const doctorStep = await runUpdateStep({
@@ -431,6 +446,82 @@ async function runPackageInstallUpdate(params: {
     after: { version: afterVersion },
     steps,
     durationMs: Date.now() - params.startedAt,
+  };
+}
+
+// Eager-stage bundled plugin runtime deps that `files`-stripped tarballs
+// leave unstaged on the client. Runs after the global install step, before
+// doctor — doctor eagerly loads bundled plugins and will crash on a missing
+// module if any `stageRuntimeDependencies: true` plugin lacks its sibling
+// `node_modules/`. Filesystem-only discovery; spawns the install subprocess
+// only per-plugin that actually needs staging.
+async function runBundledPluginStagingStep(params: {
+  packageRoot: string;
+  manager: "pnpm" | "npm" | "bun";
+  timeoutMs: number;
+  progress?: UpdateStepProgress;
+}): Promise<UpdateStepResult | null> {
+  const { discoverMissingBundledPluginStaging, repairBundledPluginStaging } =
+    await import("../../commands/doctor-bundled-plugin-staging.js");
+  const extensionsDir = path.join(params.packageRoot, "dist", "extensions");
+  const discovery = discoverMissingBundledPluginStaging({ extensionsDir });
+  if (discovery.missing.length === 0) {
+    return null;
+  }
+
+  const stepName = `${CLI_NAME} stage bundled plugin runtime deps`;
+  const command = `${params.manager} install --prod in ${discovery.missing.length} bundled plugin dir(s)`;
+  params.progress?.onStepStart?.({
+    name: stepName,
+    command,
+    index: 0,
+    total: 0,
+  });
+
+  const startedAt = Date.now();
+  const result = await repairBundledPluginStaging({
+    extensionsDir,
+    packageManager: params.manager,
+    runCommand: async ({ command: cmd, args, cwd }) => {
+      const spawned = await runCommandWithTimeout([cmd, ...args], {
+        cwd,
+        timeoutMs: params.timeoutMs,
+      });
+      return {
+        exitCode: spawned.code ?? 1,
+        stdout: spawned.stdout ?? "",
+        stderr: spawned.stderr ?? "",
+      };
+    },
+  });
+  const durationMs = Date.now() - startedAt;
+  const hasFailure = result.failed.length > 0;
+  const exitCode = hasFailure ? 1 : 0;
+
+  const repairedList = result.repaired.map((entry) => entry.id).join(", ") || "(none)";
+  const stdoutTail = `staged ${result.repaired.length} of ${discovery.missing.length}: ${repairedList}`;
+  const stderrTail = hasFailure
+    ? result.failed.map((entry) => `${entry.id}: ${entry.detail}`).join("\n")
+    : null;
+
+  params.progress?.onStepComplete?.({
+    name: stepName,
+    command,
+    index: 0,
+    total: 0,
+    durationMs,
+    exitCode,
+    stderrTail: stderrTail ?? undefined,
+  });
+
+  return {
+    name: stepName,
+    command,
+    cwd: extensionsDir,
+    durationMs,
+    exitCode,
+    stdoutTail,
+    stderrTail,
   };
 }
 
