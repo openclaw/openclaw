@@ -342,6 +342,7 @@ export async function executePreparedCliRun(
             args,
             env,
             prompt,
+            useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: ({ text, delta }) => {

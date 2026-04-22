@@ -785,7 +785,7 @@ describe("runCliAgent spawn path", () => {
     });
 
     const backend = {
-      resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
+      resumeArgs: ["-p", "--output-format", "stream-json", "--resume={sessionId}"],
       liveSession: "claude-stdio" as const,
     };
     const first = await executePreparedCliRun(
@@ -939,6 +939,7 @@ describe("runCliAgent spawn path", () => {
           args: context.preparedBackend.backend.args ?? [],
           env: {},
           prompt: `prompt ${index}`,
+          useResume: false,
           noOutputTimeoutMs: 1_000,
           getProcessSupervisor: () => ({
             spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
@@ -1049,6 +1050,7 @@ describe("runCliAgent spawn path", () => {
         args,
         env,
         prompt: "hi",
+        useResume: args.some((entry) => entry.startsWith("--resume")),
         noOutputTimeoutMs: 1_000,
         getProcessSupervisor: () => ({
           spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>

@@ -761,13 +761,13 @@ export async function runClaudeLiveSessionTurn(params: {
   args: string[];
   env: Record<string, string>;
   prompt: string;
+  useResume: boolean;
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
-  const useResume = params.args.includes("--resume") || params.args.includes("-r");
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
   const argv = [
     params.context.preparedBackend.backend.command,
@@ -775,7 +775,7 @@ export async function runClaudeLiveSessionTurn(params: {
       args: params.args,
       backend: params.context.preparedBackend.backend,
       systemPrompt: params.context.systemPrompt,
-      useResume,
+      useResume: params.useResume,
     }),
   ];
   const fingerprint = buildClaudeLiveFingerprint({
@@ -792,7 +792,7 @@ export async function runClaudeLiveSessionTurn(params: {
     await params.cleanup();
   };
   let session = liveSessions.get(key) ?? null;
-  if (session && resumeCapable && !useResume) {
+  if (session && resumeCapable && !params.useResume) {
     closeLiveSession(session, "restart");
     session = null;
   }
@@ -819,7 +819,7 @@ export async function runClaudeLiveSessionTurn(params: {
       if (session.fingerprint !== fingerprint) {
         closeLiveSession(session, "restart");
         session = null;
-      } else if (resumeCapable && !useResume) {
+      } else if (resumeCapable && !params.useResume) {
         closeLiveSession(session, "restart");
         session = null;
       } else {
