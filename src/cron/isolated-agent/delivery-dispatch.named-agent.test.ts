@@ -72,15 +72,19 @@ describe("matchesMessagingToolDeliveryTarget", () => {
       ),
     ).toBe(false);
   });
-  it("rejects when delivery has accountId but target omits it (spoof guard)", () => {
-    // Regression guard for CWE-284: an omitted target.accountId must NOT
-    // count as a wildcard match against an account-tied delivery.
+  it("matches when delivery has accountId and target omits it (tool fills accountId at exec)", () => {
+    // message-tool resolves accountId from the agent's bound account at
+    // execution time (message-tool.ts: `accountId ?? agentAccountId`), so
+    // an absent target.accountId is equivalent to the delivery's bound
+    // account. Rejecting this case caused duplicate sends for account-bound
+    // cron jobs (codex review on PR #69940). CWE-284 spoofing is still
+    // prevented by the "accountIds differ" case above.
     expect(
       matchesMessagingToolDeliveryTarget(
         { provider: "message", to: "123456" },
         { channel: "telegram", to: "123456", accountId: "bot-a" },
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("matches when delivery and target carry the same accountId", () => {

@@ -80,18 +80,13 @@ export function matchesMessagingToolDeliveryTarget(
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
-  // Strict accountId matching when the resolved delivery is tied to a specific
-  // account: require the tool-reported target to carry an equal accountId.
-  // Omitting target.accountId must NOT count as a wildcard match, otherwise a
-  // generic `message` send could spoof attribution to any bot identity in the
-  // cron delivery trace (CWE-284).
-  if (delivery.accountId) {
-    if (!target.accountId) {
-      return false;
-    }
-    if (target.accountId !== delivery.accountId) {
-      return false;
-    }
+  // CWE-284: when the tool-reported target explicitly names a different
+  // accountId than the account-bound delivery, reject so attribution cannot
+  // be spoofed to another bot identity. An omitted target.accountId is
+  // legitimate — message-tool fills accountId from the agent's bound account
+  // at exec time, which equals delivery.accountId for account-bound jobs.
+  if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
+    return false;
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
   // both sides so cron duplicate suppression compares canonical IDs.

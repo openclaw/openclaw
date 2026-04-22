@@ -535,10 +535,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
-  it("does not rewrite generic message provider when accountId is missing on tool send", async () => {
-    // Regression guard: a tool send omitting accountId must NOT be attributed
-    // to a specific account-tied delivery in the trace. Spoofing protection
-    // for CronDeliveryTrace.messageToolSentTo[i].channel (CWE-284).
+  it("rewrites generic message provider when tool send omits accountId (tool fills at exec)", async () => {
+    // message-tool resolves accountId from the agent's bound account at exec
+    // time (message-tool.ts: `accountId ?? agentAccountId`), so a tool call
+    // that omits accountId is the common path for account-bound cron jobs.
+    // The trace rewrite must still happen here, otherwise cron's
+    // delivery-suppression flag is lost and dispatchCronDelivery would
+    // double-send for account-bound jobs (codex review on PR #69940).
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
@@ -565,6 +568,53 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     const result = await runCronIsolatedAgentTurn({
       ...makeParams(),
       job: {
+        id: "message-tool-generic-target-account-default",
+        name: "Message Tool Generic Target (accountId default)",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
+        delivery: { mode: "announce", channel: "telegram", to: "123", accountId: "bot-a" },
+      } as never,
+    });
+
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+      }),
+    );
+  });
+
+  it("does not rewrite generic message provider when tool names a different accountId (spoof guard)", async () => {
+    // CWE-284: a tool that explicitly sets a foreign accountId must not be
+    // attributed to this account-bound delivery in the trace.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+      threadId: undefined,
+      mode: "explicit",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [
+        { tool: "message", provider: "message", to: "123", accountId: "bot-b" },
+      ],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
         id: "message-tool-generic-target-account-spoof",
         name: "Message Tool Generic Target (account spoof guard)",
         schedule: { kind: "every", everyMs: 60_000 },
@@ -576,9 +626,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(result.delivery).toEqual(
       expect.objectContaining({
-        // Channel stays as "message" because the tool-reported target did not
-        // carry an accountId matching the resolved delivery's bot-a binding.
-        messageToolSentTo: [{ channel: "message", to: "123" }],
+        // Channel stays as "message" because the tool named bot-b, which does
+        // not match the resolved delivery's bot-a binding.
+        messageToolSentTo: [{ channel: "message", to: "123", accountId: "bot-b" }],
       }),
     );
   });
