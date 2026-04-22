@@ -1,4 +1,6 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+
+
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -1216,6 +1218,8 @@ async function executeMainSessionCronJob(
     const waitStartedAt = state.deps.nowMs();
 
     let heartbeatResult: HeartbeatRunResult;
+    let contextHitRetries = 0;
+    const maxContextHitRetries = 3;
     for (;;) {
       if (abortSignal?.aborted) {
         return { status: "error", error: timeoutErrorMessage() };
@@ -1226,8 +1230,36 @@ async function executeMainSessionCronJob(
         sessionKey: targetMainSessionKey,
         heartbeat: { target: "last" },
       });
-      if (heartbeatResult.status !== "skipped" || heartbeatResult.reason !== "requests-in-flight") {
+      const stillBusy = heartbeatResult.status === "skipped" && heartbeatResult.reason === "requests-in-flight";
+      const contextHit =
+        heartbeatResult.status === "ran" &&
+        (heartbeatResult.reason === "context-hit-empty" || heartbeatResult.reason === "context-hit-token");
+      if (!stillBusy && !contextHit) {
         break;
+      }
+      if (contextHit) {
+        // Agent returned HEARTBEAT_OK immediately — session context is too full.
+        // Retry with exponential backoff to give the session a chance to drain.
+        contextHitRetries++;
+        const retryDelays = [500, 1_000, 2_000]; // 500ms, 1s, 2s
+        const delay = retryDelays[Math.min(contextHitRetries - 1, retryDelays.length - 1)];
+        state.deps.log.warn(
+          `Cron job context-hit retry ${contextHitRetries}/${maxContextHitRetries} ` +
+            `for session ${targetMainSessionKey}, waiting ${delay}ms`,
+        );
+        if (contextHitRetries >= maxContextHitRetries) {
+          // Exhausted retries — request a deferred heartbeat so the event is
+          // re-delivered when the session context has room.
+          state.deps.requestHeartbeatNow({
+            reason,
+            agentId: job.agentId,
+            sessionKey: targetMainSessionKey,
+            heartbeat: { target: "last" },
+          });
+          return { status: "ok", summary: text };
+        }
+        await waitWithAbort(delay);
+        continue;
       }
       if (isRecurringJob) {
         // Recurring main-session cron jobs should not hold the cron lane open
