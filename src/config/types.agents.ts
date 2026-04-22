@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type {
+  AgentCompactionConfig,
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
   EmbeddedPiExecutionContract,
@@ -97,6 +98,8 @@ export type AgentConfig = {
   contextLimits?: AgentContextLimitsConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  /** Optional per-agent compaction overrides. */
+  compaction?: AgentCompactionConfig;
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {

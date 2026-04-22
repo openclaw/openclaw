@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { AgentCompactionSchema } from "./zod-schema.agent-compaction.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
@@ -829,6 +830,7 @@ export const AgentEntrySchema = z
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
     heartbeat: HeartbeatSchema,
+    compaction: AgentCompactionSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
     subagents: z

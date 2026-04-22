@@ -8,6 +8,7 @@ export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
+  agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;

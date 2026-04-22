@@ -1015,6 +1015,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
         contextTokenBudget: params.contextTokenBudget,
       });
       applyPiAutoCompactionGuard({
@@ -1030,6 +1031,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        agentId: sessionAgentId,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,
@@ -1043,6 +1045,7 @@ export async function runEmbeddedAttempt(
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
+        agentId: sessionAgentId,
         contextTokenBudget: params.contextTokenBudget,
       });
 

@@ -813,6 +813,7 @@ export async function compactEmbeddedPiSessionDirect(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        agentId: params.agentId,
         contextTokenBudget: ctxInfo.tokens,
       });
       // Sets compaction/pruning runtime state and returns extension factories
@@ -823,6 +824,7 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        agentId: params.agentId,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,
@@ -836,6 +838,7 @@ export async function compactEmbeddedPiSessionDirect(
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
+        agentId: params.agentId,
         contextTokenBudget: ctxInfo.tokens,
       });
 
