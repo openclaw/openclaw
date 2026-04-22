@@ -413,4 +413,42 @@ describe("anthropic transport stream", () => {
       output_config: { effort: "xhigh" },
     });
   });
+
+  it("omits adaptive effort for github-copilot Claude Opus 4.7 transport runs", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        api: "anthropic-messages",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com/anthropic",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies AnthropicMessagesModel,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think extra hard." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "github-copilot-token",
+        reasoning: "xhigh",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "adaptive" },
+    });
+    expect(latestAnthropicRequest().payload).not.toHaveProperty("output_config");
+  });
 });

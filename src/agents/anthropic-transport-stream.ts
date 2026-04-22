@@ -123,6 +123,13 @@ function supportsAdaptiveThinking(modelId: string): boolean {
   );
 }
 
+function shouldEmitAdaptiveThinkingEffort(model: AnthropicTransportModel): boolean {
+  return !(
+    normalizeLowercaseStringOrEmpty(model.provider) === "github-copilot" &&
+    isClaudeOpus47Model(model.id)
+  );
+}
+
 function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): AnthropicAdaptiveEffort {
   switch (level) {
     case "minimal":
@@ -657,7 +664,7 @@ function buildAnthropicParams(
     if (options?.thinkingEnabled) {
       if (supportsAdaptiveThinking(model.id)) {
         params.thinking = { type: "adaptive" };
-        if (options.effort) {
+        if (options.effort && shouldEmitAdaptiveThinkingEffort(model)) {
           params.output_config = { effort: options.effort };
         }
       } else {
