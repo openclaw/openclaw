@@ -17,6 +17,7 @@ import { writeDiagnosticSupportExport } from "./diagnostic-support-export.js";
 import {
   redactSupportString,
   redactTextForSupport,
+  sanitizeSupportConfigValue,
   sanitizeSupportSnapshotValue,
 } from "./diagnostic-support-redaction.js";
 import type { LogTailPayload } from "./log-tail.js";
@@ -85,6 +86,7 @@ describe("diagnostic support export", () => {
                 "15555551212": {
                   botToken: fakeToken,
                   allowFrom: [privateChat],
+                  ownerId: 8675309001,
                 },
               },
             },
@@ -202,6 +204,7 @@ describe("diagnostic support export", () => {
           probeUrl: credentialUrl,
         },
         warning: {
+          chatId: 4444555566,
           message: privateChat,
         },
       }),
@@ -211,8 +214,9 @@ describe("diagnostic support export", () => {
           telegram: {
             accounts: {
               "15555551212": {
-                accountId: "15555551212",
+                accountId: 15555551212,
                 configured: true,
+                phone: 4444555566,
                 probe: {
                   ok: false,
                   error: webhookBody,
@@ -249,6 +253,8 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(privateChat);
     expect(combined).not.toContain(webhookBody);
     expect(combined).not.toContain("15555551212");
+    expect(combined).not.toContain("4444555566");
+    expect(combined).not.toContain("8675309001");
     expect(combined).not.toContain("support-password");
     expect(combined).not.toContain("short-token");
     expect(combined).not.toContain(tempDir);
@@ -346,7 +352,10 @@ describe("diagnostic support export", () => {
       };
       channels?: {
         telegram?: {
-          accounts?: Record<string, { botToken?: string; allowFrom?: { redacted?: boolean } }>;
+          accounts?: Record<
+            string,
+            { botToken?: string; allowFrom?: { redacted?: boolean }; ownerId?: string }
+          >;
         };
       };
       logging?: {
@@ -372,8 +381,25 @@ describe("diagnostic support export", () => {
       sanitizedConfig.channels?.telegram?.accounts?.["<redacted-account-1>"];
     expect(sanitizedTelegramAccount?.botToken).toBe("<redacted>");
     expect(sanitizedTelegramAccount?.allowFrom).toEqual({ redacted: true, count: 1 });
+    expect(sanitizedTelegramAccount?.ownerId).toBe("<redacted>");
     expect(sanitizedConfig.agents?.[0]?.name).toBe("personal-agent");
     expect(sanitizedConfig.agents?.[0]?.instructions).toBe("<redacted>");
+  });
+
+  it("redacts numeric private fields in support snapshots and config", () => {
+    const redaction = {
+      env: {
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+    };
+
+    expect(sanitizeSupportSnapshotValue(15555551212, redaction, "chatId")).toBe("<redacted>");
+    expect(sanitizeSupportSnapshotValue(15555551212, redaction, "messageId")).toBe("<redacted>");
+    expect(sanitizeSupportSnapshotValue(200, redaction, "statusCode")).toBe(200);
+    expect(sanitizeSupportConfigValue(15555551212, redaction, "ownerId")).toBe("<redacted>");
+    expect(sanitizeSupportConfigValue(18789, redaction, "port")).toBe(18789);
   });
 
   it("redacts support text identifiers without hiding useful URL hosts", () => {

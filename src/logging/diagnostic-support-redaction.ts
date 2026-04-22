@@ -257,8 +257,11 @@ export function sanitizeSupportSnapshotValue(
   key = "",
   depth = 0,
 ): unknown {
-  if (value == null || typeof value === "boolean" || typeof value === "number") {
+  if (value == null || typeof value === "boolean") {
     return value;
+  }
+  if (typeof value === "number") {
+    return isPrivateSupportField(key) ? "<redacted>" : value;
   }
   if (typeof value === "string") {
     return isPrivateSupportField(key) ? "<redacted>" : redactSupportString(value, redaction);
@@ -296,8 +299,11 @@ export function sanitizeSupportConfigValue(
   key = "",
   depth = 0,
 ): unknown {
-  if (value == null || typeof value === "boolean" || typeof value === "number") {
+  if (value == null || typeof value === "boolean") {
     return value;
+  }
+  if (typeof value === "number") {
+    return isPrivateConfigField(key) ? "<redacted>" : value;
   }
   if (typeof value === "string") {
     return isPrivateConfigField(key) ? "<redacted>" : redactSupportString(value, redaction);
