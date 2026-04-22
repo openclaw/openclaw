@@ -295,6 +295,26 @@ describe("sendMessageTelegram", () => {
     expect(botApi.unpinChatMessage).toHaveBeenCalledWith("-1001234567890", 101);
   });
 
+  it("honors Telegram pin notification requests", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.pinChatMessage.mockResolvedValue(true);
+
+    await pinMessageTelegram("-1001234567890", 101, {
+      accountId: "default",
+      notify: true,
+    });
+
+    expect(botApi.pinChatMessage).toHaveBeenCalledWith("-1001234567890", 101, {
+      disable_notification: false,
+    });
+  });
+
   it("renames a Telegram forum topic", async () => {
     loadConfig.mockReturnValue({
       channels: {

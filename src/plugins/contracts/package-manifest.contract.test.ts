@@ -86,7 +86,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
     pluginId: "qqbot",
-    pluginLocalRuntimeDeps: ["mpg123-decoder", "silk-wasm"],
+    pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
     mirroredRootRuntimeDeps: ["ws"],
   },
   {

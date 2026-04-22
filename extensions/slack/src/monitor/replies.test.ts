@@ -6,6 +6,7 @@ vi.mock("../send.js", () => ({
 }));
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
+let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
 
@@ -23,7 +24,8 @@ function baseParams(overrides?: Record<string, unknown>) {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ deliverReplies, resolveSlackThreadTs } = await import("./replies.js"));
+    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
+      await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -208,6 +210,29 @@ describe("resolveSlackThreadTs fallback classification", () => {
         hasReplied: true,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("createSlackReplyDeliveryPlan", () => {
+  it("lets draft previews inspect first thread targets without consuming them", () => {
+    const hasRepliedRef = { value: false };
+    const plan = createSlackReplyDeliveryPlan({
+      replyToMode: "first",
+      incomingThreadTs: undefined,
+      messageTs: "9999999999.999999",
+      hasRepliedRef,
+      isThreadReply: false,
+    });
+
+    expect(plan.peekThreadTs()).toBe("9999999999.999999");
+    expect(plan.peekThreadTs()).toBe("9999999999.999999");
+    expect(hasRepliedRef.value).toBe(false);
+
+    plan.markSent();
+
+    expect(hasRepliedRef.value).toBe(true);
+    expect(plan.peekThreadTs()).toBeUndefined();
+    expect(plan.nextThreadTs()).toBeUndefined();
   });
 });
 
