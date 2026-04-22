@@ -272,6 +272,83 @@ describe("stripInvalidThinkingSignatures", () => {
     const result = stripInvalidThinkingSignatures(messages);
     expect(result).toBe(messages);
   });
+
+  it("keeps thinking blocks signed only via snake_case thought_signature", () => {
+    // sanitizeSessionMessagesImages preserves Anthropic's snake_case
+    // thought_signature field when preserveSignatures: true. Those blocks
+    // must NOT be treated as missing a signature.
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning", thought_signature: "AQID" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("keeps redacted_thinking blocks signed only via thought_signature", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", thought_signature: "AQID" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("strips thinking blocks where all signature fields are empty", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: "",
+            thought_signature: "",
+          },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+  });
+
+  it("keeps thinking blocks when at least one signature field is valid", () => {
+    // Belt-and-braces: even if thinkingSignature is empty, a valid
+    // thought_signature is enough to keep the block.
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: "",
+            thought_signature: "AQID",
+          },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).toBe(messages);
+  });
 });
 
 describe("isInvalidThinkingSignatureError", () => {
