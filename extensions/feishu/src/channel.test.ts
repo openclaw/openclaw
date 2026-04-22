@@ -385,6 +385,74 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
   });
 
+  it("falls back to text send when explicit card payload is an array", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_text", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        card: [{ schema: "2.0" }],
+        message: "hello",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "hello",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+    expect(result?.details).toMatchObject({ ok: true, messageId: "om_text", chatId: "oc_group_1" });
+  });
+
+  it("rejects structured card actions missing context bindings", async () => {
+    const structuredButUnboundCard = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: "Run reset" },
+                value: {
+                  oc: "ocf1",
+                  k: "quick",
+                  a: "feishu.quick_actions.reset",
+                  q: "/reset",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: structuredButUnboundCard,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu card actions must use structured interaction envelopes.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("rejects legacy command payloads in non-button card elements", async () => {
     const legacyCard = {
       schema: "2.0",

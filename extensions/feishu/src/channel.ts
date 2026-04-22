@@ -116,6 +116,18 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
       if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
         return true;
       }
+      if (!isRecord(actionValue.c)) {
+        return true;
+      }
+      if (typeof actionValue.c.u !== "string" || !actionValue.c.u.trim()) {
+        return true;
+      }
+      if (typeof actionValue.c.h !== "string" || !actionValue.c.h.trim()) {
+        return true;
+      }
+      if (!Number.isFinite(actionValue.c.e)) {
+        return true;
+      }
     }
 
     for (const child of Object.values(value)) {
@@ -728,8 +740,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const card =
               presentation !== undefined
                 ? buildFeishuPresentationCard({ presentation, fallbackText: text })
-                : ctx.params.card && typeof ctx.params.card === "object"
-                  ? (ctx.params.card as Record<string, unknown>)
+                : isRecord(ctx.params.card)
+                  ? ctx.params.card
                   : undefined;
             const hasValidCard = isValidFeishuCard(card);
             if (hasValidCard && mediaUrl) {
@@ -747,9 +759,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             let result;
             if (hasValidCard) {
               if (containsUnstructuredFeishuCardActionValue(card)) {
-                throw new Error(
-                  "Feishu card actions must use structured interaction envelopes.",
-                );
+                throw new Error("Feishu card actions must use structured interaction envelopes.");
               }
               result = await runtime.sendCardFeishu({
                 cfg: ctx.cfg,
@@ -822,10 +832,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu edit requires messageId.");
             }
             const text = readFirstString(ctx.params, ["text", "message"]);
-            const card =
-              ctx.params.card && typeof ctx.params.card === "object"
-                ? (ctx.params.card as Record<string, unknown>)
-                : undefined;
+            const card = isRecord(ctx.params.card) ? ctx.params.card : undefined;
             const hasValidCard = isValidFeishuCard(card);
             const { editMessageFeishu } = await loadFeishuChannelRuntime();
             const result = await editMessageFeishu({
