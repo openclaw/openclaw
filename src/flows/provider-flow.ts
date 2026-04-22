@@ -71,7 +71,10 @@ function resolveInstallCatalogProviderSetupFlowContributions(params?: {
   scope?: ProviderFlowScope;
 }): ProviderSetupFlowContribution[] {
   const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
-  return resolveProviderInstallCatalogEntries(params ?? {})
+  return resolveProviderInstallCatalogEntries({
+    ...params,
+    includeUntrustedWorkspacePlugins: false,
+  })
     .filter((entry) => includesProviderFlowScope(entry.onboardingScopes, scope))
     .map((entry) => {
       const groupId = entry.groupId ?? entry.providerId;

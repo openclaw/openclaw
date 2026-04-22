@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
@@ -32,9 +32,56 @@ vi.mock("../plugins/installs.js", () => ({
   buildNpmResolutionInstallFields,
 }));
 
+const resolveGitHeadPath = vi.hoisted(() => vi.fn<(root: string) => string | null>(() => null));
+vi.mock("../infra/git-root.js", () => ({
+  resolveGitHeadPath,
+}));
+
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 
 describe("ensureOnboardingPluginInstalled", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveGitHeadPath.mockReturnValue(null);
+  });
+
+  it("passes pinned npm specs and expected integrity to npm installs", async () => {
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo-plugin",
+      targetDir: "/tmp/demo-plugin",
+      version: "1.2.3",
+      npmResolution: {
+        resolvedSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
+        integrity: "sha512-wecom",
+      },
+    });
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "demo-plugin",
+        label: "WeCom",
+        install: {
+          npmSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
+          expectedIntegrity: "sha512-wecom",
+        },
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+      } as never,
+      runtime: {} as never,
+    });
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+        expectedIntegrity: "sha512-wecom",
+      }),
+    );
+    expect(result.installed).toBe(true);
+  });
+
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-spoofed-git-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
@@ -90,6 +137,9 @@ describe("ensureOnboardingPluginInstalled", () => {
       await fs.mkdir(path.join(gitDir, "refs"), { recursive: true });
       await fs.writeFile(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n", "utf8");
       await fs.writeFile(path.join(workspaceDir, ".git"), "gitdir: .actual-git\n", "utf8");
+      resolveGitHeadPath.mockImplementation((root: string) =>
+        root === workspaceDir ? path.join(gitDir, "HEAD") : null,
+      );
 
       let captured:
         | {
@@ -148,6 +198,9 @@ describe("ensureOnboardingPluginInstalled", () => {
       await fs.writeFile(path.join(worktreeGitDir, "HEAD"), "ref: refs/heads/main\n", "utf8");
       await fs.writeFile(path.join(worktreeGitDir, "commondir"), "../..\n", "utf8");
       await fs.writeFile(path.join(workspaceDir, ".git"), `gitdir: ${worktreeGitDir}\n`, "utf8");
+      resolveGitHeadPath.mockImplementation((root: string) =>
+        root === workspaceDir ? path.join(worktreeGitDir, "HEAD") : null,
+      );
 
       let captured:
         | {
@@ -185,6 +238,56 @@ describe("ensureOnboardingPluginInstalled", () => {
         { value: "skip", label: "Skip for now" },
       ]);
       expect(captured?.initialValue).toBe("local");
+    });
+  });
+
+  it("keeps local installs available when cwd is a git repo but workspaceDir is not", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-cwd-git-" }, async (temp) => {
+      const repoDir = path.join(temp, "repo");
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(temp, "demo-plugin");
+      await fs.mkdir(path.join(repoDir, ".git"), { recursive: true });
+      await fs.mkdir(path.join(repoDir, ".git", "objects"), { recursive: true });
+      await fs.mkdir(path.join(repoDir, ".git", "refs"), { recursive: true });
+      await fs.writeFile(path.join(repoDir, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.mkdir(workspaceDir, { recursive: true });
+      resolveGitHeadPath.mockImplementation((root: string) =>
+        root === process.cwd() ? path.join(repoDir, ".git", "HEAD") : null,
+      );
+
+      let captured:
+        | {
+            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+          }
+        | undefined;
+      await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            localPath: pluginDir,
+          },
+        },
+        prompter: {
+          select: vi.fn(async (input) => {
+            captured = input;
+            return "skip";
+          }),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      expect(captured?.options).toEqual([
+        {
+          value: "local",
+          label: "Use local plugin path",
+          hint: pluginDir,
+        },
+        { value: "skip", label: "Skip for now" },
+      ]);
     });
   });
 });

@@ -58,6 +58,7 @@ describe("provider install catalog", () => {
             install: {
               npmSpec: "@openclaw/openai",
               defaultChoice: "npm",
+              expectedIntegrity: "sha512-openai",
             },
           },
         },
@@ -66,6 +67,7 @@ describe("provider install catalog", () => {
     });
     loadPluginManifest.mockReturnValue({
       ok: true,
+      manifestPath: "/repo/extensions/openai/openclaw.plugin.json",
       manifest: {
         id: "openai",
         configSchema: {
@@ -100,6 +102,7 @@ describe("provider install catalog", () => {
           npmSpec: "@openclaw/openai",
           localPath: "extensions/openai",
           defaultChoice: "npm",
+          expectedIntegrity: "sha512-openai",
         },
       },
     ]);
@@ -123,6 +126,7 @@ describe("provider install catalog", () => {
     });
     loadPluginManifest.mockReturnValue({
       ok: true,
+      manifestPath: "/repo/extensions/demo-provider/openclaw.plugin.json",
       manifest: {
         id: "demo-provider",
         configSchema: {
@@ -179,6 +183,7 @@ describe("provider install catalog", () => {
     });
     loadPluginManifest.mockReturnValue({
       ok: true,
+      manifestPath: "/Users/test/.openclaw/extensions/vllm/openclaw.plugin.json",
       manifest: {
         id: "vllm",
         configSchema: {

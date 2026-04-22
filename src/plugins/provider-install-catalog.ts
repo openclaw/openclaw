@@ -74,6 +74,9 @@ function resolveInstallInfo(params: {
     ...(localPath ? { localPath } : {}),
     ...(defaultChoice ? { defaultChoice } : {}),
     ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
+    ...(params.install?.expectedIntegrity
+      ? { expectedIntegrity: params.install.expectedIntegrity }
+      : {}),
     ...(params.install?.allowInvalidConfigRecovery === true
       ? { allowInvalidConfigRecovery: true }
       : {}),

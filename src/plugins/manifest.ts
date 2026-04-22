@@ -963,6 +963,7 @@ export type PluginPackageInstall = {
   localPath?: string;
   defaultChoice?: "npm" | "local";
   minHostVersion?: string;
+  expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
 };
 

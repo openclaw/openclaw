@@ -55,17 +55,25 @@ function resolveGitCommonDir(gitDir: string): string | null {
 }
 
 function hasGitWorkspace(workspaceDir?: string): boolean {
-  const root = workspaceDir ?? process.cwd();
-  const headPath = resolveGitHeadPath(root);
-  if (!headPath) {
-    return false;
+  const roots = [process.cwd()];
+  if (workspaceDir && workspaceDir !== process.cwd()) {
+    roots.push(workspaceDir);
   }
-  const gitDir = path.dirname(headPath);
-  if (looksLikeGitDir(gitDir)) {
-    return true;
+  for (const root of roots) {
+    const headPath = resolveGitHeadPath(root);
+    if (!headPath) {
+      continue;
+    }
+    const gitDir = path.dirname(headPath);
+    if (looksLikeGitDir(gitDir)) {
+      return true;
+    }
+    const commonDir = resolveGitCommonDir(gitDir);
+    if (commonDir && hasGitHead(gitDir) && hasGitObjectStore(commonDir)) {
+      return true;
+    }
   }
-  const commonDir = resolveGitCommonDir(gitDir);
-  return commonDir ? hasGitHead(gitDir) && hasGitObjectStore(commonDir) : false;
+  return false;
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
@@ -276,6 +284,7 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   const result = await installPluginFromNpmSpec({
     spec: npmSpec,
+    expectedIntegrity: entry.install.expectedIntegrity,
     logger: {
       info: (message) => runtime.log?.(message),
       warn: (message) => runtime.log?.(message),

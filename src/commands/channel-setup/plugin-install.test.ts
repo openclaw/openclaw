@@ -44,6 +44,11 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistry(...args),
 }));
 
+const resolveGitHeadPath = vi.fn();
+vi.mock("../../infra/git-root.js", () => ({
+  resolveGitHeadPath: (...args: unknown[]) => resolveGitHeadPath(...args),
+}));
+
 vi.mock("../../plugins/bundled-sources.js", () => ({
   findBundledPluginSourceInMap: ({
     bundled,
@@ -180,6 +185,7 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolveGitHeadPath.mockReturnValue(null);
   applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
     config: params.config,
     changes: [],
@@ -193,10 +199,13 @@ beforeEach(() => {
 });
 
 function mockRepoLocalPathExists() {
+  resolveGitHeadPath.mockReturnValue(path.join(process.cwd(), ".git", "HEAD"));
   vi.mocked(fs.existsSync).mockImplementation((value) => {
     const raw = String(value);
     return (
-      raw.endsWith(`${path.sep}.git`) ||
+      raw.endsWith(`${path.sep}.git${path.sep}HEAD`) ||
+      raw.endsWith(`${path.sep}.git${path.sep}objects`) ||
+      raw.endsWith(`${path.sep}.git${path.sep}refs`) ||
       raw.endsWith(`${path.sep}extensions${path.sep}bundled-chat`)
     );
   });

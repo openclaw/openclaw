@@ -32,10 +32,8 @@ export type ChannelPluginCatalogEntry = {
   pluginId?: string;
   origin?: PluginOrigin;
   meta: ChannelMeta;
-  install: {
+  install: PluginPackageInstall & {
     npmSpec: string;
-    localPath?: string;
-    defaultChoice?: "npm" | "local";
   };
 };
 
@@ -217,6 +215,13 @@ function resolveInstallInfo(params: {
     npmSpec,
     ...(localPath ? { localPath } : {}),
     ...(defaultChoice ? { defaultChoice } : {}),
+    ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
+    ...(params.install?.expectedIntegrity
+      ? { expectedIntegrity: params.install.expectedIntegrity }
+      : {}),
+    ...(params.install?.allowInvalidConfigRecovery === true
+      ? { allowInvalidConfigRecovery: true }
+      : {}),
   };
 }
 

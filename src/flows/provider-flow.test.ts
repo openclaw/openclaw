@@ -32,7 +32,10 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders,
 }));
 
-import { resolveProviderSetupFlowContributions } from "./provider-flow.js";
+import {
+  resolveProviderModelPickerFlowContributions,
+  resolveProviderSetupFlowContributions,
+} from "./provider-flow.js";
 
 describe("provider flow install catalog contributions", () => {
   beforeEach(() => {
@@ -79,6 +82,11 @@ describe("provider flow install catalog contributions", () => {
         source: "install-catalog",
       },
     ]);
+    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
   });
 
   it("adds a fallback group when install-catalog entries omit group metadata", () => {
@@ -155,6 +163,40 @@ describe("provider flow install catalog contributions", () => {
           group: {
             id: "openai",
             label: "OpenAI",
+          },
+        },
+        source: "runtime",
+      },
+    ]);
+  });
+
+  it("keeps docs attached to runtime model-picker contributions", () => {
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI",
+        docsPath: "/providers/openai",
+        auth: [],
+      },
+    ]);
+    resolveProviderModelPickerEntries.mockReturnValue([
+      {
+        value: "provider-plugin:openai:gpt-5.4",
+        label: "GPT-5.4",
+      },
+    ]);
+
+    expect(resolveProviderModelPickerFlowContributions()).toEqual([
+      {
+        id: "provider:model-picker:provider-plugin:openai:gpt-5.4",
+        kind: "provider",
+        surface: "model-picker",
+        providerId: "openai",
+        option: {
+          value: "provider-plugin:openai:gpt-5.4",
+          label: "GPT-5.4",
+          docs: {
+            path: "/providers/openai",
           },
         },
         source: "runtime",
