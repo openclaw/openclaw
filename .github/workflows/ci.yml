@@ -346,10 +346,21 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null &&
+            git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
+            git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          elif git show "refs/remotes/origin/${BASE_REF}:.pre-commit-config.yaml" \
+            > "$trusted_config" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} does not expose .pre-commit-config.yaml; using origin/${BASE_REF} instead."
+          else
+            echo "::warning title=trusted pre-commit config unavailable::Could not read .pre-commit-config.yaml from ${BASE_SHA} or origin/${BASE_REF}; falling back to the checked-out config."
+            rm -f "$trusted_config"
+            exit 0
+          fi
           echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
       - name: Setup Python
@@ -489,7 +500,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -589,7 +600,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -677,7 +688,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -780,7 +791,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -848,7 +859,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -941,7 +952,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1065,7 +1076,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1189,7 +1200,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1358,7 +1369,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1442,7 +1453,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1577,7 +1588,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1604,11 +1615,50 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Cache extension package boundary artifacts
+        id: extension-package-boundary-cache
+        if: matrix.group == 'extension-package-boundary-compile'
+        uses: actions/cache@v5
+        with:
+          path: |
+            dist/plugin-sdk
+            packages/plugin-sdk/dist
+            extensions/*/dist/.boundary-tsc.tsbuildinfo
+            extensions/*/dist/.boundary-tsc.stamp
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-extension-package-boundary-v1-
+
+      - name: Preserve extension package boundary cache hit
+        if: matrix.group == 'extension-package-boundary-compile' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          find extensions \
+            -path '*/dist' -prune -o \
+            -path '*/node_modules' -prune -o \
+            -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
+            -exec touch -t 200001010000 {} +
+          find src \
+            -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
+            -exec touch -t 200001010000 {} +
+          touch -t 200001010000 \
+            tsconfig.json \
+            tsconfig.plugin-sdk.dts.json \
+            packages/plugin-sdk/tsconfig.json \
+            scripts/check-extension-package-tsc-boundary.mjs \
+            scripts/prepare-extension-package-boundary-artifacts.mjs \
+            scripts/write-plugin-sdk-entry-dts.ts \
+            scripts/lib/plugin-sdk-entrypoints.json \
+            scripts/lib/plugin-sdk-entries.mjs \
+            package.json \
+            pnpm-lock.yaml
+
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
-          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 4
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
         shell: bash
         run: |
           set -euo pipefail
@@ -1740,7 +1790,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1836,7 +1886,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 120s git -C "$workdir" \
+            timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -2034,30 +2084,6 @@ jobs:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
 
-      - name: Patch mlx-audio-swift manifest
-        run: |
-          set -euo pipefail
-          swift package resolve --package-path apps/macos >/dev/null
-          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
-          text = path.read_text()
-          if "Models/Qwen3/README.md" in text:
-              print("mlx-audio-swift README excludes already present")
-              raise SystemExit(0)
-
-          needle = '            path: "Sources/MLXAudioTTS"\n'
-          replacement = """            path: \"Sources/MLXAudioTTS\",\n            exclude: [\n                \"Models/Llama/README.md\",\n                \"Models/Marvis/README.md\",\n                \"Models/PocketTTS/README.md\",\n                \"Models/Qwen3/README.md\",\n                \"Models/Soprano/README.md\",\n            ]\n"""
-
-          if needle not in text:
-              raise SystemExit("Could not find MLXAudioTTS target path in mlx-audio-swift Package.swift")
-
-          path.write_text(text.replace(needle, replacement, 1))
-          print(f"Patched {path}")
-          PY
-
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -2114,42 +2140,27 @@ jobs:
             ${{ runner.os }}-swiftpm-
 
       - name: Cache Swift build directory
+        id: swift-build-cache
         uses: actions/cache@v5
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v1-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/shared/OpenClawKit/Package.swift', 'Swabble/Package.swift') }}
+          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'Swabble/Package.swift', 'Swabble/Sources/**') }}
           restore-keys: |
-            ${{ runner.os }}-swift-build-v1-${{ steps.swift-toolchain.outputs.key }}-
+            ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-
 
-      - name: Patch mlx-audio-swift manifest
+      - name: Preserve Swift build cache hit
+        if: steps.swift-build-cache.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
-            swift package resolve --package-path apps/macos >/dev/null
-          fi
-          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
-            echo "mlx-audio-swift checkout missing after swift package resolve" >&2
-            exit 1
-          fi
-          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
-          text = path.read_text()
-          if "Models/Qwen3/README.md" in text:
-              print("mlx-audio-swift README excludes already present")
-              raise SystemExit(0)
-
-          needle = '            path: "Sources/MLXAudioTTS"\n'
-          replacement = """            path: \"Sources/MLXAudioTTS\",\n            exclude: [\n                \"Models/Llama/README.md\",\n                \"Models/Marvis/README.md\",\n                \"Models/PocketTTS/README.md\",\n                \"Models/Qwen3/README.md\",\n                \"Models/Soprano/README.md\",\n            ]\n"""
-
-          if needle not in text:
-              raise SystemExit("Could not find MLXAudioTTS target path in mlx-audio-swift Package.swift")
-
-          path.write_text(text.replace(needle, replacement, 1))
-          print(f"Patched {path}")
-          PY
+          # Exact source-hash cache hits already match these inputs; checkout
+          # mtimes are the only reason SwiftPM rebuilds cached products.
+          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources Swabble/Sources apps/macos/.build/checkouts \
+            -type f -exec touch -t 200001010000 {} +
+          touch -t 200001010000 \
+            apps/macos/Package.swift \
+            apps/macos/Package.resolved \
+            apps/shared/OpenClawKit/Package.swift \
+            Swabble/Package.swift
 
       - name: Show toolchain
         run: |
@@ -2202,10 +2213,52 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -x "$workdir/apps/android/gradlew" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -2213,6 +2266,11 @@ jobs:
           distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.
           java-version: 17
+          cache: gradle
+          cache-dependency-path: |
+            apps/android/**/*.gradle*
+            apps/android/**/gradle-wrapper.properties
+            apps/android/gradle/libs.versions.toml
 
       - name: Setup Android SDK cmdline-tools
         run: |
@@ -2233,11 +2291,6 @@ jobs:
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
-        with:
-          gradle-version: 8.11.1
-
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
@@ -2255,16 +2308,16 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test-play)
-              ./gradlew --no-daemon :app:testPlayDebugUnitTest
+              ./gradlew --no-daemon --build-cache :app:testPlayDebugUnitTest
               ;;
             test-third-party)
-              ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+              ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
             build-play)
-              ./gradlew --no-daemon :app:assemblePlayDebug
+              ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
               ;;
             build-third-party)
-              ./gradlew --no-daemon :app:assembleThirdPartyDebug
+              ./gradlew --no-daemon --build-cache :app:assembleThirdPartyDebug
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

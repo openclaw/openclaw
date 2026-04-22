@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.20",
+  "version": "2026.4.21",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -1387,6 +1387,7 @@
     "qa:lab:up": "node --import tsx scripts/qa-lab-up.ts",
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
+    "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:check": "pnpm deps:root-ownership:check && pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
@@ -1605,7 +1606,8 @@
   },
   "overrides": {
     "axios": "1.15.0",
-    "follow-redirects": "1.16.0"
+    "follow-redirects": "1.16.0",
+    "node-domexception": "npm:@nolyfill/domexception@1.0.28"
   },
   "engines": {
     "node": ">=22.14.0"
@@ -1628,7 +1630,7 @@
       "minimatch": "10.2.4",
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
-      "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
+      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
       "@sinclair/typebox": "0.34.49",
       "tar": "7.5.13",
       "tough-cookie": "4.1.3",
