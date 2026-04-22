@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import type { SessionsListParams } from "../../gateway/protocol/index.js";
+import type { SessionsListParams, SessionsResolveParams } from "../../gateway/protocol/index.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
+import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
@@ -37,6 +38,10 @@ interface EmbeddedGatewayRuntime {
     storePath: string;
     store: unknown;
   };
+  resolveSessionKeyFromResolveParams: (opts: {
+    cfg: OpenClawConfig;
+    p: SessionsResolveParams;
+  }) => Promise<SessionsResolveResult>;
   loadSessionEntry: (sessionKey: string) => {
     cfg: OpenClawConfig;
     storePath: string | undefined;
@@ -70,6 +75,19 @@ async function handleSessionsList(params: Record<string, unknown>) {
     store,
     opts: params as SessionsListParams,
   });
+}
+
+async function handleSessionsResolve(params: Record<string, unknown>) {
+  const rt = await getRuntime();
+  const cfg = rt.loadConfig();
+  const resolved = await rt.resolveSessionKeyFromResolveParams({
+    cfg,
+    p: params as SessionsResolveParams,
+  });
+  if (!resolved.ok) {
+    throw new Error(resolved.error.message);
+  }
+  return { ok: true, key: resolved.key };
 }
 
 async function handleChatHistory(params: Record<string, unknown>): Promise<{
@@ -140,6 +158,8 @@ export function createEmbeddedCallGateway(): EmbeddedCallGateway {
     switch (method) {
       case "sessions.list":
         return (await handleSessionsList(params)) as T;
+      case "sessions.resolve":
+        return (await handleSessionsResolve(params)) as T;
       case "chat.history":
         return (await handleChatHistory(params)) as T;
       default:
