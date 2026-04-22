@@ -302,24 +302,39 @@ function findManagedDailyDreamingHeadingIndex(
   return null;
 }
 
+function getDailyHeadingLevel(line: string): number | null {
+  const match = line.trim().match(/^(#{1,6})\s+/);
+  return match?.[1]?.length ?? null;
+}
+
 function isManagedDailyDreamingBoundary(
   line: string,
   blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]>,
+  blockHeadingLevel: number,
 ): boolean {
   const trimmed = line.trim();
-  return /^#{1,6}\s+/.test(trimmed) || blockByStartMarker.has(trimmed);
+  if (blockByStartMarker.has(trimmed)) {
+    return true;
+  }
+  const headingLevel = getDailyHeadingLevel(trimmed);
+  return headingLevel !== null && headingLevel <= blockHeadingLevel;
 }
 
 function stripManagedDailyDreamingLines(lines: string[]): string[] {
   const blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]> =
     new Map(MANAGED_DAILY_DREAMING_BLOCKS.map((block) => [block.startMarker, block]));
+  const blockByHeading: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]> =
+    new Map(MANAGED_DAILY_DREAMING_BLOCKS.map((block) => [block.heading, block]));
   const sanitized = [...lines];
   for (let index = 0; index < sanitized.length; index += 1) {
-    const block = blockByStartMarker.get(sanitized[index]?.trim() ?? "");
+    const trimmedLine = sanitized[index]?.trim() ?? "";
+    const block = blockByStartMarker.get(trimmedLine) ?? blockByHeading.get(trimmedLine);
     if (!block) {
       continue;
     }
 
+    const isHeadingStart = trimmedLine === block.heading;
+    const blockHeadingLevel = getDailyHeadingLevel(block.heading) ?? 2;
     let stripUntilIndex = -1;
     for (let cursor = index + 1; cursor < sanitized.length; cursor += 1) {
       const line = sanitized[cursor];
@@ -328,7 +343,7 @@ function stripManagedDailyDreamingLines(lines: string[]): string[] {
         stripUntilIndex = cursor;
         break;
       }
-      if (line && isManagedDailyDreamingBoundary(line, blockByStartMarker)) {
+      if (line && isManagedDailyDreamingBoundary(line, blockByStartMarker, blockHeadingLevel)) {
         stripUntilIndex = cursor - 1;
         break;
       }
@@ -337,7 +352,9 @@ function stripManagedDailyDreamingLines(lines: string[]): string[] {
       continue;
     }
 
-    const headingIndex = findManagedDailyDreamingHeadingIndex(lines, index, block.heading);
+    const headingIndex = isHeadingStart
+      ? index
+      : findManagedDailyDreamingHeadingIndex(lines, index, block.heading);
     const startIndex = headingIndex ?? index;
     for (let cursor = startIndex; cursor <= stripUntilIndex; cursor += 1) {
       sanitized[cursor] = "";

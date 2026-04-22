@@ -127,12 +127,60 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
+function stripFallbackDreamPrefix(value: string): string {
+  return value.replace(/^(?:possible lasting truths|reflections)\s*:\s*/i, "").trim();
+}
+
+function cleanFallbackDreamFragment(value: string): string {
+  return stripFallbackDreamPrefix(value)
+    .replace(/\s*\[[^\]]*confidence=[^\]]+\]\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateFallbackDreamText(value: string, max = 220): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function buildPoeticFallbackNarrative(data: NarrativePhaseData): string {
+  const fragments = [...data.snippets, ...(data.promotions ?? [])]
+    .map((value) => cleanFallbackDreamFragment(value))
+    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index)
+    .slice(0, 3);
+  const themeBits = (data.themes ?? [])
+    .map((value) => value.replace(/^-+\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+
+  if (fragments.length === 0 && themeBits.length === 0) {
+    return "A memory trace surfaced, but details were unavailable in this run.";
+  }
+
+  const lines: string[] = [];
+  if (fragments.length > 0) {
+    lines.push(
+      `Tonight felt stitched together from ${fragments.length === 1 ? "one" : fragments.length === 2 ? "two" : "three"} bright fragments: ${truncateFallbackDreamText(fragments[0] ?? "")}`,
+    );
+    if (fragments[1]) {
+      lines.push(`Another thread lingered nearby: ${truncateFallbackDreamText(fragments[1])}`);
+    }
+    if (fragments[2]) {
+      lines.push(
+        `And beneath it all, this kept glowing: ${truncateFallbackDreamText(fragments[2])}`,
+      );
+    }
+  }
+  if (themeBits.length > 0) {
+    lines.push(`Themes circling in the dark: ${themeBits.join(" · ")}.`);
+  }
+  return lines.join("\n\n");
+}
+
 function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
-  return (
-    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
-    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
-    "A memory trace surfaced, but details were unavailable in this run."
-  );
+  return buildPoeticFallbackNarrative(data);
 }
 
 async function startNarrativeRunOrFallback(params: {
@@ -337,11 +385,9 @@ function normalizeDiaryBlockFingerprint(block: string): string {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  let dateLine = "";
   const bodyLines: string[] = [];
   for (const line of lines) {
-    if (!dateLine && line.startsWith("*") && line.endsWith("*") && line.length > 2) {
-      dateLine = line.slice(1, -1).trim();
+    if (line.startsWith("*") && line.endsWith("*") && line.length > 2) {
       continue;
     }
     if (line.startsWith("<!--") || line.startsWith("#")) {
@@ -349,12 +395,11 @@ function normalizeDiaryBlockFingerprint(block: string): string {
     }
     bodyLines.push(line);
   }
-  const normalizedDate = dateLine.replace(/\s+/g, " ").trim();
   const normalizedBody = bodyLines
     .join("\n")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
-  return `${normalizedDate}\n${normalizedBody}`;
+  return normalizedBody;
 }
 
 function joinDiaryBlocks(blocks: string[]): string {
@@ -622,6 +667,25 @@ export async function appendNarrativeEntry(params: {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
+      const ensured = ensureDiarySection(existing);
+      const startIdx = ensured.indexOf(DIARY_START_MARKER);
+      const endIdx = ensured.indexOf(DIARY_END_MARKER);
+      const newFingerprint = normalizeDiaryBlockFingerprint(`*${dateStr}*\n\n${params.narrative}`);
+      if (startIdx >= 0 && endIdx > startIdx) {
+        const currentBlocks = splitDiaryBlocks(
+          ensured.slice(startIdx + DIARY_START_MARKER.length, endIdx),
+        );
+        if (
+          currentBlocks.some((block) => normalizeDiaryBlockFingerprint(block) === newFingerprint)
+        ) {
+          return {
+            content: ensured,
+            result: dreamsPath,
+            shouldWrite: false,
+          };
+        }
+      }
+
       let updated: string;
       if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
         const endIdx = existing.lastIndexOf(DIARY_END_MARKER);

@@ -319,6 +319,25 @@ describe("appendNarrativeEntry", () => {
     expect(secondIdx).toBeLessThan(end);
   });
 
+  it("does not append a duplicate diary body on a later day", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "The compass was there before I was.",
+      nowMs: Date.parse("2026-04-04T03:00:00Z"),
+      timezone: "UTC",
+    });
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "The compass was there before I was.",
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content.match(/The compass was there before I was\./g)?.length).toBe(1);
+  });
+
   it("prepends diary before existing managed blocks", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
@@ -395,7 +414,7 @@ describe("appendNarrativeEntry", () => {
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
-  it("dedupes only exact diary duplicates while keeping distinct timestamps", async () => {
+  it("dedupes identical diary bodies even when timestamps differ", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(
@@ -422,7 +441,7 @@ describe("appendNarrativeEntry", () => {
         "",
         "*April 11, 2026, 8:30 AM*",
         "",
-        "The server room smelled like rain.",
+        "A different lantern blinked by the door.",
         "",
         "<!-- openclaw:dreaming:diary:end -->",
         "",
@@ -435,9 +454,9 @@ describe("appendNarrativeEntry", () => {
     expect(result.removed).toBe(1);
     expect(result.kept).toBe(2);
     const content = await fs.readFile(dreamsPath, "utf-8");
-    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(2);
+    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
     expect(content).toContain("*April 11, 2026, 8:00 AM*");
-    expect(content).toContain("*April 11, 2026, 8:30 AM*");
+    expect(content).toContain("A different lantern blinked by the door.");
   });
 
   it("serializes append and dedupe so concurrent rewrites keep the new entry", async () => {
@@ -722,6 +741,36 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
+  });
+
+  it("turns request-scoped fallback fragments into diary prose instead of raw headings", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "rem",
+        snippets: [
+          "Reflections: Theme: `assistant` kept surfacing across 40 memories.",
+          "Possible Lasting Truths: First contact in February, a compass on the desk.",
+        ],
+        promotions: ["Reflections: Metadata is just memory with a timestamp attached."],
+        themes: ["assistant", "memory"],
+      },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("Tonight felt stitched together");
+    expect(content).toContain("Themes circling in the dark: assistant · memory.");
+    expect(content).not.toContain("Reflections:");
+    expect(content).not.toContain("Possible Lasting Truths:");
   });
 
   it("falls back when the request-scoped runtime error is detected by stable code", async () => {

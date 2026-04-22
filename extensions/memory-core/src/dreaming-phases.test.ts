@@ -10,7 +10,11 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
-import { __testing, runDreamingSweepPhases } from "./dreaming-phases.js";
+import {
+  __testing,
+  runDreamingSweepPhases,
+  seedHistoricalDailyMemorySignals,
+} from "./dreaming-phases.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
@@ -189,6 +193,64 @@ async function readCandidateSnippets(workspaceDir: string, nowIso: string): Prom
 }
 
 describe("memory-core dreaming phases", () => {
+  it("strips managed dream blocks with nested subheadings before seeding daily recall", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const currentPath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const legacyPath = path.join(workspaceDir, "memory", "2026-04-04.md");
+
+    await fs.writeFile(
+      currentPath,
+      [
+        "## REM Sleep",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "### Reflections",
+        "- Theme: `assistant` kept surfacing across 40 memories.",
+        "### Possible Lasting Truths",
+        "- First contact in February, a compass on the desk.",
+        "<!-- openclaw:dreaming:rem:end -->",
+        "",
+        "## Notes",
+        "North keeps shifting.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      legacyPath,
+      [
+        "## REM Sleep",
+        "### Reflections",
+        "- Theme: `metadata` kept surfacing across 36 memories.",
+        "### Possible Lasting Truths",
+        "- A nearly-perfect certainty glowed at 0.99.",
+        "",
+        "## Notes",
+        "A real note remains.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await seedHistoricalDailyMemorySignals({
+      workspaceDir,
+      filePaths: [currentPath, legacyPath],
+      limit: 20,
+      nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      timezone: "UTC",
+    });
+
+    const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:00:00.000Z");
+
+    expect(snippets).toContain("Notes: North keeps shifting.");
+    expect(snippets).toContain("Notes: A real note remains.");
+    expect(
+      snippets.some((snippet) =>
+        /Reflections|Possible Lasting Truths|assistant kept surfacing|nearly-perfect certainty/i.test(
+          snippet,
+        ),
+      ),
+    ).toBe(false);
+  });
+
   it("uses the hashed narrative session key for sweep-level fallback cleanup", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
