@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
 const mocks = vi.hoisted(() => ({
   unlink: vi.fn(async (_path: string) => undefined),
@@ -15,7 +18,9 @@ const mocks = vi.hoisted(() => ({
   })),
   formatDoctorNonInteractiveHint: vi.fn(() => "Run: openclaw doctor --non-interactive"),
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/sentinel.json"),
-  scheduleGatewaySigusr1Restart: vi.fn(() => ({ scheduled: true })),
+  scheduleGatewaySigusr1Restart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
+    scheduled: true,
+  })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
 }));
 
@@ -141,6 +146,34 @@ describe("handleRestartCommand", () => {
       }),
     );
     expect(mocks.triggerOpenClawRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepares the routed sentinel only when SIGUSR1 restart emits", async () => {
+    const handler = () => {};
+    process.on("SIGUSR1", handler);
+    try {
+      const result = await handleRestartCommand(restartCommandParams(), true);
+
+      expect(result?.reply?.text).toContain("SIGUSR1");
+      expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
+      expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+
+      const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
+      await scheduledArgs?.emitHooks?.beforeEmit?.();
+
+      expect(mocks.writeRestartSentinel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "restart",
+          status: "ok",
+          sessionKey: "agent:main:telegram:direct:123:thread:thread-1",
+          continuation: expect.objectContaining({
+            kind: "agentTurn",
+          }),
+        }),
+      );
+    } finally {
+      process.removeListener("SIGUSR1", handler);
+    }
   });
 
   it("rejects authorized non-owner restart commands", async () => {

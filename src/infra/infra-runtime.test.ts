@@ -94,6 +94,45 @@ describe("infra runtime", () => {
       }
     });
 
+    it("runs restart preparation only when the scheduled restart emits", async () => {
+      const beforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          emitHooks: { beforeEmit },
+        });
+
+        await vi.advanceTimersByTimeAsync(999);
+        expect(beforeEmit).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("rolls back prepared restart state when emission is rejected", async () => {
+      const beforeEmit = vi.fn(async () => {});
+      const afterEmitRejected = vi.fn(async () => {});
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw new Error("no signal");
+      });
+
+      scheduleGatewaySigusr1Restart({
+        delayMs: 0,
+        emitHooks: { beforeEmit, afterEmitRejected },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(beforeEmit).toHaveBeenCalledTimes(1);
+      expect(afterEmitRejected).toHaveBeenCalledTimes(1);
+    });
+
     it("applies restart cooldown between emitted restart cycles", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};

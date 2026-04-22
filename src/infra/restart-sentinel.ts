@@ -87,6 +87,13 @@ export async function writeRestartSentinel(
   return filePath;
 }
 
+export async function removeRestartSentinelFile(filePath: string | null | undefined) {
+  if (!filePath) {
+    return;
+  }
+  await fs.unlink(filePath).catch(() => {});
+}
+
 export function buildRestartSuccessContinuation(params: {
   sessionKey?: string;
   continuationMessage?: string | null;
@@ -140,7 +147,7 @@ export async function consumeRestartSentinel(
   if (!parsed) {
     return null;
   }
-  await fs.unlink(filePath).catch(() => {});
+  await removeRestartSentinelFile(filePath);
   return parsed;
 }
 

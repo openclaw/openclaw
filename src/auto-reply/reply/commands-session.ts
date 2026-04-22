@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
@@ -16,6 +15,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
+  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -42,7 +42,7 @@ const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
 
-async function writeRestartCommandSentinel(params: HandleCommandsParams): Promise<string | null> {
+function buildRestartCommandSentinel(params: HandleCommandsParams): RestartSentinelPayload | null {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return null;
@@ -63,14 +63,7 @@ async function writeRestartCommandSentinel(params: HandleCommandsParams): Promis
       reason: "/restart",
     },
   };
-  return await writeRestartSentinel(payload);
-}
-
-async function removeRestartCommandSentinel(filePath: string | null) {
-  if (!filePath) {
-    return;
-  }
-  await fs.unlink(filePath).catch(() => {});
+  return payload;
 }
 
 function resolveSessionCommandUsage() {
@@ -683,9 +676,34 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+  const sentinelPayload = buildRestartCommandSentinel(params);
+  if (hasSigusr1Listener) {
+    let sentinelPath: string | null = null;
+    scheduleGatewaySigusr1Restart({
+      reason: "/restart",
+      emitHooks: sentinelPayload
+        ? {
+            beforeEmit: async () => {
+              sentinelPath = await writeRestartSentinel(sentinelPayload);
+            },
+            afterEmitRejected: async () => {
+              await removeRestartSentinelFile(sentinelPath);
+            },
+          }
+        : undefined,
+    });
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+      },
+    };
+  }
   let sentinelPath: string | null = null;
   try {
-    sentinelPath = await writeRestartCommandSentinel(params);
+    if (sentinelPayload) {
+      sentinelPath = await writeRestartSentinel(sentinelPayload);
+    }
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
     return {
@@ -695,18 +713,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  if (hasSigusr1Listener) {
-    scheduleGatewaySigusr1Restart({ reason: "/restart" });
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
-      },
-    };
-  }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    await removeRestartCommandSentinel(sentinelPath);
+    await removeRestartSentinelFile(sentinelPath);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,

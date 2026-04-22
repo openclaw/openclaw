@@ -197,6 +197,25 @@ export type RestartDeferralHooks = {
   onCheckError?: (err: unknown) => void;
 };
 
+export type RestartEmitHooks = {
+  beforeEmit?: () => Promise<void>;
+  afterEmitRejected?: () => Promise<void>;
+};
+
+async function emitPreparedGatewayRestart(hooks?: RestartEmitHooks): Promise<void> {
+  try {
+    await hooks?.beforeEmit?.();
+  } catch (err) {
+    restartLog.warn(`restart preparation failed; restart not emitted: ${String(err)}`);
+    return;
+  }
+
+  const emitted = emitGatewayRestart();
+  if (!emitted) {
+    await hooks?.afterEmitRejected?.().catch(() => undefined);
+  }
+}
+
 /**
  * Poll pending work until it drains (or times out), then emit one restart signal.
  * Shared by both the direct RPC restart path and the config watcher path.
@@ -204,6 +223,7 @@ export type RestartDeferralHooks = {
 export function deferGatewayRestartUntilIdle(opts: {
   getPendingCount: () => number;
   hooks?: RestartDeferralHooks;
+  emitHooks?: RestartEmitHooks;
   pollMs?: number;
   maxWaitMs?: number;
 }): void {
@@ -217,12 +237,12 @@ export function deferGatewayRestartUntilIdle(opts: {
     pending = opts.getPendingCount();
   } catch (err) {
     opts.hooks?.onCheckError?.(err);
-    emitGatewayRestart();
+    void emitPreparedGatewayRestart(opts.emitHooks);
     return;
   }
   if (pending <= 0) {
     opts.hooks?.onReady?.();
-    emitGatewayRestart();
+    void emitPreparedGatewayRestart(opts.emitHooks);
     return;
   }
 
@@ -236,14 +256,14 @@ export function deferGatewayRestartUntilIdle(opts: {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onCheckError?.(err);
-      emitGatewayRestart();
+      void emitPreparedGatewayRestart(opts.emitHooks);
       return;
     }
     if (current <= 0) {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onReady?.();
-      emitGatewayRestart();
+      void emitPreparedGatewayRestart(opts.emitHooks);
       return;
     }
     const elapsedMs = Date.now() - startedAt;
@@ -251,7 +271,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onTimeout?.(current, elapsedMs);
-      emitGatewayRestart();
+      void emitPreparedGatewayRestart(opts.emitHooks);
     }
   }, pollMs);
   activeDeferralPolls.add(poll);
@@ -419,6 +439,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  emitHooks?: RestartEmitHooks;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -484,13 +505,14 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       pendingRestartReason = undefined;
       const pendingCheck = preRestartCheck;
       if (!pendingCheck) {
-        emitGatewayRestart();
+        void emitPreparedGatewayRestart(opts?.emitHooks);
         return;
       }
       const cfg = getRuntimeConfig();
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
         maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
+        emitHooks: opts?.emitHooks,
       });
     },
     Math.max(0, requestedDueAt - nowMs),
