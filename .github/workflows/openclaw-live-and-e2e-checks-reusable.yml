@@ -222,7 +222,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -258,7 +258,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -303,7 +303,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -381,6 +381,12 @@ jobs:
             timeout_minutes: 75
             release_path: true
             openwebui_only: false
+          - suite_id: docker-bundled-channel-deps
+            label: Bundled Channel Runtime Deps Docker E2E
+            command: pnpm test:docker:bundled-channel-deps
+            timeout_minutes: 75
+            release_path: true
+            openwebui_only: false
           - suite_id: docker-doctor-switch
             label: Doctor Install Switch Docker E2E
             command: pnpm test:docker:doctor-switch
@@ -454,7 +460,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -596,7 +602,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

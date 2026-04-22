@@ -917,7 +917,7 @@ module.exports = {
       },
       bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
         installedSpecs.push(...missingSpecs);
-        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(bundledDir));
+        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
         fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
           recursive: true,
         });
@@ -1030,7 +1030,7 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "openai")?.status).toBe("loaded");
   });
 
-  it("retains earlier bundled runtime deps across sequential repairs", () => {
+  it("installs bundled runtime deps into each plugin root", () => {
     const bundledDir = makeTempDir();
     const alpha = writePlugin({
       id: "alpha",
@@ -1110,9 +1110,84 @@ module.exports = {
       },
       {
         missingSpecs: ["beta-runtime@1.0.0"],
-        installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"],
+        installSpecs: ["beta-runtime@1.0.0"],
       },
     ]);
+  });
+
+  it("loads bundled runtime deps from an external stage dir", () => {
+    const bundledDir = makeTempDir();
+    const stageDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "alpha",
+      dir: path.join(bundledDir, "alpha"),
+      filename: "index.cjs",
+      body: `
+        const runtimeDep = require("external-runtime");
+        module.exports = {
+          id: "alpha",
+          register(api) {
+            api.registerCommand({ name: "external-runtime", handler: () => runtimeDep.marker });
+          }
+        };
+      `,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/alpha",
+          version: "1.0.0",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "alpha",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({ name: "external-runtime", version: "1.0.0", main: "index.cjs" }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.cjs"),
+          "module.exports = { marker: 'external-ok' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
   });
 
   it("registers standalone text transforms", () => {

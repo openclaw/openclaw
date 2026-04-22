@@ -1301,6 +1301,7 @@
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
+                  "providers/tencent",
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
