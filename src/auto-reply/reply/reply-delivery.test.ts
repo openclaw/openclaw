@@ -13,7 +13,13 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
-  it("sends media-bearing block replies even when block streaming is disabled", async () => {
+  it("accumulates media-bearing block replies for buildReplyPayloads when block streaming is disabled", async () => {
+    // When block streaming is disabled, media-bearing blocks must NOT be sent immediately via
+    // onBlockReply. Sending them immediately would invoke normalizeMediaPaths a second time
+    // (once in reply-delivery, once in buildReplyPayloads), producing different UUID outbound
+    // paths and defeating the deduplication key — resulting in duplicate media delivery.
+    // Instead, media blocks are accumulated and sent via buildReplyPayloads at end of run.
+    // See: https://github.com/openclaw/openclaw/issues/70085
     const onBlockReply = vi.fn(async () => {});
     const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
       text: payload.text,
@@ -40,24 +46,11 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: true,
     });
 
-    expect(onBlockReply).toHaveBeenCalledWith({
-      text: undefined,
-      mediaUrl: "/tmp/generated.png",
-      mediaUrls: ["/tmp/generated.png"],
-      replyToCurrent: true,
-      replyToId: undefined,
-      replyToTag: undefined,
-      audioAsVoice: false,
-    });
-    expect(directlySentBlockKeys).toEqual(
-      new Set([
-        createBlockReplyContentKey({
-          text: "here's the vibe",
-          mediaUrls: ["/tmp/generated.png"],
-          replyToCurrent: true,
-        }),
-      ]),
-    );
+    // onBlockReply must NOT be called — media will be sent via buildReplyPayloads
+    expect(onBlockReply).not.toHaveBeenCalled();
+    // No content key tracked since nothing was sent
+    expect(directlySentBlockKeys).toEqual(new Set());
+    // Typing signal still sent for the text portion
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
   });
 

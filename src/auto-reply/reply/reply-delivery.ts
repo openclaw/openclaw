@@ -151,17 +151,11 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
-    } else if (blockHasMedia) {
-      // When block streaming is disabled, text-only block replies are accumulated into the
-      // final response. Media cannot be reconstructed later, so send it immediately and let
-      // the assistant's final text arrive through the normal final-reply path.
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directlySentBlockKeys: params.directlySentBlockKeys,
-        trackingPayload: blockPayload,
-        payload: { ...blockPayload, text: undefined },
-      });
     }
-    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
+    // When streaming is disabled entirely, blocks (including media) are accumulated and sent
+    // via buildReplyPayloads at the end of the run. Sending media immediately here would
+    // invoke normalizeMediaPaths a second time (once per send), producing different UUID
+    // outbound paths each time and defeating the deduplication key match in
+    // buildReplyPayloads — resulting in duplicate media delivery (#70085).
   };
 }
