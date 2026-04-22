@@ -52,12 +52,13 @@ afterEach(() => {
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
+    const originalFetch = globalThis.fetch;
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = createGoogleAuthFetch(originalFetch);
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       agent: { proxy: new URL("http://proxy.example:8080") },
       cert: "CLIENT_CERT",
@@ -89,6 +90,25 @@ describe("googlechat google auth runtime", () => {
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("uses the ambient global fetch identity by default so the guard can pick runtime undici", async () => {
+    const release = vi.fn();
+    const originalFetch = globalThis.fetch;
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+    await guardedFetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).toMatchObject({
+      fetchImpl: originalFetch,
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 

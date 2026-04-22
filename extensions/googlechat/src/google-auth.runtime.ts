@@ -403,9 +403,7 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
-export function createGoogleAuthFetch(
-  baseFetch: FetchLike = globalThis.fetch.bind(globalThis),
-): FetchLike {
+export function createGoogleAuthFetch(baseFetch: FetchLike = globalThis.fetch): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
     const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
