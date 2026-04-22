@@ -11,6 +11,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { persistCliTurnTranscript } from "../../agents/command/attempt-execution.runtime.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -934,6 +935,34 @@ export async function runAgentTurnWithFallback(params: {
                     stream: "assistant",
                     data: { text: cliText },
                   });
+                }
+
+                // Persist the user+assistant turn into the session transcript so
+                // that later turns have the conversation history available when
+                // Claude CLI rotates its own session file. The CLI branch inside
+                // agent-command.ts already does this for direct agent invocations;
+                // the auto-reply path bypasses agent-command by calling runCliAgent
+                // directly, so we mirror the same persist call here.
+                const persistSessionKey = params.sessionKey ?? params.followupRun.run.sessionId;
+                try {
+                  const persistedEntry = await persistCliTurnTranscript({
+                    body: params.commandBody,
+                    result,
+                    sessionId: params.followupRun.run.sessionId,
+                    sessionKey: persistSessionKey,
+                    sessionEntry: params.getActiveSessionEntry(),
+                    sessionStore: params.activeSessionStore,
+                    storePath: params.storePath,
+                    sessionAgentId: params.followupRun.run.agentId,
+                    sessionCwd: params.followupRun.run.workspaceDir,
+                  });
+                  if (persistedEntry && params.activeSessionStore && params.sessionKey) {
+                    params.activeSessionStore[params.sessionKey] = persistedEntry;
+                  }
+                } catch (error) {
+                  logVerbose(
+                    `CLI transcript persistence failed for ${persistSessionKey}: ${formatErrorMessage(error)}`,
+                  );
                 }
 
                 emitAgentEvent({
