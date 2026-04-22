@@ -172,10 +172,8 @@ export async function handleSlackAction(
   const buildActionOpts = (operation: "read" | "write") => {
     const token = getTokenForOperation(operation);
     const tokenOverride = token && token !== botToken ? token : undefined;
-    if (!accountId && !tokenOverride) {
-      return undefined;
-    }
     return {
+      cfg,
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),
     };
@@ -446,7 +444,7 @@ export async function handleSlackAction(
             (pin.message as { ts?: unknown }).ts,
           )
         : pin.message;
-      return message ? { ...pin, message } : pin;
+      return message ? Object.assign({}, pin, { message }) : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
   }

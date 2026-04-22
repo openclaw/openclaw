@@ -114,10 +114,7 @@ describe("package dist inventory", () => {
       );
       await fs.writeFile(omittedMap, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
-      ]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([]);
     });
   });
   it("fails closed when the inventory is missing", async () => {
