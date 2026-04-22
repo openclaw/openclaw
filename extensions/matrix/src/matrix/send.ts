@@ -1,3 +1,4 @@
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
@@ -135,13 +136,13 @@ async function resolvePreviousEditMentions(params: {
 export function prepareMatrixSingleText(
   text: string,
   opts: {
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     accountId?: string;
     tableMode?: MarkdownTableMode;
-  } = {},
+  },
 ): MatrixPreparedSingleText {
   const trimmedText = text.trim();
-  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
   const tableMode =
     opts.tableMode ??
     getCore().channel.text.resolveMarkdownTableMode({
@@ -165,13 +166,13 @@ export function prepareMatrixSingleText(
 export function chunkMatrixText(
   text: string,
   opts: {
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     accountId?: string;
     tableMode?: MarkdownTableMode;
-  } = {},
+  },
 ): MatrixPreparedChunkedText {
   const preparedText = prepareMatrixSingleText(text, opts);
-  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
   const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
   return {
     ...preparedText,
@@ -186,7 +187,7 @@ export function chunkMatrixText(
 export async function sendMessageMatrix(
   to: string,
   message: string | undefined,
-  opts: MatrixSendOpts = {},
+  opts: MatrixSendOpts,
 ): Promise<MatrixSendResult> {
   const trimmedMessage = message?.trim() ?? "";
   if (!trimmedMessage && !opts.mediaUrl) {
@@ -201,7 +202,7 @@ export async function sendMessageMatrix(
     },
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
-      const cfg = opts.cfg ?? getCore().config.loadConfig();
+      const cfg = requireRuntimeConfig(opts.cfg, "Matrix send") as CoreConfig;
       const { chunks } = chunkMatrixText(trimmedMessage, {
         cfg,
         accountId: opts.accountId,
@@ -330,7 +331,7 @@ export async function sendMessageMatrix(
 export async function sendPollMatrix(
   to: string,
   poll: PollInput,
-  opts: MatrixSendOpts = {},
+  opts: MatrixSendOpts,
 ): Promise<{ eventId: string; roomId: string }> {
   if (!poll.question?.trim()) {
     throw new Error("Matrix poll requires a question");
@@ -416,7 +417,7 @@ export async function sendSingleTextMessageMatrix(
   text: string,
   opts: {
     client?: MatrixClient;
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     replyToId?: string;
     threadId?: string;
     accountId?: string;
@@ -425,7 +426,7 @@ export async function sendSingleTextMessageMatrix(
     extraContent?: MatrixExtraContentFields;
     /** When true, marks the message as a live/streaming update (MSC4357). */
     live?: boolean;
-  } = {},
+  },
 ): Promise<MatrixSendResult> {
   const { trimmedText, convertedText, singleEventLimit, fitsInSingleEvent } =
     prepareMatrixSingleText(text, {
@@ -502,7 +503,7 @@ export async function editMessageMatrix(
   newText: string,
   opts: {
     client?: MatrixClient;
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     threadId?: string;
     accountId?: string;
     timeoutMs?: number;
@@ -511,7 +512,7 @@ export async function editMessageMatrix(
     extraContent?: MatrixExtraContentFields;
     /** When true, marks the edit as a live/streaming update (MSC4357). */
     live?: boolean;
-  } = {},
+  },
 ): Promise<string> {
   return await withResolvedMatrixSendClient(
     {
@@ -522,7 +523,7 @@ export async function editMessageMatrix(
     },
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-      const cfg = opts.cfg ?? getCore().config.loadConfig();
+      const cfg = requireRuntimeConfig(opts.cfg, "Matrix message edit") as CoreConfig;
       const tableMode = getCore().channel.text.resolveMarkdownTableMode({
         cfg,
         channel: "matrix",
