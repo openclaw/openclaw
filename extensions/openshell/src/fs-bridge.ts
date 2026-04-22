@@ -422,6 +422,16 @@ async function openPinnedReadableFile(params: {
     if (!sameFileIdentity(currentResolvedStat, openedStat)) {
       throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
     }
+    // Belt-and-suspenders: re-fstat the pinned fd after the identity check and
+    // confirm the file type and link count are still trustworthy. A hardlink
+    // that appeared between the initial fstat and here is not exploitable for
+    // the read (the fd is already pinned to the original inode), but failing
+    // closed here keeps the guarantee simple: the bytes we return always come
+    // from a file that was a single-linked regular file at verification time.
+    const postCheckStat = await handle.stat();
+    if (!postCheckStat.isFile() || postCheckStat.nlink > 1) {
+      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
+    }
     return handle;
   } catch (error) {
     await handle.close();
