@@ -465,7 +465,7 @@ delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
 history, search, `/new`, `/reset`, and future model or harness switching. The
 mirror includes the user prompt, final assistant text, and lightweight Codex
 reasoning or plan records when the app-server emits them. Today, OpenClaw only
-confirms that native compaction started or completed. It does not yet expose a
+records native compaction start and completion signals. It does not yet expose a
 human-readable compaction summary or an auditable list of which entries Codex
 kept after compaction.
 
