@@ -519,17 +519,6 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           const yes = popover.querySelector(".chat-delete-confirm__yes")!;
           const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
 
-          cancel.addEventListener("click", () => popover.remove());
-          yes.addEventListener("click", () => {
-            if (check.checked) {
-              try {
-                getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
-              } catch {}
-            }
-            popover.remove();
-            onDelete();
-          });
-
           // Close on click outside
           const closeOnOutside = (evt: MouseEvent) => {
             if (!popover.contains(evt.target as Node) && evt.target !== btn) {
@@ -537,6 +526,23 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
               document.removeEventListener("click", closeOnOutside, true);
             }
           };
+
+          const dismissPopover = () => {
+            popover.remove();
+            document.removeEventListener("click", closeOnOutside, true);
+          };
+
+          cancel.addEventListener("click", () => dismissPopover());
+          yes.addEventListener("click", () => {
+            if (check.checked) {
+              try {
+                getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
+              } catch {}
+            }
+            dismissPopover();
+            onDelete();
+          });
+
           requestAnimationFrame(() => document.addEventListener("click", closeOnOutside, true));
         }}
       >
