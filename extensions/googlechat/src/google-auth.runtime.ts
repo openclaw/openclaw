@@ -123,16 +123,12 @@ function normalizeGoogleAuthProxyEnvValue(value: string | undefined): string | n
 }
 
 function resolveGoogleAuthEnvProxyUrl(protocol: "http" | "https"): string | undefined {
-  const lowerHttpProxy = normalizeGoogleAuthProxyEnvValue(process.env.http_proxy);
-  const lowerHttpsProxy = normalizeGoogleAuthProxyEnvValue(process.env.https_proxy);
   const httpProxy =
-    lowerHttpProxy !== undefined
-      ? lowerHttpProxy
-      : normalizeGoogleAuthProxyEnvValue(process.env.HTTP_PROXY);
+    normalizeGoogleAuthProxyEnvValue(process.env.HTTP_PROXY) ??
+    normalizeGoogleAuthProxyEnvValue(process.env.http_proxy);
   const httpsProxy =
-    lowerHttpsProxy !== undefined
-      ? lowerHttpsProxy
-      : normalizeGoogleAuthProxyEnvValue(process.env.HTTPS_PROXY);
+    normalizeGoogleAuthProxyEnvValue(process.env.HTTPS_PROXY) ??
+    normalizeGoogleAuthProxyEnvValue(process.env.https_proxy);
   if (protocol === "https") {
     return httpsProxy ?? httpProxy ?? undefined;
   }
@@ -403,17 +399,17 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
-export function createGoogleAuthFetch(baseFetch: FetchLike = globalThis.fetch): FetchLike {
+export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
     const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
     const { response, release } = await fetchWithSsrFGuard({
       auditContext: GOOGLE_AUTH_AUDIT_CONTEXT,
       dispatcherPolicy: guardedOptions.dispatcherPolicy,
-      fetchImpl: baseFetch,
       init: guardedOptions.init,
       policy: GOOGLE_AUTH_POLICY,
       url,
+      ...(baseFetch ? { fetchImpl: baseFetch } : {}),
     });
     try {
       const body = await readGoogleAuthResponseBytes(response);
@@ -538,5 +534,6 @@ export const __testing = {
     googleAuthRuntimePromise = null;
     googleAuthTransportPromise = null;
   },
+  resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };

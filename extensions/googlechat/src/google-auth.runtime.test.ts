@@ -52,13 +52,13 @@ afterEach(() => {
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
-    const originalFetch = globalThis.fetch;
+    const injectedFetch = vi.fn(globalThis.fetch);
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch(originalFetch);
+    const guardedFetch = createGoogleAuthFetch(injectedFetch);
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       agent: { proxy: new URL("http://proxy.example:8080") },
       cert: "CLIENT_CERT",
@@ -79,7 +79,7 @@ describe("googlechat google auth runtime", () => {
         },
         proxyUrl: "http://proxy.example:8080",
       },
-      fetchImpl: expect.any(Function),
+      fetchImpl: injectedFetch,
       init: {
         headers: { "content-type": "application/json" },
         method: "POST",
@@ -93,9 +93,8 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("uses the ambient global fetch identity by default so the guard can pick runtime undici", async () => {
+  it("lets the guard resolve the ambient runtime fetch when no override is injected", async () => {
     const release = vi.fn();
-    const originalFetch = globalThis.fetch;
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
@@ -106,9 +105,30 @@ describe("googlechat google auth runtime", () => {
       method: "POST",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).toMatchObject({
-      fetchImpl: originalFetch,
+    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps using the guard-selected runtime fetch even if global fetch changes later", async () => {
+    const release = vi.fn();
+    const originalFetch = globalThis.fetch;
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
     });
+
+    const guardedFetch = createGoogleAuthFetch();
+    (globalThis as Record<string, unknown>).fetch = vi.fn(async () => new Response("patched"));
+
+    try {
+      await guardedFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+      } as RequestInit);
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalFetch;
+    }
+
+    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -137,7 +157,6 @@ describe("googlechat google auth runtime", () => {
         },
         mode: "direct",
       },
-      fetchImpl: expect.any(Function),
       init: {
         method: "POST",
       },
@@ -157,6 +176,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
     vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://lower-proxy.example:8080");
 
     const guardedFetch = createGoogleAuthFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
@@ -174,7 +194,6 @@ describe("googlechat google auth runtime", () => {
           key: "CLIENT_KEY",
         },
       },
-      fetchImpl: expect.any(Function),
       init: {
         method: "POST",
       },
@@ -185,6 +204,20 @@ describe("googlechat google auth runtime", () => {
     });
     await expect(response.text()).resolves.toBe("ok");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("matches gaxios proxy env precedence for Google auth requests", () => {
+    vi.stubEnv("HTTP_PROXY", "http://upper-http-proxy.example:8080");
+    vi.stubEnv("http_proxy", "http://lower-http-proxy.example:8080");
+    vi.stubEnv("HTTPS_PROXY", "http://upper-https-proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://lower-https-proxy.example:8080");
+
+    expect(__testing.resolveGoogleAuthEnvProxyUrl("https")).toBe(
+      "http://upper-https-proxy.example:8080",
+    );
+    expect(__testing.resolveGoogleAuthEnvProxyUrl("http")).toBe(
+      "http://upper-http-proxy.example:8080",
+    );
   });
 
   it("releases guarded auth fetch resources even when callers do not consume the body", async () => {
