@@ -182,6 +182,7 @@ export type CronStoreFile = {
 };
 
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  id?: string;
   state?: Partial<CronJobState>;
 };
 

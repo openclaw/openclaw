@@ -1,4 +1,5 @@
 import { Type, type TSchema } from "@sinclair/typebox";
+import { CRON_CUSTOM_JOB_ID_PATTERN } from "../../../cron/job-id.js";
 import { NonEmptyString } from "./primitives.js";
 
 function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
@@ -98,6 +99,12 @@ const CronRunLogJobIdSchema = Type.String({
   minLength: 1,
   // Prevent path traversal via separators in cron.runs id/jobId.
   pattern: "^[^/\\\\]+$",
+});
+
+const CronCustomJobIdSchema = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: CRON_CUSTOM_JOB_ID_PATTERN,
 });
 
 export const CronScheduleSchema = Type.Union([
@@ -286,6 +293,7 @@ export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: fa
 
 export const CronAddParamsSchema = Type.Object(
   {
+    id: Type.Optional(CronCustomJobIdSchema),
     name: NonEmptyString,
     ...CronCommonOptionalFields,
     schedule: CronScheduleSchema,

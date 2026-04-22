@@ -74,6 +74,7 @@ type CronUpdatePatch = {
 };
 
 type CronAddParams = {
+  id?: string;
   schedule?: { kind?: string; staggerMs?: number };
   payload?: {
     model?: string;
@@ -471,6 +472,23 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
     expect(params?.agentId).toBe("ops");
+  });
+
+  it("passes custom job ids through cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--id",
+      "daily-brief",
+      "--name",
+      "Daily brief",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+    ]);
+
+    expect(params?.id).toBe("daily-brief");
   });
 
   it("sets lightContext on cron add when --light-context is passed", async () => {

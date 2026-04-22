@@ -5,6 +5,7 @@ import {
   normalizeOptionalThreadValue,
 } from "../../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
+import { assertSafeCronCustomJobId } from "../job-id.js";
 import {
   coerceFiniteScheduleNumber,
   computeNextRunAtMs,
@@ -550,7 +551,10 @@ export function nextWakeAtMs(state: CronServiceState) {
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
-  const id = crypto.randomUUID();
+  const id = input.id ? assertSafeCronCustomJobId(input.id) : crypto.randomUUID();
+  if (state.store?.jobs.some((job) => job.id === id)) {
+    throw new Error(`cron job id already exists: ${id}`);
+  }
   const schedule =
     input.schedule.kind === "every"
       ? {

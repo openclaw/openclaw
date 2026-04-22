@@ -11,6 +11,7 @@ import {
   parseDeliveryInput,
   parseOptionalField,
 } from "./delivery-field-schemas.js";
+import { normalizeOptionalCronJobId } from "./job-id.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { inferLegacyName } from "./service/normalize.js";
 import { assertSafeCronSessionTargetId } from "./session-target.js";
@@ -522,6 +523,14 @@ export function normalizeCronJobInput(
       const trimmed = next.name.trim();
       if (trimmed) {
         next.name = trimmed;
+      }
+    }
+    if ("id" in next) {
+      const id = normalizeOptionalCronJobId(next.id);
+      if (id) {
+        next.id = id;
+      } else {
+        delete next.id;
       }
     }
     if (!next.sessionTarget && isRecord(next.payload)) {

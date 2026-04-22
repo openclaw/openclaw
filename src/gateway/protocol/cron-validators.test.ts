@@ -21,6 +21,27 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("accepts safe custom add ids and rejects unsafe ones", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        id: "daily-brief",
+      }),
+    ).toBe(true);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        id: "daily brief",
+      }),
+    ).toBe(false);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        id: "../daily-brief",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts current and custom session targets", () => {
     expect(
       validateCronAddParams({
