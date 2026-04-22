@@ -1,9 +1,4 @@
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/config-runtime";
-import {
-  isHeartbeatEnabledForAgent,
-  peekSystemEventEntries,
-  resolveHeartbeatIntervalMs,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/infra-runtime";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
   DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
@@ -34,7 +29,6 @@ import {
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DREAMING_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
-const CRON_SESSION_TARGET_MAIN = "main" as const;
 const LEGACY_LIGHT_SLEEP_CRON_NAME = "Memory Light Dreaming";
 const LEGACY_LIGHT_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
 const LEGACY_LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
@@ -53,7 +47,7 @@ type ManagedCronJobCreate = {
   description: string;
   enabled: boolean;
   schedule: CronSchedule;
-  sessionTarget: typeof CRON_SESSION_TARGET_MAIN;
+  sessionTarget: "main";
   wakeMode: "now";
   payload: CronPayload;
 };
@@ -63,7 +57,7 @@ type ManagedCronJobPatch = {
   description?: string;
   enabled?: boolean;
   schedule?: CronSchedule;
-  sessionTarget?: typeof CRON_SESSION_TARGET_MAIN;
+  sessionTarget?: "main";
   wakeMode?: "now";
   payload?: CronPayload;
 };
@@ -155,7 +149,7 @@ function buildManagedDreamingCronJob(
       expr: config.cron,
       ...(config.timezone ? { tz: config.timezone } : {}),
     },
-    sessionTarget: CRON_SESSION_TARGET_MAIN,
+    sessionTarget: "main",
     wakeMode: "now",
     payload: {
       kind: "systemEvent",
@@ -356,27 +350,6 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };
-}
-
-export function resolveDreamingBlockedReason(cfg: OpenClawConfig): string | null {
-  const pluginConfig = resolveMemoryCorePluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  if (!dreaming.enabled) {
-    return null;
-  }
-
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  // Mirror the managed dreaming wake path in server-cron: the job carries no
-  // agentId/sessionKey, so the wake uses defaults-only heartbeat. Not using
-  // resolveHeartbeatSummaryForAgent since it would apply the per-agent override
-  // and diverge from actual runtime behavior.
-  const enabledForDefault = isHeartbeatEnabledForAgent(cfg, defaultAgentId);
-  const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, cfg.agents?.defaults?.heartbeat);
-  if (enabledForDefault && intervalMs != null) {
-    return null;
-  }
-
-  return `dreaming is enabled but will not run because heartbeat is disabled for "${defaultAgentId}". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting`;
 }
 
 export async function reconcileShortTermDreamingCronJob(params: {
