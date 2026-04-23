@@ -470,4 +470,38 @@ describe("openai image generation provider", () => {
       );
     });
   });
+
+  it.each([
+    {
+      name: "generation",
+      inputImages: undefined,
+      expectedMessage: "OpenAI Codex image generation failed",
+    },
+    {
+      name: "edit",
+      inputImages: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+      expectedMessage: "OpenAI Codex image edit failed",
+    },
+  ])("uses the codex provider label in $name failure messages", async ({ inputImages, expectedMessage }) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {} as Response,
+      release: vi.fn(async () => {}),
+    });
+    assertOkOrThrowHttpErrorMock.mockRejectedValueOnce(new Error(expectedMessage));
+
+    const provider = buildOpenAIImageGenerationProvider("openai-codex");
+
+    await expect(
+      provider.generateImage({
+        provider: "openai-codex",
+        model: "gpt-image-2",
+        prompt: "draw a cat",
+        cfg: {},
+        authStore: { version: 1, profiles: {} },
+        inputImages,
+      }),
+    ).rejects.toThrow(expectedMessage);
+
+    expect(assertOkOrThrowHttpErrorMock).toHaveBeenCalledWith(expect.anything(), expectedMessage);
+  });
 });
