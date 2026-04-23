@@ -218,6 +218,8 @@ Docs: https://docs.openclaw.ai
 - Codex harness/hooks: fire `llm_input`, `llm_output`, and `agent_end` for native Codex app-server turns so lifecycle hooks stop drifting from Pi. Thanks @vincentkoc.
 - QA/Telegram: record per-scenario reply RTT in the live Telegram QA report and summary, starting with the canary response. (#70550) Thanks @obviyus.
 - Status: add an explicit `Runner:` field to `/status` so sessions now report whether they are running on embedded Pi, a CLI-backed provider, or an ACP harness agent/backend such as `codex (acp/acpx)` or `gemini (acp/acpx)`. (#70595)
+- Gateway/diagnostics: enable payload-free stability recording by default and add a support-ready diagnostics export with sanitized logs, status, health, config, and stability snapshots for bug reports. (#70324) Thanks @gumadeiras.
+- Matrix: require full cross-signing identity trust for self-device verification and add `openclaw matrix verify self` so operators can establish that trust from the CLI. (#70401) Thanks @gumadeiras.
 
 ### Fixes
 
