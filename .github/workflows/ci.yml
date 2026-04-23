@@ -1843,6 +1843,7 @@ jobs:
           check-latest: false
 
       - name: Setup pnpm + cache store
+        id: pnpm-cache
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           pnpm-version: "10.33.0"
@@ -1875,6 +1876,14 @@ jobs:
           # Persist Windows-native postinstall outputs in the pnpm store so restored
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Save pnpm store cache
+        if: steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: ${{ steps.pnpm-cache.outputs.store-path }}
+          key: ${{ steps.pnpm-cache.outputs.primary-key }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:

@@ -9,7 +9,7 @@
         "channel": {
           "id": "wecom",
           "label": "WeCom",
-          "selectionLabel": "WeCom (Enterprise WeChat)",
+          "selectionLabel": "WeCom（企业微信）",
           "detailLabel": "WeCom",
           "docsPath": "/plugins/community#wecom",
           "docsLabel": "wecom",
