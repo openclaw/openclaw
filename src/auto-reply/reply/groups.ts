@@ -217,19 +217,10 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 }
 
 export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
-  const subject = normalizeOptionalString(params.sessionCtx.GroupSubject);
-  const members = normalizeOptionalString(params.sessionCtx.GroupMembers);
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
 
   const lines: string[] = [];
-  if (subject) {
-    lines.push(`You are in the ${providerLabel} group chat "${subject}".`);
-  } else {
-    lines.push(`You are in a ${providerLabel} group chat.`);
-  }
-  if (members) {
-    lines.push(`Participants: ${members}.`);
-  }
+  lines.push(`You are in a ${providerLabel} group chat.`);
   lines.push(
     "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
   );

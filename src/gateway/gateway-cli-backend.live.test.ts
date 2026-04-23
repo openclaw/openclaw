@@ -205,7 +205,13 @@ describeLive("gateway live (cli backend)", () => {
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
                 systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
-                ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
+                ...(cliImageArg
+                  ? {
+                      imageArg: cliImageArg,
+                      imageMode: cliImageMode,
+                      imagePathScope: providerDefaults?.imagePathScope,
+                    }
+                  : {}),
               },
             },
             sandbox: { mode: "off" },
@@ -355,11 +361,15 @@ describeLive("gateway live (cli backend)", () => {
         }
 
         if (enableCliImageProbe) {
-          logCliBackendLiveStep("image-probe:start", { sessionKey });
+          const imageSessionKey =
+            providerId === "codex-cli"
+              ? `agent:dev:live-cli-backend-image:${randomUUID()}`
+              : sessionKey;
+          logCliBackendLiveStep("image-probe:start", { sessionKey: imageSessionKey });
           await verifyCliBackendImageProbe({
             client,
             providerId,
-            sessionKey,
+            sessionKey: imageSessionKey,
             tempDir,
             bootstrapWorkspace,
           });

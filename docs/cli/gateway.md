@@ -140,6 +140,7 @@ Notes:
 ### `gateway diagnostics export`
 
 Write a local diagnostics zip that is designed to attach to bug reports.
+For the privacy model and bundle contents, see [Diagnostics Export](/gateway/diagnostics).
 
 ```bash
 openclaw gateway diagnostics export

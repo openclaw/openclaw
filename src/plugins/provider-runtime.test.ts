@@ -943,7 +943,7 @@ describe("provider-runtime", () => {
         {
           ...createOpenAiCatalogProviderPlugin({
             buildMissingAuthMessage: () =>
-              'No API key found for provider "openai". Use openai-codex/gpt-5.4.',
+              'No API key found for provider "openai". Use openai-codex/gpt-5.5.',
             buildUnknownModelHint,
           }),
         } as ProviderPlugin,

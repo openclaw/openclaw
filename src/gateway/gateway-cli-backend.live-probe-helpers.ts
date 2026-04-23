@@ -267,8 +267,7 @@ export async function verifyCliBackendImageProbe(params: {
       // still receives a local file path, but now via the runner code we
       // actually want to validate instead of an ad hoc prompt-only shortcut.
       message:
-        "Best match for the image: lobster, mouse, cat, horse. " +
-        "Reply with one lowercase word only.",
+        "What animal is drawn in the attached image? Reply with only the lowercase animal name.",
       attachments: [
         {
           mimeType: "image/png",

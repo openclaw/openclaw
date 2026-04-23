@@ -12,6 +12,7 @@ import {
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
+  shouldRetryVitestNoOutputTimeout,
 } from "../../scripts/test-projects.test-support.mjs";
 
 describe("scripts/test-projects changed-target routing", () => {
@@ -223,6 +224,21 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: [],
         includePatterns: ["packages/sdk/src/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed source files to sibling tests when present", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "src/agents/live-model-turn-probes.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/live-model-turn-probes.test.ts"],
         watchMode: false,
       },
     ]);
@@ -857,6 +873,15 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
 
     expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBeUndefined();
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("0");
+  });
+
+  it("allows changed checks to disable automatic silent-run retries", () => {
+    expect(shouldRetryVitestNoOutputTimeout({})).toBe(true);
+    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1" })).toBe(true);
+    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0" })).toBe(false);
+    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "false" })).toBe(
+      false,
+    );
   });
 });
 
