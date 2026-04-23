@@ -22,6 +22,13 @@ export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js
 export type { AgentApprovalEventData } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
+export type {
+  CodexAppServerExtensionContext,
+  CodexAppServerExtensionFactory,
+  CodexAppServerExtensionRuntime,
+  CodexAppServerToolResultEvent,
+  CodexAppServerToolResultHandlerResult,
+} from "../plugins/codex-app-server-extension-types.js";
 
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
@@ -54,3 +61,18 @@ export { resolveSandboxContext } from "../agents/sandbox.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export { acquireSessionWriteLock } from "../agents/session-write-lock.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+export {
+  resolveAgentHarnessBeforePromptBuildResult,
+  runAgentHarnessAfterCompactionHook,
+  runAgentHarnessBeforeCompactionHook,
+} from "../agents/harness/prompt-compaction-hook-helpers.js";
+export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
+export {
+  runAgentHarnessAfterToolCallHook,
+  runAgentHarnessBeforeMessageWriteHook,
+} from "../agents/harness/hook-helpers.js";
+export {
+  runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmInputHook,
+  runAgentHarnessLlmOutputHook,
+} from "../agents/harness/lifecycle-hook-helpers.js";

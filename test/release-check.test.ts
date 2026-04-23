@@ -308,10 +308,11 @@ describe("collectForbiddenPackPaths", () => {
     ]);
   });
 
-  it("blocks private qa lab and suite paths from npm pack output", () => {
+  it("blocks private qa channel, qa lab, and suite paths from npm pack output", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
+        "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
         "dist/plugin-sdk/qa-lab.js",
@@ -320,6 +321,8 @@ describe("collectForbiddenPackPaths", () => {
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
+      "dist/extensions/qa-channel/runtime-api.js",
+      "dist/extensions/qa-lab/runtime-api.js",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/qa-runtime.js",
@@ -408,8 +411,6 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
-        "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
@@ -467,11 +468,10 @@ describe("collectPackUnpackedSizeErrors", () => {
 });
 
 describe("createPackedBundledPluginPostinstallEnv", () => {
-  it("enables eager bundled dependency repair for packed channel entry smoke", () => {
+  it("keeps packed postinstall on the lazy bundled dependency path", () => {
     expect(createPackedBundledPluginPostinstallEnv({ PATH: "/usr/bin" })).toEqual({
       PATH: "/usr/bin",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-      OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
     });
   });
 });

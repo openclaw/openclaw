@@ -8,7 +8,6 @@ import {
   ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
   type OAuthCredential,
-  type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
@@ -24,11 +23,6 @@ import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
-import {
-  CODEX_CLI_PROFILE_ID,
-  hasOpenAICodexCliOAuthCredential,
-  readOpenAICodexCliOAuthProfile,
-} from "./openai-codex-cli-auth.js";
 import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
 import {
   buildOpenAIResponsesProviderHooks,
@@ -45,14 +39,11 @@ const OPENAI_WIZARD_GROUP = {
   groupLabel: "OpenAI",
   groupHint: "API key + Codex auth",
 } as const;
+const CODEX_CLI_PROFILE_ID = `${PROVIDER_ID}:codex-cli`;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
-const OPENAI_CODEX_IMPORT_ASSISTANT_PRIORITY = -20;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
 const OPENAI_CODEX_LOGIN_LABEL = "OpenAI Codex Browser Login";
 const OPENAI_CODEX_LOGIN_HINT = "Sign in with OpenAI in your browser";
-const OPENAI_CODEX_IMPORT_LABEL = "Import Existing Codex Login";
-const OPENAI_CODEX_IMPORT_HINT = "Import an existing ~/.codex login";
-const OPENAI_CODEX_IMPORT_DETECTED_SUFFIX = "~/.codex detected";
 const OPENAI_CODEX_DEVICE_PAIRING_LABEL = "OpenAI Codex Device Pairing";
 const OPENAI_CODEX_DEVICE_PAIRING_HINT = "Pair in browser with a device code";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
@@ -371,53 +362,6 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
   }
 }
 
-async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
-  const profile = readOpenAICodexCliOAuthProfile({
-    env: ctx.env ?? process.env,
-    store: ensureAuthProfileStoreForLocalUpdate(ctx.agentDir),
-  });
-  if (!profile) {
-    const message =
-      "No compatible ~/.codex ChatGPT login found. Use Browser Login or Device Pairing instead.";
-    ctx.runtime.error(message);
-    await ctx.prompter.note(message, OPENAI_CODEX_IMPORT_LABEL);
-    return { profiles: [] };
-  }
-
-  return {
-    profiles: [{ profileId: profile.profileId, credential: profile.credential }],
-    configPatch: {
-      agents: {
-        defaults: {
-          models: {
-            [OPENAI_CODEX_DEFAULT_MODEL]: {},
-          },
-        },
-      },
-    },
-    defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
-    notes: ["Imported existing Codex CLI login into OpenClaw canonical auth."],
-  } satisfies ProviderAuthResult;
-}
-
-function ensureOpenAICodexCatalogAuthStore(ctx: { agentDir?: string; env?: NodeJS.ProcessEnv }) {
-  const store = ensureAuthProfileStoreForLocalUpdate(ctx.agentDir);
-  const profile = readOpenAICodexCliOAuthProfile({
-    env: ctx.env ?? process.env,
-    store,
-  });
-  if (!profile) {
-    return store;
-  }
-  return {
-    ...store,
-    profiles: {
-      ...store.profiles,
-      [profile.profileId]: profile.credential,
-    },
-  };
-}
-
 function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   if (ctx.profileId !== CODEX_CLI_PROFILE_ID) {
     return undefined;
@@ -425,16 +369,7 @@ function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   return "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.";
 }
 
-function buildOpenAICodexImportWizardLabel(hasCodexCliCredential: boolean) {
-  if (!hasCodexCliCredential) {
-    return OPENAI_CODEX_IMPORT_LABEL;
-  }
-  return `${OPENAI_CODEX_IMPORT_LABEL} (${OPENAI_CODEX_IMPORT_DETECTED_SUFFIX})`;
-}
-
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
-  const hasCodexCliCredential = hasOpenAICodexCliOAuthCredential();
-  const importWizardLabel = buildOpenAICodexImportWizardLabel(hasCodexCliCredential);
   return {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
@@ -474,26 +409,11 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           }
         },
       },
-      {
-        id: "import-codex-cli",
-        label: importWizardLabel,
-        hint: OPENAI_CODEX_IMPORT_HINT,
-        kind: "oauth",
-        wizard: {
-          choiceId: "openai-codex-import",
-          choiceLabel: importWizardLabel,
-          choiceHint: OPENAI_CODEX_IMPORT_HINT,
-          assistantPriority: OPENAI_CODEX_IMPORT_ASSISTANT_PRIORITY,
-          assistantVisibility: hasCodexCliCredential ? "visible" : "manual-only",
-          ...OPENAI_WIZARD_GROUP,
-        },
-        run: async (ctx) => await runImportOpenAICodexCliAuth(ctx),
-      },
     ],
     catalog: {
       order: "profile",
       run: async (ctx) => {
-        const authStore = ensureOpenAICodexCatalogAuthStore(ctx);
+        const authStore = ensureAuthProfileStoreForLocalUpdate(ctx.agentDir);
         if (listProfilesForProvider(authStore, PROVIDER_ID).length === 0) {
           return null;
         }
@@ -546,13 +466,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     fetchUsageSnapshot: async (ctx) =>
       await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
     refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
-    resolveExternalAuthProfiles: (ctx) => {
-      const profile = readOpenAICodexCliOAuthProfile({
-        env: ctx.env,
-        store: ctx.store,
-      });
-      return profile ? [{ ...profile, persistence: "runtime-only" }] : [];
-    },
     augmentModelCatalog: (ctx) => {
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,

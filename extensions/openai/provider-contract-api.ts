@@ -41,20 +41,6 @@ export function createOpenAICodexProvider(): ProviderPlugin {
           ...OPENAI_WIZARD_GROUP,
         },
       },
-      {
-        id: "import-codex-cli",
-        kind: "oauth",
-        label: "Import Existing Codex Login",
-        hint: "Import an existing ~/.codex login",
-        run: noopAuth,
-        wizard: {
-          choiceId: "openai-codex-import",
-          choiceLabel: "Import Existing Codex Login",
-          choiceHint: "Import an existing ~/.codex login",
-          assistantPriority: -20,
-          ...OPENAI_WIZARD_GROUP,
-        },
-      },
     ],
   };
 }

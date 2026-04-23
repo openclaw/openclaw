@@ -32,6 +32,8 @@ export default definePluginEntry({
       ...openAIToolCompatHooks,
       resolveSystemPromptContribution: (ctx) =>
         resolveOpenAISystemPromptContribution({
+          config: ctx.config,
+          legacyPluginConfig: api.pluginConfig,
           mode: promptOverlayMode,
           modelProviderId: provider.id,
           modelId: ctx.modelId,

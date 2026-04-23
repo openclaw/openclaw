@@ -227,6 +227,23 @@ export function resolveCodexAuthBridgeHome(params: {
   return path.join(params.agentDir, params.bridgeDir, "codex", digest);
 }
 
+function assertExistingCodexAuthBridgeFileSafe(codexHome: string): void {
+  const authFile = path.join(codexHome, "auth.json");
+  try {
+    const stat = fs.lstatSync(authFile);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Private secret file ${authFile} must not be a symlink.`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Private secret file ${authFile} must be a regular file.`);
+    }
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
 export function buildCodexAuthBridgeFile(
   credential: OAuthCredential,
   material: Partial<CodexAuthBridgeMaterial> = {},
@@ -268,11 +285,15 @@ export async function prepareCodexAuthBridge(params: {
   }
 
   const codexHome = resolveCodexAuthBridgeHome(params);
+  assertExistingCodexAuthBridgeFileSafe(codexHome);
   const material = resolveCodexAuthBridgeMaterial({
     credential,
     sourceCodexHome: params.sourceCodexHome,
     env: { ...process.env, ...params.env },
   });
+  if (!readCodexAuthString(credential.idToken) && !readCodexAuthString(material.idToken)) {
+    return undefined;
+  }
   await writePrivateSecretFileAtomic({
     rootDir: params.agentDir,
     filePath: path.join(codexHome, "auth.json"),

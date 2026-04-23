@@ -9,6 +9,7 @@ import {
   createBundledRuntimeDepsInstallEnv,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
+  isWritableDirectory,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
   type BundledRuntimeDepsInstallParams,
@@ -145,6 +146,21 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
 });
 
 describe("installBundledRuntimeDeps", () => {
+  it("uses a real write probe for runtime dependency roots", () => {
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    const mkdirSpy = vi.spyOn(fs, "mkdtempSync").mockImplementation(() => {
+      const error = new Error("read-only file system") as NodeJS.ErrnoException;
+      error.code = "EROFS";
+      throw error;
+    });
+
+    expect(isWritableDirectory("/usr/lib/node_modules/openclaw")).toBe(false);
+    expect(accessSpy).not.toHaveBeenCalled();
+    expect(mkdirSpy).toHaveBeenCalledWith(
+      path.join("/usr/lib/node_modules/openclaw", ".openclaw-write-probe-"),
+    );
+  });
+
   it("uses the npm cmd shim on Windows", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(fs, "existsSync").mockImplementation(
@@ -601,6 +617,50 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} })).toBe(pluginRoot);
+  });
+
+  it("treats Docker build source trees without .git as source checkouts", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages:\n  - .\n");
+    const pluginRoot = path.join(packageRoot, "extensions", "acpx");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          acpx: "0.5.3",
+        },
+        devDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "acpx",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["acpx@0.5.3"],
+      retainSpecs: ["acpx@0.5.3"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        installExecutionRoot: expect.stringContaining(
+          path.join(".local", "bundled-plugin-runtime-deps"),
+        ),
+        missingSpecs: ["acpx@0.5.3"],
+        installSpecs: ["acpx@0.5.3"],
+      },
+    ]);
   });
 
   it("does not trust package-root runtime deps for source-checkout bundled plugins", () => {

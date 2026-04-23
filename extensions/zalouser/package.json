@@ -35,7 +35,13 @@
         "zlu"
       ],
       "order": 85,
-      "quickstartAllowFrom": false
+      "quickstartAllowFrom": false,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "hybrid",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": false
+      }
     },
     "install": {
       "npmSpec": "@openclaw/zalouser",

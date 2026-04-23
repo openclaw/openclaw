@@ -44,6 +44,22 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps extension batch runner edits on extension script tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/test-extension-batch.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/test-extension.test.ts"],
+    });
+  });
+
+  it("does not route live tests through the normal changed-test lane", () => {
+    expect(
+      resolveChangedTestTargetPlan(["src/gateway/gateway-codex-harness.live.test.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [],
+    });
+  });
+
   it("routes changed extension vitest configs to their own shard", () => {
     expect(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
@@ -150,6 +166,21 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.extension-providers.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/lmstudio/src/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes QA extension changes to the QA extension lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "extensions/qa-lab/src/scenario-catalog.test.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-qa.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/qa-lab/src/scenario-catalog.test.ts"],
         watchMode: false,
       },
     ]);

@@ -1,6 +1,7 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -149,6 +150,7 @@ type RestartContinuationRoute = {
   accountId?: string;
   replyToId?: string;
   threadId?: string;
+  chatType: ChatType;
 };
 
 function resolveRestartContinuationRoute(params: {
@@ -157,6 +159,7 @@ function resolveRestartContinuationRoute(params: {
   accountId?: string;
   replyToId?: string;
   threadId?: string;
+  chatType: ChatType;
 }): RestartContinuationRoute | undefined {
   if (!params.channel || !params.to) {
     return undefined;
@@ -167,6 +170,7 @@ function resolveRestartContinuationRoute(params: {
     ...(params.accountId ? { accountId: params.accountId } : {}),
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.threadId ? { threadId: params.threadId } : {}),
+    chatType: params.chatType,
   };
 }
 
@@ -246,7 +250,7 @@ async function dispatchRestartSentinelContinuation(params: {
         Timestamp: Date.now(),
         Provider: route.channel,
         Surface: route.channel,
-        ChatType: "direct",
+        ChatType: route.chatType,
         CommandAuthorized: true,
         ReplyToId: route.replyToId,
         OriginatingChannel: route.channel,
@@ -337,12 +341,14 @@ async function loadRestartSentinelStartupTask(params: {
 
     const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
+    let chatType = entry?.origin?.chatType ?? "direct";
     if (
       !hasRoutableDeliveryContext(sessionDeliveryContext) &&
       baseSessionKey &&
       baseSessionKey !== sessionKey
     ) {
       const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
+      chatType = entry?.origin?.chatType ?? baseEntry?.origin?.chatType ?? "direct";
       sessionDeliveryContext = mergeDeliveryContext(
         sessionDeliveryContext,
         deliveryContextFromSession(baseEntry),
@@ -426,6 +432,7 @@ async function loadRestartSentinelStartupTask(params: {
           accountId: origin?.accountId,
           replyToId,
           threadId: resolvedThreadId,
+          chatType,
         }),
       });
     } catch (err) {

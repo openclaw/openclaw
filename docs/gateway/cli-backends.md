@@ -181,10 +181,10 @@ child process environment for the run.
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
-- The bundled `claude-cli` backend uses `liveSession: "claude-stdio"` so
-  follow-up turns reuse the live Claude process while it is active. If the
-  Gateway restarts or the idle process exits, OpenClaw resumes from the stored
-  Claude session id.
+- `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`,
+  and `input: "stdin"` so follow-up turns reuse the live Claude process while
+  it is active. If the Gateway restarts or the idle process exits, OpenClaw
+  resumes from the stored Claude session id.
 - Stored CLI sessions are provider-owned continuity. The implicit daily session
   reset does not cut them; `/reset` and explicit `session.reset` policies still
   do.

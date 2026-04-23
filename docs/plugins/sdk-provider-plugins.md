@@ -599,12 +599,34 @@ API key auth, and dynamic model resolution.
         id: "acme-ai",
         label: "Acme Realtime Transcription",
         isConfigured: () => true,
-        createSession: (req) => ({
-          connect: async () => {},
-          sendAudio: () => {},
-          close: () => {},
-          isConnected: () => true,
-        }),
+        createSession: (req) => {
+          const apiKey = String(req.providerConfig.apiKey ?? "");
+          return createRealtimeTranscriptionWebSocketSession({
+            providerId: "acme-ai",
+            callbacks: req,
+            url: "wss://api.example.com/v1/realtime-transcription",
+            headers: { Authorization: `Bearer ${apiKey}` },
+            onMessage: (event, transport) => {
+              if (event.type === "session.created") {
+                transport.sendJson({ type: "session.update" });
+                transport.markReady();
+                return;
+              }
+              if (event.type === "transcript.final") {
+                req.onTranscript?.(event.text);
+              }
+            },
+            sendAudio: (audio, transport) => {
+              transport.sendJson({
+                type: "audio.append",
+                audio: audio.toString("base64"),
+              });
+            },
+            onClose: (transport) => {
+              transport.sendJson({ type: "audio.end" });
+            },
+          });
+        },
       });
 
       api.registerRealtimeVoiceProvider({

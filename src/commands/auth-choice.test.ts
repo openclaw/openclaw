@@ -691,6 +691,20 @@ describe("applyAuthChoice", () => {
     );
   });
 
+  it("fails fast when a removed provider auth choice is passed to the interactive flow", async () => {
+    await expect(
+      applyAuthChoice({
+        authChoice: "openai-codex-import",
+        config: {},
+        prompter: createPrompter({}),
+        runtime: createExitThrowingRuntime(),
+        setDefaultModel: true,
+      }),
+    ).rejects.toThrow(
+      'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead.',
+    );
+  });
+
   it("prompts and writes provider API key profiles for common providers", async () => {
     const scenarios: Array<{
       authChoice: "huggingface-api-key";
