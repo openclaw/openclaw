@@ -83,9 +83,7 @@ None - all features are additive.
 ## Some Screenshots
 
 <img width="1462" height="948" alt="Screenshot 2026-04-23 112822" src="https://github.com/user-attachments/assets/68e66bfa-8539-4dbb-af2a-f38d147da05b" /><br>
-   
-<img width="1250" height="894" alt="embeded-video" src="https://github.com/user-attachments/assets/f0eba12d-4406-41a4-b374-6868e681a898" /><br>  
-    
+  
 <img width="1627" height="1078" alt="media-server" src="https://github.com/user-attachments/assets/42f464e9-2b48-4e89-a3fd-e743b01124fa" /><br>  
   
 https://github.com/user-attachments/assets/a11f41b2-0262-48c7-8ba2-7c5462840d6f  
