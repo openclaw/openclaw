@@ -193,7 +193,7 @@ export async function appendCatalogSupplementRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
-  const catalog = await loadModelCatalog({ config: params.context.cfg });
+  const catalog = await loadModelCatalog({ config: params.context.cfg, readOnly: true });
   for (const entry of catalog) {
     if (
       params.context.filter.provider &&
