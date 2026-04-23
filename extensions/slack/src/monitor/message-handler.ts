@@ -137,9 +137,18 @@ export function createSlackMessageHandler(params: {
               .filter(Boolean)
               .join("\n");
       const combinedMentioned = entries.some((entry) => Boolean(entry.opts.wasMentioned));
+      // Merge files from all entries: app_mention events do not carry files,
+      // so we must union files across the debounce window to avoid dropping attachments.
+      const seenFileIds = new Set<string>();
+      const combinedFiles = entries.flatMap((entry) => entry.message.files ?? []).filter((file) => {
+        if (!file.id || seenFileIds.has(file.id)) return false;
+        seenFileIds.add(file.id);
+        return true;
+      });
       const syntheticMessage: SlackMessageEvent = {
         ...last.message,
         text: combinedText,
+        ...(combinedFiles.length > 0 ? { files: combinedFiles } : {}),
       };
       const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
       try {
