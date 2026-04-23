@@ -15,6 +15,7 @@
 
 #include "gateway_client.h"
 #include "product_coordinator.h"
+#include "runtime_paths.h"
 #include "state.h"
 
 extern void systemd_restart_gateway(void);
@@ -50,14 +51,30 @@ static void on_dbg_reveal_config(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
 
-    GatewayConfig *cfg = gateway_client_get_config();
-    if (cfg && cfg->config_path) {
-        g_autofree gchar *dir = g_path_get_dirname(cfg->config_path);
-        g_autofree gchar *uri = g_filename_to_uri(dir, NULL, NULL);
-        if (uri) {
-            g_app_info_launch_default_for_uri(uri, NULL, NULL);
-        }
+    g_autofree gchar *uri = section_debug_test_build_reveal_config_uri();
+    if (uri) {
+        g_app_info_launch_default_for_uri(uri, NULL, NULL);
     }
+}
+
+gchar* section_debug_test_build_reveal_config_uri(void) {
+    g_autofree gchar *profile = NULL;
+    g_autofree gchar *state_dir = NULL;
+    g_autofree gchar *config_path = NULL;
+    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+
+    GatewayConfig *cfg = gateway_client_get_config();
+    RuntimeEffectivePaths effective_paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &effective_paths);
+
+    gchar *uri = NULL;
+    if (effective_paths.effective_config_path) {
+        g_autofree gchar *dir = g_path_get_dirname(effective_paths.effective_config_path);
+        uri = g_filename_to_uri(dir, NULL, NULL);
+    }
+
+    runtime_effective_paths_clear(&effective_paths);
+    return uri;
 }
 
 static void on_dbg_copy_journal_cmd(GtkButton *button, gpointer user_data) {
