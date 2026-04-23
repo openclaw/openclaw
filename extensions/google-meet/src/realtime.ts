@@ -3,11 +3,9 @@ import type { Writable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import {
   createRealtimeVoiceBridgeSession,
-  getRealtimeVoiceProvider,
-  listRealtimeVoiceProviders,
+  resolveConfiguredRealtimeVoiceProvider,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
@@ -59,44 +57,14 @@ export function resolveGoogleMeetRealtimeProvider(params: {
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
 }): ResolvedRealtimeProvider {
-  const configuredProviderId = params.config.realtime.provider;
-  const providers = params.providers ?? listRealtimeVoiceProviders(params.fullConfig);
-  const resolution = resolveConfiguredCapabilityProvider({
-    configuredProviderId,
+  return resolveConfiguredRealtimeVoiceProvider({
+    configuredProviderId: params.config.realtime.provider,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
-    cfgForResolve: params.fullConfig,
-    getConfiguredProvider: (providerId) =>
-      params.providers?.find((entry) => entry.id === providerId) ??
-      getRealtimeVoiceProvider(providerId, params.fullConfig),
-    listProviders: () => providers,
-    resolveProviderConfig: ({ provider, cfg, rawConfig }) => {
-      const withModel =
-        params.config.realtime.model && rawConfig.model === undefined
-          ? { ...rawConfig, model: params.config.realtime.model }
-          : rawConfig;
-      return provider.resolveConfig?.({ cfg, rawConfig: withModel }) ?? withModel;
-    },
-    isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-      provider.isConfigured({ cfg, providerConfig }),
+    providers: params.providers,
+    defaultModel: params.config.realtime.model,
+    noRegisteredProviderMessage: "No configured realtime voice provider registered",
   });
-
-  if (!resolution.ok && resolution.code === "missing-configured-provider") {
-    throw new Error(
-      `Realtime voice provider "${resolution.configuredProviderId}" is not registered`,
-    );
-  }
-  if (!resolution.ok && resolution.code === "no-registered-provider") {
-    throw new Error("No configured realtime voice provider registered");
-  }
-  if (!resolution.ok) {
-    throw new Error(`Realtime voice provider "${resolution.provider?.id}" is not configured`);
-  }
-
-  return {
-    provider: resolution.provider,
-    providerConfig: resolution.providerConfig,
-  };
 }
 
 export async function startCommandRealtimeAudioBridge(params: {
@@ -172,13 +140,11 @@ export async function startCommandRealtimeAudioBridge(params: {
     provider: resolved.provider,
     providerConfig: resolved.providerConfig,
     instructions: params.config.realtime.instructions,
+    markStrategy: "ack-immediately",
     audioSink: {
       isOpen: () => !stopped,
       sendAudio: (muLaw) => {
         outputProcess.stdin?.write(muLaw);
-      },
-      sendMark: () => {
-        bridge?.acknowledgeMark();
       },
     },
     onTranscript: (role, text, isFinal) => {
