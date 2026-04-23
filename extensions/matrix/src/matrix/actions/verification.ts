@@ -168,15 +168,21 @@ function formatMatrixOwnerVerificationDiagnostics(
   }, locally trusted: ${status.localVerified ? "yes" : "no"}`;
 }
 
-async function waitForMatrixOwnerVerificationStatus(params: {
+async function waitForMatrixSelfVerificationTrustStatus(params: {
   client: MatrixActionClient;
   timeoutMs: number;
 }): Promise<MatrixOwnDeviceVerificationStatus> {
   const startedAt = Date.now();
   let last: MatrixOwnDeviceVerificationStatus | undefined;
+  let crossSigningPublished = false;
   while (Date.now() - startedAt < params.timeoutMs) {
-    last = await params.client.getOwnDeviceVerificationStatus();
-    if (last.verified) {
+    const [status, crossSigning] = await Promise.all([
+      params.client.getOwnDeviceVerificationStatus(),
+      params.client.getOwnCrossSigningPublicationStatus(),
+    ]);
+    last = status;
+    crossSigningPublished = crossSigning.published;
+    if (last.verified && crossSigningPublished) {
       return last;
     }
     await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
@@ -184,7 +190,7 @@ async function waitForMatrixOwnerVerificationStatus(params: {
   throw new Error(
     `Timed out waiting for Matrix self-verification to establish full Matrix identity trust for this device (${formatMatrixOwnerVerificationDiagnostics(
       last,
-    )}). Complete self-verification from another Matrix client, then check Matrix verification status for details.`,
+    )}, cross-signing keys published: ${crossSigningPublished ? "yes" : "no"}). Complete self-verification from another Matrix client, then check Matrix verification status for details.`,
   );
 }
 
@@ -215,12 +221,13 @@ async function completeMatrixSelfVerification(params: {
   if (!bootstrap.verification.verified) {
     await params.client.trustOwnIdentityAfterSelfVerification?.();
   }
-  const ownerVerification = bootstrap.verification.verified
-    ? bootstrap.verification
-    : await waitForMatrixOwnerVerificationStatus({
-        client: params.client,
-        timeoutMs: params.timeoutMs,
-      });
+  const ownerVerification =
+    bootstrap.verification.verified && bootstrap.crossSigning.published
+      ? bootstrap.verification
+      : await waitForMatrixSelfVerificationTrustStatus({
+          client: params.client,
+          timeoutMs: params.timeoutMs,
+        });
   return {
     ...params.completed,
     deviceOwnerVerified: ownerVerification.verified,
