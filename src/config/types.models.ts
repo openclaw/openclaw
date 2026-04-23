@@ -54,6 +54,7 @@ export type ModelDefinitionConfig = {
   id: string;
   name: string;
   api?: ModelApi;
+  baseUrl?: string;
   reasoning: boolean;
   input: Array<"text" | "image">;
   cost: {
@@ -82,7 +83,6 @@ export type ModelDefinitionConfig = {
    */
   contextTokens?: number;
   maxTokens: number;
-  baseUrl?: string;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
 };
