@@ -54,11 +54,9 @@ describe("flushPendingToolResultsAfterIdle", () => {
       timeoutMs: 1_000,
     });
 
-    // Flush is waiting for idle; synthetic result must not appear yet.
     await Promise.resolve();
     expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
 
-    // Tool completes before idle wait finishes.
     appendMessage(toolResult("call_retry_1", "command output here"));
     idle.resolve();
     await flushPromise;
@@ -71,7 +69,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     );
   });
 
-  it("flushes pending tool call after timeout when idle never resolves", async () => {
+  it("does not synthesize a tool result after timeout when idle never resolves", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     vi.useFakeTimers();
@@ -87,14 +85,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     await vi.advanceTimersByTimeAsync(30);
     await flushPromise;
 
-    const entries = getMessages(sm);
-
-    expect(entries.length).toBe(2);
-    expect(entries[1].role).toBe("toolResult");
-    expect((entries[1] as { isError?: boolean }).isError).toBe(true);
-    expect((entries[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
-      "missing tool result",
-    );
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
   });
 
   it("clears pending without synthetic flush when timeout cleanup is requested", async () => {
