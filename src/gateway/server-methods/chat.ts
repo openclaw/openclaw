@@ -643,6 +643,7 @@ function sanitizeChatHistoryContentBlock(
     preserveExactToolPayload?: boolean;
     maxChars?: number;
     inlineImageBudget?: { remainingBytes: number };
+    preserveInlineImageData?: boolean;
   },
 ): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
@@ -711,6 +712,7 @@ function sanitizeChatHistoryContentBlock(
           : "image/png",
     };
     if (
+      opts?.preserveInlineImageData === true &&
       bytes <= CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES &&
       (!opts?.inlineImageBudget || opts.inlineImageBudget.remainingBytes >= bytes)
     ) {
@@ -836,6 +838,7 @@ function sanitizeCost(raw: unknown): { total?: number } | undefined {
 function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: { preserveInlineImageData?: boolean },
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -908,6 +911,7 @@ function sanitizeChatHistoryMessage(
         preserveExactToolPayload,
         maxChars,
         inlineImageBudget,
+        preserveInlineImageData: opts?.preserveInlineImageData,
       }),
     );
     if (updated.some((item) => item.changed)) {
@@ -1010,6 +1014,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: { preserveInlineImageData?: boolean },
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -1021,7 +1026,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, opts);
     changed ||= res.changed;
     if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
@@ -1650,7 +1655,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -1685,8 +1690,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
+    const preserveInlineImageData = isWebchatClient(client?.connect?.client);
     const normalized = augmentChatHistoryWithCanvasBlocks(
-      sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
+      sanitizeChatHistoryMessages(sanitized, effectiveMaxChars, {
+        preserveInlineImageData,
+      }),
     );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);

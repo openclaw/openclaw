@@ -80,12 +80,13 @@ describe("gateway server chat", () => {
 
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
+    historyWs: WebSocket = ws,
   ): Promise<unknown[]> => {
     return withMainSessionStore(async (dir) => {
       const lines = messages.map((message) => JSON.stringify({ message }));
       await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
 
-      const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+      const res = await rpcReq<{ messages?: unknown[] }>(historyWs, "chat.history", {
         sessionKey: "main",
       });
       expect(res.ok).toBe(true);
@@ -572,6 +573,67 @@ describe("gateway server chat", () => {
       media_type: "image/png",
       data: "abc123==",
     });
+  });
+
+  test("chat.history omits inline image payloads for non-webchat clients", async () => {
+    const testWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
+    trackConnectChallengeNonce(testWs);
+    await new Promise<void>((resolve) => testWs.once("open", resolve));
+    await connectOk(testWs, {
+      client: {
+        id: GATEWAY_CLIENT_NAMES.TEST,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+      },
+    });
+
+    try {
+      const historyMessages = await loadChatHistoryWithMessages(
+        [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "see image" },
+              { type: "image", data: "abc123==", mimeType: "image/png" },
+            ],
+            timestamp: 1,
+          },
+        ],
+        testWs,
+      );
+
+      const firstMessage = historyMessages[0] as
+        | {
+            content?: Array<{
+              type?: string;
+              data?: string;
+              source?: {
+                type?: string;
+                media_type?: string;
+                omitted?: boolean;
+                bytes?: number;
+                data?: string;
+              };
+            }>;
+          }
+        | undefined;
+      const imageBlock = firstMessage?.content?.[1];
+      expect(imageBlock?.type).toBe("image");
+      expect(imageBlock).not.toHaveProperty("data");
+      expect(imageBlock).not.toHaveProperty("mimeType");
+      expect(imageBlock?.source).toMatchObject({
+        type: "base64",
+        media_type: "image/png",
+        omitted: true,
+        bytes: 8,
+      });
+      expect(imageBlock?.source).not.toHaveProperty("data");
+    } finally {
+      testWs.close();
+    }
   });
 
   test("chat.history omits oversized inline image payloads without replacing the full turn", async () => {
