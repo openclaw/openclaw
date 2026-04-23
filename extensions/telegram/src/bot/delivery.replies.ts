@@ -47,7 +47,7 @@ import {
   type DeliveryProgress as ReplyThreadDeliveryProgress,
 } from "./reply-threading.js";
 
-const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
@@ -193,9 +193,9 @@ async function sendPendingFollowUpText(params: {
 
 function isVoiceMessagesForbidden(err: unknown): boolean {
   if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return VOICE_FORBIDDEN_RE.test(err.description);
+    return err.description.includes(VOICE_FORBIDDEN_MARKER);
   }
-  return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+  return formatErrorMessage(err).includes(VOICE_FORBIDDEN_MARKER);
 }
 
 function isCaptionTooLong(err: unknown): boolean {
@@ -676,11 +676,15 @@ export async function deliverReplies(params: {
     }
 
     const rawContent = reply.text || "";
+    const replyToId =
+      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     if (hasMessageSendingHooks) {
       const hookResult = await hookRunner?.runMessageSending(
         {
           to: params.chatId,
           content: rawContent,
+          replyToId,
+          threadId: params.thread?.id,
           metadata: {
             channel: "telegram",
             mediaUrls: mediaList,
@@ -705,8 +709,6 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
-      const replyToId =
-        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;

@@ -262,6 +262,13 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
+const formatFastModeLabel = (enabled: boolean) => {
+  if (!enabled) {
+    return null;
+  }
+  return "Fast";
+};
+
 const readUsageFromSessionLog = (
   sessionId?: string,
   sessionEntry?: SessionEntry,
@@ -736,7 +743,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Runtime: ${runtime.label}`,
     `Runner: ${runnerLabel}`,
     `Think: ${thinkLevel}`,
-    fastMode ? "Fast: on" : null,
+    formatFastModeLabel(fastMode),
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,

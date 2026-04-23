@@ -23,7 +23,7 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
-export const CLI_AUTH_EPOCH_VERSION = 2;
+export const CLI_AUTH_EPOCH_VERSION = 3;
 
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
@@ -41,20 +41,35 @@ function encodeUnknown(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
+function encodeOAuthIdentity(credential: {
+  type: "oauth";
+  provider: string;
+  clientId?: string;
+  email?: string;
+  enterpriseUrl?: string;
+  projectId?: string;
+  accountId?: string;
+}): string {
+  return JSON.stringify([
+    "oauth",
+    credential.provider,
+    credential.clientId ?? null,
+    credential.email ?? null,
+    credential.enterpriseUrl ?? null,
+    credential.projectId ?? null,
+    credential.accountId ?? null,
+  ]);
+}
+
 function encodeClaudeCredential(credential: ClaudeCliCredential): string {
   if (credential.type === "oauth") {
-    return JSON.stringify(["oauth", credential.provider, credential.refresh]);
+    return encodeOAuthIdentity(credential);
   }
   return JSON.stringify(["token", credential.provider, credential.token]);
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
-  return JSON.stringify([
-    credential.type,
-    credential.provider,
-    credential.refresh,
-    credential.accountId ?? null,
-  ]);
+  return encodeOAuthIdentity(credential);
 }
 
 function encodeAuthProfileCredential(credential: AuthProfileCredential): string {
@@ -79,16 +94,7 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.displayName ?? null,
       ]);
     case "oauth":
-      return JSON.stringify([
-        "oauth",
-        credential.provider,
-        credential.refresh,
-        credential.clientId ?? null,
-        credential.email ?? null,
-        credential.enterpriseUrl ?? null,
-        credential.projectId ?? null,
-        credential.accountId ?? null,
-      ]);
+      return encodeOAuthIdentity(credential);
   }
   throw new Error("Unsupported auth profile credential type");
 }

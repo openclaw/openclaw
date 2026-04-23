@@ -82,6 +82,8 @@ observation works best when both bots have Bot-to-Bot Communication Mode
 enabled in `@BotFather`.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
+The Telegram report and summary include per-reply RTT from the driver message
+send request to the observed SUT reply, starting with the canary.
 
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:

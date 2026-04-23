@@ -193,6 +193,7 @@ const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, updateStatusCommand, updateWizardCommand } = await import("./update-cli.js");
 const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
+const { spawnSync } = await import("node:child_process");
 
 type UpdateCliScenario = {
   name: string;
@@ -456,6 +457,19 @@ describe("update-cli", () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     setTty(false);
     setStdoutTty(false);
+  });
+
+  it("bounds completion cache refresh during update follow-up", async () => {
+    const root = createCaseDir("openclaw-completion-timeout");
+    pathExists.mockResolvedValue(true);
+
+    await updateCliShared.tryWriteCompletionCache(root, false);
+
+    expect(spawnSync).toHaveBeenCalledWith(
+      expect.any(String),
+      [path.join(root, "openclaw.mjs"), "completion", "--write-state"],
+      expect.objectContaining({ timeout: 30_000 }),
+    );
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
@@ -821,6 +835,33 @@ describe("update-cli", () => {
       ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
     );
+  });
+
+  it("skips package-manager updates when the installed version already matches the target", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.22",
+    });
+
+    await updateCommand({ yes: true });
+
+    const installCalls = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.filter(
+        ([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
+      );
+    expect(installCalls).toEqual([]);
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("already-current");
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {
@@ -1264,6 +1305,65 @@ describe("update-cli", () => {
       | { nextConfig?: { update?: { channel?: string } } }
       | undefined;
     expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");
+  });
+
+  it("uses source config, not runtime-materialized config, for post-update plugin sync", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const sourceConfig = {
+      plugins: {
+        installs: {
+          "lossless-claw": {
+            source: "npm",
+            spec: "@martian-engineering/lossless-claw",
+            installPath: "/tmp/lossless-claw",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig,
+      config: {
+        ...sourceConfig,
+        gateway: { auth: { mode: "token", token: "runtime" } },
+        plugins: {
+          ...sourceConfig.plugins,
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: { provider: "firecrawl" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    syncPluginsForUpdateChannel.mockResolvedValue({
+      changed: false,
+      config: sourceConfig,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    });
+    updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: sourceConfig,
+      outcomes: [],
+    });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    const syncConfig = vi.mocked(syncPluginsForUpdateChannel).mock.calls[0]?.[0]?.config as
+      | OpenClawConfig
+      | undefined;
+    expect(syncConfig?.plugins?.installs).toEqual(sourceConfig.plugins?.installs);
+    expect(syncConfig?.update?.channel).toBe("beta");
+    expect(syncConfig?.gateway?.auth).toBeUndefined();
+    expect(syncConfig?.plugins?.entries).toBeUndefined();
   });
 
   it("skips plugin sync in the old process after switching from package to git", async () => {
