@@ -829,6 +829,67 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.modelOverride).toBe("qwen3-coder:30b");
     expect(capturedEntry?.providerOverride).toBe("ollama");
   });
+  // Broader regression guard for the #5369 stale-writeback class: any field
+  // that the patch blindly carries from the cached entry will clobber a fresh
+  // concurrent write. The fix dropped all such fields from the patch; this
+  // test ensures none get silently re-added. If a future change puts e.g.
+  // `sendPolicy: entry?.sendPolicy` back into the patch, this test fails.
+  it("preserves all fresh session fields when cached entry is stale (#5369 broader)", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "subagent-session-id",
+        updatedAt: Date.now() - 1000,
+        // All fields below absent — stale pre-patch view
+      },
+      canonicalKey: "agent:main:subagent:test-broader",
+    });
+    const freshFields = {
+      sendPolicy: "allow",
+      skillsSnapshot: { tools: ["bash"] },
+      thinkingLevel: "high",
+      fastMode: true,
+      verboseLevel: "detailed",
+      traceLevel: "info",
+      reasoningLevel: "on",
+      systemSent: true,
+      spawnedWorkspaceDir: "/work/fresh",
+      spawnDepth: 2,
+      cliSessionIds: { "claude-cli": "fresh-cli-id" },
+      cliSessionBindings: { "claude-cli": { sessionId: "fresh-binding" } },
+      claudeCliSessionId: "fresh-cli-id",
+    };
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:test-broader": {
+          sessionId: "subagent-session-id",
+          updatedAt: Date.now(),
+          ...freshFields,
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:test-broader"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:test-broader",
+        idempotencyKey: "test-5369-broader",
+      },
+      { reqId: "broader-1" },
+    );
+    for (const [field, expected] of Object.entries(freshFields)) {
+      expect(capturedEntry?.[field]).toEqual(expected);
+    }
+  });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const completedRun = {
