@@ -54,4 +54,22 @@ describe("json-file helpers", () => {
       expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
     });
   });
+
+  // An external mirror process (e.g. the MCTL s3-sync sidecar) must never
+  // observe a partial / zero-byte copy of the target file while a save is in
+  // flight. Verify the save writes through a temp file and leaves no
+  // residual `.tmp.*` artefacts behind in the parent directory.
+  it("uses atomic temp+rename (no residual .tmp siblings after save)", async () => {
+    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+      const pathname = path.join(root, "state.json");
+      saveJsonFile(pathname, { v: 1 });
+      saveJsonFile(pathname, { v: 2 });
+
+      const siblings = fs.readdirSync(root);
+      expect(siblings).toContain("state.json");
+      const leftovers = siblings.filter((name) => name !== "state.json");
+      expect(leftovers).toEqual([]);
+      expect(loadJsonFile(pathname)).toEqual({ v: 2 });
+    });
+  });
 });
