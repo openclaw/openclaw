@@ -24,6 +24,11 @@
       - any-glob-to-any-file:
           - "extensions/googlechat/**"
           - "docs/channels/googlechat.md"
+"plugin: google-meet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-meet/**"
+          - "docs/plugins/google-meet.md"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
