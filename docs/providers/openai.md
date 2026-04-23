@@ -214,10 +214,13 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 editing. `gpt-image-1` remains usable as an explicit model override, but new
 OpenAI image workflows should use `openai/gpt-image-2`.
 
-For Codex OAuth installs, keep the same `openai/gpt-image-2` ref. If no
-`OPENAI_API_KEY` is available, OpenClaw resolves the stored OAuth access token
-for the `openai-codex` auth profile and sends image requests through the Codex
-Responses backend, so this path works without the public OpenAI Images API key.
+For Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
+`openai-codex` OAuth profile is configured, OpenClaw resolves that stored OAuth
+access token and sends image requests through the Codex Responses backend. It
+does not first try `OPENAI_API_KEY` or silently fall back to an API key for that
+request. Configure `models.providers.openai` explicitly with an API key,
+custom base URL, or Azure endpoint when you want the direct OpenAI Images API
+route instead.
 
 Generate:
 

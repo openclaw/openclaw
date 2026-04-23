@@ -125,6 +125,11 @@ Important distinction:
 
 - `tools.exec.host=auto` chooses where exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses how host exec is approved: `security=full` plus `ask=off`.
+- CLI-backed providers that expose their own noninteractive permission mode can follow this policy.
+  Claude CLI adds `--permission-mode bypassPermissions` when OpenClaw's requested exec policy is
+  YOLO. Override that backend behavior with explicit Claude args under
+  `agents.defaults.cliBackends.claude-cli.args` / `resumeArgs`, for example
+  `--permission-mode default`, `acceptEdits`, or `bypassPermissions`.
 - In YOLO mode, OpenClaw does not add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
 - `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`, and `host=gateway` is only allowed from `auto` when no sandbox runtime is active. If you want a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 

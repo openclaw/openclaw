@@ -30,9 +30,11 @@ The tool only appears when at least one image generation provider is available. 
 }
 ```
 
-Codex OAuth uses the same `openai/gpt-image-2` model ref. If no `OPENAI_API_KEY`
-is available, OpenClaw resolves the existing `openai-codex` OAuth profile and
-sends the image request through the Codex Responses backend.
+Codex OAuth uses the same `openai/gpt-image-2` model ref. When an
+`openai-codex` OAuth profile is configured, OpenClaw routes image requests
+through that same OAuth profile instead of first trying `OPENAI_API_KEY`.
+Explicit custom `models.providers.openai` image config, such as an API key or
+custom/Azure base URL, opts back into the direct OpenAI Images API route.
 
 3. Ask the agent: _"Generate an image of a friendly robot mascot."_
 
@@ -128,10 +130,13 @@ OpenAI, Google, and xAI support up to 5 reference images via the `images` parame
 
 ### OpenAI `gpt-image-2`
 
-OpenAI image generation defaults to `openai/gpt-image-2`. It uses
-`OPENAI_API_KEY` when available. If no API key is configured, OpenClaw reuses the
-same `openai-codex` OAuth profile used by Codex subscription chat models and
-sends the image request through the Codex Responses backend. The older
+OpenAI image generation defaults to `openai/gpt-image-2`. If an
+`openai-codex` OAuth profile is configured, OpenClaw reuses the same OAuth
+profile used by Codex subscription chat models and sends the image request
+through the Codex Responses backend; it does not silently fall back to
+`OPENAI_API_KEY` for that request. To force direct OpenAI Images API routing,
+configure `models.providers.openai` explicitly with an API key, custom base URL,
+or Azure endpoint. The older
 `openai/gpt-image-1` model can still be selected explicitly, but new OpenAI
 image-generation and image-editing requests should use `gpt-image-2`.
 

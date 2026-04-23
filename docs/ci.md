@@ -28,12 +28,14 @@ for slow tests. It has no pure schedule: a successful non-bot push CI run on
 `main` can trigger it, but it skips if another workflow-run invocation already
 ran or is running that UTC day. Manual dispatch bypasses that daily activity
 gate. The lane builds a full-suite grouped Vitest performance report, lets Codex
-make only small coverage-preserving test performance fixes, then reruns the
-full-suite report and rejects changes that reduce the passing baseline test
-count. If the baseline has failing tests, Codex may fix only obvious failures
-and the after-agent full-suite report must pass before anything is committed.
-It uses GitHub-hosted Ubuntu so the Codex action can keep the same drop-sudo
-safety posture as the docs agent.
+make only small coverage-preserving test performance fixes instead of broad
+refactors, then reruns the full-suite report and rejects changes that reduce the
+passing baseline test count. If the baseline has failing tests, Codex may fix
+only obvious failures and the after-agent full-suite report must pass before
+anything is committed. When `main` advances before the bot push lands, the lane
+rebases the validated patch, reruns `pnpm check:changed`, and retries the push;
+conflicting stale patches are skipped. It uses GitHub-hosted Ubuntu so the Codex
+action can keep the same drop-sudo safety posture as the docs agent.
 
 ```bash
 gh workflow run duplicate-after-merge.yml \

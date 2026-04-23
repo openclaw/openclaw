@@ -49,10 +49,23 @@ vi.mock("../../agents/bootstrap-budget.js", () => ({
 
 vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   BILLING_ERROR_USER_MESSAGE: "billing",
+  formatRateLimitOrOverloadedErrorCopy: (message: string) => {
+    if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
+      return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
+    }
+    if (/rate.limit|too many requests|429/i.test(message)) {
+      return "⚠️ API rate limit reached. Please try again later.";
+    }
+    if (/overloaded/i.test(message)) {
+      return "The AI service is temporarily overloaded. Please try again in a moment.";
+    }
+    return undefined;
+  },
   isCompactionFailureError: () => false,
   isContextOverflowError: () => false,
   isBillingErrorMessage: () => false,
   isLikelyContextOverflowError: () => false,
+  isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
   isRateLimitErrorMessage: () => false,
   isTransientHttpError: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
@@ -408,6 +421,95 @@ describe("runAgentTurnWithFallback", () => {
       mediaUrls: ["/tmp/generated.png"],
     });
     expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+  });
+
+  it("surfaces model capacity errors from no-text mid-turn failures", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "thinking", isReasoning: true }],
+      meta: {
+        error: {
+          kind: "server_overloaded",
+          message: "Selected model is at capacity. Please try a different model.",
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([
+        {
+          text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+          isError: true,
+        },
+      ]);
+    }
+  });
+
+  it("surfaces model capacity errors from pre-reply CLI failures", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error("Selected model is at capacity. Please try a different model."),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai-codex";
+    followupRun.run.model = "gpt-5.5";
+
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result).toEqual({
+      kind: "final",
+      payload: {
+        text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+      },
+    });
   });
 
   it("strips a glued leading NO_REPLY token from streamed tool results", async () => {

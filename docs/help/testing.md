@@ -379,6 +379,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
           import-breakdown output.
         - `pnpm test:perf:imports:changed` scopes the same profiling view to
           files changed since `origin/main`.
+        - When one hot test still spends most of its time in startup imports,
+          keep heavy dependencies behind a narrow local `*.runtime.ts` seam and
+          mock that seam directly instead of deep-importing runtime helpers just
+          to pass them through `vi.mock(...)`.
         - `pnpm test:perf:changed:bench -- --ref <git-ref>` compares routed
           `test:changed` against the native root-project path for that committed
           diff and prints wall time plus macOS max RSS.

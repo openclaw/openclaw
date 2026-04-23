@@ -36,6 +36,7 @@ const lanes = [
   ["plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"],
   ["config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"],
   ["bundled-channel-deps", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps"],
+  ["openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth"],
   ["qr", "pnpm test:docker:qr"],
 ];
 

@@ -1,10 +1,6 @@
 import type { Bot } from "grammy";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveChunkMode as resolveChunkModeRuntime } from "../../../src/auto-reply/chunk.js";
-import { resolveMarkdownTableMode as resolveMarkdownTableModeRuntime } from "../../../src/config/markdown-tables.js";
-import { resolveSessionStoreEntry as resolveSessionStoreEntryRuntime } from "../../../src/config/sessions/store.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsRuntime } from "../../../src/media/local-roots.js";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -67,6 +63,16 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
 const resolveDefaultModelForAgent = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
+const getAgentScopedMediaLocalRoots = vi.hoisted(() =>
+  vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
+);
+const resolveChunkMode = vi.hoisted(() => vi.fn(() => undefined));
+const resolveMarkdownTableMode = vi.hoisted(() => vi.fn(() => "preserve"));
+const resolveSessionStoreEntry = vi.hoisted(() =>
+  vi.fn(({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
+    existing: store[sessionKey],
+  })),
+);
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -95,12 +101,12 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
-  getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsRuntime,
+  getAgentScopedMediaLocalRoots,
   loadSessionStore,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
-  resolveChunkMode: resolveChunkModeRuntime,
-  resolveMarkdownTableMode: resolveMarkdownTableModeRuntime,
-  resolveSessionStoreEntry: resolveSessionStoreEntryRuntime,
+  resolveChunkMode,
+  resolveMarkdownTableMode,
+  resolveSessionStoreEntry,
   resolveStorePath,
 }));
 
@@ -186,6 +192,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     generateTopicLabel.mockReset();
+    getAgentScopedMediaLocalRoots.mockClear();
+    resolveChunkMode.mockClear();
+    resolveMarkdownTableMode.mockClear();
+    resolveSessionStoreEntry.mockClear();
     describeStickerImage.mockReset();
     loadModelCatalog.mockReset();
     findModelInCatalog.mockReset();

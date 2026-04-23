@@ -115,6 +115,9 @@ export class CodexAppServerEventProjector {
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;
+      case "rawResponseItem/completed":
+        this.handleRawResponseItemCompleted(params);
+        break;
       case "error":
         this.promptError = readString(params, "message") ?? "codex app-server error";
         this.promptErrorSource = "prompt";
@@ -424,6 +427,20 @@ export class CodexAppServerEventProjector {
     await this.maybeEndReasoning();
   }
 
+  private handleRawResponseItemCompleted(params: JsonObject): void {
+    const item = isJsonObject(params.item) ? params.item : undefined;
+    if (!item || readString(item, "role") !== "assistant") {
+      return;
+    }
+    const text = extractRawAssistantText(item);
+    if (!text) {
+      return;
+    }
+    const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    this.rememberAssistantItem(itemId);
+    this.assistantTextByItem.set(itemId, text);
+  }
+
   private async maybeEndReasoning(): Promise<void> {
     if (!this.reasoningStarted || this.reasoningEnded) {
       return;
@@ -659,6 +676,24 @@ function splitPlanText(text: string): string[] {
 
 function collectTextValues(map: Map<string, string>): string[] {
   return [...map.values()].filter((text) => text.trim().length > 0);
+}
+
+function extractRawAssistantText(item: JsonObject): string | undefined {
+  const content = Array.isArray(item.content) ? item.content : [];
+  const text = content
+    .flatMap((entry) => {
+      if (!isJsonObject(entry)) {
+        return [];
+      }
+      const type = readString(entry, "type");
+      if (type !== "output_text" && type !== "text") {
+        return [];
+      }
+      const value = readString(entry, "text");
+      return value ? [value] : [];
+    })
+    .join("");
+  return text.trim() || undefined;
 }
 
 function itemKind(
