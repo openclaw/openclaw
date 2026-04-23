@@ -501,6 +501,8 @@ describe("secret ref resolver", () => {
   it("warns instead of crashing on Windows when ACL source is unknown", async () => {
     // Mock process.platform to simulate Windows
     vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
+    const { getLogger } = await import("../logging/logger.js");
+    const warnSpy = vi.spyOn(getLogger(), "warn");
 
     try {
       const dir = await createCaseDir("win-acl");
@@ -521,6 +523,7 @@ describe("secret ref resolver", () => {
         },
       );
       expect(value).toBe("abc123");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ACL verification unavailable"));
     } finally {
       vi.restoreAllMocks();
     }

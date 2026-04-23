@@ -207,6 +207,7 @@ async function assertSecurePath(params: {
   allowInsecurePath?: boolean;
   allowReadableByOthers?: boolean;
   allowSymlinkPath?: boolean;
+  isExecPath?: boolean;
 }): Promise<string> {
   if (!isAbsolutePathname(params.targetPath)) {
     throw new Error(`${params.label} must be an absolute path.`);
@@ -254,6 +255,11 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
+    if (params.isExecPath) {
+      throw new Error(
+        `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
+      );
+    }
     getLogger().warn(
       `${params.label} ACL verification unavailable on Windows for ${effectivePath}, skipping permission check.`,
     );
@@ -672,6 +678,7 @@ async function resolveExecRefs(params: {
       allowInsecurePath: params.providerConfig.allowInsecurePath,
       allowReadableByOthers: true,
       allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
+      isExecPath: true,
     });
   } catch (err) {
     throwUnknownProviderResolutionError({
