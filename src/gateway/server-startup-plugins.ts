@@ -32,7 +32,11 @@ async function maybeRepairBundledPluginRuntimeDepsForGatewayStartup(params: {
   env?: NodeJS.ProcessEnv;
   log: GatewayPluginBootstrapLog;
   packageRoot?: string | null;
-  installDeps?: (params: { installRoot: string; missingSpecs: string[]; installSpecs: string[] }) => void;
+  installDeps?: (params: {
+    installRoot: string;
+    missingSpecs: string[];
+    installSpecs: string[];
+  }) => void;
 }) {
   const env = params.env ?? process.env;
   const packageRoot =
@@ -46,12 +50,22 @@ async function maybeRepairBundledPluginRuntimeDepsForGatewayStartup(params: {
     return;
   }
 
-  const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
-    packageRoot,
-    config: params.cfg,
-    includeConfiguredChannels: true,
-    env,
-  });
+  let deps: { name: string; version: string }[] = [];
+  let missing: { name: string; version: string }[] = [];
+  let conflicts: { name: string }[] = [];
+  try {
+    ({ deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: params.cfg,
+      includeConfiguredChannels: true,
+      env,
+    }));
+  } catch (error) {
+    params.log.warn(
+      `gateway: unable to scan bundled plugin runtime deps during startup preflight; continuing without repair (${String(error)})`,
+    );
+    return;
+  }
   if (conflicts.length > 0) {
     params.log.warn(
       `gateway: bundled plugin runtime deps have version conflicts; skipping preflight repair for ${conflicts.map((conflict) => conflict.name).join(", ")}`,
@@ -75,7 +89,13 @@ async function maybeRepairBundledPluginRuntimeDepsForGatewayStartup(params: {
         missingSpecs: installParams.missingSpecs,
         env,
       }));
-  install({ installRoot, missingSpecs, installSpecs });
+  try {
+    install({ installRoot, missingSpecs, installSpecs });
+  } catch (error) {
+    params.log.warn(
+      `gateway: unable to install bundled plugin runtime deps during startup preflight; continuing without repair (${String(error)})`,
+    );
+  }
 }
 
 export async function prepareGatewayPluginBootstrap(params: {

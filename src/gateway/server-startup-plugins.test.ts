@@ -221,4 +221,87 @@ describe("gateway startup plugin bootstrap", () => {
       env: process.env,
     });
   });
+
+  it("warns and continues when bundled runtime dep scan fails during startup preflight", async () => {
+    scanBundledPluginRuntimeDeps.mockImplementation(() => {
+      throw new Error("unsupported spec");
+    });
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {
+        channels: {
+          feishu: {
+            appId: "cli-app",
+          },
+        },
+      },
+      startupRuntimeConfig: {
+        channels: {
+          feishu: {
+            appId: "cli-app",
+          },
+        },
+      },
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "gateway: unable to scan bundled plugin runtime deps during startup preflight; continuing without repair",
+      ),
+    );
+    expect(callOrder).toContain("maintenance");
+    expect(callOrder).toContain("migration");
+    expect(callOrder).toContain("plugins");
+    expect(installBundledRuntimeDeps).not.toHaveBeenCalled();
+  });
+
+  it("warns and continues when bundled runtime dep install fails during startup preflight", async () => {
+    installBundledRuntimeDeps.mockImplementation(() => {
+      throw new Error("unwritable stage dir");
+    });
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {
+        channels: {
+          feishu: {
+            appId: "cli-app",
+          },
+        },
+      },
+      startupRuntimeConfig: {
+        channels: {
+          feishu: {
+            appId: "cli-app",
+          },
+        },
+      },
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "gateway: unable to install bundled plugin runtime deps during startup preflight; continuing without repair",
+      ),
+    );
+    expect(callOrder).toContain("maintenance");
+    expect(callOrder).toContain("migration");
+    expect(callOrder).toContain("plugins");
+  });
 });
