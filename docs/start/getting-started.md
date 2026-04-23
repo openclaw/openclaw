@@ -14,15 +14,74 @@ and a working chat session.
 
 ## What you need
 
-- **Node.js** — Node 24 recommended (Node 22.14+ also supported)
+The installer detects and installs missing dependencies automatically. Run the
+checks in [Step 0](#step-0-check-prerequisites) if you'd rather verify or
+install them yourself.
+
+- **Node.js** — Node 24 recommended (Node 22.14+ also supported) — `node --version`
+- **npm** — bundled with Node — `npm --version`
+- **git** — `git --version`
+- **curl** (macOS / Linux) — `curl --version`
+- **bash** 4+ (macOS / Linux) — `bash --version`
+- **openssl** — `openssl version`
+- **pnpm** — only needed if you build from source — `pnpm --version`
 - **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
 
 <Tip>
-Check your Node version with `node --version`.
 **Windows users:** both native Windows and WSL2 are supported. WSL2 is more
 stable and recommended for the full experience. See [Windows](/platforms/windows).
 Need to install Node? See [Node setup](/install/node).
 </Tip>
+
+## Step 0: Check prerequisites
+
+The install script auto-installs anything missing, but you can verify upfront.
+Run the matching one-liner — any line that fails or prints an old version
+points at a dependency to install.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    ```bash
+    for c in "node --version" "npm --version" "git --version" "curl --version" "bash --version" "openssl version"; do
+      printf "%-18s " "$c:"; eval "$c" 2>&1 | head -n 1 || echo "MISSING"
+    done
+    ```
+
+    Install anything missing:
+
+    - **macOS** (Homebrew): `brew install node git curl openssl`
+    - **Ubuntu / Debian**: `sudo apt-get install -y nodejs npm git curl openssl ca-certificates`
+    - **Fedora / RHEL**: `sudo dnf install -y nodejs npm git curl openssl`
+    - **Arch**: `sudo pacman -S --needed nodejs npm git curl openssl`
+
+    For Node specifically, see [Node setup](/install/node) for version managers
+    (fnm, nvm, mise) and PATH troubleshooting.
+
+  </Tab>
+  <Tab title="Windows (PowerShell)">
+    ```powershell
+    foreach ($c in 'node --version','npm --version','git --version','openssl version') {
+      Write-Host -NoNewline "${c}: "
+      try { & cmd /c $c } catch { Write-Host 'MISSING' }
+    }
+    ```
+
+    Install anything missing with **winget**:
+
+    ```powershell
+    winget install OpenJS.NodeJS.LTS Git.Git ShiningLight.OpenSSL.Light
+    ```
+
+    `curl` and `bash` ship with Git for Windows. For the full experience,
+    WSL2 is recommended — see [Windows](/platforms/windows).
+
+  </Tab>
+</Tabs>
+
+<Note>
+`pnpm` is only required if you build from source. Install with
+`npm install -g pnpm` or `corepack enable pnpm`.
+</Note>
 
 ## Quick setup
 
