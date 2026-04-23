@@ -1,16 +1,18 @@
 /**
- * QQ Bot 流式消息控制器（简化版）
+ * QQ Bot Streaming Message Controller
  *
- * 核心原则：
- * 1. 绝对不修改原始内容（不 trim、不 strip），避免 PREFIX MISMATCH
- * 2. 媒体标签同步等待发送完成
- * 3. 碰到富媒体标签（包括未闭合前缀）时，先终结当前流式会话再处理
- * 4. 纯空白分片处理：
- *    - 首分片空白 → 暂停发送（不开启流式），但内容保留
- *    - 被媒体标签打断或结束时，如果还都是空白 → 不发送
- *    - 结束时已有活跃流式会话（之前有非空白分片）→ 可以发送当前空白分片
- * 5. 回复边界检测：通过前缀匹配判断（而非仅长度缩短），
- *    如果新文本不是上次处理文本的前缀延续，视为新消息
+ * Core principles:
+ * 1. Never mutate original content (no trim, no strip) to avoid PREFIX MISMATCH.
+ * 2. Media tags are sent synchronously — wait for completion before proceeding.
+ * 3. When a rich-media tag (including an unclosed prefix) is encountered,
+ *    terminate the active streaming session first, then handle the media.
+ * 4. Whitespace-only chunk handling:
+ *    - First chunk is whitespace → defer sending (do not open a stream), but retain content.
+ *    - Interrupted by a media tag or ended while still whitespace-only → skip sending.
+ *    - Ended with an active streaming session (prior non-whitespace chunks exist) → send the whitespace chunk.
+ * 5. Reply boundary detection uses prefix matching (not just length reduction):
+ *    if the new text is not a prefix continuation of the last processed text,
+ *    it is treated as a new message.
  */
 
 import { getNextMsgSeq } from "../api/routes.js";
