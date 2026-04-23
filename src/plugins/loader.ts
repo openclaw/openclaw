@@ -2533,13 +2533,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
       }
 
+      let validatedConfig: { ok: boolean; value?: Record<string, unknown>; errors?: string[] } = {
+        ok: true,
+        value: entry?.config as Record<string, unknown> | undefined,
+      };
       if (
         shouldValidatePluginConfigForLoad({
           value: entry?.config,
           shouldActivate,
         })
       ) {
-        const validatedConfig = validatePluginConfig({
+        validatedConfig = validatePluginConfig({
           schema: manifestRecord.configSchema,
           cacheKey: manifestRecord.schemaCacheKey,
           value: entry?.config,
@@ -3190,19 +3194,25 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
+    let validatedConfig: { ok: boolean; value?: Record<string, unknown>; errors?: string[] } = {
+      ok: true,
+      value: entry?.config as Record<string, unknown> | undefined,
+    };
     if (
       shouldValidatePluginConfigForLoad({
         value: entry?.config,
         shouldActivate: false,
       })
     ) {
-      const validatedConfig = validatePluginConfig({
+      validatedConfig = validatePluginConfig({
         schema: manifestRecord.configSchema,
         cacheKey: manifestRecord.schemaCacheKey,
         value: entry?.config,
       });
       if (!validatedConfig.ok) {
-        logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
+        logger.error(
+          `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
+        );
         pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
         continue;
       }
