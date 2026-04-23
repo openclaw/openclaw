@@ -877,10 +877,6 @@ export async function removeFileWithinRoot(params: {
       basename: pinned.basename,
     });
   } catch (error) {
-    if (isPinnedUnlinkHelperStartupFailure(error)) {
-      await removeFileWithinRootLegacy(params);
-      return;
-    }
     throw normalizePinnedUnlinkError(error);
   }
 
@@ -1122,6 +1118,9 @@ function normalizePinnedWriteError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
   }
+  if (error instanceof Error && /^Pinned write helper failed to start:/i.test(error.message)) {
+    return new SafeOpenError("invalid-path", error.message, { cause: error });
+  }
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,
   });
@@ -1178,10 +1177,6 @@ function normalizePinnedUnlinkError(error: unknown): Error {
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,
   });
-}
-
-function isPinnedUnlinkHelperStartupFailure(error: unknown): boolean {
-  return error instanceof Error && /^Pinned unlink helper failed to start:/i.test(error.message);
 }
 
 async function writeFileWithinRootLegacy(params: {

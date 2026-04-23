@@ -1,18 +1,9 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import fsSync, { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
+import fsSync from "node:fs";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FileIdentityStat } from "./file-identity.js";
-
-const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-const FALLBACK_WRITE_FLAGS =
-  fsConstants.O_WRONLY |
-  fsConstants.O_CREAT |
-  fsConstants.O_EXCL |
-  (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
 export type PinnedWriteInput =
   | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
@@ -227,6 +218,12 @@ function createPinnedUnlinkSpawnError(error: Error): Error {
   });
 }
 
+function createPinnedWriteSpawnError(error: Error): Error {
+  return new Error(`Pinned write helper failed to start: ${error.message}`, {
+    cause: error,
+  });
+}
+
 export async function runPinnedWriteHelper(params: {
   rootPath: string;
   relativeParentPath: string;
@@ -263,17 +260,14 @@ export async function runPinnedWriteHelper(params: {
   });
 
   const { exitPromise, errorPromise, getSpawnError } = trackSpawnLifecycle(child);
-  let inputStarted = false;
   try {
     if (!child.stdin) {
-      const identity = await runPinnedWriteFallback(params);
       await exitPromise.catch(() => {});
-      return identity;
+      throw new Error("Pinned write helper missing stdin pipe");
     }
 
     if (params.input.kind === "buffer") {
       const input = params.input;
-      inputStarted = true;
       await Promise.race([
         new Promise<void>((resolve, reject) => {
           child.stdin.once("error", reject);
@@ -286,7 +280,6 @@ export async function runPinnedWriteHelper(params: {
         errorPromise,
       ]);
     } else {
-      inputStarted = true;
       await Promise.race([pipeline(params.input.stream, child.stdin), errorPromise]);
     }
 
@@ -306,8 +299,9 @@ export async function runPinnedWriteHelper(params: {
     }
     await exitPromise.catch(() => {});
 
-    if (getSpawnError() && (params.input.kind === "buffer" || !inputStarted)) {
-      return await runPinnedWriteFallback(params);
+    const spawnError = getSpawnError();
+    if (spawnError) {
+      throw createPinnedWriteSpawnError(spawnError);
     }
 
     throw error;
@@ -355,41 +349,4 @@ export async function runPinnedUnlinkHelper(params: {
     }
     throw error;
   }
-}
-
-async function runPinnedWriteFallback(params: {
-  rootPath: string;
-  relativeParentPath: string;
-  basename: string;
-  mkdir: boolean;
-  mode: number;
-  input: PinnedWriteInput;
-}): Promise<FileIdentityStat> {
-  const parentPath = params.relativeParentPath
-    ? path.join(params.rootPath, ...params.relativeParentPath.split("/"))
-    : params.rootPath;
-  if (params.mkdir) {
-    await fs.mkdir(parentPath, { recursive: true });
-  }
-  const targetPath = path.join(parentPath, params.basename);
-  const tempPath = path.join(parentPath, `.${params.basename}.fallback.tmp`);
-  // Remove any pre-existing temp file to allow O_EXCL to succeed on retry.
-  await fs.unlink(tempPath).catch(() => {});
-  // Open with O_CREAT | O_EXCL | O_NOFOLLOW to reject symlinks at the temp path,
-  // preventing a pre-placed symlink from redirecting writes outside the root.
-  const handle = await fs.open(tempPath, FALLBACK_WRITE_FLAGS, params.mode);
-  try {
-    if (params.input.kind === "buffer") {
-      await handle.writeFile(params.input.data, {
-        encoding: params.input.encoding ?? "utf8",
-      });
-    } else {
-      await pipeline(params.input.stream, handle.createWriteStream());
-    }
-  } finally {
-    await handle.close().catch(() => {});
-  }
-  await fs.rename(tempPath, targetPath);
-  const stat = await fs.stat(targetPath);
-  return { dev: stat.dev, ino: stat.ino };
 }

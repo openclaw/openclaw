@@ -5,8 +5,8 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const tempDirs = createTrackedTempDirs();
 
-describe("fs-safe unlink helper errors", () => {
-  let removeFileWithinRoot: typeof import("./fs-safe.js").removeFileWithinRoot;
+describe("fs-safe write helper errors", () => {
+  let writeFileWithinRoot: typeof import("./fs-safe.js").writeFileWithinRoot;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -14,12 +14,12 @@ describe("fs-safe unlink helper errors", () => {
       const actual = await importOriginal<typeof import("./fs-pinned-write-helper.js")>();
       return {
         ...actual,
-        runPinnedUnlinkHelper: async () => {
-          throw new Error("Pinned unlink helper failed to start: spawn python3 ENOENT");
+        runPinnedWriteHelper: async () => {
+          throw new Error("Pinned write helper failed to start: spawn python3 ENOENT");
         },
       };
     });
-    ({ removeFileWithinRoot } = await import("./fs-safe.js"));
+    ({ writeFileWithinRoot } = await import("./fs-safe.js"));
   });
 
   afterEach(async () => {
@@ -29,20 +29,20 @@ describe("fs-safe unlink helper errors", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "fails closed when the unlink helper cannot start",
+    "fails closed when the write helper cannot start",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
       const targetPath = path.join(root, "note.txt");
-      await fs.writeFile(targetPath, "hello", "utf8");
 
       await expect(
-        removeFileWithinRoot({
+        writeFileWithinRoot({
           rootDir: root,
           relativePath: "note.txt",
+          data: "hello",
         }),
       ).rejects.toThrow(/failed to start: spawn python3 ENOENT/i);
 
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("hello");
+      await expect(fs.readFile(targetPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 });

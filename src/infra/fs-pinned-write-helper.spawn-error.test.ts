@@ -53,25 +53,27 @@ describe("fs pinned helper spawn failures", () => {
     ({ runPinnedWriteHelper, runPinnedUnlinkHelper } = await import("./fs-pinned-write-helper.js"));
   });
 
-  it("falls back to JS writes when the pinned write helper cannot be spawned", async () => {
+  it("fails closed when the pinned write helper cannot be spawned", async () => {
     spawnMock.mockImplementation(() => createSpawnErrorChild());
     const root = await tempDirs.make("openclaw-fs-pinned-root-");
 
-    const identity = await runPinnedWriteHelper({
-      rootPath: root,
-      relativeParentPath: "nested",
-      basename: "note.txt",
-      mkdir: true,
-      mode: 0o600,
-      input: {
-        kind: "buffer",
-        data: "hello",
-      },
-    });
+    await expect(
+      runPinnedWriteHelper({
+        rootPath: root,
+        relativeParentPath: "nested",
+        basename: "note.txt",
+        mkdir: true,
+        mode: 0o600,
+        input: {
+          kind: "buffer",
+          data: "hello",
+        },
+      }),
+    ).rejects.toThrow(/failed to start: spawn boom/i);
 
-    await expect(fs.readFile(path.join(root, "nested", "note.txt"), "utf8")).resolves.toBe("hello");
-    expect(identity.dev).toBeGreaterThanOrEqual(0);
-    expect(identity.ino).toBeGreaterThan(0);
+    await expect(fs.readFile(path.join(root, "nested", "note.txt"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("returns a normal error when the pinned unlink helper cannot be spawned", async () => {
