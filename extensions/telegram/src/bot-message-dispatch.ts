@@ -1202,7 +1202,7 @@ export const dispatchTelegramMessage = async ({
     const shouldKeepTurnSilent = !isGroup || silentReplyFallback.length === 0;
     if (shouldKeepTurnSilent) {
       handledSilentNoVisibleResponse = true;
-    } else if (silentReplyFallback.length > 0) {
+    } else {
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         replies: silentReplyFallback,
         ...deliveryBaseOptions,
