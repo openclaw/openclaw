@@ -19,7 +19,7 @@ describe("Codex app-server config", () => {
           approvalPolicy: "on-request",
           sandbox: "danger-full-access",
           approvalsReviewer: "guardian_subagent",
-          serviceTier: "priority",
+          serviceTier: "flex",
         },
       },
       env: {
@@ -33,7 +33,7 @@ describe("Codex app-server config", () => {
         approvalPolicy: "on-request",
         sandbox: "danger-full-access",
         approvalsReviewer: "guardian_subagent",
-        serviceTier: "priority",
+        serviceTier: "flex",
         start: expect.objectContaining({
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
@@ -41,6 +41,29 @@ describe("Codex app-server config", () => {
         }),
       }),
     );
+  });
+
+  it("drops invalid legacy service tiers without discarding the rest of the config", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+          approvalPolicy: "on-request",
+          sandbox: "read-only",
+          serviceTier: "priority",
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "read-only",
+        approvalsReviewer: "guardian_subagent",
+      }),
+    );
+    expect(runtime).not.toHaveProperty("serviceTier");
   });
 
   it("rejects malformed plugin config instead of treating freeform strings as control values", () => {

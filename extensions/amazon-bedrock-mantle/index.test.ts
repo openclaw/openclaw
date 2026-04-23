@@ -24,9 +24,9 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     expect(
       provider.classifyFailoverReason?.({ errorMessage: "some other error" } as never),
     ).toBeUndefined();
-    expect(
-      provider.classifyFailoverReason?.({ errorMessage: "overloaded_error" } as never),
-    ).toBe("overloaded");
+    expect(provider.classifyFailoverReason?.({ errorMessage: "overloaded_error" } as never)).toBe(
+      "overloaded",
+    );
   });
 
   it("provides a custom stream only for Mantle Anthropic models", async () => {

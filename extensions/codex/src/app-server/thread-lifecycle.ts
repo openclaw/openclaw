@@ -163,7 +163,23 @@ export function buildTurnStartParams(
 }
 
 function fingerprintDynamicTools(dynamicTools: JsonValue[]): string {
-  return JSON.stringify(dynamicTools.map(stabilizeJsonValue));
+  return JSON.stringify(dynamicTools.map(fingerprintDynamicToolSpec));
+}
+
+function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
+  if (!isJsonObject(tool)) {
+    return stabilizeJsonValue(tool);
+  }
+  const stable: JsonObject = {};
+  for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (key === "description") {
+      continue;
+    }
+    stable[key] = stabilizeJsonValue(child);
+  }
+  return stable;
 }
 
 function stabilizeJsonValue(value: JsonValue): JsonValue {

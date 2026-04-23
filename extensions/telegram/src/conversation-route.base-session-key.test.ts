@@ -6,7 +6,7 @@ import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.
 describe("resolveTelegramConversationBaseSessionKey", () => {
   const cfg: OpenClawConfig = {};
 
-  it("uses a per-account key for default-account DMs", () => {
+  it("keeps default-account DMs on the route session key", () => {
     expect(
       resolveTelegramConversationBaseSessionKey({
         cfg,
@@ -20,7 +20,34 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
         isGroup: false,
         senderId: 12345,
       }),
-    ).toBe("agent:main:telegram:default:direct:12345");
+    ).toBe("agent:main:main");
+  });
+
+  it("keeps configured default-account DMs on the route session key", () => {
+    expect(
+      resolveTelegramConversationBaseSessionKey({
+        cfg: {
+          channels: {
+            telegram: {
+              defaultAccount: "work",
+              accounts: {
+                work: {},
+                personal: {},
+              },
+            },
+          },
+        },
+        route: {
+          agentId: "main",
+          accountId: "work",
+          matchedBy: "default",
+          sessionKey: "agent:main:main",
+        },
+        chatId: 12345,
+        isGroup: false,
+        senderId: 12345,
+      }),
+    ).toBe("agent:main:main");
   });
 
   it("uses the per-account fallback key for named-account DMs without an explicit binding", () => {

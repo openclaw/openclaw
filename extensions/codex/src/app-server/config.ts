@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { CodexServiceTier } from "./protocol.js";
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
 export type CodexAppServerPolicyMode = "yolo" | "guardian";
@@ -24,7 +25,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicy: CodexAppServerApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
-  serviceTier?: string;
+  serviceTier?: CodexServiceTier;
 };
 
 export type CodexPluginConfig = {
@@ -44,7 +45,7 @@ export type CodexPluginConfig = {
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
-    serviceTier?: string;
+    serviceTier?: CodexServiceTier | null;
   };
 };
 
@@ -73,6 +74,10 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "guardian_subagent"]);
+const codexAppServerServiceTierSchema = z.preprocess(
+  (value) => (value === null ? null : resolveServiceTier(value)),
+  z.enum(["fast", "flex"]).nullable().optional(),
+);
 
 const codexPluginConfigSchema = z
   .object({
@@ -96,7 +101,7 @@ const codexPluginConfigSchema = z
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
-        serviceTier: z.string().optional(),
+        serviceTier: codexAppServerServiceTierSchema,
       })
       .strict()
       .optional(),
@@ -127,6 +132,7 @@ export function resolveCodexAppServerRuntimeOptions(
     resolvePolicyMode(config.mode) ??
     resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
     "yolo";
+  const serviceTier = resolveServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -154,9 +160,7 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
       (policyMode === "guardian" ? "guardian_subagent" : "user"),
-    ...(readNonEmptyString(config.serviceTier)
-      ? { serviceTier: readNonEmptyString(config.serviceTier) }
-      : {}),
+    ...(serviceTier ? { serviceTier } : {}),
   };
 }
 
@@ -200,6 +204,10 @@ function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
 
 function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReviewer | undefined {
   return value === "guardian_subagent" || value === "user" ? value : undefined;
+}
+
+function resolveServiceTier(value: unknown): CodexServiceTier | undefined {
+  return value === "fast" || value === "flex" ? value : undefined;
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {

@@ -35,8 +35,8 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   // expensive per file than Matrix/Discord/MSTeams.
   "test/vitest/vitest.extension-bluebubbles.config.ts": 0.8,
   "test/vitest/vitest.extension-browser.config.ts": 0.55,
-  "test/vitest/vitest.extension-discord.config.ts": 0.3,
-  "test/vitest/vitest.extension-feishu.config.ts": 0.6,
+  "test/vitest/vitest.extension-discord.config.ts": 0.55,
+  "test/vitest/vitest.extension-feishu.config.ts": 1.1,
   "test/vitest/vitest.extension-imessage.config.ts": 0.9,
   "test/vitest/vitest.extension-matrix.config.ts": 0.25,
   "test/vitest/vitest.extension-mattermost.config.ts": 1.05,

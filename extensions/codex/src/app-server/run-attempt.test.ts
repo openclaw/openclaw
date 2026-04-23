@@ -14,6 +14,7 @@ import {
 } from "../../../../src/plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
@@ -104,6 +105,9 @@ function createAppServerHarness(
         interval: 1,
       });
     },
+    async notify(notification: CodexServerNotification) {
+      await notify(notification);
+    },
     async completeTurn(params: { threadId: string; turnId: string }) {
       await notify({
         method: "turn/completed",
@@ -113,9 +117,6 @@ function createAppServerHarness(
           turn: { id: params.turnId, status: "completed" },
         },
       });
-    },
-    async notify(notification: CodexServerNotification) {
-      await notify(notification);
     },
   };
 }
@@ -177,6 +178,44 @@ async function writeExistingBinding(
     modelProvider: "openai",
     ...overrides,
   });
+}
+
+function createThreadLifecycleAppServerOptions(): Parameters<
+  typeof startOrResumeThread
+>[0]["appServer"] {
+  return {
+    start: {
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    },
+    requestTimeoutMs: 60_000,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  };
+}
+
+function createMessageDynamicTool(
+  description: string,
+  actions: string[] = ["send"],
+): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+  return {
+    name: "message",
+    description,
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: actions,
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  };
 }
 
 describe("runCodexAppServerAttempt", () => {
@@ -583,6 +622,50 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("does not complete on unscoped turn/completed notifications", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-wrong", text: "wrong completion" }],
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(resolved).toBe(false);
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-right", text: "final completion" }],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      assistantTexts: ["final completion"],
+      aborted: false,
+      timedOut: false,
+    });
+  });
+
   it("releases completion when a projector callback throws during turn/completed", async () => {
     // Regression for openclaw/openclaw#67996: a throw inside the projector's
     // turn/completed handler must not strand resolveCompletion, otherwise the
@@ -636,6 +719,87 @@ describe("runCodexAppServerAttempt", () => {
       aborted: false,
       timedOut: false,
     });
+  });
+
+  it("routes MCP approval elicitations through the native bridge", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const bridgeSpy = vi
+      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .mockResolvedValue({
+        action: "accept",
+        content: { approve: true },
+        _meta: null,
+      });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+      }
+      if (method === "turn/start") {
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+
+    const result = await handleRequest?.({
+      id: "request-elicitation-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "codex_apps__github",
+        mode: "form",
+      },
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: { approve: true },
+      _meta: null,
+    });
+    expect(bridgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
   });
 
   it("times out app-server startup before thread setup can hang forever", async () => {
@@ -731,6 +895,76 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("resumes a bound Codex thread when only dynamic tool descriptions change", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "thread/resume") {
+        return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send and manage messages for the current Slack thread."),
+      ],
+      appServer,
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send and manage messages for the current Discord channel."),
+      ],
+      appServer,
+    });
+
+    expect(binding.threadId).toBe("thread-existing");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("starts a new Codex thread when dynamic tool schemas change", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    let nextThread = 1;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult(`thread-${nextThread++}`);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createMessageDynamicTool("Send and manage messages.", ["send"])],
+      appServer,
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createMessageDynamicTool("Send and manage messages.", ["send", "read"])],
+      appServer,
+    });
+
+    expect(binding.threadId).toBe("thread-2");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
+  });
+
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -743,7 +977,7 @@ describe("runCodexAppServerAttempt", () => {
           approvalPolicy: "on-request",
           approvalsReviewer: "guardian_subagent",
           sandbox: "danger-full-access",
-          serviceTier: "priority",
+          serviceTier: "fast",
         },
       },
     });
@@ -758,7 +992,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
-      serviceTier: "priority",
+      serviceTier: "fast",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
@@ -769,11 +1003,40 @@ describe("runCodexAppServerAttempt", () => {
           params: expect.objectContaining({
             approvalPolicy: "on-request",
             approvalsReviewer: "guardian_subagent",
-            serviceTier: "priority",
+            serviceTier: "fast",
             model: "gpt-5.4-codex",
           }),
         },
       ]),
+    );
+  });
+
+  it("drops invalid legacy service tiers before app-server resume and turn requests", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+    const { requests, waitForMethod, completeTurn } = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: {
+        appServer: {
+          approvalPolicy: "on-request",
+          sandbox: "danger-full-access",
+          serviceTier: "priority",
+        },
+      },
+    });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const resumeRequest = requests.find((request) => request.method === "thread/resume");
+    expect(resumeRequest?.params).toEqual(
+      expect.not.objectContaining({ serviceTier: expect.anything() }),
+    );
+    const turnRequest = requests.find((request) => request.method === "turn/start");
+    expect(turnRequest?.params).toEqual(
+      expect.not.objectContaining({ serviceTier: expect.anything() }),
     );
   });
 
@@ -790,7 +1053,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
-      serviceTier: "priority",
+      serviceTier: "flex" as const,
     };
 
     expect(buildThreadResumeParams(params, { threadId: "thread-1", appServer })).toEqual({
@@ -800,7 +1063,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
-      serviceTier: "priority",
+      serviceTier: "flex",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
@@ -813,7 +1076,7 @@ describe("runCodexAppServerAttempt", () => {
         model: "gpt-5.4-codex",
         approvalPolicy: "on-request",
         approvalsReviewer: "guardian_subagent",
-        serviceTier: "priority",
+        serviceTier: "flex",
       }),
     );
   });

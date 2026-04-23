@@ -132,7 +132,8 @@ describe("bedrock discovery", () => {
             type: "SYSTEM_DEFINED",
             models: [
               {
-                modelArn: "arn:aws:bedrock:ap-northeast-1::foundation-model/example.unknown-text-v1:0",
+                modelArn:
+                  "arn:aws:bedrock:ap-northeast-1::foundation-model/example.unknown-text-v1:0",
               },
             ],
           },

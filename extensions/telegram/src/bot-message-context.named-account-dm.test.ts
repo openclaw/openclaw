@@ -140,7 +140,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     expect(ctx).toBeNull();
   });
 
-  it("uses a per-account session key for default-account DMs", async () => {
+  it("uses the main session key for default-account DMs", async () => {
     setRuntimeConfigSnapshot(baseCfg);
 
     const ctx = await buildTelegramMessageContextForTest({
@@ -154,7 +154,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
       },
     });
 
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:default:direct:42");
-    expect(getLastUpdateLastRoute()?.sessionKey).toBe("agent:main:telegram:default:direct:42");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+    expect(getLastUpdateLastRoute()?.sessionKey).toBe("agent:main:main");
   });
 });

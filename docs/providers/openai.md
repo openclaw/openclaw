@@ -16,6 +16,21 @@ OpenAI provides developer APIs for GPT models. OpenClaw supports two auth routes
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
+## OpenClaw feature coverage
+
+| OpenAI capability         | OpenClaw surface                          | Status                                                 |
+| ------------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| Chat / Responses          | `openai/<model>` model provider           | Yes                                                    |
+| Codex subscription models | `openai-codex/<model>` model provider     | Yes                                                    |
+| Server-side web search    | Native OpenAI Responses tool              | Yes, when web search is enabled and no provider pinned |
+| Images                    | `image_generate`                          | Yes                                                    |
+| Videos                    | `video_generate`                          | Yes                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts` | Yes                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding | Yes                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"` | Yes                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"`  | Yes                                                    |
+| Embeddings                | memory embedding provider                 | Yes                                                    |
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.
@@ -299,18 +314,56 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
 
   </Accordion>
 
+  <Accordion title="Speech-to-text">
+    The bundled `openai` plugin registers batch speech-to-text through
+    OpenClaw's media-understanding transcription surface.
+
+    - Default model: `gpt-4o-transcribe`
+    - Endpoint: OpenAI REST `/v1/audio/transcriptions`
+    - Input path: multipart audio file upload
+    - Supported by OpenClaw wherever inbound audio transcription uses
+      `tools.media.audio`, including Discord voice-channel segments and channel
+      audio attachments
+
+    To force OpenAI for inbound audio transcription:
+
+    ```json5
+    {
+      tools: {
+        media: {
+          audio: {
+            models: [
+              {
+                type: "provider",
+                provider: "openai",
+                model: "gpt-4o-transcribe",
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    Language and prompt hints are forwarded to OpenAI when supplied by the
+    shared audio media config or per-call transcription request.
+
+  </Accordion>
+
   <Accordion title="Realtime transcription">
     The bundled `openai` plugin registers realtime transcription for the Voice Call plugin.
 
     | Setting | Config path | Default |
     |---------|------------|---------|
     | Model | `plugins.entries.voice-call.config.streaming.providers.openai.model` | `gpt-4o-transcribe` |
+    | Language | `...openai.language` | (unset) |
+    | Prompt | `...openai.prompt` | (unset) |
     | Silence duration | `...openai.silenceDurationMs` | `800` |
     | VAD threshold | `...openai.vadThreshold` | `0.5` |
     | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
 
     <Note>
-    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law audio.
+    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. This streaming provider is for Voice Call's realtime transcription path; Discord voice currently records short segments and uses the batch `tools.media.audio` transcription path instead.
     </Note>
 
   </Accordion>

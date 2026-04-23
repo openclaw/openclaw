@@ -289,7 +289,7 @@ To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
         config: {
           appServer: {
             mode: "guardian",
-            serviceTier: "priority",
+            serviceTier: "fast",
           },
         },
       },
@@ -361,20 +361,20 @@ For an already-running app-server, use WebSocket transport:
 
 Supported `appServer` fields:
 
-| Field               | Default                                  | Meaning                                                         |
-| ------------------- | ---------------------------------------- | --------------------------------------------------------------- |
-| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.        |
-| `command`           | `"codex"`                                | Executable for stdio transport.                                 |
-| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                  |
-| `url`               | unset                                    | WebSocket app-server URL.                                       |
-| `authToken`         | unset                                    | Bearer token for WebSocket transport.                           |
-| `headers`           | `{}`                                     | Extra WebSocket headers.                                        |
-| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                     |
-| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                 |
-| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.  |
-| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.          |
-| `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex Guardian review prompts. |
-| `serviceTier`       | unset                                    | Optional Codex service tier, for example `"priority"`.          |
+| Field               | Default                                  | Meaning                                                                                                   |
+| ------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                  |
+| `command`           | `"codex"`                                | Executable for stdio transport.                                                                           |
+| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                            |
+| `url`               | unset                                    | WebSocket app-server URL.                                                                                 |
+| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                     |
+| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                  |
+| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                               |
+| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                           |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                            |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                    |
+| `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex Guardian review prompts.                                           |
+| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored. |
 
 The older environment variables still work as fallbacks for local testing when
 the matching config field is unset:

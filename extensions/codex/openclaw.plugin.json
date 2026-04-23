@@ -83,7 +83,7 @@
             "enum": ["user", "guardian_subagent"],
             "default": "user"
           },
-          "serviceTier": { "type": "string" }
+          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] }
         }
       }
     }
@@ -165,7 +165,7 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex service tier passed when starting or resuming threads.",
+      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
       "advanced": true
     }
   }

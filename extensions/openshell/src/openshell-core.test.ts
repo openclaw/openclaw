@@ -382,7 +382,9 @@ describe("openshell fs bridges", () => {
 
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
-    const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
+    const readlinkSpy = vi
+      .spyOn(fs, "readlink")
+      .mockRejectedValue(new Error("fd path unavailable"));
 
     try {
       await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
@@ -401,43 +403,45 @@ describe("openshell fs bridges", () => {
   it.skipIf(process.platform === "win32")(
     "rejects fallback reads when path stats report an unknown device id",
     async () => {
-    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
-    const targetPath = path.join(workspaceDir, "subdir", "secret.txt");
-    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
-    await fs.writeFile(targetPath, "inside", "utf8");
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      const targetPath = path.join(workspaceDir, "subdir", "secret.txt");
+      await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+      await fs.writeFile(targetPath, "inside", "utf8");
 
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
+      const backend = createMirrorBackendMock();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
 
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
-    const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
-    const originalStat = fs.stat.bind(fs);
-    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-      const stat = await originalStat(...args);
-      if (args[0] === targetPath) {
-        return cloneStatWithDev(stat, 0);
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const readlinkSpy = vi
+        .spyOn(fs, "readlink")
+        .mockRejectedValue(new Error("fd path unavailable"));
+      const originalStat = fs.stat.bind(fs);
+      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const stat = await originalStat(...args);
+        if (args[0] === targetPath) {
+          return cloneStatWithDev(stat, 0);
+        }
+        return stat;
+      });
+
+      try {
+        await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+          "Sandbox boundary checks failed",
+        );
+        expect(readlinkSpy).toHaveBeenCalled();
+        expect(statSpy).toHaveBeenCalledWith(targetPath);
+      } finally {
+        statSpy.mockRestore();
+        readlinkSpy.mockRestore();
       }
-      return stat;
-    });
-
-    try {
-      await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
-        "Sandbox boundary checks failed",
-      );
-      expect(readlinkSpy).toHaveBeenCalled();
-      expect(statSpy).toHaveBeenCalledWith(targetPath);
-    } finally {
-      statSpy.mockRestore();
-      readlinkSpy.mockRestore();
-    }
     },
   );
 
@@ -474,7 +478,9 @@ describe("openshell fs bridges", () => {
     }) as unknown as typeof fs.open);
     // Force the fallback verification path even on Linux so the ancestor-walk
     // guard is exercised directly.
-    const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
+    const readlinkSpy = vi
+      .spyOn(fs, "readlink")
+      .mockRejectedValue(new Error("fd path unavailable"));
 
     try {
       await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
@@ -512,12 +518,13 @@ describe("openshell fs bridges", () => {
       },
     });
 
-    const { createOpenShellFsBridge, setReadOpenFlagsResolverForTest } = await import(
-      "./fs-bridge.js"
-    );
+    const { createOpenShellFsBridge, setReadOpenFlagsResolverForTest } =
+      await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
     // Force the fallback path so the leaf-lstat guard is exercised.
-    const readlinkSpy = vi.spyOn(fs, "readlink").mockRejectedValue(new Error("fd path unavailable"));
+    const readlinkSpy = vi
+      .spyOn(fs, "readlink")
+      .mockRejectedValue(new Error("fd path unavailable"));
     // Simulate a host that lacks `O_NOFOLLOW` (e.g. Windows) without touching
     // the non-configurable native `fs.constants` data property. The bridge
     // exposes a test-only seam for exactly this case.

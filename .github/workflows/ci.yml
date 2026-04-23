@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-v6-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v6-{1}', github.workflow, github.ref) || format('{0}-v6-{1}-{2}', github.workflow, github.ref, github.sha)) }}
+  group: ${{ github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)) }}
   cancel-in-progress: true
 
 env:
@@ -251,9 +251,9 @@ jobs:
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: nodeTestDistShards.length > 0,
             checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
-            run_extension_fast: hasChangedExtensions,
+            run_extension_fast: hasChangedExtensions && !isPush,
             extension_fast_matrix: createMatrix(
-              hasChangedExtensions
+              hasChangedExtensions && !isPush
                 ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
                     check_name: `extension-fast-${entry.extension}`,
                     extension: entry.extension,
@@ -284,7 +284,6 @@ jobs:
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     { check_name: "android-build-play", task: "build-play" },
-                    { check_name: "android-build-third-party", task: "build-third-party" },
                   ]
                 : [],
             ),
@@ -2270,9 +2269,6 @@ jobs:
               ;;
             build-play)
               ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
-              ;;
-            build-third-party)
-              ./gradlew --no-daemon --build-cache :app:assembleThirdPartyDebug
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

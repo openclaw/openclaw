@@ -395,9 +395,10 @@ function resolveInferenceProfiles(
       reasoning: baseModel?.reasoning ?? false,
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
-      contextWindow: baseModel?.contextWindow
-        ?? resolveKnownContextWindow(baseModelId ?? profile.inferenceProfileId ?? "")
-        ?? defaults.contextWindow,
+      contextWindow:
+        baseModel?.contextWindow ??
+        resolveKnownContextWindow(baseModelId ?? profile.inferenceProfileId ?? "") ??
+        defaults.contextWindow,
       maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
     });
   }

@@ -18,7 +18,7 @@ trap cleanup EXIT
 echo "Building Docker image..."
 run_logged cron-mcp-cleanup-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
-echo "Running in-container cron MCP cleanup smoke..."
+echo "Running in-container cron/subagent MCP cleanup smoke..."
 set +e
 docker run --rm \
   --name "$CONTAINER_NAME" \
@@ -81,7 +81,7 @@ status=${PIPESTATUS[0]}
 set -e
 
 if [ "$status" -ne 0 ]; then
-  echo "Docker cron MCP cleanup smoke failed"
+  echo "Docker cron/subagent MCP cleanup smoke failed"
   cat "$CLIENT_LOG"
   exit "$status"
 fi

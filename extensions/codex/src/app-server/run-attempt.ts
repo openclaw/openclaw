@@ -31,6 +31,7 @@ import {
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   isJsonObject,
@@ -175,7 +176,8 @@ export async function runCodexAppServerAttempt(
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
     const isTurnCompletion =
-      notification.method === "turn/completed" && isTurnNotification(notification.params, turnId);
+      notification.method === "turn/completed" &&
+      isTurnNotification(notification.params, thread.threadId, turnId);
     try {
       await projector.handleNotification(notification);
     } catch (error) {
@@ -202,6 +204,15 @@ export async function runCodexAppServerAttempt(
   const requestCleanup = client.addRequestHandler(async (request) => {
     if (!turnId) {
       return undefined;
+    }
+    if (request.method === "mcpServer/elicitation/request") {
+      return handleCodexAppServerElicitationRequest({
+        requestParams: request.params,
+        paramsForRun: params,
+        threadId: thread.threadId,
+        turnId,
+        signal: runAbortController.signal,
+      });
     }
     if (request.method !== "item/tool/call") {
       if (isCodexAppServerApprovalRequest(request.method)) {
@@ -562,16 +573,15 @@ function readDynamicToolCallParams(
   };
 }
 
-function isTurnNotification(value: JsonValue | undefined, turnId: string): boolean {
+function isTurnNotification(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
   if (!isJsonObject(value)) {
     return false;
   }
-  const directTurnId = readString(value, "turnId");
-  if (directTurnId === turnId) {
-    return true;
-  }
-  const turn = isJsonObject(value.turn) ? value.turn : undefined;
-  return readString(turn ?? {}, "id") === turnId;
+  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

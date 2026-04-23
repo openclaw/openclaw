@@ -72,13 +72,6 @@ openclaw pairing approve telegram <CODE>
 Token resolution order is account-aware. In practice, config values win over env fallback, and `TELEGRAM_BOT_TOKEN` only applies to the default account.
 </Note>
 
-## Session isolation
-
-Telegram bot DMs use per-account sender session keys, for example
-`agent:main:telegram:default:direct:814912386`. This keeps Telegram-originated
-tool and sandbox policy distinct from the agent main session even when the
-global `session.dmScope` setting is `main`.
-
 ## Telegram side settings
 
 <AccordionGroup>

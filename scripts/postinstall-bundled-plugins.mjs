@@ -34,7 +34,16 @@ const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
-const LEGACY_UPDATE_COMPAT_SIDECARS = [];
+const LEGACY_UPDATE_COMPAT_SIDECARS = [
+  {
+    path: "dist/extensions/qa-channel/runtime-api.js",
+    content: "export {};\n",
+  },
+  {
+    path: "dist/extensions/qa-lab/runtime-api.js",
+    content: "export {};\n",
+  },
+];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",

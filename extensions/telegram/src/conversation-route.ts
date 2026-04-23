@@ -7,11 +7,13 @@ import {
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
+  normalizeAccountId,
   resolveAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 import { buildAgentMainSessionKey, sanitizeAgentId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
@@ -147,10 +149,13 @@ export function resolveTelegramConversationBaseSessionKey(params: {
   isGroup: boolean;
   senderId?: string | number | null;
 }): string {
-  if (params.isGroup || params.route.matchedBy === "binding.channel") {
+  const routeAccountId = normalizeAccountId(params.route.accountId);
+  const defaultAccountId = normalizeAccountId(resolveDefaultTelegramAccountId(params.cfg));
+  const isNamedAccountFallback =
+    routeAccountId !== defaultAccountId && params.route.matchedBy === "default";
+  if (!isNamedAccountFallback || params.isGroup) {
     return params.route.sessionKey;
   }
-  const configuredDmScope = params.cfg.session?.dmScope;
   return normalizeLowercaseStringOrEmpty(
     buildAgentSessionKey({
       agentId: params.route.agentId,
@@ -163,10 +168,7 @@ export function resolveTelegramConversationBaseSessionKey(params: {
           senderId: params.senderId,
         }),
       },
-      dmScope:
-        configuredDmScope && configuredDmScope !== "main"
-          ? configuredDmScope
-          : "per-account-channel-peer",
+      dmScope: "per-account-channel-peer",
       identityLinks: params.cfg.session?.identityLinks,
     }),
   );

@@ -144,6 +144,7 @@ export function createMatrixQaRoomObserver(
       const startSince = await this.prime();
       const startedAt = Date.now();
       let cursorIndex = roomObserver.cursorIndex;
+      let didPoll = false;
       while (true) {
         const matched = findMatrixQaObservedEventMatch({
           cursorIndex,
@@ -161,7 +162,7 @@ export function createMatrixQaRoomObserver(
         }
 
         const elapsedMs = Date.now() - startedAt;
-        if (elapsedMs >= waitParams.timeoutMs) {
+        if (elapsedMs >= waitParams.timeoutMs && (didPoll || waitParams.timeoutMs <= 0)) {
           roomObserver.cursorIndex = Math.max(roomObserver.cursorIndex, cursorIndex);
           return {
             matched: false,
@@ -177,6 +178,7 @@ export function createMatrixQaRoomObserver(
           roomObserver,
           timeoutMs: remainingMs,
         });
+        didPoll = true;
       }
     },
     async waitForRoomEvent(waitParams) {
