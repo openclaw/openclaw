@@ -1167,7 +1167,12 @@ export async function resolveGatewayModelSupportsImages(params: {
       // entry for the same model may declare image capability.
       if (
         params.provider &&
-        catalog.some((entry) => entry.id === params.model && entry.input?.includes("image"))
+        catalog.some(
+          (entry) =>
+            entry.id === params.model &&
+            entry.provider !== params.provider &&
+            entry.input?.includes("image"),
+        )
       ) {
         return true;
       }
@@ -1188,7 +1193,12 @@ export async function resolveGatewayModelSupportsImages(params: {
     // Cross-provider fallback for the no-entry path.
     if (
       params.provider &&
-      catalog.some((entry) => entry.id === params.model && entry.input?.includes("image"))
+      catalog.some(
+        (entry) =>
+          entry.id === params.model &&
+          entry.provider !== params.provider &&
+          entry.input?.includes("image"),
+      )
     ) {
       return true;
     }

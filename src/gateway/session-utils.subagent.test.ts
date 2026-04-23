@@ -795,13 +795,25 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(timeout?.runtimeMs).toBe(0);
   });
 
-  test("fails closed when model lookup misses", async () => {
+  test("cross-provider fallback finds image capability from another provider", async () => {
     await expect(
       resolveGatewayModelSupportsImages({
         model: "gpt-5.4",
         provider: "openai",
         loadGatewayModelCatalog: async () => [
           { id: "gpt-5.4", name: "GPT-5.4", provider: "other", input: ["text", "image"] },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("fails closed when no provider declares image support", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "other", input: ["text"] },
         ],
       }),
     ).resolves.toBe(false);
