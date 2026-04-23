@@ -22,10 +22,8 @@ import {
 } from "../scripts/openclaw-npm-release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = ["dist/extensions/qa-channel/runtime-api.js"] as const;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
@@ -341,6 +339,7 @@ describe("collectForbiddenPackedPathErrors", () => {
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
@@ -349,13 +348,14 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("allows only the legacy update verifier QA channel runtime sidecar", () => {
+  it("rejects legacy update verifier QA runtime sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
       ]),
     ).toEqual([
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
     ]);
   });
@@ -375,6 +375,25 @@ describe("collectForbiddenPackedPathErrors", () => {
       expect(collectForbiddenPackedContentErrors(["dist/entry.js", "README.md"], rootDir)).toEqual([
         'npm package must not include private QA lab marker "//#region extensions/qa-lab/" in "dist/entry.js".',
       ]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-inventory-"));
+
+    try {
+      mkdirSync(join(rootDir, "dist"), { recursive: true });
+      writeFileSync(
+        join(rootDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+        JSON.stringify(["dist/extensions/qa-lab/runtime-api.js"]),
+        "utf8",
+      );
+
+      expect(
+        collectForbiddenPackedContentErrors([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], rootDir),
+      ).toEqual([]);
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }
@@ -412,6 +431,15 @@ describe("collectPackedTestCargoErrors", () => {
       collectPackedTestCargoErrors([
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("allows leaf runtime filenames named test or tests", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
       ]),
     ).toEqual([]);
   });

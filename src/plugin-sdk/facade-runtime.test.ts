@@ -6,44 +6,39 @@ import { createPluginActivationSource, normalizePluginsConfig } from "../plugins
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
+  resetFacadeActivationCheckRuntimeStateForTest,
+  resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
+} from "./facade-activation-check.runtime.js";
+import {
   __testing,
   canLoadActivatedBundledPluginPublicSurface,
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
-import { createPluginSdkTestHarness } from "./test-helpers.js";
+import {
+  createBundledPluginPublicSurfaceFixture,
+  createPluginSdkTestHarness,
+  createThrowingBundledPluginPublicSurfaceFixture,
+} from "./test-helpers.js";
 
 const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function createBundledPluginDir(prefix: string, marker: string): string {
-  const rootDir = createTempDirSync(prefix);
-  fs.mkdirSync(path.join(rootDir, "demo"), { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "demo", "api.js"),
-    `export const marker = ${JSON.stringify(marker)};\n`,
-    "utf8",
-  );
-  return rootDir;
+  return createBundledPluginPublicSurfaceFixture({ createTempDirSync, marker, prefix });
 }
 
 function createThrowingPluginDir(prefix: string): string {
-  const rootDir = createTempDirSync(prefix);
-  fs.mkdirSync(path.join(rootDir, "bad"), { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "bad", "api.js"),
-    `throw new Error("plugin load failure");\n`,
-    "utf8",
-  );
-  return rootDir;
+  return createThrowingBundledPluginPublicSurfaceFixture({ createTempDirSync, prefix });
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetFacadeRuntimeStateForTest();
+  resetFacadeActivationCheckRuntimeStateForTest();
   clearPluginDiscoveryCache();
   clearPluginManifestRegistryCache();
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -390,5 +385,53 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
       }),
     ).toBe(true);
+  });
+
+  it("prefers the source runtime snapshot for facade activation checks", () => {
+    const dir = createTempDirSync("openclaw-facade-source-snapshot-");
+    fs.mkdirSync(path.join(dir, "demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "demo", "runtime-api.js"),
+      'export const marker = "source-snapshot";\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(dir, "demo", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+      }),
+      "utf8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    setRuntimeConfigSnapshot(
+      {
+        plugins: {},
+      },
+      {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    );
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: {
+          modulePath: path.join(dir, "demo", "runtime-api.js"),
+          boundaryRoot: dir,
+        },
+        sourceExtensionsRoot: dir,
+        resolutionKey: "source-snapshot-demo",
+      }),
+    ).toEqual({
+      allowed: true,
+      pluginId: "demo",
+    });
   });
 });

@@ -8,12 +8,19 @@ import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import {
-  maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
+  restoreCredsFromBackupIfNeeded,
   resolveDefaultWebAuthDir,
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
 } from "./auth-store.js";
+import {
+  enqueueCredsSave,
+  waitForCredsSaveQueue,
+  waitForCredsSaveQueueWithTimeout,
+  writeCredsJsonAtomically,
+  type CredsQueueWaitResult,
+} from "./creds-persistence.js";
 import { formatError, getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
@@ -29,38 +36,47 @@ export {
   logoutWeb,
   logWebSelfId,
   pickWebChannel,
+  readWebAuthSnapshot,
+  readWebAuthState,
+  readWebAuthExistsBestEffort,
+  readWebAuthExistsForDecision,
+  readWebAuthSnapshotBestEffort,
+  readWebSelfIdentityForDecision,
   readWebSelfId,
+  WHATSAPP_AUTH_UNSTABLE_CODE,
+  WhatsAppAuthUnstableError,
+  type WhatsAppWebAuthState,
   WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./auth-store.js";
+export {
+  waitForCredsSaveQueue,
+  waitForCredsSaveQueueWithTimeout,
+  writeCredsJsonAtomically,
+} from "./creds-persistence.js";
+export type { CredsQueueWaitResult } from "./creds-persistence.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const CREDS_FLUSH_TIMEOUT_MESSAGE =
+  "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 
 async function loadQrTerminal() {
   const mod = await import("qrcode-terminal");
   return mod.default ?? mod;
 }
 
-// Per-authDir queues so multi-account creds saves don't block each other.
-const credsSaveQueues = new Map<string, Promise<void>>();
-const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
-  const prev = credsSaveQueues.get(authDir) ?? Promise.resolve();
-  const next = prev
-    .then(() => safeSaveCreds(authDir, saveCreds, logger))
-    .catch((err) => {
+  enqueueCredsSave(
+    authDir,
+    () => safeSaveCreds(authDir, saveCreds, logger),
+    (err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
-    })
-    .finally(() => {
-      if (credsSaveQueues.get(authDir) === next) {
-        credsSaveQueues.delete(authDir);
-      }
-    });
-  credsSaveQueues.set(authDir, next);
+    },
+  );
 }
 
 async function safeSaveCreds(
@@ -92,11 +108,6 @@ async function safeSaveCreds(
   }
   try {
     await Promise.resolve(saveCreds());
-    try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
-    } catch {
-      // best-effort on platforms that support it
-    }
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
   }
@@ -121,8 +132,16 @@ export async function createWaSocket(
   const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
-  maybeRestoreCredsFromBackup(authDir);
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  const queueResult = await waitForCredsSaveQueueWithTimeout(authDir);
+  if (queueResult === "timed_out") {
+    sessionLogger.warn({ authDir }, CREDS_FLUSH_TIMEOUT_MESSAGE);
+  } else {
+    await restoreCredsFromBackupIfNeeded(authDir);
+  }
+  const { state } = await useMultiFileAuthState(authDir);
+  const saveCreds = async () => {
+    await writeCredsJsonAtomically(authDir, state.creds);
+  };
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
@@ -274,32 +293,6 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
     };
 
     sock.ev.on("connection.update", handler);
-  });
-}
-
-/** Await pending credential saves — scoped to one authDir, or all if omitted. */
-export function waitForCredsSaveQueue(authDir?: string): Promise<void> {
-  if (authDir) {
-    return credsSaveQueues.get(authDir) ?? Promise.resolve();
-  }
-  return Promise.all(credsSaveQueues.values()).then(() => {});
-}
-
-/** Await pending credential saves, but don't hang forever on stalled I/O. */
-export async function waitForCredsSaveQueueWithTimeout(
-  authDir: string,
-  timeoutMs = CREDS_SAVE_FLUSH_TIMEOUT_MS,
-): Promise<void> {
-  let flushTimeout: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    waitForCredsSaveQueue(authDir),
-    new Promise<void>((resolve) => {
-      flushTimeout = setTimeout(resolve, timeoutMs);
-    }),
-  ]).finally(() => {
-    if (flushTimeout) {
-      clearTimeout(flushTimeout);
-    }
   });
 }
 

@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { wrapLmstudioInferencePreload } from "./stream.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -50,42 +50,67 @@ function buildDoneStreamFn(): StreamFn {
   });
 }
 
+function createWrappedLmstudioStream(
+  baseStream: StreamFn,
+  params?: { baseUrl?: string },
+): StreamFn {
+  return wrapLmstudioInferencePreload({
+    provider: "lmstudio",
+    modelId: "qwen3-8b-instruct",
+    config: {
+      models: {
+        providers: {
+          lmstudio: {
+            baseUrl: params?.baseUrl ?? "http://localhost:1234",
+            models: [],
+          },
+        },
+      },
+    },
+    streamFn: baseStream,
+  } as never);
+}
+
+function runWrappedLmstudioStream(
+  wrapped: StreamFn,
+  model: Record<string, unknown>,
+  options?: Record<string, unknown>,
+) {
+  return wrapped(
+    {
+      provider: "lmstudio",
+      api: "openai-completions",
+      id: "lmstudio/qwen3-8b-instruct",
+      ...model,
+    } as never,
+    { messages: [] } as never,
+    options as never,
+  );
+}
+
 describe("lmstudio stream wrapper", () => {
+  beforeEach(() => {
+    __resetLmstudioPreloadCooldownForTest();
+  });
+
   afterEach(() => {
     ensureLmstudioModelLoadedMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockReset();
     resolveLmstudioRuntimeApiKeyMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue(undefined);
+    __resetLmstudioPreloadCooldownForTest();
   });
 
   it("preloads LM Studio model before inference using model context window", async () => {
     const baseStream = buildDoneStreamFn();
-    const wrapped = wrapLmstudioInferencePreload({
-      provider: "lmstudio",
-      modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: "http://lmstudio.internal:1234/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      streamFn: baseStream,
-    } as never);
-
-    const stream = wrapped(
-      {
-        provider: "lmstudio",
-        api: "openai-completions",
-        id: "lmstudio/qwen3-8b-instruct",
-        contextWindow: 131072,
-      } as never,
-      { messages: [] } as never,
-      { apiKey: "lmstudio-token" } as never,
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      baseUrl: "http://lmstudio.internal:1234/v1",
+    });
+    const stream = runWrappedLmstudioStream(
+      wrapped,
+      { contextWindow: 131072 },
+      { apiKey: "lmstudio-token" },
     );
     const events = await collectEvents(stream);
 
@@ -104,32 +129,13 @@ describe("lmstudio stream wrapper", () => {
 
   it("prefers model contextTokens over contextWindow for preload requests", async () => {
     const baseStream = buildDoneStreamFn();
-    const wrapped = wrapLmstudioInferencePreload({
-      provider: "lmstudio",
-      modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: "http://lmstudio.internal:1234/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      streamFn: baseStream,
-    } as never);
-
-    const stream = wrapped(
-      {
-        provider: "lmstudio",
-        api: "openai-completions",
-        id: "lmstudio/qwen3-8b-instruct",
-        contextWindow: 131072,
-        contextTokens: 64000,
-      } as never,
-      { messages: [] } as never,
-      { apiKey: "lmstudio-token" } as never,
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      baseUrl: "http://lmstudio.internal:1234/v1",
+    });
+    const stream = runWrappedLmstudioStream(
+      wrapped,
+      { contextWindow: 131072, contextTokens: 64000 },
+      { apiKey: "lmstudio-token" },
     );
     const events = await collectEvents(stream);
 
@@ -241,6 +247,113 @@ describe("lmstudio stream wrapper", () => {
     expect(firstEvents).toEqual([expect.objectContaining({ type: "done" })]);
     expect(secondEvents).toEqual([expect.objectContaining({ type: "done" })]);
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips preload on the second attempt while the failure backoff is active", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValue(new Error("out of memory"));
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const firstEvents = await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+    expect(firstEvents).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+
+    const secondEvents = await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+    expect(secondEvents).toEqual([expect.objectContaining({ type: "done" })]);
+    // The second call must NOT retry preload because cooldown is active, but
+    // the underlying stream must still run so the user gets a response.
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expect(baseStream).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries preload once the cooldown expires", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(new Error("out of memory"));
+    ensureLmstudioModelLoadedMock.mockResolvedValueOnce(undefined);
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    // Freeze Date.now at a known base so we can jump past the first backoff
+    // window (5s by default) between the two preload attempts.
+    const baseTime = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(baseTime);
+    await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+
+    // Move the clock past the initial 5s cooldown window so the next call is
+    // allowed to retry preload.
+    nowSpy.mockReturnValue(baseTime + 6_000);
+    await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
   });
 
   it("forces supportsUsageInStreaming compat before calling the underlying stream", async () => {

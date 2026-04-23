@@ -19,9 +19,8 @@ const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
     return isSensitiveConfigPath(path.slice(0, -2));
-  } else {
-    return isSensitiveConfigPath(path);
   }
+  return isSensitiveConfigPath(path);
 }
 
 function isEnvVarPlaceholder(value: string): boolean {
@@ -146,9 +145,8 @@ function redactObject(obj: unknown, hints?: ConfigUiHints): unknown {
     return lookup.has("")
       ? redactObjectWithLookup(obj, lookup, "", [], hints)
       : redactObjectGuessing(obj, "", [], hints);
-  } else {
-    return redactObjectGuessing(obj, "", []);
   }
+  return redactObjectGuessing(obj, "", []);
 }
 
 /**
@@ -703,6 +701,59 @@ function restoreGuessingArray(
   });
 }
 
+function shouldRestoreSensitiveGuessingPath(
+  path: string,
+  hintPaths: string[],
+  hints?: ConfigUiHints,
+): boolean {
+  return (
+    !isExplicitlyNonSensitivePath(hints, hintPaths) &&
+    (isSensitivePath(path) || hasSensitiveUrlHintPath(hints, hintPaths) || isSensitiveUrlPath(path))
+  );
+}
+
+function restoreRedactedEntryGuessing(params: {
+  key: string;
+  value: unknown;
+  path: string;
+  wildcardPath: string;
+  original: Record<string, unknown>;
+  hints?: ConfigUiHints;
+}): unknown {
+  const hintPaths = [params.path, params.wildcardPath];
+  const canRestoreSecretRef = shouldRestoreSensitiveGuessingPath(
+    params.path,
+    hintPaths,
+    params.hints,
+  );
+  if (params.value === REDACTED_SENTINEL && canRestoreSecretRef) {
+    return restoreOriginalValueOrThrow({
+      key: params.key,
+      path: params.path,
+      original: params.original,
+    });
+  }
+  if (typeof params.value === "object" && params.value !== null) {
+    if (canRestoreSecretRef) {
+      const restoredSecretRef = maybeRestoreSecretRefId({
+        incoming: params.value,
+        original: params.original[params.key],
+        path: params.path,
+      });
+      if (restoredSecretRef.handled) {
+        return restoredSecretRef.value;
+      }
+    }
+    return restoreRedactedValuesGuessing(
+      params.value,
+      params.original[params.key],
+      params.path,
+      params.hints,
+    );
+  }
+  return params.value;
+}
+
 /**
  * Worker for restoreRedactedValues().
  * Used when there are ConfigUiHints available.
@@ -776,34 +827,14 @@ function restoreRedactedValuesWithLookup(
       }
     }
     if (!matched) {
-      const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
-      if (
-        !markedNonSensitive &&
-        value === REDACTED_SENTINEL &&
-        (isSensitivePath(path) ||
-          hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-          isSensitiveUrlPath(path))
-      ) {
-        result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
-      } else if (typeof value === "object" && value !== null) {
-        const canRestoreSecretRef =
-          !markedNonSensitive &&
-          (isSensitivePath(path) ||
-            hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-            isSensitiveUrlPath(path));
-        if (canRestoreSecretRef) {
-          const restoredSecretRef = maybeRestoreSecretRefId({
-            incoming: value,
-            original: orig[key],
-            path,
-          });
-          result[key] = restoredSecretRef.handled
-            ? restoredSecretRef.value
-            : restoreRedactedValuesGuessing(value, orig[key], path, hints);
-        } else {
-          result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
-        }
-      }
+      result[key] = restoreRedactedEntryGuessing({
+        key,
+        value,
+        path,
+        wildcardPath,
+        original: orig,
+        hints,
+      });
     }
   }
   return result;
@@ -837,35 +868,14 @@ function restoreRedactedValuesGuessing(
   for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
-    if (
-      !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
-      value === REDACTED_SENTINEL &&
-      (isSensitivePath(path) ||
-        hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-        isSensitiveUrlPath(path))
-    ) {
-      result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
-    } else if (typeof value === "object" && value !== null) {
-      const canRestoreSecretRef =
-        !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
-        (isSensitivePath(path) ||
-          hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-          isSensitiveUrlPath(path));
-      if (canRestoreSecretRef) {
-        const restoredSecretRef = maybeRestoreSecretRefId({
-          incoming: value,
-          original: orig[key],
-          path,
-        });
-        result[key] = restoredSecretRef.handled
-          ? restoredSecretRef.value
-          : restoreRedactedValuesGuessing(value, orig[key], path, hints);
-      } else {
-        result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
-      }
-    } else {
-      result[key] = value;
-    }
+    result[key] = restoreRedactedEntryGuessing({
+      key,
+      value,
+      path,
+      wildcardPath,
+      original: orig,
+      hints,
+    });
   }
   return result;
 }

@@ -14,34 +14,67 @@
       "provider": "openai-codex",
       "method": "oauth",
       "choiceId": "openai-codex",
-      "deprecatedChoiceIds": ["codex-cli"],
-      "choiceLabel": "OpenAI Codex (ChatGPT OAuth)",
-      "choiceHint": "Browser sign-in",
+      "deprecatedChoiceIds": ["codex-cli", "openai-codex-import"],
+      "choiceLabel": "OpenAI Codex Browser Login",
+      "choiceHint": "Sign in with OpenAI in your browser",
+      "assistantPriority": -30,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex OAuth + API key"
+      "groupHint": "API key or Codex sign-in"
+    },
+    {
+      "provider": "openai-codex",
+      "method": "device-code",
+      "choiceId": "openai-codex-device-code",
+      "choiceLabel": "OpenAI Codex Device Pairing",
+      "choiceHint": "Pair in browser with a device code",
+      "assistantPriority": -10,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "API key or Codex sign-in"
     },
     {
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",
-      "choiceLabel": "OpenAI API key",
+      "choiceLabel": "OpenAI API Key",
+      "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex OAuth + API key",
+      "groupHint": "API key or Codex sign-in",
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
       "cliOption": "--openai-api-key <key>",
-      "cliDescription": "OpenAI API key"
+      "cliDescription": "OpenAI API Key"
     }
   ],
   "contracts": {
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
+    "memoryEmbeddingProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "openai": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "gpt-5.4-mini",
+        "audio": "gpt-4o-transcribe"
+      },
+      "autoPriority": {
+        "image": 10,
+        "audio": 10
+      }
+    },
+    "openai-codex": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5.4"
+      }
+    }
   },
   "configSchema": {
     "type": "object",
@@ -51,7 +84,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs. `friendly` and `on` enable the overlay; `off` disables it."
+        "description": "Legacy compatibility fallback for the shared GPT-5 friendly interaction-style overlay. Prefer agents.defaults.promptOverlays.gpt5.personality. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
       }
     }
   }

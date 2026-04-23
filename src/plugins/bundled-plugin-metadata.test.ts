@@ -165,6 +165,37 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
+    // Regression for #69317: the bundled channel entry now points its
+    // runtime.specifier at runtime-setter-api.js to avoid loading the full
+    // runtime-api barrel during register(). The setter file must therefore
+    // be discoverable as part of Slack's public surface.
+    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
+    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Telegram's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const telegram = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "telegram");
+    expectArtifactPresence(telegram?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(telegram?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Discord's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
       expect.objectContaining({
@@ -184,6 +215,13 @@ describe("bundled plugin metadata", () => {
     expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyMatrixAuth",
+    });
+  });
+
+  it("keeps Matrix's narrow runtime-setter sidecar on the bundled public surface", () => {
+    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expectArtifactPresence(matrix?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
     });
   });
 
@@ -311,6 +349,33 @@ describe("bundled plugin metadata", () => {
         pluginsDir,
       ),
     ).toBe(path.join(pluginRoot, "index.ts"));
+  });
+
+  it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
+    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
+    const pluginRoot = path.join(pluginsDir, "alpha");
+    const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
+
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(nestedDistPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const source = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(nestedDistPluginRoot, "index.js"),
+      "export const built = true;\n",
+      "utf8",
+    );
+
+    expect(
+      resolveBundledPluginGeneratedPath(
+        pluginsDir,
+        {
+          source: "./index.ts",
+          built: "index.js",
+        },
+        "alpha",
+        pluginsDir,
+      ),
+    ).toBe(path.join(pluginRoot, "index.js"));
   });
 
   it("resolves bundled repo entry paths from dist before workspace source", () => {

@@ -1,7 +1,15 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../../src/plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import type { JsonValue } from "./protocol.js";
 
 function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   return {
@@ -13,6 +21,55 @@ function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   } as unknown as AnyAgentTool;
 }
 
+function mediaResult(mediaUrl: string, audioAsVoice?: boolean): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: "Generated media reply." }],
+    details: {
+      media: {
+        mediaUrl,
+        ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+      },
+    },
+  };
+}
+
+function createBridgeWithToolResult(toolName: string, toolResult: AgentToolResult<unknown>) {
+  return createCodexDynamicToolBridge({
+    tools: [
+      createTool({
+        name: toolName,
+        execute: vi.fn(async () => toolResult),
+      }),
+    ],
+    signal: new AbortController().signal,
+  });
+}
+
+function expectInputText(text: string) {
+  return {
+    success: true,
+    contentItems: [{ type: "inputText", text }],
+  };
+}
+
+async function handleMessageToolCall(
+  bridge: ReturnType<typeof createCodexDynamicToolBridge>,
+  arguments_: JsonValue,
+) {
+  return await bridge.handleToolCall({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    callId: "call-1",
+    tool: "message",
+    arguments: arguments_,
+  });
+}
+
+afterEach(() => {
+  resetGlobalHookRunner();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
+
 describe("createCodexDynamicToolBridge", () => {
   it.each([
     { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
@@ -22,23 +79,7 @@ describe("createCodexDynamicToolBridge", () => {
   ])(
     "preserves structured media artifacts from $toolName tool results",
     async ({ toolName, mediaUrl, audioAsVoice }) => {
-      const toolResult = {
-        content: [{ type: "text", text: "Generated media reply." }],
-        details: {
-          media: {
-            mediaUrl,
-            ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
-          },
-        },
-      } satisfies AgentToolResult<unknown>;
-      const tool = createTool({
-        name: toolName,
-        execute: vi.fn(async () => toolResult),
-      });
-      const bridge = createCodexDynamicToolBridge({
-        tools: [tool],
-        signal: new AbortController().signal,
-      });
+      const bridge = createBridgeWithToolResult(toolName, mediaResult(mediaUrl, audioAsVoice));
 
       const result = await bridge.handleToolCall({
         threadId: "thread-1",
@@ -48,10 +89,7 @@ describe("createCodexDynamicToolBridge", () => {
         arguments: { prompt: "hello" },
       });
 
-      expect(result).toEqual({
-        success: true,
-        contentItems: [{ type: "inputText", text: "Generated media reply." }],
-      });
+      expect(result).toEqual(expectInputText("Generated media reply."));
       expect(bridge.telemetry.toolMediaUrls).toEqual([mediaUrl]);
       expect(bridge.telemetry.toolAudioAsVoice).toBe(audioAsVoice === true);
     },
@@ -59,7 +97,7 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("preserves audio-as-voice metadata from tts results", async () => {
     const toolResult = {
-      content: [{ type: "text", text: "Generated audio reply." }],
+      content: [{ type: "text", text: "(spoken) hello" }],
       details: {
         media: {
           mediaUrl: "/tmp/reply.opus",
@@ -85,7 +123,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(result).toEqual({
       success: true,
-      contentItems: [{ type: "inputText", text: "Generated audio reply." }],
+      contentItems: [{ type: "inputText", text: "(spoken) hello" }],
     });
     expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
@@ -105,25 +143,16 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      tool: "message",
-      arguments: {
-        action: "send",
-        text: "hello from Codex",
-        mediaUrl: "/tmp/reply.png",
-        provider: "telegram",
-        to: "chat-1",
-        threadId: "thread-ts-1",
-      },
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      text: "hello from Codex",
+      mediaUrl: "/tmp/reply.png",
+      provider: "telegram",
+      to: "chat-1",
+      threadId: "thread-ts-1",
     });
 
-    expect(result).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "Sent." }],
-    });
+    expect(result).toEqual(expectInputText("Sent."));
     expect(bridge.telemetry).toMatchObject({
       didSendViaMessagingTool: true,
       messagingToolSentTexts: ["hello from Codex"],
@@ -151,17 +180,11 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      tool: "message",
-      arguments: {
-        action: "send",
-        text: "not delivered",
-        provider: "slack",
-        to: "C123",
-      },
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      text: "not delivered",
+      provider: "slack",
+      to: "C123",
     });
 
     expect(result).toEqual({
@@ -173,6 +196,84 @@ describe("createCodexDynamicToolBridge", () => {
       messagingToolSentTexts: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+    });
+  });
+
+  it("applies codex app-server tool_result extensions from the active plugin registry", async () => {
+    const registry = createEmptyPluginRegistry();
+    const factory = async (codex: {
+      on: (
+        event: "tool_result",
+        handler: (event: any) => Promise<{ result: AgentToolResult<unknown> }>,
+      ) => void;
+    }) => {
+      codex.on("tool_result", async (event) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text", text: `${event.toolName} compacted` }],
+        },
+      }));
+    };
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const bridge = createBridgeWithToolResult("exec", {
+      content: [{ type: "text", text: "raw output" }],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "exec",
+      arguments: { command: "git status" },
+    });
+
+    expect(result).toEqual(expectInputText("exec compacted"));
+  });
+
+  it("fires after_tool_call for successful codex tool executions", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+
+    const bridge = createBridgeWithToolResult("exec", {
+      content: [{ type: "text", text: "done" }],
+      details: {},
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    await vi.waitFor(() => {
+      expect(afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "exec",
+          toolCallId: "call-1",
+          params: { command: "pwd" },
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "done" }],
+            details: {},
+          }),
+        }),
+        expect.objectContaining({
+          toolName: "exec",
+          toolCallId: "call-1",
+        }),
+      );
     });
   });
 });

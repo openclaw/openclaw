@@ -31,6 +31,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
+  onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
   config?: OpenClawConfig;
@@ -39,5 +41,11 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /**
+   * Exact raw names of non-plugin OpenClaw tools registered for this run.
+   * When provided, MEDIA: passthrough requires an exact match instead of only
+   * a normalized-name collision with a trusted built-in.
+   */
+  builtinToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
 };

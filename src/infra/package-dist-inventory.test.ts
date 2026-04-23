@@ -18,6 +18,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
+        "dist/extensions/qa-channel/runtime-api.js",
       ]);
       await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([]);
 
@@ -37,14 +38,22 @@ describe("package dist inventory", () => {
 
   it("keeps npm-omitted dist artifacts out of the inventory", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-pack-" }, async (packageRoot) => {
-      const packagedQaRuntime = path.join(
+      const packagedQaChannelRuntime = path.join(
         packageRoot,
         "dist",
         "extensions",
         "qa-channel",
         "runtime-api.js",
       );
+      const packagedQaLabRuntime = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "qa-lab",
+        "runtime-api.js",
+      );
       const omittedQaChunk = path.join(packageRoot, "dist", "extensions", "qa-channel", "cli.js");
+      const omittedQaLabChunk = path.join(packageRoot, "dist", "extensions", "qa-lab", "cli.js");
       const omittedQaMatrixChunk = path.join(
         packageRoot,
         "dist",
@@ -62,6 +71,22 @@ describe("package dist inventory", () => {
         "cli.d.ts",
       );
       const omittedQaRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-B9LDtssJ.js");
+      const omittedRuntimeDepsStamp = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "discord",
+        ".openclaw-runtime-deps-stamp.json",
+      );
+      const omittedRuntimeDepsTempFile = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "discord",
+        ".openclaw-runtime-deps-backup-node_modules-old",
+        "left-pad",
+        "index.js",
+      );
       const omittedExtensionNodeModuleSymlink = path.join(
         packageRoot,
         "dist",
@@ -71,21 +96,42 @@ describe("package dist inventory", () => {
         ".bin",
         "color-support",
       );
+      const omittedExtensionRootAliasSymlink = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "node_modules",
+        "openclaw",
+        "plugin-sdk",
+      );
       const omittedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
-      await fs.mkdir(path.dirname(packagedQaRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(packagedQaChannelRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(packagedQaLabRuntime), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaMatrixChunk), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaLabTypes), { recursive: true });
+      await fs.mkdir(path.dirname(omittedRuntimeDepsStamp), { recursive: true });
+      await fs.mkdir(path.dirname(omittedRuntimeDepsTempFile), { recursive: true });
       await fs.mkdir(path.dirname(omittedExtensionNodeModuleSymlink), { recursive: true });
+      await fs.mkdir(path.dirname(omittedExtensionRootAliasSymlink), { recursive: true });
+      await fs.mkdir(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
       await fs.writeFile(path.join(packageRoot, "color-support.js"), "export {};\n", "utf8");
-      await fs.writeFile(packagedQaRuntime, "export {};\n", "utf8");
+      await fs.writeFile(packagedQaChannelRuntime, "export {};\n", "utf8");
+      await fs.writeFile(packagedQaLabRuntime, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChunk, "export {};\n", "utf8");
+      await fs.writeFile(omittedQaLabChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaMatrixChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabTypes, "export {};\n", "utf8");
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
+      await fs.writeFile(omittedRuntimeDepsStamp, "{}\n", "utf8");
+      await fs.writeFile(omittedRuntimeDepsTempFile, "module.exports = 1;\n", "utf8");
       await fs.symlink(
         path.join(packageRoot, "color-support.js"),
         omittedExtensionNodeModuleSymlink,
+      );
+      await fs.symlink(
+        path.join(packageRoot, "dist", "plugin-sdk"),
+        omittedExtensionRootAliasSymlink,
       );
       await fs.writeFile(omittedMap, "{}", "utf8");
 

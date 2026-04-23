@@ -4,7 +4,10 @@ import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -16,10 +19,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
-import {
-  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
-  normalizeBundledPluginArtifactSubpath,
-} from "../plugins/public-surface-runtime.js";
+import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "image-generation-core",
@@ -69,6 +69,10 @@ function readFacadeBoundaryConfigSafely(): {
   cacheKey?: string;
 } {
   try {
+    const sourceSnapshot = getRuntimeConfigSourceSnapshot();
+    if (sourceSnapshot) {
+      return { rawConfig: sourceSnapshot };
+    }
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
       return { rawConfig: runtimeSnapshot };
@@ -144,7 +148,10 @@ function getFacadeBoundaryResolvedConfig() {
   return resolved;
 }
 
-function getFacadeManifestRegistry(params: { cacheKey: string }): readonly PluginManifestRecord[] {
+function getFacadeManifestRegistry(params: {
+  cacheKey: string;
+  env?: NodeJS.ProcessEnv;
+}): readonly PluginManifestRecord[] {
   const cached = cachedManifestRegistryByKey.get(params.cacheKey);
   if (cached) {
     return cached;
@@ -152,6 +159,7 @@ function getFacadeManifestRegistry(params: { cacheKey: string }): readonly Plugi
   const loaded = loadPluginManifestRegistry({
     config: getFacadeBoundaryResolvedConfig().config,
     cache: true,
+    ...(params.env ? { env: params.env } : {}),
   }).plugins;
   cachedManifestRegistryByKey.set(params.cacheKey, loaded);
   return loaded;
@@ -161,32 +169,17 @@ export function resolveRegistryPluginModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
   resolutionKey: string;
+  env?: NodeJS.ProcessEnv;
 }): FacadeModuleLocation | null {
-  const registry = getFacadeManifestRegistry({ cacheKey: params.resolutionKey });
-  type RegistryRecord = (typeof registry)[number];
-  const tiers: Array<(plugin: RegistryRecord) => boolean> = [
-    (plugin) => plugin.id === params.dirName,
-    (plugin) => path.basename(plugin.rootDir) === params.dirName,
-    (plugin) => plugin.channels.includes(params.dirName),
-  ];
-  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  for (const matchFn of tiers) {
-    for (const record of registry.filter(matchFn)) {
-      const rootDir = path.resolve(record.rootDir);
-      const builtCandidate = path.join(rootDir, artifactBasename);
-      if (fs.existsSync(builtCandidate)) {
-        return { modulePath: builtCandidate, boundaryRoot: rootDir };
-      }
-      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
-        if (fs.existsSync(sourceCandidate)) {
-          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
-        }
-      }
-    }
-  }
-  return null;
+  const registry = getFacadeManifestRegistry({
+    cacheKey: params.resolutionKey,
+    ...(params.env ? { env: params.env } : {}),
+  });
+  return resolveRegistryPluginModuleLocationFromRecords({
+    registry,
+    dirName: params.dirName,
+    artifactBasename: params.artifactBasename,
+  });
 }
 
 function readBundledPluginManifestRecordFromDir(params: {
@@ -229,6 +222,7 @@ function resolveBundledMetadataManifestRecord(params: {
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
+  env?: NodeJS.ProcessEnv;
 }): FacadePluginManifestLike | null {
   if (!params.location) {
     return null;
@@ -247,7 +241,7 @@ function resolveBundledMetadataManifestRecord(params: {
       resolvedDirName,
     });
   }
-  const bundledPluginsDir = resolveBundledPluginsDir();
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
   if (!bundledPluginsDir) {
     return null;
   }
@@ -275,6 +269,7 @@ function resolveBundledPluginManifestRecord(params: {
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
   resolutionKey: string;
+  env?: NodeJS.ProcessEnv;
 }): FacadePluginManifestLike | null {
   if (cachedFacadeManifestRecordsByKey.has(params.resolutionKey)) {
     return cachedFacadeManifestRecordsByKey.get(params.resolutionKey) ?? null;
@@ -286,7 +281,10 @@ function resolveBundledPluginManifestRecord(params: {
     return metadataRecord;
   }
 
-  const registry = getFacadeManifestRegistry({ cacheKey: params.resolutionKey });
+  const registry = getFacadeManifestRegistry({
+    cacheKey: params.resolutionKey,
+    ...(params.env ? { env: params.env } : {}),
+  });
   const resolved =
     (params.location
       ? registry.find((plugin) => {
@@ -312,6 +310,7 @@ export function resolveTrackedFacadePluginId(params: {
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
   resolutionKey: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
   return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
 }
@@ -322,6 +321,7 @@ export function resolveBundledPluginPublicSurfaceAccess(params: {
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
   resolutionKey: string;
+  env?: NodeJS.ProcessEnv;
 }): { allowed: boolean; pluginId?: string; reason?: string } {
   const cached = cachedFacadePublicSurfaceAccessByKey.get(params.resolutionKey);
   if (cached) {
@@ -410,6 +410,7 @@ export function resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(params: 
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
   resolutionKey: string;
+  env?: NodeJS.ProcessEnv;
 }) {
   const access = resolveBundledPluginPublicSurfaceAccess(params);
   if (!access.allowed) {

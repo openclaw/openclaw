@@ -40,6 +40,10 @@ type VisibleReplyTarget = {
   } | null;
 };
 
+type ReplyThreadingContext = {
+  implicitCurrentMessage?: "default" | "allow" | "deny";
+};
+
 type SenderContext = {
   id?: string;
   name?: string;
@@ -87,9 +91,11 @@ export function buildWhatsAppInboundContext(params: {
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
+  groupSystemPrompt?: string;
   msg: WebInboundMsg;
   route: ReturnType<typeof resolveAgentRoute>;
   sender: SenderContext;
+  replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
 }) {
   const inboundHistory =
@@ -101,7 +107,7 @@ export function buildWhatsAppInboundContext(params: {
         }))
       : undefined;
 
-  return finalizeInboundContext({
+  const result = finalizeInboundContext({
     Body: params.combinedBody,
     BodyForAgent: params.msg.body,
     InboundHistory: inboundHistory,
@@ -131,13 +137,16 @@ export function buildWhatsAppInboundContext(params: {
     SenderId: params.sender.id ?? params.sender.e164,
     SenderE164: params.sender.e164,
     CommandAuthorized: params.commandAuthorized,
+    ReplyThreading: params.replyThreading,
     WasMentioned: params.msg.wasMentioned,
+    GroupSystemPrompt: params.groupSystemPrompt,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",
     OriginatingChannel: "whatsapp",
     OriginatingTo: params.msg.from,
   });
+  return result;
 }
 
 export function resolveWhatsAppDmRouteTarget(params: {
@@ -236,7 +245,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   maxMediaBytes: number;
   maxMediaTextChunkLimit?: number;
   msg: WebInboundMsg;
-  onModelSelected?: ChannelReplyOnModelSelected | undefined;
+  onModelSelected?: ChannelReplyOnModelSelected;
   rememberSentText: (
     text: string | undefined,
     opts: {

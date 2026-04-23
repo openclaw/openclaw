@@ -44,19 +44,28 @@ import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
+
+let piEmbeddedRuntimePromise: Promise<PiEmbeddedRuntime> | undefined;
+
+function loadPiEmbeddedRuntime(): Promise<PiEmbeddedRuntime> {
+  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.js");
+  return piEmbeddedRuntimePromise;
+}
+
 async function compactEmbeddedPiSessionDefault(
   ...args: Parameters<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>
 ): Promise<
   Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>>
 > {
-  const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
+  const { compactEmbeddedPiSession } = await loadPiEmbeddedRuntime();
   return await compactEmbeddedPiSession(...args);
 }
 
 async function runEmbeddedPiAgentDefault(
   ...args: Parameters<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>
 ): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>>> {
-  const { runEmbeddedPiAgent } = await import("../../agents/pi-embedded.js");
+  const { runEmbeddedPiAgent } = await loadPiEmbeddedRuntime();
   return await runEmbeddedPiAgent(...args);
 }
 
@@ -206,10 +215,10 @@ async function appendPostCompactionRefreshPrompt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
 }): Promise<void> {
-  const refreshPrompt = await readPostCompactionContext(
-    params.followupRun.run.workspaceDir,
-    params.cfg,
-  );
+  const refreshPrompt = await readPostCompactionContext(params.followupRun.run.workspaceDir, {
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+  });
   if (!refreshPrompt) {
     return;
   }
@@ -352,6 +361,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -454,6 +464,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
+    sandboxSessionKey: params.runtimePolicySessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.followupRun.run.messageProvider,
     groupId: entry.groupId ?? params.followupRun.run.groupId,
@@ -514,6 +525,7 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -529,7 +541,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     const runtime = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      sessionKey: params.runtimePolicySessionKey ?? params.sessionKey,
     });
     if (!runtime.sandboxed) {
       return true;
@@ -753,6 +765,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
           trigger: "memory",

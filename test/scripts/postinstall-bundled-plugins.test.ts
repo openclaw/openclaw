@@ -2,13 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createBundledRuntimeDependencyInstallArgs,
+  createBundledRuntimeDependencyInstallEnv,
   createNestedNpmInstallEnv,
+  isDirectPostinstallInvocation,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
-  restoreLegacyUpdaterCompatSidecars,
   runBundledPluginPostinstall,
+  restoreLegacyUpdaterCompatSidecars,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { NPM_UPDATE_COMPAT_SIDECARS } from "../../src/infra/npm-update-compat-sidecars.ts";
 import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -47,14 +51,7 @@ async function writePluginPackage(
 
 describe("bundled plugin postinstall", () => {
   function createNpmInstallArgs(...packages: string[]) {
-    return [
-      "install",
-      "--omit=dev",
-      "--no-save",
-      "--package-lock=false",
-      "--legacy-peer-deps",
-      ...packages,
-    ];
+    return createBundledRuntimeDependencyInstallArgs(packages);
   }
 
   function createBareNpmRunner(packages: string[]) {
@@ -87,6 +84,42 @@ describe("bundled plugin postinstall", () => {
     });
   }
 
+  it("recognizes direct invocation through symlinked temp prefixes", () => {
+    const realpathSync = vi.fn((value: string) =>
+      value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
+    );
+
+    expect(
+      isDirectPostinstallInvocation({
+        entryPath: "/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        modulePath: "/private/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        realpathSync,
+      }),
+    ).toBe(true);
+  });
+
+  async function writeDiscordDaveyOptionalDependencyFixture(
+    extensionsDir: string,
+    packageRoot: string,
+  ) {
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        "@snazzah/davey": "0.1.11",
+      },
+    });
+    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
+      JSON.stringify({
+        optionalDependencies: {
+          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
+        },
+      }),
+    );
+  }
+
   it("clears global npm config before nested installs", () => {
     expect(
       createNestedNpmInstallEnv({
@@ -100,7 +133,26 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
-  it("installs bundled plugin deps outside of source checkouts", async () => {
+  it("uses package-manager-neutral runtime install args with npm config env", () => {
+    expect(createBundledRuntimeDependencyInstallArgs(["acpx@0.4.1"])).toEqual([
+      "install",
+      "--ignore-scripts",
+      "acpx@0.4.1",
+    ]);
+    expect(
+      createBundledRuntimeDependencyInstallEnv({
+        HOME: "/tmp/home",
+        npm_config_prefix: "/opt/homebrew",
+      }),
+    ).toEqual({
+      HOME: "/tmp/home",
+      npm_config_legacy_peer_deps: "true",
+      npm_config_package_lock: "false",
+      npm_config_save: "false",
+    });
+  });
+
+  it("does not install bundled plugin deps outside of source checkouts by default", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
@@ -119,7 +171,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {
@@ -215,7 +267,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("restores only postinstall-generated QA lab compat sidecar after pruning old installs", async () => {
+  it("restores only postinstall-generated QA compat sidecars after pruning old installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
     const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");
@@ -241,35 +293,37 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(stalePackage)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(staleManifest)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
-    ).resolves.toContain("QA Lab is not packaged");
+      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"), {
+        encoding: "utf8",
+      }),
+    ).resolves.toBe("export {};\n");
+    await expect(
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), {
+        encoding: "utf8",
+      }),
+    ).resolves.toBe("export {};\n");
   });
 
-  it("creates only an empty QA lab compat sidecar for fresh installs", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-no-qa-compat-");
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), "export {};\n");
-    await writePackageDistInventory(packageRoot);
+  it("keeps postinstall QA compat sidecars aligned with update verification metadata", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
 
-    expect(
-      restoreLegacyUpdaterCompatSidecars({
-        packageRoot,
-        removedFiles: ["dist/entry-old.js"],
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).toEqual(["dist/extensions/qa-lab/runtime-api.js"]);
+    const restored = restoreLegacyUpdaterCompatSidecars({
+      packageRoot,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
 
-    await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
-    ).resolves.toBe(
-      "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
-    );
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "openclaw.plugin.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(restored).toEqual(NPM_UPDATE_COMPAT_SIDECARS.map((sidecar) => sidecar.path));
+    for (const sidecar of NPM_UPDATE_COMPAT_SIDECARS) {
+      await expect(fs.readFile(path.join(packageRoot, sidecar.path), "utf8")).resolves.toBe(
+        sidecar.content,
+      );
+    }
   });
 
   it("keeps packaged postinstall non-fatal when the dist inventory is missing", async () => {
@@ -362,6 +416,27 @@ describe("bundled plugin postinstall", () => {
     ).toThrow("unsafe dist entry: dist/escape");
   });
 
+  it("ignores staged bundled plugin node_modules when pruning packaged dist", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-runtime-deps-");
+    const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
+    const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
+    const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    await fs.mkdir(path.dirname(staleFile), { recursive: true });
+    await fs.mkdir(path.dirname(packageJson), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(staleFile, "export {};\n");
+    await fs.writeFile(packageJson, "{}\n");
+    await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        expectedFiles: new Set(["dist/extensions/slack/package.json"]),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/stale-runtime.js"]);
+  });
+
   it("unlinks stale files instead of recursive pruning them", () => {
     const unlinkSync = vi.fn();
 
@@ -408,6 +483,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_global: "true",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
@@ -452,26 +528,11 @@ describe("bundled plugin postinstall", () => {
   it("reinstalls bundled runtime deps when optional native children are missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "discord", {
-      dependencies: {
-        "@snazzah/davey": "0.1.11",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
-      JSON.stringify({
-        optionalDependencies: {
-          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
-        },
-      }),
-    );
+    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
-      env: { HOME: "/tmp/home" },
+      env: { HOME: "/tmp/home", OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1" },
       extensionsDir,
       packageRoot,
       arch: "arm64",
@@ -487,22 +548,7 @@ describe("bundled plugin postinstall", () => {
   it("does not reinstall when only another platform optional native child is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "discord", {
-      dependencies: {
-        "@snazzah/davey": "0.1.11",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
-      JSON.stringify({
-        optionalDependencies: {
-          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
-        },
-      }),
-    );
+    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
     const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
@@ -591,6 +637,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_global: "true",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
@@ -630,6 +677,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         HOME: "/tmp/home",
       },
       extensionsDir,
@@ -654,6 +702,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",

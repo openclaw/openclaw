@@ -3,11 +3,13 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import {
   formatErrorWithStack,
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
+import { toModelRow as toModelRowBase } from "./list.model-row.js";
 import {
   discoverAuthStorage,
   discoverModels,
@@ -18,7 +20,7 @@ import {
   resolveOpenClawAgentDir,
 } from "./list.runtime.js";
 import type { ModelRow } from "./list.types.js";
-import { isLocalBaseUrl, modelKey } from "./shared.js";
+import { modelKey } from "./shared.js";
 
 const hasAuthForProvider = (
   provider: string,
@@ -38,6 +40,9 @@ const hasAuthForProvider = (
     return true;
   }
   if (hasUsableCustomProviderApiKey(cfg, provider)) {
+    return true;
+  }
+  if (resolveRuntimeSyntheticAuthProviderRefs().includes(provider)) {
     return true;
   }
   return false;
@@ -105,11 +110,13 @@ function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Mode
 
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
-  _opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { sourceConfig?: OpenClawConfig; providerFilter?: string },
 ) {
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
-  const registry = discoverModels(authStorage, agentDir);
+  const registry = discoverModels(authStorage, agentDir, {
+    providerFilter: opts?.providerFilter,
+  });
   const models = registry.getAll().filter(
     (model) =>
       !shouldSuppressBuiltInModel({
@@ -140,71 +147,10 @@ export async function loadModelRegistry(
   return { registry, models, availableKeys, availabilityErrorMessage };
 }
 
-export function toModelRow(params: {
-  model?: Model<Api>;
-  key: string;
-  tags: string[];
-  aliases?: string[];
-  availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  allowProviderAvailabilityFallback?: boolean;
-}): ModelRow {
-  const {
-    model,
-    key,
-    tags,
-    aliases = [],
-    availableKeys,
-    cfg,
-    authStore,
-    allowProviderAvailabilityFallback = false,
-  } = params;
-  if (!model) {
-    return {
-      key,
-      name: key,
-      input: "-",
-      contextWindow: null,
-      local: null,
-      available: null,
-      tags: [...tags, "missing"],
-      missing: true,
-    };
-  }
-
-  const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
-  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
-  // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available,
-  // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
-  const available =
-    availableKeys !== undefined && !allowProviderAvailabilityFallback
-      ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore ? hasAuthForProvider(model.provider, cfg, authStore) : false);
-  const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
-  const mergedTags = new Set(tags);
-  if (aliasTags.length > 0) {
-    for (const tag of mergedTags) {
-      if (tag === "alias" || tag.startsWith("alias:")) {
-        mergedTags.delete(tag);
-      }
-    }
-    for (const tag of aliasTags) {
-      mergedTags.add(tag);
-    }
-  }
-
-  return {
-    key,
-    name: model.name || model.id,
-    input,
-    contextWindow: model.contextWindow ?? null,
-    local,
-    available,
-    tags: Array.from(mergedTags),
-    missing: false,
-  };
+export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
+  return toModelRowBase({
+    ...params,
+    hasAuthForProvider: ({ provider, cfg, authStore }) =>
+      hasAuthForProvider(provider, cfg, authStore),
+  });
 }

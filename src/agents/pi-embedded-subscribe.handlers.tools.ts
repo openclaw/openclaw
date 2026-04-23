@@ -293,7 +293,7 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
 
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean },
+  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
 ) {
   const seen = new Set(ctx.state.pendingToolMediaUrls);
   for (const mediaUrl of mediaReply.mediaUrls) {
@@ -305,6 +305,9 @@ function queuePendingToolMedia(
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
+  }
+  if (mediaReply.trustedLocalMedia) {
+    ctx.state.pendingToolTrustedLocalMedia = true;
   }
 }
 
@@ -433,12 +436,13 @@ function readExecApprovalUnavailableDetails(result: unknown): {
 async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
+  rawToolName: string;
   meta?: string;
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
 }) {
-  const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
+  const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
   const hasStructuredMedia =
     result &&
     typeof result === "object" &&
@@ -511,10 +515,10 @@ async function emitToolResultOutput(params: {
     ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText });
   if (shouldEmitOutput) {
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText, result);
+      ctx.emitToolOutput(rawToolName, meta, outputText, result);
       if (ctx.params.toolResultFormat === "plain") {
         emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
-          toolName,
+          rawToolName,
           outputText,
           result,
         );
@@ -533,9 +537,14 @@ async function emitToolResultOutput(params: {
   if (!mediaReply) {
     return;
   }
-  const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
+  const mediaUrls = filterToolResultMediaUrls(
+    rawToolName,
+    mediaReply.mediaUrls,
+    result,
+    ctx.builtinToolNames,
+  );
   const pendingMediaUrls =
-    mediaReply.audioAsVoice || emittedToolOutputMediaUrls.length === 0
+    emittedToolOutputMediaUrls.length === 0
       ? mediaUrls
       : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
   if (pendingMediaUrls.length === 0) {
@@ -779,7 +788,8 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(evt.toolName);
+  const rawToolName = evt.toolName;
+  const toolName = normalizeToolName(rawToolName);
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1099,7 +1109,15 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  await emitToolResultOutput({
+    ctx,
+    toolName,
+    rawToolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+  });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();

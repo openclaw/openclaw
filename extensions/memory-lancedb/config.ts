@@ -99,7 +99,15 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dreaming", "dbPath", "autoCapture", "autoRecall", "captureMaxChars", "storageOptions"],
+      [
+        "embedding",
+        "dreaming",
+        "dbPath",
+        "autoCapture",
+        "autoRecall",
+        "captureMaxChars",
+        "storageOptions",
+      ],
       "memory config",
     );
 
@@ -121,7 +129,7 @@ export const memoryConfigSchema = {
     }
 
     const dreaming =
-      typeof cfg.dreaming === "undefined"
+      cfg.dreaming === undefined
         ? undefined
         : cfg.dreaming && typeof cfg.dreaming === "object" && !Array.isArray(cfg.dreaming)
           ? (cfg.dreaming as Record<string, unknown>)

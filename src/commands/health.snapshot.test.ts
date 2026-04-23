@@ -25,14 +25,9 @@ type TelegramHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-    return {
-      ...actual,
-      loadConfig: () => testConfig,
-    };
-  });
+  vi.doMock("../config/config.js", () => ({
+    loadConfig: () => testConfig,
+  }));
   vi.doMock("../config/sessions.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
     resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
@@ -54,6 +49,9 @@ async function loadFreshHealthModulesForTest() {
     readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
     logWebSelfId: vi.fn(),
     logoutWeb: vi.fn(),
+  }));
+  vi.doMock("../channels/plugins/read-only.js", () => ({
+    listReadOnlyChannelPluginsForConfig: () => [createTelegramHealthPlugin()],
   }));
 
   const [pluginsRuntime, channelTestUtils, health] = await Promise.all([
@@ -353,24 +351,24 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
     expect(calls.some((c) => c.includes("/getMe"))).toBe(true);
     expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
-  });
 
-  it("treats telegram.tokenFile as configured", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
-    fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
-    const { calls, telegram } = await runSuccessfulTelegramProbe(
-      { channels: { telegram: { tokenFile } } },
-      { clearTokenEnv: true },
-    );
-    expect(telegram.configured).toBe(true);
-    expect(telegram.probe?.ok).toBe(true);
-    expect(calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try {
+      fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
+      const tokenFileProbe = await runSuccessfulTelegramProbe(
+        { channels: { telegram: { tokenFile } } },
+        { clearTokenEnv: true },
+      );
+      expect(tokenFileProbe.telegram.configured).toBe(true);
+      expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
+      expect(tokenFileProbe.calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
-  it("returns a structured telegram probe error when getMe fails", async () => {
+  it("returns structured telegram probe errors", async () => {
     testConfig = { channels: { telegram: { botToken: "bad-token" } } };
     testStore = {};
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
@@ -398,9 +396,7 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(false);
     expect(telegram.probe?.status).toBe(401);
     expect(telegram.probe?.error).toMatch(/unauthorized/i);
-  });
 
-  it("captures unexpected probe exceptions as errors", async () => {
     testConfig = { channels: { telegram: { botToken: "t-err" } } };
     testStore = {};
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
@@ -412,14 +408,14 @@ describe("getHealthSnapshot", () => {
       }),
     );
 
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.channels.telegram as {
+    const exceptionSnap = await getHealthSnapshot({ timeoutMs: 25 });
+    const exceptionTelegram = exceptionSnap.channels.telegram as {
       configured?: boolean;
       probe?: { ok?: boolean; error?: string };
     };
-    expect(telegram.configured).toBe(true);
-    expect(telegram.probe?.ok).toBe(false);
-    expect(telegram.probe?.error).toMatch(/network down/i);
+    expect(exceptionTelegram.configured).toBe(true);
+    expect(exceptionTelegram.probe?.ok).toBe(false);
+    expect(exceptionTelegram.probe?.error).toMatch(/network down/i);
   });
 
   it("disables heartbeat for agents without heartbeat blocks", async () => {

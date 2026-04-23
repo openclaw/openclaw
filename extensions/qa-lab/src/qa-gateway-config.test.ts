@@ -58,11 +58,20 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-channel"]);
+    expect(cfg.plugins?.entries?.acpx).toEqual({
+      enabled: true,
+      config: {
+        pluginToolsMcpBridge: true,
+        openClawToolsMcpBridge: true,
+      },
+    });
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
     expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
+    expect(cfg.tools?.profile).toBe("coding");
+    expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("coding");
     expect(cfg.channels?.["qa-channel"]).toMatchObject({
       enabled: true,
       baseUrl: "http://127.0.0.1:43124",
@@ -93,7 +102,30 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.models.map((model) => model.id)).toContain(
       "claude-opus-4-6",
     );
-    expect(cfg.plugins?.allow).toEqual(["memory-core"]);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core"]);
+  });
+
+  it("can wire AIMock as a separate mock provider lane", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:45080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "aimock",
+      primaryModel: "aimock/gpt-5.4",
+      alternateModel: "aimock/gpt-5.4-alt",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("aimock/gpt-5.4");
+    expect(cfg.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "aimock/gpt-image-1",
+    });
+    expect(cfg.models?.providers?.aimock?.baseUrl).toBe("http://127.0.0.1:45080/v1");
+    expect(cfg.models?.providers?.aimock?.api).toBe("openai-responses");
+    expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:45080/v1");
+    expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:45080");
+    expect(cfg.models?.providers?.["mock-openai"]).toBeUndefined();
   });
 
   it("can omit qa-channel for live transport gateway children", () => {
@@ -107,7 +139,7 @@ describe("buildQaGatewayConfig", () => {
       transportConfig: {},
     });
 
-    expect(cfg.plugins?.allow).toEqual(["memory-core"]);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core"]);
     expect(cfg.plugins?.entries?.["qa-channel"]).toBeUndefined();
     expect(cfg.channels?.["qa-channel"]).toBeUndefined();
   });
@@ -123,7 +155,7 @@ describe("buildQaGatewayConfig", () => {
       ...createQaChannelTransportParams(),
     });
 
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "active-memory", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "active-memory", "qa-channel"]);
     expect(cfg.plugins?.entries?.["active-memory"]).toEqual({ enabled: true });
   });
 
@@ -143,7 +175,7 @@ describe("buildQaGatewayConfig", () => {
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
     expect(getPrimaryModel(cfg.agents?.list?.[0]?.model)).toBe("openai/gpt-5.4");
     expect(cfg.models).toBeUndefined();
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "openai", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "openai", "qa-channel"]);
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
       params: { transport: "sse", openaiWsWarmup: false, fastMode: true },
@@ -163,7 +195,13 @@ describe("buildQaGatewayConfig", () => {
       ...createQaChannelTransportParams(),
     });
 
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "anthropic", "google", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual([
+      "acpx",
+      "memory-core",
+      "anthropic",
+      "google",
+      "qa-channel",
+    ]);
     expect(cfg.plugins?.entries?.anthropic).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.google).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
@@ -185,7 +223,7 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("codex-cli/test-model");
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "openai", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "openai", "qa-channel"]);
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["codex-cli"]).toBeUndefined();
   });
@@ -225,7 +263,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(cfg.models?.mode).toBe("merge");
     expect(cfg.models?.providers?.["custom-openai"]?.api).toBe("openai-responses");
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "openai", "qa-channel"]);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "openai", "qa-channel"]);
   });
 
   it("can set a QA default thinking level for judge turns", () => {

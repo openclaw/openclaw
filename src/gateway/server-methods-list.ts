@@ -3,6 +3,7 @@ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
+  "diagnostics.stability",
   "doctor.memory.status",
   "doctor.memory.dreamDiary",
   "doctor.memory.backfillDreamDiary",
@@ -12,6 +13,7 @@ const BASE_METHODS = [
   "doctor.memory.dedupeDreamDiary",
   "logs.tail",
   "channels.status",
+  "channels.start",
   "channels.logout",
   "status",
   "usage.status",
