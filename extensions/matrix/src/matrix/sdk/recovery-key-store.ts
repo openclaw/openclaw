@@ -47,20 +47,9 @@ export class MatrixRecoveryKeyStore {
           return null;
         }
 
-        const staged = this.stagedRecoveryKey;
-        if (staged?.privateKeyBase64) {
-          const privateKey = new Uint8Array(Buffer.from(staged.privateKeyBase64, "base64"));
-          if (privateKey.length > 0) {
-            const stagedKeyId =
-              staged.keyId && requestedKeyIds.includes(staged.keyId)
-                ? staged.keyId
-                : requestedKeyIds[0];
-            if (stagedKeyId) {
-              this.rememberStagedSecretStorageKey(stagedKeyId, privateKey, staged.keyInfo);
-              this.stagedCacheKeyIds.add(stagedKeyId);
-              return [stagedKeyId, privateKey];
-            }
-          }
+        const staged = this.resolveStagedSecretStorageKey(requestedKeyIds);
+        if (staged) {
+          return staged;
         }
 
         for (const keyId of requestedKeyIds) {
@@ -359,6 +348,25 @@ export class MatrixRecoveryKeyStore {
     this.stagedRecoveryKey = null;
     this.stagedRecoveryKeyUsed = false;
     this.stagedCacheKeyIds.clear();
+  }
+
+  private resolveStagedSecretStorageKey(requestedKeyIds: string[]): [string, Uint8Array] | null {
+    const staged = this.stagedRecoveryKey;
+    if (!staged?.privateKeyBase64) {
+      return null;
+    }
+    const privateKey = new Uint8Array(Buffer.from(staged.privateKeyBase64, "base64"));
+    if (privateKey.length === 0) {
+      return null;
+    }
+    const keyId =
+      staged.keyId && requestedKeyIds.includes(staged.keyId) ? staged.keyId : requestedKeyIds[0];
+    if (!keyId) {
+      return null;
+    }
+    this.rememberStagedSecretStorageKey(keyId, privateKey, staged.keyInfo);
+    this.stagedCacheKeyIds.add(keyId);
+    return [keyId, privateKey];
   }
 
   private rememberStagedSecretStorageKey(

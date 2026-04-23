@@ -764,7 +764,7 @@ function printMatrixVerificationSasGuidance(requestId: string, accountId?: strin
   ]);
 }
 
-function getMatrixVerificationCommandId(summary: MatrixCliVerificationSummary): string {
+function formatMatrixVerificationCommandId(summary: MatrixCliVerificationSummary): string {
   return sanitizeMatrixCliText(summary.transactionId ?? summary.id);
 }
 
@@ -1266,7 +1266,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             printAccountLabel(accountId);
             printMatrixVerificationSummary(summary);
             printMatrixVerificationRequestGuidance(
-              getMatrixVerificationCommandId(summary),
+              formatMatrixVerificationCommandId(summary),
               accountId,
             );
           },
@@ -1287,7 +1287,7 @@ export function registerMatrixCli(params: { program: Command }): void {
         run: async (accountId, cfg) => await acceptMatrixVerification(id, { accountId, cfg }),
         afterText: (summary, accountId) => {
           printGuidance([
-            `Run '${formatMatrixCliCommand(`verify start ${getMatrixVerificationCommandId(summary)}`, accountId)}' to start SAS verification.`,
+            `Run '${formatMatrixCliCommand(`verify start ${formatMatrixVerificationCommandId(summary)}`, accountId)}' to start SAS verification.`,
           ]);
         },
         errorPrefix: "Verification accept failed",
@@ -1306,7 +1306,7 @@ export function registerMatrixCli(params: { program: Command }): void {
         run: async (accountId, cfg) =>
           await startMatrixVerification(id, { accountId, cfg, method: "sas" }),
         afterText: (summary, accountId) =>
-          printMatrixVerificationSasGuidance(getMatrixVerificationCommandId(summary), accountId),
+          printMatrixVerificationSasGuidance(formatMatrixVerificationCommandId(summary), accountId),
         errorPrefix: "Verification start failed",
       });
     });

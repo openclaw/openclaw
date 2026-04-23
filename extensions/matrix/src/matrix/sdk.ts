@@ -1194,10 +1194,10 @@ export class MatrixClient {
         resolveMatrixRoomKeyBackupReadinessError(status.backup, {
           requireServerBackup: true,
         }) === null;
-      const stagedRecoveryKeyAccepted = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
-      const recoveryKeyAccepted = stagedRecoveryKeyAccepted && (status.verified || backupUsable);
+      const stagedRecoveryKeyUsed = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
+      const recoveryKeyAccepted = stagedRecoveryKeyUsed && (status.verified || backupUsable);
       if (!status.verified) {
-        if (backupUsable && stagedRecoveryKeyAccepted) {
+        if (backupUsable && stagedRecoveryKeyUsed) {
           this.recoveryKeyStore.commitStagedRecoveryKey({
             keyId: await this.resolveDefaultSecretStorageKeyId(crypto),
           });
@@ -1228,7 +1228,7 @@ export class MatrixClient {
           ...status,
         };
       }
-      if (!stagedRecoveryKeyAccepted) {
+      if (!stagedRecoveryKeyUsed) {
         this.recoveryKeyStore.discardStagedRecoveryKey();
         return {
           success: false,
