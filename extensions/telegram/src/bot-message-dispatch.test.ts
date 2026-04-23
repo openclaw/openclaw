@@ -2564,16 +2564,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("rewrites a no-visible-response DM turn through silent-reply fallback", async () => {
+  it("keeps a no-visible-response DM turn silent instead of sending silent-reply chatter", async () => {
     const draftStream = createDraftStream(999);
+    const statusReactionController = createStatusReactionController();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
     });
-    deliverReplies.mockResolvedValueOnce({ delivered: true });
 
     await dispatchWithContext({
       context: createContext({
+        statusReactionController: statusReactionController as never,
         ctxPayload: {
           SessionKey: "agent:main:telegram:direct:123",
         } as unknown as TelegramMessageContext["ctxPayload"],
@@ -2594,11 +2595,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       } as unknown as OpenClawConfig,
     });
 
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    const deliveredReplies = deliverReplies.mock.calls[0]?.[0]?.replies;
-    expect(Array.isArray(deliveredReplies)).toBe(true);
-    expect(deliveredReplies?.[0]?.text).toEqual(expect.any(String));
-    expect(deliveredReplies?.[0]?.text?.trim()).not.toBe("NO_REPLY");
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setError).not.toHaveBeenCalled();
   });
 
   it("does not add silent-reply fallback after visible block delivery", async () => {
