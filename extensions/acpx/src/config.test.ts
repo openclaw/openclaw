@@ -67,10 +67,10 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.probeAgent).toBeUndefined();
   });
 
-  it("carries an explicit probeAgent through to the resolved plugin config, trimmed", () => {
+  it("carries an explicit probeAgent through to the resolved plugin config, trimmed and lowercased", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        probeAgent: "  opencode  ",
+        probeAgent: "  OpenCode  ",
       },
       workspaceDir: "/tmp/openclaw-acpx",
     });
