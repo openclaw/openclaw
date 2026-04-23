@@ -1,91 +1,57 @@
-# OpenClaw Contributor Status - 2026-04-22
+# OpenClaw Contributor Status - 2026-04-23
 
-## Merged PRs: 4 (lifetime)
+## Merged PRs: 4 (lifetime, gap to 46: 42)
 
 - 2026-04-19: #55787 fix: strip orphaned OpenAI reasoning blocks before responses API call
 - 2026-04-16: #67457 fix(ollama): strip provider prefix from model ID in chat requests
 - 2026-04-14: #64735 fix(hooks): pass workspaceDir in gateway session reset internal hook context
 - 2026-03-29: #45911 fix(telegram): accept approval callbacks from forwarding target recipients
 
-## Open PRs: 4
+## Open PRs: 5
 
-| #      | Title                                                                          | Labels                | Age | Comments | Status          |
-| ------ | ------------------------------------------------------------------------------ | --------------------- | --- | -------- | --------------- |
-| #69685 | fix(agents): strip final tags from persisted assistant message                 | agents, size:M        | 1d  | 2        | Awaiting review |
-| #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass      | whatsapp-web, size:XS | 4d  | 2        | Awaiting review |
-| #66544 | fix(gateway): exclude heartbeat sender ID from session display name            | gateway, size:XS      | 8d  | 3        | Awaiting review |
-| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size:S        | 8d  | 5        | Awaiting review |
+| #      | Title                                                                          | Labels                | Age | Status          |
+| ------ | ------------------------------------------------------------------------------ | --------------------- | --- | --------------- |
+| #70413 | fix(agents): route /btw through provider stream fn for correct URLs            | agents, size:S        | <1d | Awaiting review |
+| #69685 | fix(agents): strip final tags from persisted assistant message                 | agents, size:S        | 2d  | Awaiting review |
+| #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass      | whatsapp-web, size:XS | 5d  | Awaiting review |
+| #66544 | fix(gateway): exclude heartbeat sender ID from session display name            | gateway, size:XS      | 9d  | Awaiting review |
+| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size:S        | 9d  | Awaiting review |
 
-CI and mergeable status not available (GitHub MCP restricted to fork; search API does not surface per-PR check status).
+## Actions Taken This Run (2026-04-23)
 
-## Actions Taken This Run
+### New fix: browser snapshot Playwright compat (closes #70158, #70337)
 
-### Bug Fix filed: #69960 (plugins install --profile X writes to wrong extensions dir)
+**Issue**: `refs=aria` and the AI snapshot path both throw immediately on playwright-core
+1.59.1+ because `page._snapshotForAI` was removed. Error messages seen in the wild:
 
-**Root cause confirmed in code:**
+- `refs=aria requires Playwright _snapshotForAI support.`
+- `Playwright _snapshotForAI is not available. Upgrade playwright-core.`
 
-`CONFIG_DIR` in `src/utils.ts` is a module-level constant evaluated at import time:
+**Root cause confirmed**: `src/browser/pw-tools-core.snapshot.ts` line 66
+(`snapshotAiViaPlaywright`) and line 120 (`snapshotRoleViaPlaywright` refs=aria path) both
+hard-fail when `_snapshotForAI` is absent. The public replacement
+`locator.ariaSnapshot({ mode: 'ai' })` has been available since Playwright 1.52.
 
-```ts
-export const CONFIG_DIR = resolveConfigDir(); // line 387
-```
+**Fix**: Added `LocatorWithAriaAiMode` type and dual-path logic in both call sites. Prefers
+`_snapshotForAI` when present (backward compat), falls through to the public API otherwise.
 
-`resolveConfigDir()` reads `OPENCLAW_STATE_DIR` from `process.env`. But `src/infra/dotenv.ts`
-is statically imported in `src/cli/run-main.ts`, which transitively imports `utils.ts` -
-so `CONFIG_DIR` is frozen to the default `~/.openclaw` **before** `applyCliProfileEnv` runs
-and sets `OPENCLAW_STATE_DIR` to the profile-specific path.
+**Tests**: 5 new regression tests in
+`src/browser/pw-tools-core.snapshot.playwright-compat.test.ts`, all pass.
 
-`runPluginInstallCommand` in `src/cli/plugins-cli.ts` called `installPluginFromNpmSpec` and
-`installPluginFromPath` without passing `extensionsDir`, so both fell back to
-`path.join(CONFIG_DIR, "extensions")` - always `~/.openclaw/extensions` regardless of profile.
+**Branch pushed**: `suboss87:fix/browser-snapshot-pw-aria-snapshot-public-api`
 
-The `uninstall` command (same file, line 595) already correctly called
-`resolveStateDir(process.env, os.homedir)` at call time. Applied the same pattern to install.
+**PR to open manually**:
+https://github.com/openclaw/openclaw/compare/main...suboss87:fix/browser-snapshot-pw-aria-snapshot-public-api
 
-**Fix:** Added `extensionsDir` computation via `resolveStateDir(process.env, os.homedir)` at
-the top of `runPluginInstallCommand` and threaded it through to all three install call sites
-(dryRun probe, path install, npm install). 5 lines changed.
+Closes #70158 and #70337.
 
-**Verified:** All 13 existing plugin install tests pass. `pnpm tsgo` clean.
+### Comment / rebase check
 
-**Branch pushed:** `suboss87:fix/plugins-install-profile-extensions-dir`
-
-**PR URL (open manually):** https://github.com/suboss87/openclaw/pull/new/fix/plugins-install-profile-extensions-dir
-Upstream target: openclaw/openclaw, closes #69960
-
-### Comment check
-
-Unable to read PR comments on `openclaw/openclaw` (GitHub MCP write and read tools
-restricted to `suboss87/openclaw`; only the search API reaches upstream). No comment
-responses posted this run.
-
-### Rebase check
-
-Mergeable status not available via search API. All 4 open PRs were updated within the last
-8 days so no automated rebase was attempted.
-
-### PR review identified: #69270
-
-PR #69270 by @de1tydev (fix(compaction): restore session invariants across compaction and
-reset, agents+gateway, size:M, 3 comments) was the best candidate in our lanes.
-
-Could not post review - MCP write tools are restricted to `suboss87/openclaw`.
-
-Key observations from local code review (post manually if desired):
-
-- `src/agents/pi-embedded-subscribe.handlers.compaction.ts` fires `before_compaction` /
-  `after_compaction` hooks in two separate sites (subscribe-time ~line 848 and engine-owned
-  ~line 1052). Each builds its hook context independently. Worth checking whether the PR
-  centralizes this into a shared helper to prevent future drift, or patches each site
-  separately.
-- Verify the reset path correctly invalidates in-flight compaction state before reinitializing
-  session invariants. A race between reset and a queued compaction could re-corrupt state
-  even after the fix.
+Unable to read PR-level comments on `openclaw/openclaw` (GitHub MCP restricted to fork).
+No changes-requested reviews found via search API. No rebases attempted.
 
 ## Next Steps
 
-1. Open upstream PR for the profile fix from
-   https://github.com/suboss87/openclaw/pull/new/fix/plugins-install-profile-extensions-dir
-2. Follow up on #66544 and #66225 (8 days old, no merge activity) - may need a ping or rebase.
-3. Post the compaction review on #69270 manually if desired.
-4. Check CI on #69685 and #68446 (both recent, should have results).
+1. Open upstream PR using the URL above.
+2. Follow up on #66544 and #66225 (9 days old, may need a ping).
+3. Check CI on #70413 (opened today).
