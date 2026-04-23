@@ -25,6 +25,40 @@ const OPENAI_SUPPORTED_SIZES = [
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 
+const AZURE_HOSTNAME_SUFFIXES = [
+  ".openai.azure.com",
+  ".services.ai.azure.com",
+  ".cognitiveservices.azure.com",
+] as const;
+
+const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+
+function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const hostname = new URL(trimmed).hostname.toLowerCase();
+    return AZURE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+function resolveAzureApiVersion(): string {
+  return process.env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
+}
+
+function buildAzureImageUrl(
+  rawBaseUrl: string,
+  model: string,
+  action: "generations" | "edits",
+): string {
+  const cleanBase = rawBaseUrl.replace(/\/+$/, "").replace(/\/openai\/v1$/, "").replace(/\/v1$/, "");
+  return `${cleanBase}/openai/deployments/${model}/images/${action}?api-version=${resolveAzureApiVersion()}`;
+}
+
 function shouldAllowPrivateImageEndpoint(req: {
   provider: string;
   cfg: OpenClawConfig | undefined;
@@ -88,14 +122,17 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("OpenAI API key missing");
       }
+      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+      const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
+
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
+          baseUrl: rawBaseUrl,
           defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
           allowPrivateNetwork: shouldAllowPrivateImageEndpoint(req),
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-          },
+          defaultHeaders: isAzure
+            ? { "api-key": auth.apiKey }
+            : { Authorization: `Bearer ${auth.apiKey}` },
           provider: "openai",
           capability: "image",
           transport: "http",
@@ -104,12 +141,15 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
       const count = req.count ?? 1;
       const size = req.size ?? DEFAULT_SIZE;
+      const url = isAzure
+        ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
+        : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
       const requestResult = isEdit
         ? await (() => {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: `${baseUrl}/images/edits`,
+              url,
               headers: jsonHeaders,
               body: {
                 model,
@@ -133,7 +173,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: `${baseUrl}/images/generations`,
+              url,
               headers: jsonHeaders,
               body: {
                 model,
